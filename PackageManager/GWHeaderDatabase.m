@@ -348,7 +348,8 @@
 
 // Every file basename present under the distro's include prefix, cached per
 // instance.  Lets isHeaderInstalled: match headers that live in a
-// subdirectory reached through a -I flag.
+// subdirectory reached through a -I flag.  The cache is invalidated by
+// -invalidateInstalledBasenames so that freshly installed packages are visible.
 - (NSSet *)_installedBasenamesForDistro:(NSString *)distro
 {
   if (!_installedBasenames)
@@ -367,6 +368,13 @@
     }
   _installedBasenames[distro] = basenames;
   return basenames;
+}
+
+// Drop the basename cache so that the next isHeaderInstalled: call rescans
+// the filesystem.  Must be called after package installation.
+- (void)invalidateInstalledBasenames
+{
+  [_installedBasenames removeAllObjects];
 }
 
 - (void)_collectHeaderBasenamesAtPath:(NSString *)path

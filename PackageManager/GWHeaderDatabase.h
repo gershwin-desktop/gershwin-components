@@ -54,6 +54,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)isHeaderInstalled:(NSString *)includeName
                    distro:(NSString *)distro;
 
+// Drop the cached set of installed header basenames so that the next
+// isHeaderInstalled: call rescans the filesystem.  Call after installing
+// packages so freshly installed headers are visible.
+- (void)invalidateInstalledBasenames;
+
 // Location of the database file in use (mainly for diagnostics).
 @property (readonly, copy) NSString *databasePath;
 

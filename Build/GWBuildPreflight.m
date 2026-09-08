@@ -824,6 +824,10 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
     }
     _installedPackages = YES;
 
+    // Drop the stale basename cache so verification sees freshly installed
+    // headers on the filesystem instead of the pre-install snapshot.
+    [db invalidateInstalledBasenames];
+
     // Fail hard: the build must not run with headers we promised to provide.
     if (![self verifyHeadersInstalled:_resolvedHeaders
                              database:db distro:distro]) {
