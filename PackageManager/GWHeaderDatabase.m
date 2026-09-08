@@ -70,7 +70,8 @@
       return nil;
     }
 
-  int rc = sqlite3_open([_databasePath UTF8String], &_db);
+  int rc = sqlite3_open_v2([_databasePath UTF8String], &_db,
+                           SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, NULL);
   if (rc != SQLITE_OK)
     {
       if (error)
@@ -81,7 +82,7 @@
                                     [NSString stringWithFormat:
                                       @"Could not open the header database at %@", _databasePath],
                                 }];
-      NSLog(@"GWHeaderDatabase [FAIL] init: sqlite3_open failed (%d)", rc);
+      NSLog(@"GWHeaderDatabase [FAIL] init: sqlite3_open_v2 failed (%d)", rc);
       sqlite3_close(_db);
       _db = NULL;
       return nil;
