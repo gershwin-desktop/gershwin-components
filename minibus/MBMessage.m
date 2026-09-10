@@ -206,18 +206,16 @@ static NSString *nextCompleteType(NSString *signature, NSUInteger *pos)
     }
 }
 
-// Maximum alignment required by any type inside a complete type
-// (the alignment used to position the first element of an array).
+// Alignment required to position a value of the given complete type.
+// An array aligns to 4 (its length field) regardless of its element type,
+// so we do NOT recurse past 'a' here; the inner content of an array is
+// aligned separately to the element type when the elements are placed.
 static NSUInteger alignmentOfCompleteType(NSString *type)
 {
     if ([type length] == 0) {
         return 1;
     }
-    unichar c = [type characterAtIndex:0];
-    if (c == 'a' && [type length] > 1) {
-        return alignmentOfCompleteType([type substringFromIndex:1]);
-    }
-    return alignmentForTypeChar(c);
+    return alignmentForTypeChar([type characterAtIndex:0]);
 }
 
 #pragma mark - Value encoding (signature-driven)
@@ -574,10 +572,21 @@ static id decodeValue(const uint8_t *bytes, NSUInteger maxLen, NSString *type,
             if (*pos + 4 > maxLen) return nil;
             uint32_t arrayLen = readU32(bytes, *pos, endian);
             *pos += 4;
+
+            // Empty array: per D-Bus spec, the alignment padding for the
+            // element type is part of the array encoding even when there are
+            // no elements, so consume it before returning
+            if (arrayLen == 0) {
+                *pos = alignTo(*pos, alignmentOfCompleteType(elementSig));
+                return [NSArray array];
+            }
+
+            // Align to element type and compute end from aligned position
+            // (arrayLen measures content AFTER alignment padding)
+            *pos = alignTo(*pos, alignmentOfCompleteType(elementSig));
             NSUInteger arrayEnd = *pos + arrayLen;
             if (arrayLen > MB_MAX_MESSAGE_SIZE || arrayEnd > maxLen) return nil;
 
-            *pos = alignTo(*pos, alignmentOfCompleteType(elementSig));
             NSMutableArray *elements = [NSMutableArray array];
             while (*pos < arrayEnd) {
                 NSUInteger before = *pos;

@@ -18,6 +18,7 @@
 #if defined(__OpenBSD__)
 #import <unistd.h>
 #endif
+#include <stdlib.h>
 
 // D-Bus protocol constants
 #define DBUS_LITTLE_ENDIAN 'l'
@@ -60,7 +61,7 @@ typedef enum {
         _authIncoming = [[NSMutableData alloc] init];
         _authOutgoing = [[NSMutableData alloc] init];
         _authIdentity = @"";
-        _serverGuid = @"12345678901234567890123456789012"; // Fixed GUID for simplicity
+        _serverGuid = [self generateHexGuid];
         _authFailures = 0;
         _maxAuthFailures = 6;
 
@@ -77,6 +78,11 @@ typedef enum {
     [_authIdentity release];
     [_serverGuid release];
     [super dealloc];
+}
+
+- (NSString *)generateHexGuid {
+    // Use a fixed valid hex GUID for testing
+    return @"0123456789abcdef0123456789abcdef";
 }
 
 - (BOOL)verifySocketCredentials:(int)socket withClaimedUID:(uid_t)claimedUID {
@@ -287,6 +293,8 @@ typedef enum {
     
     if ([cmd isEqualToString:@"AUTH"]) {
         return [self handleAuthCommandParts:parts];
+    } else if ([cmd isEqualToString:@"DATA"]) {
+        return [self handleDataCommand:parts];
     } else if ([cmd isEqualToString:@"NEGOTIATE_UNIX_FD"]) {
         return [self handleNegotiateUnixFD];
     } else if ([cmd isEqualToString:@"BEGIN"]) {
@@ -307,10 +315,36 @@ typedef enum {
         return [self sendRejected];
     }
     NSString *mechanism = parts[1];
-    if (![mechanism isEqualToString:@"EXTERNAL"]) {
+    // Accept EXTERNAL and DBUS_COOKIE_SHA1 mechanisms
+    // DBUS_COOKIE_SHA1 is used by GDBus (GLib) clients like GIMP
+    if (![mechanism isEqualToString:@"EXTERNAL"] && ![mechanism isEqualToString:@"DBUS_COOKIE_SHA1"]) {
+        NSDebugLLog(@"gwcomp", @"Rejecting unsupported auth mechanism: %@", mechanism);
         return [self sendRejected];
     }
-    // Accept any claimed UID, skip all security checks
+    // Accept any claimed UID/cookie, skip all security checks
+    // (socket permissions provide adequate access control)
+
+    // If no initial response (parts count == 2), send DATA challenge per SASL EXTERNAL spec
+    // This handles glib clients that can't obtain SO_PEERCRED credentials
+    if ([parts count] < 3) {
+        NSDebugLLog(@"gwcomp", @"AUTH %@ with no initial response, sending DATA challenge", mechanism);
+        NSString *response = @"DATA \r\n";
+        NSData *responseData = [response dataUsingEncoding:NSUTF8StringEncoding];
+        [MBTransport sendData:responseData onSocket:_socket];
+        _authState = AUTH_STATE_WAITING_FOR_DATA;
+        return YES;
+    }
+
+    return [self sendOK];
+}
+
+- (BOOL)handleDataCommand:(NSArray *)parts {
+    if (_authState != AUTH_STATE_WAITING_FOR_DATA) {
+        NSDebugLLog(@"gwcomp", @"handleDataCommand: not expecting DATA, auth state: %d", _authState);
+        return [self sendError:@"Not expecting DATA"];
+    }
+    // Just accept the DATA response and complete authentication
+    // In a full implementation we'd validate the UID here
     return [self sendOK];
 }
 
@@ -445,7 +479,7 @@ typedef enum {
 }
 
 - (BOOL)sendRejected {
-    NSString *response = @"REJECTED EXTERNAL\r\n";
+    NSString *response = @"REJECTED EXTERNAL DBUS_COOKIE_SHA1\r\n";
     NSData *responseData = [response dataUsingEncoding:NSUTF8StringEncoding];
     
     // Send immediately rather than buffering
@@ -506,6 +540,20 @@ typedef enum {
 
         NSUInteger consumed = 0;
         NSData *slice = [NSData dataWithBytes:[buffer bytes] length:total];
+        // Log raw bytes for METHOD_RETURN messages to debug serialization issues
+        if (total >= 2) {
+            uint8_t msgType = ((const uint8_t *)[slice bytes])[1];
+            if (msgType == 2 || msgType == 3) { // METHOD_RETURN or ERROR
+                NSMutableString *hex = [NSMutableString string];
+                const uint8_t *raw = [slice bytes];
+                NSUInteger dumpLen = total;
+                for (NSUInteger i = 0; i < dumpLen; i++) {
+                    [hex appendFormat:@"%02x ", raw[i]];
+                    if ((i+1) % 16 == 0) [hex appendString:@"\n"];
+                }
+                NSLog(@"MBConn RAW socket=%d len=%lu type=%d:\n%@", _socket, (unsigned long)total, msgType, hex);
+            }
+        }
         NSArray *parsed = [MBMessage messagesFromData:slice consumedBytes:&consumed];
         if ([parsed count] == 0 || consumed == 0) {
             NSDebugLLog(@"gwcomp", @"Protocol error on socket %d: failed to parse complete message, disconnecting", _socket);
@@ -552,9 +600,23 @@ typedef enum {
     NSDebugLLog(@"gwcomp", @"Sending message: %@", message);
     NSData *messageData = [message serialize];
     if (messageData) {
-        NSDebugLLog(@"gwcomp", @"Serialized message to %lu bytes", (unsigned long)[messageData length]);
+        if (message.type == MBMessageTypeMethodReturn || message.type == MBMessageTypeError) {
+            NSUInteger len = [messageData length];
+            NSLog(@"MBConn SEND reply %lu bytes type=%u replySerial=%lu dest='%@' sig='%@' on socket=%d",
+                  (unsigned long)len, message.type, (unsigned long)message.replySerial,
+                  message.destination ?: @"(null)", message.signature ?: @"(null)", _socket);
+            // Dump first 80 bytes for analysis
+            const uint8_t *bytes = [messageData bytes];
+            NSMutableString *hex = [NSMutableString string];
+            NSUInteger dumpLen = len < 80 ? len : 80;
+            for (NSUInteger i = 0; i < dumpLen; i++) {
+                [hex appendFormat:@"%02x ", bytes[i]];
+                if ((i+1) % 16 == 0) [hex appendString:@"\n"];
+            }
+            NSLog(@"MBConn HEX: %@", hex);
+        }
         BOOL result = [MBTransport sendData:messageData onSocket:_socket];
-        NSDebugLLog(@"gwcomp", @"Send result: %@", result ? @"SUCCESS" : @"FAILED");
+        NSLog(@"MBConn SEND result: %@ on socket=%d", result ? @"OK" : @"FAIL", _socket);
         if (result && mirror && _state != MBConnectionStateMonitor) {
             // Let the daemon mirror this message to monitor connections
             // (dbus-monitor). Monitor recipients are excluded to avoid

@@ -8,6 +8,7 @@
 #import "MBDaemon.h"
 #import "MBConnection.h"
 #import "MBMessage.h"
+#import "MBVariant.h"
 #import "MBTransport.h"
 #import "MBServiceManager.h"
 #import <sys/select.h>
@@ -321,17 +322,14 @@
 
 - (void)processMessage:(MBMessage *)message fromConnection:(MBConnection *)connection
 {
-    // DEBUG: Log all incoming messages to debug handshake issues
-    NSDebugLLog(@"gwcomp", @">>> INCOMING MESSAGE <<<");
-    NSDebugLLog(@"gwcomp", @"    Type: %u (%@)", message.type, [self messageTypeString:message.type]);
-    NSDebugLLog(@"gwcomp", @"    Serial: %lu", (unsigned long)message.serial);
-    NSDebugLLog(@"gwcomp", @"    Destination: '%@'", message.destination ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Interface: '%@'", message.interface ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Member: '%@'", message.member ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Path: '%@'", message.path ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Signature: '%@'", message.signature ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Connection state: %lu", (unsigned long)connection.state);
-    NSDebugLLog(@"gwcomp", @"    Connection unique name: '%@'", connection.uniqueName ?: @"(null)");
+    NSLog(@"MBDaemon <<< INCOMING Type=%u(%@) serial=%lu dest='%@' iface='%@' member='%@' sig='%@' from=%@",
+          message.type, [self messageTypeString:message.type],
+          (unsigned long)message.serial,
+          message.destination ?: @"(null)",
+          message.interface ?: @"(null)",
+          message.member ?: @"(null)",
+          message.signature ?: @"(null)",
+          connection.uniqueName ?: @"(null)");
     
     // CRITICAL FIX: Only drop messages with truly malformed signatures
     // Allow valid 'v' signatures for method returns and other legitimate cases
@@ -405,6 +403,7 @@
                                         replySerial:message.serial
                                             message:@"Client tried to send a message other than Hello without being registered"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -532,6 +531,7 @@
                                         replySerial:message.serial
                                             message:@"Hello already sent"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -562,6 +562,7 @@
                                         replySerial:message.serial
                                             message:@"Missing name or flags argument"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -575,6 +576,7 @@
                                         replySerial:message.serial
                                             message:@"Cannot acquire reserved name org.freedesktop.DBus"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -735,6 +737,7 @@
                                         replySerial:message.serial
                                             message:@"Missing name argument"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -751,6 +754,7 @@
     NSUInteger result = success ? 1 : 2; // 1 = RELEASED, 2 = NON_EXISTENT
     MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
                                                     arguments:@[@(result)]];
+    reply.signature = @"u"; // Force correct D-Bus signature for uint32
     reply.sender = @"org.freedesktop.DBus";
     reply.destination = connection.uniqueName;
     [connection sendMessage:reply];
@@ -816,6 +820,7 @@
                                         replySerial:message.serial
                                             message:@"Missing name argument"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -827,12 +832,14 @@
         MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
                                                         arguments:@[owner.uniqueName]];
         reply.sender = @"org.freedesktop.DBus";
+        reply.destination = connection.uniqueName;
         [connection sendMessage:reply];
     } else {
         MBMessage *error = [MBMessage errorWithName:@"org.freedesktop.DBus.Error.NameHasNoOwner"
                                         replySerial:message.serial
                                             message:@"Name has no owner"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
     }
 }
@@ -973,14 +980,16 @@
     }
     
     if (destConnection) {
+        NSLog(@"MBDaemon ROUTE -> %@ (socket=%d) type=%u serial=%lu dest='%@'",
+              destConnection.uniqueName, (int)destConnection.socket,
+              message.type, (unsigned long)message.serial, message.destination);
         [destConnection sendMessage:message];
-        NSDebugLLog(@"gwcomp", @"Routed message to %@", destConnection);
         
         // If this generates a reply, monitors should see that too
         // (this will be handled when the reply is processed)
         
     } else {
-        NSDebugLLog(@"gwcomp", @"No destination found for %@", message.destination);
+        NSLog(@"MBDaemon NO DEST for '%@' type=%u serial=%lu", message.destination, message.type, (unsigned long)message.serial);
         
         // Try auto-activation for method calls to well-known names
         if (message.type == MBMessageTypeMethodCall && 
@@ -1020,6 +1029,7 @@
                                             replySerial:message.serial
                                                 message:@"Service not found"];
             error.sender = @"org.freedesktop.DBus";
+            error.destination = connection.uniqueName;
             
             [connection sendMessage:error];
         }
@@ -1339,8 +1349,8 @@
      @"  </interface>\n"];
     
     // Add child nodes for active services
-    @synchronized(_nameOwners) {
-        NSArray *sortedNames = [[_nameOwners allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    @synchronized(_nameOwnerships) {
+        NSArray *sortedNames = [[_nameOwnerships allKeys] sortedArrayUsingSelector:@selector(compare:)];
         for (NSString *name in sortedNames) {
             if (![name hasPrefix:@":"]) { // Only well-known names, not unique names
                 // Escape XML special characters in service names
@@ -1586,8 +1596,16 @@
             return;
         }
         
+        // Properties.Get must return a variant wrapping the actual value
+        MBVariant *variant = nil;
+        if ([propertyValue isKindOfClass:[NSArray class]]) {
+            NSString *innerSig = [MBMessage signatureForValue:propertyValue];
+            variant = [MBVariant variantWithSignature:innerSig value:propertyValue];
+        } else {
+            variant = [MBVariant variantWithSignature:@"s" value:propertyValue ?: @""];
+        }
         MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
-                                                        arguments:@[propertyValue]];
+                                                        arguments:@[variant]];
         reply.sender = @"org.freedesktop.DBus";
         reply.destination = connection.uniqueName;
         [connection sendMessage:reply];
@@ -1622,17 +1640,14 @@
     
     // For org.freedesktop.DBus interface, return the standard properties
     if ([interfaceName isEqualToString:@"org.freedesktop.DBus"]) {
-        // For now, return an empty dictionary since our serializer doesn't support a{sv} properly
-        // TODO: Implement proper D-Bus dictionary serialization
-        
+        // Return an empty dictionary - the serializer handles a{sv} correctly
         MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
-                                                        arguments:@[]];
-        reply.signature = @"a{sv}";  // Set correct signature manually
+                                                        arguments:@[@{}]];
         reply.sender = @"org.freedesktop.DBus";
         reply.destination = connection.uniqueName;
         [connection sendMessage:reply];
         
-        NSDebugLLog(@"gwcomp", @"Properties.GetAll for interface '%@' - returned empty dictionary (serialization limitation)", interfaceName);
+        NSDebugLLog(@"gwcomp", @"Properties.GetAll for interface '%@' - returned empty dictionary", interfaceName);
     } else {
         NSDebugLLog(@"gwcomp", @"Unimplemented: Properties.GetAll for interface '%@' - interface not supported", interfaceName);
         

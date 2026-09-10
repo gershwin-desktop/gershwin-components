@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 # Tools
-TOOL_NAME = minibus minibus-test simple-test simple-format-test byte-analyzer test-real-dbus test-hello-only hello-field-analyzer compare-hello-format test-hello-destination test-hello-reply-only test-alignment hello-length-analysis debug-listnames debug-message-format debug-listnames-serialization test-array-parsing test-requestname debug-hello-reply test-gdbus-proxy test-start-service test-message-parsing debug-message-parsing test-dict-roundtrip test-empty-string-issue test-variant-format test-complex-signature
+TOOL_NAME = minibus minibus-test simple-test simple-format-test byte-analyzer test-real-dbus test-hello-only hello-field-analyzer compare-hello-format test-hello-destination test-hello-reply-only test-alignment hello-length-analysis debug-listnames debug-message-format debug-listnames-serialization test-array-parsing test-requestname debug-hello-reply test-gdbus-proxy test-start-service test-message-parsing debug-message-parsing test-dict-roundtrip test-empty-string-issue test-variant-format test-complex-signature test-gimp-objects test-gimp-menus test-a-struct-roundtrip test-gtkmenus-body
 
 minibus_OBJC_FILES = main-daemon.m MBDaemon.m MBConnection.m MBMessage.m MBVariant.m MBTransport.m MBClient.m MBServiceManager.m MBServiceFile.m
 minibus-test_OBJC_FILES = main-test.m MBClient.m MBConnection.m MBMessage.m MBVariant.m MBTransport.m
@@ -56,6 +56,10 @@ test-dict-roundtrip_OBJC_FILES = test-dict-roundtrip.m MBMessage.m MBVariant.m
 test-empty-string-issue_OBJC_FILES = test-empty-string-issue.m MBMessage.m MBVariant.m
 test-variant-format_OBJC_FILES = test-variant-format.m MBMessage.m MBVariant.m
 test-complex-signature_OBJC_FILES = test-complex-signature.m MBMessage.m MBVariant.m
+test-gimp-objects_OBJC_FILES = test-gimp-objects.m MBMessage.m MBVariant.m
+test-gimp-menus_OBJC_FILES = test-gimp-menus.m MBMessage.m MBVariant.m MBConnection.m MBClient.m MBTransport.m
+test-a-struct-roundtrip_OBJC_FILES = test-a-struct-roundtrip.m MBMessage.m MBVariant.m
+test-gtkmenus-body_OBJC_FILES = test-gtkmenus-body.m MBMessage.m MBVariant.m
 
 # Compiler flags for production builds
 minibus_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
