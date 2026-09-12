@@ -782,6 +782,14 @@
 	</dict>
 	<dict>
 		<key>Name</key>
+		<string>VIC20</string>
+		<key>GitURL</key>
+		<string>https://github.com/gcasa/VIC20</string>
+		<key>Description</key>
+		<string>Emulate a Commodore VIC-20 with a 6502 CPU, video chip, and BASIC interpreter</string>
+	</dict>
+	<dict>
+		<key>Name</key>
 		<string>MacBasic</string>
 		<key>GitURL</key>
 		<string>https://github.com/gcasa/MacBasic</string>
