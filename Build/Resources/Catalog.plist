@@ -806,6 +806,38 @@
 	</dict>
 	<dict>
 		<key>Name</key>
+		<string>PacMan</string>
+		<key>GitURL</key>
+		<string>https://github.com/gcasa/PacMan</string>
+		<key>Description</key>
+		<string>Navigate a maze, collect dots, and avoid ghosts in the classic arcade game</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>NetCheck</string>
+		<key>GitURL</key>
+		<string>https://github.com/gcasa/apps-netcheck</string>
+		<key>Description</key>
+		<string>Monitor network interface activity with per-interface RX and TX bars</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>CpuCheck</string>
+		<key>GitURL</key>
+		<string>https://github.com/gcasa/apps-cpucheck</string>
+		<key>Description</key>
+		<string>Monitor CPU usage from the dock</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>MemWatch</string>
+		<key>GitURL</key>
+		<string>https://github.com/gcasa/apps-memwatch</string>
+		<key>Description</key>
+		<string>Monitor RAM and swap usage in the status bar</string>
+	</dict>
+	<dict>
+		<key>Name</key>
 		<string>Dictionary</string>
 		<key>GitURL</key>
 		<string>https://github.com/gcasa/Dictionary</string>
