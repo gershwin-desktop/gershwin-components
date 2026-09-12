@@ -304,6 +304,14 @@
 	</dict>
 	<dict>
 		<key>Name</key>
+		<string>NXVNCServer</string>
+		<key>GitURL</key>
+		<string>https://github.com/gcasa/NXVNCServer</string>
+		<key>Description</key>
+		<string>Share the screen over VNC from a NeXTSTEP or OPENSTEP system</string>
+	</dict>
+	<dict>
+		<key>Name</key>
 		<string>NFSManager</string>
 		<key>GitURL</key>
 		<string>https://github.com/gnustep/apps-nfsmanager</string>
