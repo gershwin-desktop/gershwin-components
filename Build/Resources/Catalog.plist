@@ -282,7 +282,7 @@
 		<key>Name</key>
 		<string>Dock</string>
 		<key>GitURL</key>
-		<string>https://github.com/gnustep/apps-dock</string>
+		<string>https://github.com/gcasa/apps-dock</string>
 		<key>Description</key>
 		<string>Launch and organize applications from a desktop dock</string>
 	</dict>
