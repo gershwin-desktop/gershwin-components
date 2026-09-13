@@ -17,11 +17,6 @@
 #include <stdio.h>
 #include <string.h>
 
-@protocol DockService
-- (void)setProgressValue:(double)value;
-- (void)setProgressVisible:(BOOL)visible;
-@end
-
 // ============================================================================
 // Helper: Detect whether the real kernel is FreeBSD (even under Linux compat)
 // ============================================================================
@@ -1007,7 +1002,6 @@ NSString *IACheckImageSourceAvailable(void)
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
-    [((id<DockService>)_dockProxy) setProgressVisible:NO];
     [_etaTimer invalidate];
     [_etaTimer release];
     [_startTime release];
@@ -1071,12 +1065,6 @@ NSString *IACheckImageSourceAvailable(void)
         return;
     }
 
-    // Connect to Dock DO service for progress bar in icon
-    if (_dockProxy == nil) {
-        NSConnection *conn = [NSConnection connectionWithRegisteredName:@"DockIcon" host:nil];
-        _dockProxy = [conn rootProxy];
-    }
-
     _isRunning = YES;
     _isFinished = NO;
     _wasSuccessful = NO;
@@ -1104,13 +1092,16 @@ NSString *IACheckImageSourceAvailable(void)
     NSDebugLLog(@"gwcomp", @"IAInstallProgressStep: launching installer %@", scriptPath);
 
     NSMutableArray *taskArgs = [NSMutableArray array];
-    /* If not running as root, use sudo -n (non-interactive) to avoid
-       /dev/tty prompts that would block when stdin is a pipe from NSTask */
+    /* If not running as root, use sudo -A -E.  -A invokes SUDO_ASKPASS
+       (a GUI dialog) if a password is needed, instead of blocking on
+       stdin which would hang when NSTask provides a pipe.  -E preserves
+       the environment so DISPLAY and SUDO_ASKPASS reach sudo. */
     NSString *launchBinary = nil;
     if (getuid() != 0) {
         launchBinary = @"/usr/bin/env";
         [taskArgs addObject:@"sudo"];
-        [taskArgs addObject:@"-n"];
+        [taskArgs addObject:@"-A"];
+        [taskArgs addObject:@"-E"];
         [taskArgs addObject:scriptPath];
         NSDebugLLog(@"gwcomp", @"IAInstallProgressStep: not root (uid=%u), wrapping in sudo", getuid());
     } else {
@@ -1251,8 +1242,6 @@ NSString *IACheckImageSourceAvailable(void)
 
             [_detailLabel setStringValue:displayMsg];
             [_progressBar setDoubleValue:pct];
-            [((id<DockService>)_dockProxy) setProgressValue:pct / 100.0];
-            [((id<DockService>)_dockProxy) setProgressVisible:YES];
             _currentPercent = pct;
             [self _updateETA:nil];
         }
@@ -1292,10 +1281,8 @@ NSString *IACheckImageSourceAvailable(void)
     _wasSuccessful = (status == 0);
 
     if (_wasSuccessful) {
-        [((id<DockService>)_dockProxy) setProgressValue:1.0];
         [self _appendLog:@"\n--- Installation completed successfully ---\n"];
     } else {
-        [((id<DockService>)_dockProxy) setProgressVisible:NO];
         [self _appendLog:[NSString stringWithFormat:
             @"\n--- Installation FAILED (exit code %d) ---\n", status]];
         [_detailLabel setStringValue:
@@ -1318,7 +1305,6 @@ NSString *IACheckImageSourceAvailable(void)
     _isRunning = NO;
     _isFinished = YES;
     _wasSuccessful = NO;
-    [((id<DockService>)_dockProxy) setProgressVisible:NO];
     [_etaTimer invalidate];
     [_etaTimer release];
     _etaTimer = nil;
