@@ -49,8 +49,11 @@ ADDITIONAL_OBJCFLAGS += -fobjc-arc -fobjc-arc-exceptions
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra
 ADDITIONAL_OBJCFLAGS += -Wno-nullability-completeness -Wno-unused-parameter
 
-# Only needs Foundation and libdispatch for dispatch_once
-PackageManager_FRAMEWORKS_DEPEND_UPON = Foundation
+# ODProgressWindow uses AppKit, so the library must record gnustep-gui as a
+# dependency itself; otherwise every non-GUI consumer (e.g. Tests) fails to
+# link with undefined NSWindow/NSView/... references.  libdispatch is for
+# dispatch_once.
+PackageManager_LIBRARIES_DEPEND_UPON += $(GUI_LIBS) $(FND_LIBS) $(OBJC_LIBS)
 ADDITIONAL_LDFLAGS += -ldispatch
 
 # sqlite3 for the header database (pkg-config is the reliable way to get the
