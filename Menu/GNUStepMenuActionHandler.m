@@ -55,8 +55,11 @@ static NSLock *connectionCacheLock = nil;
 + (void)performMenuAction:(id)sender
 {
     
+    /* Every early return below drops the user's menu action.  Log them all:
+       a dropped action otherwise leaves no trace (in the UI tests the About
+       box just never appears). */
     if (![sender isKindOfClass:[NSMenuItem class]]) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Sender is not an NSMenuItem");
+        NSLog(@"GNUStepMenuActionHandler: dropping action: sender %@ is not an NSMenuItem", sender);
         return;
     }
 
@@ -66,7 +69,7 @@ static NSLock *connectionCacheLock = nil;
     NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Menu item '%@' representedObject: %@", [menuItem title], info);
     
     if (![info isKindOfClass:[NSDictionary class]]) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Missing action metadata for item '%@'", [menuItem title]);
+        NSLog(@"GNUStepMenuActionHandler: dropping '%@': missing action metadata", [menuItem title]);
         return;
     }
 
@@ -77,7 +80,7 @@ static NSLock *connectionCacheLock = nil;
     NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Extracted - clientName: %@, windowId: %@, indexPath: %@", clientName, windowId, indexPath);
 
     if (!clientName || !windowId || !indexPath) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Invalid action metadata for item '%@'", [menuItem title]);
+        NSLog(@"GNUStepMenuActionHandler: dropping '%@': incomplete action metadata %@", [menuItem title], info);
         return;
     }
 
@@ -139,7 +142,8 @@ static NSLock *connectionCacheLock = nil;
         }
     }
     if (!connection) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: No cached connection to GNUstep menu client %@", clientName);
+        NSLog(@"GNUStepMenuActionHandler: dropping '%@' for window %@: no connection to menu client %@",
+              menuItemTitle, windowId, clientName);
         return;
     }
     
@@ -147,7 +151,8 @@ static NSLock *connectionCacheLock = nil;
 
     id proxy = [connection rootProxy];
     if (!proxy) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: No root proxy for GNUstep menu client %@", clientName);
+        NSLog(@"GNUStepMenuActionHandler: dropping '%@': no root proxy for menu client %@",
+              menuItemTitle, clientName);
         return;
     }
 
@@ -163,7 +168,8 @@ static NSLock *connectionCacheLock = nil;
         NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Call completed, dispatched action for menu item '%@'", menuItemTitle);
     }
     @catch (NSException *exception) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuActionHandler: Exception activating menu item '%@': %@ - %@", menuItemTitle, [exception name], [exception reason]);
+        NSLog(@"GNUStepMenuActionHandler: dropping '%@': %@ sending it to menu client %@: %@",
+              menuItemTitle, [exception name], clientName, [exception reason]);
     }
 }
 
