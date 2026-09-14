@@ -313,8 +313,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
     if (mainView) {
         return mainView;
     }
-    xinputPath = [[self findXinput] retain];
-    [self enumerateDevices];
 
     const CGFloat winW = 560, winH = 445;
     const CGFloat sideMargin = METRICS_CONTENT_SIDE_MARGIN;      /* 24 */
@@ -476,8 +474,10 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [statusLabel setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
     [mainView addSubview:statusLabel];
 
-    [self updateSectionTitles];
-    [self refreshFromSystem];
+    /* The host may build this view without ever selecting the pane (to index
+       its labels for search), so device discovery, hiding and disabling of
+       device-dependent controls and value loading are left to
+       refreshFromSystem, which runs on selection. */
     return mainView;
 }
 
@@ -708,12 +708,17 @@ static NSString *const kMouseDomain = @"MousePreferences";
 {
     isRefreshing = YES;
     if (!xinputPath) {
+        xinputPath = [[self findXinput] retain];
+    }
+    /* Enumerate even without xinput so the device-dependent controls show
+       that no device is available instead of keeping their built state. */
+    [self enumerateDevices];
+    [self updateSectionTitles];
+    if (!xinputPath) {
         [self updateStatus:@"xinput not found. Install xinput package."];
         isRefreshing = NO;
         return;
     }
-    [self enumerateDevices];
-    [self updateSectionTitles];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSDictionary *tpProps = nil;
         NSDictionary *mProps = nil;

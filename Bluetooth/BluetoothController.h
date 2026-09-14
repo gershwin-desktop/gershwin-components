@@ -9,6 +9,8 @@
 @interface BluetoothController : NSObject <NSTableViewDataSource, NSTableViewDelegate>
 {
     NSView *mainView;
+    NSView *controlsView;
+    NSTextField *unavailableLabel;
 
     NSButton *powerCheckbox;
     NSButton *discoverableCheckbox;

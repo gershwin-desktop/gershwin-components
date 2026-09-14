@@ -51,7 +51,9 @@
     NSTextField *searchDomainsField;
     NSButton *dhcpLeaseButton;
     
-    // WiFi tab
+    // WLAN tab
+    NSTabViewItem *wlanTabItem;
+    BOOL wlanTabShown;
     NSView *wlanView;
     NSScrollView *wlanScrollView;
     NSTableView *wlanTable;
@@ -114,6 +116,8 @@
 - (void)createUnavailableView;
 
 // Refresh
+- (void)startRefreshing;
+- (void)stopRefreshing;
 - (void)refreshInterfaces:(NSTimer *)timer;
 - (void)refreshWLANNetworks;
 - (void)startWLANRefreshTimer;

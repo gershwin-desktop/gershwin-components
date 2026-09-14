@@ -13,7 +13,6 @@
 @interface NetworkPane : NSPreferencePane
 {
     NetworkController *controller;
-    NSTimer *refreshTimer;
 }
 
 @end

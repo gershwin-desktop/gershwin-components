@@ -93,8 +93,8 @@
 
 - (void)mainViewDidLoad
 {
-    // Initial data refresh
-    [controller refreshDevices];
+    // No refresh here: the view is also built for search without being
+    // shown, so reading audio state waits for didSelect
     [self setInitialKeyView:nil];
 }
 

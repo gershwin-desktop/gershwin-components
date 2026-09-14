@@ -9,6 +9,31 @@
 #import "NetworkBackend.h"
 #import <AppKit/AppKit.h>
 
+#pragma mark - Tool Lookup
+
+NSString *NetworkExecutablePath(NSString *name, NSArray *directories)
+{
+    NSMutableArray *searchPath = [NSMutableArray arrayWithArray:directories];
+    NSString *envPath = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"];
+    if (envPath) {
+        [searchPath addObjectsFromArray:[envPath componentsSeparatedByString:@":"]];
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *dir in searchPath) {
+        /* An empty PATH element means the current directory, which is
+           never where system network tools live. */
+        if ([dir length] == 0) {
+            continue;
+        }
+        NSString *candidate = [dir stringByAppendingPathComponent:name];
+        if ([fm isExecutableFileAtPath:candidate]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
 #pragma mark - IPConfiguration
 
 @implementation IPConfiguration

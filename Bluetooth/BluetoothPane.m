@@ -55,11 +55,9 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
-{
-    [controller refreshFromSystem];
-}
-
+/* The host may load the view without ever showing it (search indexing), so
+   querying bluetoothctl is deferred to here; this also re-reads state that
+   changed while the pane was not shown. */
 - (void)didSelect
 {
     [super didSelect];

@@ -19,7 +19,8 @@ typedef NS_ENUM(NSInteger, BTOperation) {
 - (NSString *)runBluetoothctl:(NSString *)command timeout:(NSTimeInterval)timeout;
 - (NSString *)runBluetoothctl:(NSString *)command;
 - (BOOL)toolExists;
-- (BOOL)bluetoothAvailable;
+- (NSString *)adapterShowOutput;
+- (void)setAdapterAvailable:(BOOL)available;
 - (NSArray *)parseDeviceList;
 - (NSDictionary *)parseDeviceInfo:(NSString *)address;
 - (void)loadPairedDevices;
@@ -51,6 +52,8 @@ typedef NS_ENUM(NSInteger, BTOperation) {
 - (void)dealloc
 {
     [mainView release];
+    [controlsView release];
+    [unavailableLabel release];
     [powerCheckbox release];
     [discoverableCheckbox release];
     [devicesTable release];
@@ -145,20 +148,23 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     return [[NSFileManager defaultManager] isExecutableFileAtPath:@"/usr/bin/bluetoothctl"];
 }
 
-- (BOOL)bluetoothAvailable
+/* Returns the "show" output so one bluetoothctl run answers both "is there
+   an adapter" and "what state is it in"; nil means no usable adapter. */
+- (NSString *)adapterShowOutput
 {
 #if !defined(__linux__)
     NSDebugLLog(@"gwcomp", @"Bluetooth: platform not supported");
-    return NO;
-#endif
+    return nil;
+#else
     if (![self toolExists]) {
         NSDebugLLog(@"gwcomp", @"Bluetooth: tool not available");
-        return NO;
+        return nil;
     }
     NSString *out = [self runBluetoothctl:@"show" timeout:5.0];
     BOOL avail = (out != nil && [out rangeOfString:@"Controller"].location != NSNotFound);
     NSDebugLLog(@"gwcomp", @"Bluetooth: %@", avail ? @"adapter found" : @"no adapter");
-    return avail;
+    return avail ? out : nil;
+#endif
 }
 
 #pragma mark - Device List Parsing
@@ -275,26 +281,25 @@ typedef NS_ENUM(NSInteger, BTOperation) {
 {
     if (mainView) return mainView;
 
-    if (![self bluetoothAvailable]) {
-        mainView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 200)];
-        NSString *msgText = [self toolExists]
-            ? @"Bluetooth controller not found.\nEnsure your adapter is connected."
-            : @"Bluetooth utility not found.\nInstall bluez package.";
-        NSTextField *msg = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 80, 520, 40)];
-        [msg setBezeled:NO];
-        [msg setEditable:NO];
-        [msg setSelectable:NO];
-        [msg setDrawsBackground:NO];
-        [msg setStringValue:msgText];
-        [msg setAlignment:NSCenterTextAlignment];
-        [msg setFont:[NSFont systemFontOfSize:13]];
-        [msg setTextColor:[NSColor grayColor]];
-        [mainView addSubview:msg];
-        [msg release];
-        return mainView;
-    }
-
+    /* Adapter presence is only known after querying bluetoothctl, which must
+       not happen while the host merely loads the view (e.g. to index it for
+       search), so every widget is always built and refreshFromSystem picks
+       which of the two groups is visible. */
     mainView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 370)];
+    controlsView = [[NSView alloc] initWithFrame:[mainView bounds]];
+    [mainView addSubview:controlsView];
+
+    unavailableLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 165, 520, 40)];
+    [unavailableLabel setBezeled:NO];
+    [unavailableLabel setEditable:NO];
+    [unavailableLabel setSelectable:NO];
+    [unavailableLabel setDrawsBackground:NO];
+    [unavailableLabel setAlignment:NSCenterTextAlignment];
+    [unavailableLabel setFont:[NSFont systemFontOfSize:13]];
+    [unavailableLabel setTextColor:[NSColor grayColor]];
+    [unavailableLabel setHidden:YES];
+    [mainView addSubview:unavailableLabel];
+
     CGFloat labelX = 18;
     CGFloat rowH = 22;
     CGFloat y = 348;
@@ -306,7 +311,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [powerCheckbox setFont:[NSFont boldSystemFontOfSize:12]];
     [powerCheckbox setTarget:self];
     [powerCheckbox setAction:@selector(settingChanged:)];
-    [mainView addSubview:powerCheckbox];
+    [controlsView addSubview:powerCheckbox];
 
     NSTextField *pwrLbl = [[NSTextField alloc] initWithFrame:NSMakeRect(100, y, 120, rowH)];
     [pwrLbl setBezeled:NO];
@@ -316,7 +321,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [pwrLbl setStringValue:@"Bluetooth"];
     [pwrLbl setFont:[NSFont boldSystemFontOfSize:13]];
     [pwrLbl setTextColor:[NSColor blackColor]];
-    [mainView addSubview:pwrLbl];
+    [controlsView addSubview:pwrLbl];
     [pwrLbl release];
     y -= 28;
 
@@ -326,12 +331,12 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [discoverableCheckbox setFont:[NSFont systemFontOfSize:11]];
     [discoverableCheckbox setTarget:self];
     [discoverableCheckbox setAction:@selector(settingChanged:)];
-    [mainView addSubview:discoverableCheckbox];
+    [controlsView addSubview:discoverableCheckbox];
     y -= 8;
 
     NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(labelX, y, 524, 1)];
     [sep setBoxType:NSBoxSeparator];
-    [mainView addSubview:sep];
+    [controlsView addSubview:sep];
     [sep release];
     y -= 14;
 
@@ -361,7 +366,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [col release];
 
     [devicesScrollView setDocumentView:devicesTable];
-    [mainView addSubview:devicesScrollView];
+    [controlsView addSubview:devicesScrollView];
 
     /* Buttons below list */
     CGFloat by = listBottom - 28;
@@ -370,20 +375,20 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [scanButton setTitle:@"Scan"];
     [scanButton setTarget:self];
     [scanButton setAction:@selector(startScan:)];
-    [mainView addSubview:scanButton];
+    [controlsView addSubview:scanButton];
 
     scanSpinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(labelX + 78, by + 4, 16, 16)];
     [scanSpinner setStyle:NSProgressIndicatorSpinningStyle];
     [scanSpinner setDisplayedWhenStopped:NO];
     [scanSpinner setControlSize:NSSmallControlSize];
-    [mainView addSubview:scanSpinner];
+    [controlsView addSubview:scanSpinner];
 
     removeButton = [[NSButton alloc] initWithFrame:NSMakeRect(labelX + 100, by, 75, 24)];
     [removeButton setTitle:@"Remove"];
     [removeButton setTarget:self];
     [removeButton setAction:@selector(removeDevice:)];
     [removeButton setEnabled:NO];
-    [mainView addSubview:removeButton];
+    [controlsView addSubview:removeButton];
 
     /* Detail panel on the right */
     CGFloat detailX = labelX + listW + 14;
@@ -397,7 +402,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [deviceInfoLabel setDrawsBackground:NO];
     [deviceInfoLabel setFont:[NSFont boldSystemFontOfSize:12]];
     [deviceInfoLabel setStringValue:@"No device selected"];
-    [mainView addSubview:deviceInfoLabel];
+    [controlsView addSubview:deviceInfoLabel];
     dy -= 22;
 
     /* Detail fields */
@@ -414,7 +419,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
         [kl setFont:[NSFont systemFontOfSize:10]];
         [kl setTextColor:[NSColor grayColor]];
         [kl setAlignment:NSRightTextAlignment];
-        [mainView addSubview:kl];
+        [controlsView addSubview:kl];
         [kl release];
 
         NSTextField *vl = [[NSTextField alloc] initWithFrame:NSMakeRect(detailX + 85, dy, detailW - 85, 16)];
@@ -424,7 +429,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
         [vl setDrawsBackground:NO];
         [vl setStringValue:@"-"];
         [vl setFont:[NSFont systemFontOfSize:10]];
-        [mainView addSubview:vl];
+        [controlsView addSubview:vl];
         *vals[i] = vl;
         dy -= 18;
     }
@@ -436,21 +441,21 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [pairButton setTarget:self];
     [pairButton setAction:@selector(pairDevice:)];
     [pairButton setEnabled:NO];
-    [mainView addSubview:pairButton];
+    [controlsView addSubview:pairButton];
 
     connectButton = [[NSButton alloc] initWithFrame:NSMakeRect(detailX + 75, dy, 75, 22)];
     [connectButton setTitle:@"Connect"];
     [connectButton setTarget:self];
     [connectButton setAction:@selector(connectDevice:)];
     [connectButton setEnabled:NO];
-    [mainView addSubview:connectButton];
+    [controlsView addSubview:connectButton];
 
     disconnectButton = [[NSButton alloc] initWithFrame:NSMakeRect(detailX + 75, dy, 75, 22)];
     [disconnectButton setTitle:@"Disconnect"];
     [disconnectButton setTarget:self];
     [disconnectButton setAction:@selector(disconnectDevice:)];
     [disconnectButton setEnabled:NO];
-    [mainView addSubview:disconnectButton];
+    [controlsView addSubview:disconnectButton];
     dy -= 24;
 
     trustButton = [[NSButton alloc] initWithFrame:NSMakeRect(detailX, dy, 70, 22)];
@@ -458,7 +463,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [trustButton setTarget:self];
     [trustButton setAction:@selector(trustDevice:)];
     [trustButton setEnabled:NO];
-    [mainView addSubview:trustButton];
+    [controlsView addSubview:trustButton];
 
     /* Status bar */
     statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(labelX, 2, 524, 14)];
@@ -468,10 +473,20 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [statusLabel setDrawsBackground:NO];
     [statusLabel setFont:[NSFont systemFontOfSize:9]];
     [statusLabel setTextColor:[NSColor grayColor]];
-    [mainView addSubview:statusLabel];
+    [controlsView addSubview:statusLabel];
 
-    [self refreshFromSystem];
     return mainView;
+}
+
+- (void)setAdapterAvailable:(BOOL)available
+{
+    [controlsView setHidden:!available];
+    [unavailableLabel setHidden:available];
+    if (!available) {
+        [unavailableLabel setStringValue:[self toolExists]
+            ? @"Bluetooth controller not found.\nEnsure your adapter is connected."
+            : @"Bluetooth utility not found.\nInstall bluez package."];
+    }
 }
 
 #pragma mark - Refresh
@@ -481,9 +496,15 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     NSDebugLLog(@"gwcomp", @"Bluetooth refreshFromSystem: start");
     isRefreshing = YES;
 
-    NSString *show = [self runBluetoothctl:@"show" timeout:5.0];
-    BOOL powered = (show != nil && [show rangeOfString:@"Powered: yes"].location != NSNotFound);
-    BOOL discoverable = (show != nil && [show rangeOfString:@"Discoverable: yes"].location != NSNotFound);
+    NSString *show = [self adapterShowOutput];
+    [self setAdapterAvailable:(show != nil)];
+    if (show == nil) {
+        isRefreshing = NO;
+        return;
+    }
+
+    BOOL powered = ([show rangeOfString:@"Powered: yes"].location != NSNotFound);
+    BOOL discoverable = ([show rangeOfString:@"Discoverable: yes"].location != NSNotFound);
     NSDebugLLog(@"gwcomp", @"Bluetooth: state: powered=%d discoverable=%d", powered, discoverable);
 
     [powerCheckbox setState:powered ? NSOnState : NSOffState];

@@ -73,60 +73,63 @@ static const CGFloat kTableRowHeight = 18.0;
         isUpdatingUI = NO;
         isInitializing = YES;
         isRefreshing = NO;
-
-        // Create serial background queue for backend operations (amixer, aplay, etc.)
-        backendQueue = dispatch_queue_create("org.gershwin.sound.backend", DISPATCH_QUEUE_SERIAL);
-
-        // Initialize backend - try OSS first (FreeBSD), then ALSA (Linux)
+        // Backend construction enumerates devices by running amixer/aplay
+        // or opening /dev/mixer, which is far too slow for a pane that may
+        // only be built for search; refreshDevices probes it on first use
         backend = nil;
+        backendProbed = NO;
+        wantsInputLevelMonitoring = NO;
+        backendQueue = NULL;
+    }
+    return self;
+}
+
+/* Returns a retained backend or nil. Blocking (backend -init enumerates
+   devices), so only called on backendQueue. */
+- (id<SoundBackend>)newAvailableBackend
+{
+    id<SoundBackend> found = nil;
 
 #if defined(__FreeBSD__) || defined(__DragonFly__)
-        // On FreeBSD/DragonFly, prefer OSS
+    // On FreeBSD/DragonFly, prefer OSS
+    OSSBackend *ossBackend = [[OSSBackend alloc] init];
+    if ([ossBackend isAvailable]) {
+        found = ossBackend;
+    } else {
+        [ossBackend release];
+    }
+#endif
+
+    // If no backend yet, try ALSA (Linux)
+    if (found == nil) {
+        ALSABackend *alsaBackend = [[ALSABackend alloc] init];
+        if ([alsaBackend isAvailable]) {
+            found = alsaBackend;
+        } else {
+            [alsaBackend release];
+        }
+    }
+
+#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__)
+    // On non-BSD systems, also try OSS as fallback (e.g., OSS4 on Linux)
+    // (OpenBSD excluded: no OSS there; sndio backend is a future addition.)
+    if (found == nil) {
         OSSBackend *ossBackend = [[OSSBackend alloc] init];
         if ([ossBackend isAvailable]) {
-            backend = ossBackend;
-            backend.delegate = self;
-            NSDebugLLog(@"gwcomp", @"SoundController: Using OSS backend version %@",
-                  [backend backendVersion]);
+            found = ossBackend;
         } else {
             [ossBackend release];
         }
-#endif
-
-        // If no backend yet, try ALSA (Linux)
-        if (backend == nil) {
-            ALSABackend *alsaBackend = [[ALSABackend alloc] init];
-            if ([alsaBackend isAvailable]) {
-                backend = alsaBackend;
-                backend.delegate = self;
-                NSDebugLLog(@"gwcomp", @"SoundController: Using ALSA backend version %@",
-                      [backend backendVersion]);
-            } else {
-                [alsaBackend release];
-            }
-        }
-
-#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__)
-        // On non-BSD systems, also try OSS as fallback (e.g., OSS4 on Linux)
-        // (OpenBSD excluded: no OSS there; sndio backend is a future addition.)
-        if (backend == nil) {
-            OSSBackend *ossBackend = [[OSSBackend alloc] init];
-            if ([ossBackend isAvailable]) {
-                backend = ossBackend;
-                backend.delegate = self;
-                NSDebugLLog(@"gwcomp", @"SoundController: Using OSS backend version %@",
-                      [backend backendVersion]);
-            } else {
-                [ossBackend release];
-            }
-        }
-#endif
-
-        if (backend == nil) {
-            NSDebugLLog(@"gwcomp", @"SoundController: No audio backend available");
-        }
     }
-    return self;
+#endif
+
+    if (found == nil) {
+        NSDebugLLog(@"gwcomp", @"SoundController: No audio backend available");
+    } else {
+        NSDebugLLog(@"gwcomp", @"SoundController: Using %@ backend version %@",
+              [found backendName], [found backendVersion]);
+    }
+    return found;
 }
 
 - (void)dealloc
@@ -165,11 +168,6 @@ static const CGFloat kTableRowHeight = 18.0;
 
 - (NSView *)createMainView
 {
-    if (backend == nil) {
-        [self createUnavailableView];
-        return mainView;
-    }
-    
     // Mark that we're in initialization phase - don't modify audio settings
     isInitializing = YES;
     
@@ -206,7 +204,9 @@ static const CGFloat kTableRowHeight = 18.0;
     
     [mainView addSubview:mainTabView];
     [mainTabView release];
-    
+
+    [self createUnavailableView];
+
     return mainView;
 }
 
@@ -232,7 +232,9 @@ static const CGFloat kTableRowHeight = 18.0;
     CGFloat contentWidth = kTabContentWidth;
     CGFloat contentHeight = kTabContentHeight;
     CGFloat yPos = contentHeight - kMargin - 10;
-    
+
+    effectsView = [tab view];
+
     // "Select an alert sound:" label
     NSTextField *alertLabel = [[NSTextField alloc] initWithFrame:
                                NSMakeRect(kMargin, yPos - kLabelHeight, 200, kLabelHeight)];
@@ -306,6 +308,9 @@ static const CGFloat kTableRowHeight = 18.0;
     [alertVolumeSlider setMinValue:0.0];
     [alertVolumeSlider setMaxValue:1.0];
     [alertVolumeSlider setFloatValue:1.0];
+    // Controls stay disabled until refreshDevices fills them, so a click
+    // before the backend exists cannot write a placeholder value
+    [alertVolumeSlider setEnabled:NO];
     [alertVolumeSlider setContinuous:YES];
     [alertVolumeSlider setTarget:self];
     [alertVolumeSlider setAction:@selector(alertVolumeChanged:)];
@@ -339,7 +344,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                   NSMakeRect(kMargin + 120, yPos - kSliderHeight, sliderWidth, kSliderHeight)];
     [mainVolumeSlider setMinValue:0.0];
     [mainVolumeSlider setMaxValue:1.0];
-    [mainVolumeSlider setFloatValue:[backend outputVolume]];
+    [mainVolumeSlider setEnabled:NO];
     [mainVolumeSlider setContinuous:YES];
     [mainVolumeSlider setTarget:self];
     [mainVolumeSlider setAction:@selector(outputVolumeChanged:)];
@@ -353,7 +358,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                             yPos - kCheckboxHeight, 60, kCheckboxHeight)];
     [mainMuteCheckbox setButtonType:NSSwitchButton];
     [mainMuteCheckbox setTitle:@"Mute"];
-    [mainMuteCheckbox setState:[backend isOutputMuted] ? NSOnState : NSOffState];
+    [mainMuteCheckbox setEnabled:NO];
     [mainMuteCheckbox setTarget:self];
     [mainMuteCheckbox setAction:@selector(outputMuteChanged:)];
     [mainMuteCheckbox setTag:100];
@@ -368,7 +373,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                        contentWidth - 2 * kMargin, kCheckboxHeight)];
     [playUIEffectsCheckbox setButtonType:NSSwitchButton];
     [playUIEffectsCheckbox setTitle:@"Play user interface sound effects"];
-    [playUIEffectsCheckbox setState:[backend playUserInterfaceSoundEffects] ? NSOnState : NSOffState];
+    [playUIEffectsCheckbox setEnabled:NO];
     [playUIEffectsCheckbox setTarget:self];
     [playUIEffectsCheckbox setAction:@selector(playUIEffectsChanged:)];
     [[tab view] addSubview:playUIEffectsCheckbox];
@@ -380,7 +385,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                             contentWidth - 2 * kMargin, kCheckboxHeight)];
     [playVolumeFeedbackCheckbox setButtonType:NSSwitchButton];
     [playVolumeFeedbackCheckbox setTitle:@"Play feedback when volume is changed"];
-    [playVolumeFeedbackCheckbox setState:[backend playFeedbackWhenVolumeIsChanged] ? NSOnState : NSOffState];
+    [playVolumeFeedbackCheckbox setEnabled:NO];
     [playVolumeFeedbackCheckbox setTarget:self];
     [playVolumeFeedbackCheckbox setAction:@selector(playVolumeFeedbackChanged:)];
     [[tab view] addSubview:playVolumeFeedbackCheckbox];
@@ -514,6 +519,7 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputBalanceSlider setMinValue:0.0];
     [outputBalanceSlider setMaxValue:1.0];
     [outputBalanceSlider setFloatValue:0.5];
+    [outputBalanceSlider setEnabled:NO];
     [outputBalanceSlider setContinuous:YES];
     [outputBalanceSlider setTarget:self];
     [outputBalanceSlider setAction:@selector(outputBalanceChanged:)];
@@ -552,7 +558,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                     volSliderWidth, kSliderHeight)];
     [outputVolumeSlider setMinValue:0.0];
     [outputVolumeSlider setMaxValue:1.0];
-    [outputVolumeSlider setFloatValue:[backend outputVolume]];
+    [outputVolumeSlider setEnabled:NO];
     [outputVolumeSlider setContinuous:YES];
     [outputVolumeSlider setTarget:self];
     [outputVolumeSlider setAction:@selector(outputVolumeChanged:)];
@@ -564,7 +570,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                     yPos - kCheckboxHeight, 60, kCheckboxHeight)];
     [outputMuteCheckbox setButtonType:NSSwitchButton];
     [outputMuteCheckbox setTitle:@"Mute"];
-    [outputMuteCheckbox setState:[backend isOutputMuted] ? NSOnState : NSOffState];
+    [outputMuteCheckbox setEnabled:NO];
     [outputMuteCheckbox setTarget:self];
     [outputMuteCheckbox setAction:@selector(outputMuteChanged:)];
     [[tab view] addSubview:outputMuteCheckbox];
@@ -684,7 +690,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                    volSliderWidth, kSliderHeight)];
     [inputVolumeSlider setMinValue:0.0];
     [inputVolumeSlider setMaxValue:1.0];
-    [inputVolumeSlider setFloatValue:[backend inputVolume]];
+    [inputVolumeSlider setEnabled:NO];
     [inputVolumeSlider setContinuous:YES];
     [inputVolumeSlider setTarget:self];
     [inputVolumeSlider setAction:@selector(inputVolumeChanged:)];
@@ -696,7 +702,7 @@ static const CGFloat kTableRowHeight = 18.0;
                                    yPos - kCheckboxHeight, 60, kCheckboxHeight)];
     [inputMuteCheckbox setButtonType:NSSwitchButton];
     [inputMuteCheckbox setTitle:@"Mute"];
-    [inputMuteCheckbox setState:[backend isInputMuted] ? NSOnState : NSOffState];
+    [inputMuteCheckbox setEnabled:NO];
     [inputMuteCheckbox setTarget:self];
     [inputMuteCheckbox setAction:@selector(inputMuteChanged:)];
     [[tab view] addSubview:inputMuteCheckbox];
@@ -733,32 +739,27 @@ static const CGFloat kTableRowHeight = 18.0;
 
 - (void)createUnavailableView
 {
-    mainView = [[SoundMainView alloc] initWithFrame:
-                NSMakeRect(0, 0, kPaneWidth, kPaneHeight)];
-    [(SoundMainView *)mainView setLayoutOwner:self];
-    [mainView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-    
-    // Create centered message
-    NSTextField *message = [[NSTextField alloc] initWithFrame:
-                            NSMakeRect(50, kPaneHeight/2 - 30, kPaneWidth - 100, 60)];
-    [message setStringValue:@"No audio system available.\n\n"
-                            @"Please check your audio hardware and drivers."];
-    [message setBezeled:NO];
-    [message setEditable:NO];
-    [message setSelectable:NO];
-    [message setDrawsBackground:NO];
-    [message setAlignment:NSCenterTextAlignment];
-    [message setFont:[NSFont systemFontOfSize:14]];
-    [message setTextColor:[NSColor grayColor]];
-    [mainView addSubview:message];
-    [message release];
+    unavailableLabel = [[NSTextField alloc] initWithFrame:
+                        NSMakeRect(50, kPaneHeight/2 - 30, kPaneWidth - 100, 60)];
+    [unavailableLabel setStringValue:@"No audio system available.\n\n"
+                                     @"Please check your audio hardware and drivers."];
+    [unavailableLabel setBezeled:NO];
+    [unavailableLabel setEditable:NO];
+    [unavailableLabel setSelectable:NO];
+    [unavailableLabel setDrawsBackground:NO];
+    [unavailableLabel setAlignment:NSCenterTextAlignment];
+    [unavailableLabel setFont:[NSFont systemFontOfSize:14]];
+    [unavailableLabel setTextColor:[NSColor grayColor]];
+    [unavailableLabel setHidden:YES];
+    [mainView addSubview:unavailableLabel];
+    [unavailableLabel release];
 }
 
 #pragma mark - Refresh
 
 - (void)refreshDevices
 {
-    if (!backend) return;
+    if (backendProbed && !backend) return;
 
     // Skip if a refresh is already in progress to avoid queueing up stale work
     if (isRefreshing) {
@@ -769,22 +770,56 @@ static const CGFloat kTableRowHeight = 18.0;
     NSDebugLLog(@"gwcomp", @"SoundController: refreshDevices called");
     isRefreshing = YES;
 
+    if (backendQueue == NULL) {
+        backendQueue = dispatch_queue_create("io.github.gershwin-desktop.sound.backend",
+                                             DISPATCH_QUEUE_SERIAL);
+    }
+    BOOL probe = !backendProbed;
+
     // Dispatch blocking backend operations to background queue
     dispatch_async(backendQueue, ^{
         @autoreleasepool {
-        // Refresh backend data (calls amixer, aplay, etc. - blocking)
-        [backend refresh];
+        // A freshly created backend has just enumerated in -init, so
+        // refreshing it again would only repeat the slow amixer/aplay runs
+        id<SoundBackend> b = probe ? [self newAvailableBackend] : backend;
+        if (!probe) {
+            [b refresh];
+        }
 
         // Pre-fetch control values on background queue to avoid blocking main thread
-        float outVol = [backend outputVolume];
-        BOOL outMuted = [backend isOutputMuted];
-        float outBalance = [backend outputBalance];
-        float inVol = [backend inputVolume];
-        BOOL inMuted = [backend isInputMuted];
-        float alertVol = [backend alertVolume];
+        float outVol = [b outputVolume];
+        BOOL outMuted = [b isOutputMuted];
+        float outBalance = [b outputBalance];
+        float inVol = [b inputVolume];
+        BOOL inMuted = [b isInputMuted];
+        float alertVol = [b alertVolume];
+        BOOL playUIEffects = [b playUserInterfaceSoundEffects];
+        BOOL playFeedback = [b playFeedbackWhenVolumeIsChanged];
 
         // Dispatch UI updates back to the main thread
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (probe) {
+                // Assigned only here so the main thread never sees a
+                // half-constructed backend; takes over the +1 from new
+                backend = b;
+                backendProbed = YES;
+                [mainTabView setHidden:(backend == nil)];
+                [unavailableLabel setHidden:(backend != nil)];
+                if (backend == nil) {
+                    isRefreshing = NO;
+                    return;
+                }
+                backend.delegate = self;
+                // The pane may have been selected before the backend existed
+                if (wantsInputLevelMonitoring) {
+                    [backend startInputLevelMonitoring];
+                }
+                // Not covered by the per-device enabling in the update methods
+                [alertVolumeSlider setEnabled:YES];
+                [playUIEffectsCheckbox setEnabled:YES];
+                [playVolumeFeedbackCheckbox setEnabled:YES];
+            }
+
             isUpdatingUI = YES;
 
             // Update device lists
@@ -796,6 +831,8 @@ static const CGFloat kTableRowHeight = 18.0;
             [self updateOutputControlsWithVolume:outVol muted:outMuted balance:outBalance];
             [self updateInputControlsWithVolume:inVol muted:inMuted];
             [alertVolumeSlider setFloatValue:alertVol];
+            [playUIEffectsCheckbox setState:playUIEffects ? NSOnState : NSOffState];
+            [playVolumeFeedbackCheckbox setState:playFeedback ? NSOnState : NSOffState];
 
             isUpdatingUI = NO;
             isRefreshing = NO;
@@ -972,7 +1009,7 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputBalanceSlider setEnabled:!readOnly];
 
     // Update the main volume slider on effects tab too
-    NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
+    NSView *effectsTabView = effectsView;
     for (NSView *subview in [effectsTabView subviews]) {
         if ([subview isKindOfClass:[NSSlider class]] && 
             [(NSSlider *)subview tag] == 100) {
@@ -1010,7 +1047,7 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputBalanceSlider setEnabled:!readOnly];
 
     // Update the main volume slider on effects tab too
-    NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
+    NSView *effectsTabView = effectsView;
     for (NSView *subview in [effectsTabView subviews]) {
         if ([subview isKindOfClass:[NSSlider class]] &&
             [(NSSlider *)subview tag] == 100) {
@@ -1107,11 +1144,15 @@ static const CGFloat kTableRowHeight = 18.0;
 
 - (void)startInputLevelMonitoring
 {
+    // Remembered because on first selection the backend is still being
+    // probed; refreshDevices starts monitoring once it exists
+    wantsInputLevelMonitoring = YES;
     [backend startInputLevelMonitoring];
 }
 
 - (void)stopInputLevelMonitoring
 {
+    wantsInputLevelMonitoring = NO;
     [backend stopInputLevelMonitoring];
 }
 
@@ -1375,7 +1416,7 @@ static const CGFloat kTableRowHeight = 18.0;
 
     // Sync the other volume slider immediately for responsive UI
     if (!fromEffectsTab) {
-        NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
+        NSView *effectsTabView = effectsView;
         for (NSView *subview in [effectsTabView subviews]) {
             if ([subview isKindOfClass:[NSSlider class]] &&
                 [(NSSlider *)subview tag] == 100) {
@@ -1434,7 +1475,7 @@ static const CGFloat kTableRowHeight = 18.0;
 
     // Sync the other mute checkbox immediately for responsive UI
     if (!fromEffectsTab) {
-        NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
+        NSView *effectsTabView = effectsView;
         for (NSView *subview in [effectsTabView subviews]) {
             if ([subview isKindOfClass:[NSButton class]] &&
                 [(NSButton *)subview tag] == 100) {
@@ -1622,7 +1663,7 @@ static const CGFloat kTableRowHeight = 18.0;
     float volume = [volumeNum floatValue];
     [outputVolumeSlider setFloatValue:volume];
     
-    NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
+    NSView *effectsTabView = effectsView;
     for (NSView *subview in [effectsTabView subviews]) {
         if ([subview isKindOfClass:[NSSlider class]] && 
             [(NSSlider *)subview tag] == 100) {
@@ -1645,7 +1686,7 @@ static const CGFloat kTableRowHeight = 18.0;
     BOOL muted = [muteNum boolValue];
     [outputMuteCheckbox setState:muted ? NSOnState : NSOffState];
     
-    NSView *effectsTabView = [[mainTabView tabViewItemAtIndex:0] view];
+    NSView *effectsTabView = effectsView;
     for (NSView *subview in [effectsTabView subviews]) {
         if ([subview isKindOfClass:[NSButton class]] && 
             [(NSButton *)subview tag] == 100) {

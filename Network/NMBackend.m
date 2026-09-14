@@ -121,50 +121,8 @@ enum {
 
 - (NSString *)findNmcliPath
 {
-    NSArray *paths = @[
-        @"/usr/bin/nmcli",
-        @"/bin/nmcli",
-        @"/usr/local/bin/nmcli",
-        @"/sbin/nmcli",
-        @"/usr/sbin/nmcli"
-    ];
-    
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *path in paths) {
-        if ([fm isExecutableFileAtPath:path]) {
-            return path;
-        }
-    }
-    
-    // Try PATH
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:@[@"nmcli"]];
-    
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task setStandardError:[NSPipe pipe]];
-    
-    @try {
-        [task launch];
-        [task waitUntilExit];
-        
-        if ([task terminationStatus] == 0) {
-            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-            NSString *path = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-            path = [path stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            [task release];
-            
-            if ([fm isExecutableFileAtPath:path]) {
-                return path;
-            }
-        }
-    } @catch (NSException *e) {
-        NSDebugLLog(@"gwcomp", @"[Network] Exception finding nmcli: %@", e);
-    }
-    
-    [task release];
-    return nil;
+    return NetworkExecutablePath(@"nmcli", @[@"/usr/bin", @"/bin", @"/usr/local/bin",
+                                             @"/sbin", @"/usr/sbin"]);
 }
 
 - (NSString *)findHelperPath
@@ -189,50 +147,8 @@ enum {
 
 - (NSString *)findSudoPath
 {
-    NSArray *paths = @[
-        @"/usr/bin/sudo",
-        @"/bin/sudo",
-        @"/usr/local/bin/sudo",
-        @"/sbin/sudo",
-        @"/usr/sbin/sudo"
-    ];
-    
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *path in paths) {
-        if ([fm isExecutableFileAtPath:path]) {
-            return path;
-        }
-    }
-    
-    // Try PATH
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:@[@"sudo"]];
-    
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task setStandardError:[NSPipe pipe]];
-    
-    @try {
-        [task launch];
-        [task waitUntilExit];
-        
-        if ([task terminationStatus] == 0) {
-            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-            NSString *path = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-            path = [path stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            [task release];
-            
-            if ([fm isExecutableFileAtPath:path]) {
-                return path;
-            }
-        }
-    } @catch (NSException *e) {
-        NSDebugLLog(@"gwcomp", @"[Network] Exception finding sudo: %@", e);
-    }
-    
-    [task release];
-    return nil;
+    return NetworkExecutablePath(@"sudo", @[@"/usr/bin", @"/bin", @"/usr/local/bin",
+                                            @"/sbin", @"/usr/sbin"]);
 }
 
 - (BOOL)runPrivilegedHelper:(NSArray *)arguments error:(NSError **)error

@@ -12,6 +12,11 @@
 
 #import <Foundation/Foundation.h>
 
+/* Looks name up in directories, then in $PATH, on the file system only.
+   Backends use it instead of which(1) because they are created whenever
+   the pane is instantiated, and that must not spawn processes. */
+extern NSString *NetworkExecutablePath(NSString *name, NSArray *directories);
+
 // Network interface types
 typedef NS_ENUM(NSInteger, NetworkInterfaceType) {
     NetworkInterfaceTypeUnknown = 0,

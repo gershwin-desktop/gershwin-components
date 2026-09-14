@@ -53,9 +53,12 @@ static NSArray *ethernetPrefixes(void)
 
         helperPath = [[self findHelperPath] retain];
 
+        /* WLAN device discovery waits for the WLAN methods that need it:
+           it runs ifconfig and sysctl through sudo and may have
+           network-helper write rc.conf, none of which may happen just
+           because the pane was instantiated. */
         if (backendAvailable) {
             NSDebugLLog(@"gwcomp", @"[Network] BSDBackend initialized");
-            [self discoverWLANDevice];
         } else {
             NSDebugLLog(@"gwcomp", @"[Network] BSDBackend: required tools not found, backend unavailable");
         }
@@ -84,49 +87,8 @@ static NSArray *ethernetPrefixes(void)
 
 - (NSString *)findExecutable:(NSString *)name
 {
-    NSArray *paths = @[
-        @"/sbin",
-        @"/usr/sbin",
-        @"/bin",
-        @"/usr/bin",
-        @"/usr/local/sbin",
-        @"/usr/local/bin"
-    ];
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *dir in paths) {
-        NSString *full = [dir stringByAppendingPathComponent:name];
-        if ([fm isExecutableFileAtPath:full]) {
-            return full;
-        }
-    }
-
-    /* Try which(1) as fallback */
-    NSTask *task = [[NSTask alloc] init];
-    @try {
-        [task setLaunchPath:@"/usr/bin/which"];
-        [task setArguments:@[name]];
-        NSPipe *pipe = [NSPipe pipe];
-        [task setStandardOutput:pipe];
-        [task setStandardError:[NSPipe pipe]];
-        [task launch];
-        [task waitUntilExit];
-        if ([task terminationStatus] == 0) {
-            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-            NSString *result = [[[NSString alloc] initWithData:data
-                                                      encoding:NSUTF8StringEncoding] autorelease];
-            result = [result stringByTrimmingCharactersInSet:
-                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            if ([fm isExecutableFileAtPath:result]) {
-                [task release];
-                return result;
-            }
-        }
-    } @catch (NSException *e) {
-        NSDebugLLog(@"gwcomp", @"[Network] BSDBackend: exception finding %@: %@", name, e);
-    }
-    [task release];
-    return nil;
+    return NetworkExecutablePath(name, @[@"/sbin", @"/usr/sbin", @"/bin", @"/usr/bin",
+                                         @"/usr/local/sbin", @"/usr/local/bin"]);
 }
 
 - (NSString *)findHelperPath

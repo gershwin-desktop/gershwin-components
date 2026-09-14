@@ -118,10 +118,12 @@ typedef struct cups_job_s cups_job_t;
     BOOL cupsAvailable;
     BOOL isDiscovering;
     BOOL userInLpadminGroup;
+    BOOL privilegeWarningShown;
     NSTextField *privilegeWarningLabel;
 }
 
 - (NSView *)createMainView;
+- (void)checkCupsAndPrivileges;
 - (void)relayoutWithWidth:(CGFloat)width;
 - (void)refreshPrinters:(NSTimer *)timer;
 - (void)refreshJobs;

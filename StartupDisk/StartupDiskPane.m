@@ -77,42 +77,30 @@
     return self;
 }
 
+/* The host calls this on every selection, and its search index calls it
+   without selecting the pane at all, so the view must be built exactly once
+   and building it must not touch EFI state; boot entries are fetched in
+   didSelect. */
 - (NSView *)loadMainView
 {
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: loadMainView called");
-    
-    // Create the main view if it doesn't exist
     if (![self mainView]) {
-        NSDebugLLog(@"gwcomp", @"StartupDiskPane: No main view exists, creating one");
         StartupDiskMainView *view = [[StartupDiskMainView alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
         [self setMainView:view];
         [view release];
-        NSDebugLLog(@"gwcomp", @"StartupDiskPane: Created main view with frame: %@", NSStringFromRect([view frame]));
+        [self mainViewDidLoad];
     }
-    
-    NSView *mainView = [super loadMainView];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: super loadMainView completed, returned view = %@", mainView);
-    [self mainViewDidLoad];
-    return mainView;
+    return [self mainView];
 }
 
 - (void)mainViewDidLoad
 {
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainViewDidLoad called");
-    
-    NSView *mainView = [self mainView];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainView = %@", mainView);
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainView frame = %@", NSStringFromRect([mainView frame]));
-    
+    /* A second controller would add a duplicate set of controls to the same
+       view and orphan the first one's helper process. */
+    if (startupDiskController) {
+        return;
+    }
     startupDiskController = [[StartupDiskController alloc] init];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: Created startupDiskController = %@", startupDiskController);
-    
-    [startupDiskController setMainView:mainView];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: Set main view on controller");
-    
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: About to call refreshBootEntries");
-    [self refreshBootEntries];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainViewDidLoad completed");
+    [startupDiskController setMainView:[self mainView]];
 }
 
 - (void)refreshBootEntries

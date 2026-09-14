@@ -55,14 +55,12 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
-{
-    [controller refreshFromSystem];
-}
-
 - (void)didSelect
 {
     [super didSelect];
+    /* Hosts may build the main view only to index its labels, so reading
+       system state (external tools, sysfs) and re-applying the saved sleep
+       inhibitor must wait until the pane is really shown. */
     [controller refreshFromSystem];
     // Poll battery/power status every second while visible
     [self startPolling];

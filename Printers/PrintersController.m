@@ -222,16 +222,27 @@ static void deviceCallback(const char *device_class,
         selectedPrinter = nil;
         selectedJob = nil;
         isDiscovering = NO;
-        
-        // Check if CUPS is available
-        cupsAvailable = [self isCupsAvailable];
-        NSDebugLLog(@"gwcomp", @"[Printers] Controller initialized, CUPS available: %@", cupsAvailable ? @"YES" : @"NO");
-        
-        // Check if user is in lpadmin group
-        userInLpadminGroup = [self isUserInLpadminGroup];
-        NSDebugLLog(@"gwcomp", @"[Printers] User in lpadmin group: %@", userInLpadminGroup ? @"YES" : @"NO");
+        cupsAvailable = NO;
+        userInLpadminGroup = NO;
+        privilegeWarningShown = NO;
     }
     return self;
+}
+
+/* Kept out of init and createMainView because the host builds panes
+   without selecting them (e.g. to index them for search), and connecting
+   to cupsd can block for up to 30 seconds. */
+- (void)checkCupsAndPrivileges
+{
+    cupsAvailable = [self isCupsAvailable];
+    NSDebugLLog(@"gwcomp", @"[Printers] CUPS available: %@", cupsAvailable ? @"YES" : @"NO");
+
+    userInLpadminGroup = [self isUserInLpadminGroup];
+    NSDebugLLog(@"gwcomp", @"[Printers] User in lpadmin group: %@", userInLpadminGroup ? @"YES" : @"NO");
+
+    /* Only Add depends on privileges here; the other printer buttons are
+       driven by the table selection in updateButtonStates. */
+    [addButton setEnabled:userInLpadminGroup];
 }
 
 - (void)dealloc
@@ -367,7 +378,13 @@ static void deviceCallback(const char *device_class,
 
 - (void)showPrivilegeWarningIfNeeded
 {
+    /* Group membership cannot change without a new login, so repeating the
+       modal alert on every selection would only nag. */
+    if (privilegeWarningShown) {
+        return;
+    }
     if (!userInLpadminGroup && cupsAvailable) {
+        privilegeWarningShown = YES;
         NSString *username = [NSString stringWithUTF8String:getenv("USER") ?: "current user"];
         NSString *adminGroupName = [self getAdminGroupName];
         
@@ -502,13 +519,6 @@ static void deviceCallback(const char *device_class,
     [statusLabel setTextColor:[NSColor darkGrayColor]];
     [statusLabel setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
     [mainView addSubview:statusLabel];
-
-    if (!userInLpadminGroup) {
-        [addButton setEnabled:NO];
-        [removeButton setEnabled:NO];
-        [defaultButton setEnabled:NO];
-        [optionsButton setEnabled:NO];
-    }
 
     return mainView;
 }

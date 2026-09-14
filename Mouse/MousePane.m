@@ -53,11 +53,9 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
-{
-    [controller refreshFromSystem];
-}
-
+/* The host also loads the main view without selecting it (to index its
+   labels for search), so querying and loading device state must wait until
+   the pane is actually shown. */
 - (void)didSelect
 {
     [super didSelect];

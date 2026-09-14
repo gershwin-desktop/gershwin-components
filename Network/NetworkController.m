@@ -71,6 +71,7 @@ static const CGFloat kStatusAreaHeight = 60;
 
 @interface NetworkController ()
 - (void)updateClonedMacPopup;
+- (void)setWLANTabShown:(BOOL)shown;
 @end
 
 @implementation NetworkController
@@ -131,10 +132,12 @@ static const CGFloat kStatusAreaHeight = 60;
         }
         [backend setDelegate:self];
         
+        /* No backendVersion here: it runs the backend's command line tool,
+           and the controller is also created when the pane is only indexed. */
         if (![backend isAvailable]) {
-            NSDebugLLog(@"gwcomp", @"[Network] NetworkManager backend is not available");
+            NSDebugLLog(@"gwcomp", @"[Network] %@ backend is not available", [backend backendName]);
         } else {
-            NSDebugLLog(@"gwcomp", @"[Network] Using %@ version %@", [backend backendName], [backend backendVersion]);
+            NSDebugLLog(@"gwcomp", @"[Network] Using %@ backend", [backend backendName]);
         }
     }
     return self;
@@ -142,11 +145,8 @@ static const CGFloat kStatusAreaHeight = 60;
 
 - (void)dealloc
 {
-    [self stopWLANRefreshTimer];
-    if (refreshTimer) {
-        [refreshTimer invalidate];
-        [refreshTimer release];
-    }
+    [self stopRefreshing];
+    [wlanTabItem release];
     [(id)backend release];
     [interfaces release];
     [wlanNetworks release];
@@ -204,13 +204,10 @@ static const CGFloat kStatusAreaHeight = 60;
     [self createDetailViewWithFrame:NSMakeRect(detailX, splitBottom, 
                                                 detailWidth, splitHeight)];
     
-    // Create panels
-    [self createPasswordPanel];
-    [self createAdvancedPanel];
-    
-    // Initial data load
-    [self refreshInterfaces:nil];
-    
+    /* Nothing is loaded here: the host also builds this view just to
+       index its widgets for search, without ever selecting the pane.
+       Data comes from -startRefreshing at selection, and the sheets are
+       built on first use. */
     return mainView;
 }
 
@@ -418,7 +415,13 @@ static const CGFloat kStatusAreaHeight = 60;
     [detailTabView addTabViewItem:dnsTab];
     [dnsTab release];
     
-    // WLAN tab is added dynamically in updateDetailView when showing wireless interfaces
+    /* The WLAN tab starts out present so that its widgets are in the
+       view hierarchy before any interface is known (the host indexes them
+       for search); updateDetailView keeps it only for wireless interfaces. */
+    wlanTabItem = [[NSTabViewItem alloc] initWithIdentifier:@"wlan"];
+    [wlanTabItem setLabel:@"WLAN"];
+    [self createWLANViewForTab:wlanTabItem];
+    [detailTabView addTabViewItem:wlanTabItem];
     
     [detailView addSubview:detailTabView];
 }
@@ -1014,6 +1017,30 @@ static const CGFloat kStatusAreaHeight = 60;
 
 #pragma mark - Refresh and Data
 
+- (void)startRefreshing
+{
+    [self refreshInterfaces:nil];
+    if (!refreshTimer) {
+        refreshTimer = [[NSTimer scheduledTimerWithTimeInterval:5.0
+                                                         target:self
+                                                       selector:@selector(refreshInterfaces:)
+                                                       userInfo:nil
+                                                        repeats:YES] retain];
+    }
+}
+
+- (void)stopRefreshing
+{
+    if (refreshTimer) {
+        [refreshTimer invalidate];
+        [refreshTimer release];
+        refreshTimer = nil;
+    }
+    /* updateDetailView restarts WLAN scanning on the next selection, so an
+       unselected pane must not keep scanning in the background. */
+    [self stopWLANRefreshTimer];
+}
+
 - (void)refreshInterfaces:(NSTimer *)timer
 {
     @try {
@@ -1254,14 +1281,37 @@ static const CGFloat kStatusAreaHeight = 60;
     }
 }
 
+/* The WLAN tab item exists from view creation on (see
+   createDetailViewWithFrame:) but is only shown while a wireless interface
+   is selected. */
+- (void)setWLANTabShown:(BOOL)shown
+{
+    BOOL present = ([detailTabView indexOfTabViewItem:wlanTabItem] != NSNotFound);
+
+    if (shown) {
+        if (!present) {
+            [detailTabView addTabViewItem:wlanTabItem];
+        }
+        // Select WLAN only when it appears; on later refreshes keep the
+        // tab the user is currently on.
+        if (!wlanTabShown) {
+            [detailTabView selectTabViewItem:wlanTabItem];
+        }
+    } else {
+        if (present) {
+            [detailTabView removeTabViewItem:wlanTabItem];
+        }
+        [detailTabView selectTabViewItemWithIdentifier:@"tcpip"];
+    }
+    wlanTabShown = shown;
+}
+
 - (void)updateDetailView
 {
     @try {
         if (!selectedInterface) {
             NSDebugLLog(@"gwcomp", @"[Network] updateDetailView: no interface selected");
-            if (detailTabView) {
-                [detailTabView selectTabViewItemWithIdentifier:@"tcpip"];
-            }
+            [self setWLANTabShown:NO];
             return;
         }
         
@@ -1285,9 +1335,7 @@ static const CGFloat kStatusAreaHeight = 60;
             if (!found) {
                 NSDebugLLog(@"gwcomp", @"[Network] updateDetailView: interface really not in list, clearing");
                 selectedInterface = nil;
-                if (detailTabView) {
-                    [detailTabView selectTabViewItemWithIdentifier:@"tcpip"];
-                }
+                [self setWLANTabShown:NO];
                 return;
             }
         }
@@ -1375,21 +1423,8 @@ static const CGFloat kStatusAreaHeight = 60;
             if (configureIPv6Popup) [configureIPv6Popup selectItemAtIndex:0];
         }
         
-        // Show/hide WLAN tab based on interface type
         if ([selectedInterface type] == NetworkInterfaceTypeWLAN) {
-            // Ensure WLAN tab is present for wireless interfaces
-            NSInteger wlanTabIndex = [detailTabView indexOfTabViewItemWithIdentifier:@"wlan"];
-            if (wlanTabIndex == NSNotFound) {
-                // WLAN tab doesn't exist, create and add it
-                NSTabViewItem *wlanTab = [[NSTabViewItem alloc] initWithIdentifier:@"wlan"];
-                [wlanTab setLabel:@"WLAN"];
-                [self createWLANViewForTab:wlanTab];
-                [detailTabView addTabViewItem:wlanTab];
-                [wlanTab release];
-                // Select WLAN only the first time it appears; on later
-                // refreshes keep the tab the user is currently on.
-                [detailTabView selectTabViewItemWithIdentifier:@"wlan"];
-            }
+            [self setWLANTabShown:YES];
             
             if (backend) {
                 BOOL wlanOn = [backend isWLANEnabled];
@@ -1404,20 +1439,8 @@ static const CGFloat kStatusAreaHeight = 60;
                 [self refreshWLANNetworks];
             }
         } else {
-            // Remove WLAN tab for non-wireless interfaces
-            NSInteger wlanTabIndex = [detailTabView indexOfTabViewItemWithIdentifier:@"wlan"];
-            if (wlanTabIndex != NSNotFound) {
-                NSTabViewItem *wlanTab = [detailTabView tabViewItemAtIndex:wlanTabIndex];
-                [detailTabView removeTabViewItem:wlanTab];
-            }
-            
-            // Stop auto-refresh when not viewing WLAN
+            [self setWLANTabShown:NO];
             [self stopWLANRefreshTimer];
-            
-            // Select TCP/IP tab for non-WLAN interfaces
-            if (detailTabView) {
-                [detailTabView selectTabViewItemWithIdentifier:@"tcpip"];
-            }
         }
         
         NSDebugLLog(@"gwcomp", @"[Network] updateDetailView: complete");
@@ -2013,11 +2036,7 @@ static const CGFloat kStatusAreaHeight = 60;
               (unsigned long)[pendingNetwork retainCount]);
         
         if (!passwordPanel) {
-            NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: ERROR - passwordPanel is nil!");
-            [self showErrorAlert:@"Error" informativeText:@"Password dialog not available."];
-            [pendingNetwork release];
-            pendingNetwork = nil;
-            return;
+            [self createPasswordPanel];
         }
         
         if (!passwordSSIDLabel) {
@@ -2196,6 +2215,9 @@ static const CGFloat kStatusAreaHeight = 60;
 
 - (IBAction)showAdvanced:(id)sender
 {
+    if (!advancedPanel) {
+        [self createAdvancedPanel];
+    }
     [NSApp beginSheet:advancedPanel
        modalForWindow:[mainView window]
         modalDelegate:nil

@@ -388,16 +388,15 @@ static NSString *StartupDiskSudoPath(NSString **error)
 {
     NSDebugLLog(@"gwcomp", @"StartupDiskController: refreshBootEntries called");
     
-    /* Skip if a fetch is already in flight.  mainViewDidLoad, didSelect and
-       the 5s refresh timer can all fire refreshBootEntries; without this
-       guard multiple background threads would read the helper's output pipe
-       concurrently and corrupt it (fragmented READY/RESULT lines). */
+    /* Skip if a fetch is already in flight.  didSelect and the 5s refresh
+       timer can both fire refreshBootEntries; without this guard multiple
+       background threads would read the helper's output pipe concurrently
+       and corrupt it (fragmented READY/RESULT lines). */
     if (isFetching) {
         NSDebugLLog(@"gwcomp", @"StartupDiskController: fetch already in progress, skipping");
         return;
     }
-    isFetching = YES;
-    
+
     // Don't refresh if the user has made changes that haven't been applied yet
     // But add a safety mechanism - if bootOrderChanged has been true for too long, reset it
     static NSDate *localBootOrderChangedTime = nil;
@@ -427,8 +426,13 @@ static NSString *StartupDiskSudoPath(NSString **error)
     [bootEntries removeAllObjects];
     NSDebugLLog(@"gwcomp", @"StartupDiskController: Cleared bootEntries array");
     
+    /* Set only once a fetch really starts: only handleBootEntriesResult:
+       clears it, so setting it before the pending-reorder early return above
+       would block every later refresh, including those of re-selections. */
+    isFetching = YES;
+
     // Run efibootmgr in a background thread to avoid blocking the UI
-    [NSThread detachNewThreadSelector:@selector(fetchBootEntriesInBackground) 
+    [NSThread detachNewThreadSelector:@selector(fetchBootEntriesInBackground)
                              toTarget:self 
                            withObject:nil];
 }

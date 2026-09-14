@@ -297,7 +297,6 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [statusLabel setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
     [mainView addSubview:statusLabel];
 
-    [self refreshFromSystem];
     return mainView;
 }
 

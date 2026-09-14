@@ -77,18 +77,21 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
+- (void)willSelect
 {
-    [controller refreshPrinters:nil];
-    [controller showPrivilegeWarningIfNeeded];
-    [self setInitialKeyView:nil];
+    [super willSelect];
+    /* Re-checked on every selection because cupsd may have been started or
+       stopped since the pane was last shown. */
+    [controller checkCupsAndPrivileges];
 }
 
 - (void)didSelect
 {
     [super didSelect];
     [controller refreshPrinters:nil];
+    [self startRefreshTimer];
     [self setInitialKeyView:nil];
+    [controller showPrivilegeWarningIfNeeded];
 }
 
 - (void)willUnselect

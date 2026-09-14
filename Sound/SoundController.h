@@ -85,6 +85,10 @@
     // No devices placeholder labels
     NSTextField *noOutputDevicesLabel;
     NSTextField *noInputDevicesLabel;
+
+    // Built hidden up front because whether a backend exists is only
+    // known after the probe at first selection
+    NSTextField *unavailableLabel;
     
     // ============ Data ============
     NSMutableArray *outputDevices;
@@ -99,8 +103,11 @@
     BOOL isUpdatingUI;
     BOOL isInitializing;
     BOOL isRefreshing;
+    BOOL backendProbed;
+    BOOL wantsInputLevelMonitoring;
 
-    // Background queue for backend operations
+    // Background queue for backend operations, created at first refresh
+    // so that building the pane for search stays free of queue work
     dispatch_queue_t backendQueue;
 
     // Volume change coalescing to prevent flooding the backend queue
