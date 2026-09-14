@@ -10,6 +10,30 @@
 // Global timer for boot order changes
 NSDate *bootOrderChangedTime = nil;
 
+/* sudo is not in the base system of the BSDs, so its location depends on
+   who installed it: /usr/bin on Linux, /usr/local/bin for FreeBSD and NextBSD
+   packages and OpenBSD ports, /usr/pkg/bin for pkgsrc.  Only these fixed
+   directories are trusted because a $PATH lookup would let the environment
+   choose which binary receives the askpass credentials. */
+static NSString *StartupDiskSudoPath(NSString **error)
+{
+    NSArray *directories = [NSArray arrayWithObjects:
+                            @"/usr/bin", @"/usr/local/bin", @"/usr/pkg/bin", nil];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    for (NSString *directory in directories) {
+        NSString *path = [directory stringByAppendingPathComponent:@"sudo"];
+        if ([fileManager isExecutableFileAtPath:path]) {
+            return path;
+        }
+    }
+    if (error) {
+        *error = [NSString stringWithFormat:
+                  @"No executable sudo was found in %@. Install sudo to change the startup disk.",
+                  [directories componentsJoinedByString:@", "]];
+    }
+    return nil;
+}
+
 // Custom cell class for displaying icons with text
 @interface BootEntryCell : NSTextFieldCell
 {
@@ -742,6 +766,16 @@ NSDate *bootOrderChangedTime = nil;
     [alert release];
 }
 
+/* Called with helperLock held, often from a background thread.  AppKit is
+   main-thread only, and waiting for the alert would deadlock whenever the
+   main thread is itself blocked on helperLock (restart, drag reorder). */
+- (void)showHelperStartError:(NSDictionary *)alertInfo
+{
+    [self performSelectorOnMainThread:@selector(showSystemErrorAlert:)
+                           withObject:alertInfo
+                        waitUntilDone:NO];
+}
+
 - (void)restartClicked:(id)sender
 {
     NSInteger selectedRow = [tableView selectedRow];
@@ -882,8 +916,34 @@ NSDate *bootOrderChangedTime = nil;
         NSDebugLLog(@"gwcomp", @"StartupDiskController: Found efiboot-helper in bundle resources at %@", helperPath);
     }
     
+    NSString *sudoError = nil;
+    NSString *sudoPath = StartupDiskSudoPath(&sudoError);
+    if (!sudoPath) {
+        NSDebugLLog(@"gwcomp", @"StartupDiskController: %@", sudoError);
+        [self showHelperStartError:[NSDictionary dictionaryWithObjectsAndKeys:
+                                    @"sudo Not Found", @"title",
+                                    sudoError, @"message", nil]];
+        return NO;
+    }
+
+    /* Validated before helperTask is created so that a rejected start does
+       not leave a never-launched task behind to be leaked by the next try. */
+    NSString *sudoAskPass = [[[NSProcessInfo processInfo] environment] objectForKey:@"SUDO_ASKPASS"];
+    BOOL askpassValid = NO;
+    if (sudoAskPass && [sudoAskPass length] > 0) {
+        askpassValid = [[NSFileManager defaultManager] isExecutableFileAtPath:sudoAskPass];
+    }
+    if (!askpassValid) {
+        NSDebugLLog(@"gwcomp", @"StartupDiskController: SUDO_ASKPASS is not set or does not point to an executable: %@", sudoAskPass);
+        [self showHelperStartError:[NSDictionary dictionaryWithObjectsAndKeys:
+                                    @"SUDO_ASKPASS Not Set or Invalid", @"title",
+                                    @"The SUDO_ASKPASS environment variable must be set and point to an existing executable binary.\n\nPlease set SUDO_ASKPASS to a valid askpass helper and try again.", @"message",
+                                    nil]];
+        return NO;
+    }
+
     helperTask = [[NSTask alloc] init];
-    [helperTask setLaunchPath:@"/usr/local/bin/sudo"];
+    [helperTask setLaunchPath:sudoPath];
     
     // Pass our process ID to the helper for security
     NSString *parentPID = [NSString stringWithFormat:@"%d", getpid()];
@@ -904,24 +964,6 @@ NSDate *bootOrderChangedTime = nil;
     NSMutableDictionary *environment = [[[NSProcessInfo processInfo] environment] mutableCopy];
     [helperTask setEnvironment:environment];
     [environment release];
-    
-    // Check SUDO_ASKPASS environment variable
-    NSString *sudoAskPass = [[[NSProcessInfo processInfo] environment] objectForKey:@"SUDO_ASKPASS"];
-    BOOL askpassValid = NO;
-    if (sudoAskPass && [sudoAskPass length] > 0) {
-        askpassValid = [[NSFileManager defaultManager] isExecutableFileAtPath:sudoAskPass];
-    }
-    if (!askpassValid) {
-        NSDebugLLog(@"gwcomp", @"StartupDiskController: SUDO_ASKPASS is not set or does not point to an executable: %@", sudoAskPass);
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"SUDO_ASKPASS Not Set or Invalid"];
-        [alert setInformativeText:@"The SUDO_ASKPASS environment variable must be set and point to an existing executable binary.\n\nPlease set SUDO_ASKPASS to a valid askpass helper and try again."];
-        [alert addButtonWithTitle:@"OK"];
-        [alert setAlertStyle:NSCriticalAlertStyle];
-        [alert runModal];
-        [alert release];
-        return NO;
-    }
     
     @try {
         [helperTask launch];
@@ -1114,8 +1156,14 @@ NSDate *bootOrderChangedTime = nil;
 {
     NSDebugLLog(@"gwcomp", @"StartupDiskController: runSudoCommand called with arguments: %@ (interactive: %@)", arguments, allowInteractive ? @"YES" : @"NO");
     
+    NSString *sudoPath = StartupDiskSudoPath(error);
+    if (!sudoPath) {
+        NSDebugLLog(@"gwcomp", @"StartupDiskController: %@", error ? *error : @"sudo not found");
+        return NO;
+    }
+
     NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/local/bin/sudo"];  // Use full path for FreeBSD
+    [task setLaunchPath:sudoPath];
     
     // Build arguments - use -A only for interactive commands, -n for non-interactive
     NSMutableArray *finalArgs = [NSMutableArray array];

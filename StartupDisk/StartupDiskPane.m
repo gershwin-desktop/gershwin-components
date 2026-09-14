@@ -44,8 +44,13 @@
 @implementation StartupDiskPane
 
 + (BOOL)isCompatible {
-  NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
-  NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
+  /* A minimal launcher environment may not set PATH at all, and
+     stringWithUTF8String: raises on the resulting NULL. */
+  const char *pathEnv = getenv("PATH");
+  if (pathEnv == NULL)
+    return NO;
+  NSArray *paths = [[NSString stringWithUTF8String: pathEnv]
+                     componentsSeparatedByString: @":"];
   for (NSString *dir in paths) {
     if ([[NSFileManager defaultManager] isExecutableFileAtPath:
           [dir stringByAppendingPathComponent: @"efibootmgr"]])
