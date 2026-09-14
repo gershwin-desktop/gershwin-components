@@ -241,7 +241,7 @@
     _frameWidth = width;
     _frameHeight = height;
 
-    // Force immediate synchronous drawing — display triggers
+    // Force immediate synchronous drawing - display triggers
     // drawRect: directly without waiting for the next run-loop iteration.
     [self display];
     [[self window] flushWindow];
@@ -571,7 +571,7 @@
                                                     keyEquivalent:@""];
     NSMenu *radioMenu = [[NSMenu alloc] initWithTitle:@"Radio"];
 
-    // Browse Radio Stations — Cmd+R (Repeat moved to Cmd+Shift+R to avoid conflict)
+    // Browse Radio Stations - Cmd+R (Repeat moved to Cmd+Shift+R to avoid conflict)
     radioModeMenuItem = (NSMenuItem *)
         [radioMenu addItemWithTitle:@"Browse Radio Stations"
                              action:@selector(toggleRadioMode:)
@@ -579,7 +579,7 @@
     [radioModeMenuItem setTarget:self];
     [radioModeMenuItem setKeyEquivalentModifierMask:NSCommandKeyMask];
 
-    // Open Radio Stream — Cmd+U
+    // Open Radio Stream - Cmd+U
     [radioMenu addItemWithTitle:@"Open Radio Stream..."
                          action:@selector(openRadioStream:)
                   keyEquivalent:@"u"];
@@ -590,7 +590,7 @@
     // Separator
     [radioMenu addItem:[NSMenuItem separatorItem]];
 
-    // Stop Radio — Cmd+.
+    // Stop Radio - Cmd+.
     [radioMenu addItemWithTitle:@"Stop Radio"
                          action:@selector(radioStop:)
                   keyEquivalent:@"."];
@@ -1417,7 +1417,7 @@
     // Restore persisted volume slider for the current mode
     [volumeSlider setDoubleValue:(playerMode == PlayerModeRadio) ? radioVolume : localVolume];
 
-    // Restore persisted radio mode — reset guard so enterRadioMode runs
+    // Restore persisted radio mode - reset guard so enterRadioMode runs
     if (playerMode == PlayerModeRadio) {
         playerMode = PlayerModeLocal;
         [self enterRadioMode];
@@ -1439,7 +1439,7 @@
         NSLog(@"[Player] yt-dlp not found - URL resolution disabled");
     }
 
-    [self updateStatus:@"Ready — open a media file to start playing"];
+    [self updateStatus:@"Ready - open a media file to start playing"];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification
@@ -1784,16 +1784,16 @@
         if ([[StreamPlayer sharedPlayer] openURL:filePath error:&err]) {
             _usingStreamPlayer = YES;
             if ([[StreamPlayer sharedPlayer] hasVideo]) {
-                // Show videoView immediately — a video track was found
+                // Show videoView immediately - a video track was found
                 [videoView setHidden:NO];
                 [flowView setHidden:YES];
             } else {
-                // Audio-only file with a video extension — show flow
+                // Audio-only file with a video extension - show flow
                 [videoView setHidden:YES];
                 [flowView setHidden:NO];
             }
         } else {
-            NSLog(@"[Player] StreamPlayer failed for %@: %@ — falling back to AVPlayer audio-only",
+            NSLog(@"[Player] StreamPlayer failed for %@: %@ - falling back to AVPlayer audio-only",
                   filePath, [err localizedDescription]);
             [videoView setHidden:YES];
             [flowView setHidden:NO];
@@ -2408,7 +2408,7 @@
         return;
     }
 
-    // Retain for MRC — released in the main-thread callback
+    // Retain for MRC - released in the main-thread callback
     [pathsToExtract retain];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
         @autoreleasepool {
@@ -2621,7 +2621,7 @@
         NSArray *urls = [panel URLs];
         if ([urls count] == 0) return;
 
-        // Clear existing playlist and stop playback — Open replaces, not appends
+        // Clear existing playlist and stop playback - Open replaces, not appends
         [self stopPlayback];
         [playlist removeAllObjects];
         [flowView reloadData];
@@ -2639,7 +2639,7 @@
             BOOL isDir = NO;
             [[NSFileManager defaultManager] fileExistsAtPath:[paths firstObject] isDirectory:&isDir];
             if (!isDir) {
-                // Single file — original fast path
+                // Single file - original fast path
                 [self loadFile:[paths firstObject]];
                 [self play];
                 return;
@@ -3136,7 +3136,7 @@
                                                  forKey:@"PlayerRadioVolume"];
         [[RadioManager sharedManager] setVolume:vol];
     } else {
-        // Local mode — persist and apply
+        // Local mode - persist and apply
         localVolume = vol;
         [[NSUserDefaults standardUserDefaults] setFloat:localVolume
                                                  forKey:@"PlayerLocalVolume"];
@@ -3235,12 +3235,12 @@
     [input setSelectable:YES];
     [cv addSubview:input];
 
-    // Buttons — default (OK) in lower-right corner, Cancel to its left per HIG
+    // Buttons - default (OK) in lower-right corner, Cancel to its left per HIG
     CGFloat buttonY = METRICS_CONTENT_BOTTOM_MARGIN;
     CGFloat buttonW = METRICS_BUTTON_MIN_WIDTH;
     CGFloat buttonH = METRICS_BUTTON_HEIGHT;
 
-    // OK button (rightmost — lower-right corner)
+    // OK button (rightmost - lower-right corner)
     CGFloat okX = pw - METRICS_CONTENT_SIDE_MARGIN - buttonW;
     NSButton *okButton = [[[NSButton alloc]
         initWithFrame:NSMakeRect(okX, buttonY, buttonW, buttonH)] autorelease];

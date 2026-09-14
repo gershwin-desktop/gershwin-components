@@ -134,7 +134,7 @@ static const CGFloat kWinHeight = 260.0;
 
     y += btnH + kSpace16;
 
-    /* Table view — edge-to-edge */
+    /* Table view - edge-to-edge */
     CGFloat tableTop = kWinHeight - kTopMargin - kSpace8 - kSearchFieldHeight;
     CGFloat listH = tableTop - y;
     CGFloat tableW = kWinWidth;

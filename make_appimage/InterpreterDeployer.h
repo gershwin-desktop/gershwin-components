@@ -7,7 +7,7 @@
 #import <Foundation/Foundation.h>
 
 /**
- * InterpreterDeployer — detects, deploys, and patches the ELF interpreter.
+ * InterpreterDeployer - detects, deploys, and patches the ELF interpreter.
  *
  * Scans .app bundles and standard system paths for ld-linux / ld-musl,
  * copies the resolved real file into the AppDir, and optionally patches

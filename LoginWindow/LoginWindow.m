@@ -206,7 +206,7 @@ static Display* safeXOpenDisplay(const char *display_name, int timeout_seconds) 
 
 // Signal handler for cleanup on termination
 void signalHandler(int sig) {
-    // NSDebugLLog/NSLog is NOT async-signal-safe — do not call from here
+    // NSDebugLLog/NSLog is NOT async-signal-safe - do not call from here
     if (sig == SIGCHLD) {
         // Child process died - we'll handle this in the main event loop
         return;
@@ -352,7 +352,7 @@ void signalHandler(int sig) {
     if (underscore.location != NSNotFound) {
         langCode = [localeStr substringToIndex:underscore.location];
     } else {
-        // No region part — try stripping encoding: "de.UTF-8" → "de"
+        // No region part - try stripping encoding: "de.UTF-8" → "de"
         NSRange dot = [localeStr rangeOfString:@"."];
         if (dot.location != NSNotFound) {
             langCode = [localeStr substringToIndex:dot.location];
@@ -494,7 +494,7 @@ static NSDictionary *parseStringsFile(NSString *path)
                     case '"': [key appendString:@"\""]; break;
                     case '\\':[key appendString:@"\\"]; break;
                     case 'u': {
-                        // \uXXXX — read 4 hex digits
+                        // \uXXXX - read 4 hex digits
                         if (i + 4 < len) {
                             NSString *hex = [content substringWithRange:
                                 NSMakeRange(i+1, 4)];
@@ -1203,7 +1203,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         return;
     }
         
-    // Attempting authentication — empty password is allowed by design for some environments
+    // Attempting authentication - empty password is allowed by design for some environments
     // (e.g., GhostBSD Live ISOs) where PAM permits passwordless login.
     NSDebugLLog(@"gwcomp", @"[DEBUG] authenticateUser:password: will be called (password empty: %s)", ([password length] == 0) ? "yes" : "no");
     if ([self authenticateUser:username password:password]) {
@@ -1217,9 +1217,9 @@ static NSDictionary *parseStringsFile(NSString *path)
         // Show detailed error message if available
         NSString *errorMsg = [pamAuth lastErrorMessage];
         if (errorMsg && [errorMsg length] > 0) {
-            // "Authentication failure" means wrong password — just shake, no dialog
+            // "Authentication failure" means wrong password - just shake, no dialog
             if ([errorMsg rangeOfString:@"Authentication failure" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-                NSDebugLLog(@"gwcomp", @"[DEBUG] Authentication failure (wrong password) — shaking only");
+                NSDebugLLog(@"gwcomp", @"[DEBUG] Authentication failure (wrong password) - shaking only");
             } else {
                 NSDebugLLog(@"gwcomp", @"[ERROR] Showing PAM error to user: %@", errorMsg);
                 NSAlert *alert = [NSAlert alertWithMessageText:NSLocalizedString(@"Authentication Error", @"Auth error alert title")
@@ -1543,7 +1543,7 @@ static NSDictionary *parseStringsFile(NSString *path)
             close(fd);
         }
         
-        // Use the parent's detected/selected values — the dropdown
+        // Use the parent's detected/selected values - the dropdown
         // always has the last word.  No re-detection in the child.
         NSString *childLang = _keyboardManager.language;
         NSString *childLayout = _keyboardManager.layout;
@@ -2438,7 +2438,7 @@ static bool isDetachedDaemon(const char *comm)
                 shouldKill = true;
             }
 
-            // Detached daemon check — match by command name.
+            // Detached daemon check - match by command name.
             // comm is in format "(name)", so strip the parens.
             char *name = comm;
             if (name[0] == '(') name++;

@@ -689,7 +689,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     [self updateStatus:powerOn ? @"Powering on..." : @"Powering off..."];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         [self applyPower:powerOn discoverable:discOn];
-        /* Wait for state to settle — poll up to 5s */
+        /* Wait for state to settle - poll up to 5s */
         BOOL actualPower = !powerOn;
         BOOL actualDisc = discOn;
         for (int i = 0; i < 10; i++) {
@@ -953,7 +953,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
                 NSLog(@"Bluetooth: connected to %@ (%@)", name, addr);
                 [self endOperationWithStatus:@"Connected"];
             } else {
-                NSLog(@"Bluetooth: CONNECTION FAILED to %@ (%@) — %@", name, addr, result ?: @"no output");
+                NSLog(@"Bluetooth: CONNECTION FAILED to %@ (%@) - %@", name, addr, result ?: @"no output");
                 [self endOperationWithError:@"Connection failed"];
             }
         });

@@ -43,7 +43,7 @@
     [msg drawAtPoint:p withAttributes:attrs];
 
     if (_vmRunning) {
-        NSString *sub = @"QEMU SDL window is separate — arrange as needed.";
+        NSString *sub = @"QEMU SDL window is separate - arrange as needed.";
         NSDictionary *subAttrs = @{NSForegroundColorAttributeName: [NSColor lightGrayColor],
                                    NSFontAttributeName: METRICS_FONT_SYSTEM_REGULAR_11};
         NSSize subSize = [sub sizeWithAttributes:subAttrs];

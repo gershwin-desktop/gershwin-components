@@ -114,7 +114,7 @@ static inline void GSWScaleFactorInvalidate(void) {
 }
 
 // Pixel-scaled window decoration metrics (multiplied by GSScaleFactor).
-// Used by theme drawing code — logical metrics remain in the base constants.
+// Used by theme drawing code - logical metrics remain in the base constants.
 #define METRICS_TITLEBAR_HEIGHT_PX (METRICS_TITLEBAR_HEIGHT * GSWScaleFactor())
 #define METRICS_TITLEBAR_ORB_BUTTON_SIZE_PX (METRICS_TITLEBAR_ORB_BUTTON_SIZE * GSWScaleFactor())
 #define METRICS_TITLEBAR_ORB_PADDING_LEFT_PX (METRICS_TITLEBAR_ORB_PADDING_LEFT * GSWScaleFactor())

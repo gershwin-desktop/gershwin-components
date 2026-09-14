@@ -134,14 +134,14 @@
                 XRRFreeCrtcInfo(ci);
             }
 
-            // Check primary — the X server tracks this per-output
+            // Check primary - the X server tracks this per-output
             if (res->noutput > 0 && res->outputs[i] == XRRGetOutputPrimary(dpy, _root)) {
                 [di setIsPrimary:YES];
             }
 
             [result addObject:di];
         } else if (connected) {
-            // Connected but no CRTC yet — give it defaults so it appears in the UI
+            // Connected but no CRTC yet - give it defaults so it appears in the UI
             [di setResolution:NSMakeSize(1920, 1080)];
             [di setFrame:NSMakeRect(0, 0, 1920, 1080)];
             if ([availRes count] == 0) {

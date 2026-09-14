@@ -1597,7 +1597,7 @@ static void _walkDTDir(NSString *dirPath, NSString *relPath, NSMutableArray *pai
 		/* Try acpiconf -b 0 for extra details */
 		NSString *acpi = [self _runCmd:@"/usr/sbin/acpiconf -b 0"];
 		if ([acpi length] > 0) {
-			/* Format: "Battery 0: status, %, time" — may include manufacturer */
+			/* Format: "Battery 0: status, %, time" - may include manufacturer */
 			[pairs addObject:@[@"ACPI Info:", acpi]];
 		}
 	}

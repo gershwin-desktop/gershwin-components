@@ -32,7 +32,7 @@ static struct timespec _lastApplicationMenuUpdateAccepted;
 static struct timespec _lastApplicationStateUpdateAccepted;
 
 /* ============================================================
-   PER-WINDOW PROXY MATERIALIZATION CACHE  —  DO NOT REMOVE!
+   PER-WINDOW PROXY MATERIALIZATION CACHE  -  DO NOT REMOVE!
    ============================================================
 
    Background:
@@ -77,7 +77,7 @@ static struct timespec _lastApplicationStateUpdateAccepted;
    call arrives before the full menu update (common with Chrome/Chromium and
    other fast-starting apps), writing to _materializationTimeByWindow from the
    state-update path would cause updateMenuForWindow: to see the window as
-   "already cached" and skip the full proxy walk — leaving the window with no
+   "already cached" and skip the full proxy walk - leaving the window with no
    menu in menusByWindow forever.
 
    If you ever feel tempted to remove this cache:
@@ -496,7 +496,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         return YES;
     }
 
-    /* Also check with alternative NSNumber representations —
+    /* Also check with alternative NSNumber representations -
      * Distributed Objects may store the key with a different
      * underlying numeric type. */
     for (NSNumber *storedKey in self.menusByWindow) {
@@ -807,7 +807,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         }
 
         if ([(id)menuData isProxy]) {
-            /* PROXY DEDUPLICATION — see the large comment block near _materializationTimeByWindow
+            /* PROXY DEDUPLICATION - see the large comment block near _materializationTimeByWindow
                at the top of this file for the full explanation of why this guard exists.
 
                Short version: walking a proxy menu tree takes ~1 s per call; GWorkspace fires
@@ -1324,7 +1324,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 // Walk a serialized menu data tree and apply fresh enabled/state values to the
 // corresponding items in an existing NSMenu.  Items are matched by title so that
 // Menu.app-only items (e.g. the ⌘ system item inserted by setupMenuViewWithMenu:)
-// are simply skipped — they are absent from the fresh serialized data.
+// are simply skipped - they are absent from the fresh serialized data.
 // This modifies items in-place and does NOT rebuild the menu, preserving all
 // action/target/representedObject wiring.
 - (void)applyEnabledStatesFromData:(NSDictionary *)menuData
@@ -1457,7 +1457,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     /* Make a lightweight DO call to get fresh enabled/state values.
        validateMenuStateForWindow: now returns a flat NSArray of
-       @[title, enabled, state] triples — no nested dictionaries, so
+       @[title, enabled, state] triples - no nested dictionaries, so
        it copies over DO in a single batch instantly regardless of
        bycopy support.  We match items by TITLE to handle the ⌘
        system item at index 0. */
@@ -1531,7 +1531,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
             return (age < ttl);
         }
     }
-    /* No tracked menu for this window — nothing for us to refresh. */
+    /* No tracked menu for this window - nothing for us to refresh. */
     return YES;
 }
 
@@ -1556,7 +1556,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: updateMenuEnabledStatesForWindow accepted - windowId=%@", windowId);
 
     (void)clientName;
-    // Validate parameters — we're on a background DO thread.
+    // Validate parameters - we're on a background DO thread.
     if (![windowId isKindOfClass:[NSNumber class]] ||
         ![menuData isKindOfClass:[NSDictionary class]]) {
         return;
@@ -1576,8 +1576,8 @@ static GNUStepMenuImporter *sSharedImporter = nil;
        Its purpose is to deduplicate expensive full-menu proxy walks during the
        window-switch flood (thousands of calls/second for the same window).
 
-       If a state-update call arrives BEFORE the full menu update — which happens
-       regularly with Chrome, Chromium, and any fast-starting app — writing to
+       If a state-update call arrives BEFORE the full menu update - which happens
+       regularly with Chrome, Chromium, and any fast-starting app - writing to
        _materializationTimeByWindow here would cause updateMenuForWindow: to see
        the window as "already cached" and skip its proxy walk entirely.  The
        window would never get an entry in menusByWindow, and the app menu would
@@ -1586,7 +1586,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
        Why materializing here is safe despite cost:
        - The 50 ms throttle gate above limits us to at most 20 calls/second.
        - updateMenuEnabledStatesForWindow: is only sent when menu states actually
-         change (user makes a selection, edits text, etc.) — far fewer calls than
+         change (user makes a selection, edits text, etc.) - far fewer calls than
          the focus-change flood that hits updateMenuForWindow:.
        - Outside of window-switch floods the DO channel is quiet, so proxy walks
          complete in < 50 ms rather than the ~1 s seen under heavy congestion.
@@ -1613,7 +1613,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         } @catch (NSException *e) { /* fall through to copy below */ }
         if (!safeData) safeData = [menuData copy];
     } else {
-        /* Non-proxy (bycopy arrived as local copy) — use directly, no expensive walk. */
+        /* Non-proxy (bycopy arrived as local copy) - use directly, no expensive walk. */
         safeData = menuData;
     }
 

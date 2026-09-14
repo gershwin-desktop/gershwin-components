@@ -498,7 +498,7 @@ static BOOL isConfigFileNewerThanParent(const char *path)
     if (fs.st_mtime >= cutoff || fs.st_ctime >= cutoff) {
         return YES;
     }
-    KbdLog(@"    ⚠ file mtime (%ld) ctime (%ld) both < dir+1h (%ld) — disregarding as default/stale\n",
+    KbdLog(@"    ⚠ file mtime (%ld) ctime (%ld) both < dir+1h (%ld) - disregarding as default/stale\n",
            (long)fs.st_mtime, (long)fs.st_ctime, (long)cutoff);
     return NO;
 }
@@ -844,7 +844,7 @@ static void ensureEfivarfsMounted(void)
         KbdLog(@"    efivarfs mount failed (not UEFI or no kernel support)\n");
     }
 #elif defined(__FreeBSD__)
-    // FreeBSD uses /dev/efi + efivar(8) — no efivarfs
+    // FreeBSD uses /dev/efi + efivar(8) - no efivarfs
     (void)0;
 #endif
 }
@@ -1225,7 +1225,7 @@ static void writeLocaleConfigFile(const char *lang)
 - (BOOL)setupWithPasswd:(const struct passwd *)pwd
 {
     if (![self detectKeyboardWithPasswd:pwd]) return NO;
-    // Only apply env vars and X11 layout — do NOT persist config files.
+    // Only apply env vars and X11 layout - do NOT persist config files.
     // Persisting would override the user's dropdown choice when the
     // session starts. The dropdown always has the last word.
     [self applyLanguage];

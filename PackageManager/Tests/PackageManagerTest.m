@@ -572,7 +572,7 @@ static void runTest(NSString *name, BOOL (^block)(void))
     @"os_overrides": @{
       @"debian": @{
         @"packages": @[@"gimp", @"gimp-plugin-registry"],
-        // No postinstall_command override — should fall back
+        // No postinstall_command override - should fall back
       },
     },
   };

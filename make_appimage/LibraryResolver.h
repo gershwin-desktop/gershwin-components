@@ -7,7 +7,7 @@
 #import <Foundation/Foundation.h>
 
 /**
- * LibraryResolver — discovers all shared libraries an AppDir's ELFs need.
+ * LibraryResolver - discovers all shared libraries an AppDir's ELFs need.
  *
  * Walks the AppDir for ELF files, runs ldd on each, resolves transitive
  * dependencies, and excludes known system libraries. Standalone mode

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * OnDemand — Placeholder on-demand installer application.
+ * OnDemand - Placeholder on-demand installer application.
  *
  * Normal mode: reads its embedded Install.plist, checks if the target
  * command exists, installs packages if needed, then launches the command.
@@ -33,7 +33,7 @@ int main(int argc, const char *argv[])
 
   /* Dependency mode: a .plist path was passed as argument.
      The bundle invokes OnDemand with the Dependencies.plist of the
-     launching app.  Install the packages listed and exit — do NOT
+     launching app.  Install the packages listed and exit - do NOT
      try to launch a postinstall_command (there is none). */
   if (argc > 1)
     {

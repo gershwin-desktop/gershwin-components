@@ -27,8 +27,8 @@ static const useconds_t kRemapSettleMicroseconds = 30000;  // 30 ms
 
 // Xlib's default error handler calls exit() on any protocol error, which would
 // take down this long-running automation server. A few codes are expected
-// during automation — e.g. a BadWindow/BadDrawable/BadMatch from racing a window
-// that closes mid-request — and are swallowed. Anything else is logged loudly
+// during automation - e.g. a BadWindow/BadDrawable/BadMatch from racing a window
+// that closes mid-request - and are swallowed. Anything else is logged loudly
 // but still tolerated, so genuine bugs stay visible without crashing the server.
 static int NonFatalXError(Display *dpy, XErrorEvent *e) {
     switch (e->error_code) {
@@ -43,7 +43,7 @@ static int NonFatalXError(Display *dpy, XErrorEvent *e) {
     }
     char buf[256];
     XGetErrorText(dpy, e->error_code, buf, sizeof(buf));
-    NSLog(@"[X11Support] X protocol error: %s (code %d, request %d) — continuing",
+    NSLog(@"[X11Support] X protocol error: %s (code %d, request %d) - continuing",
           buf, e->error_code, e->request_code);
     return 0;
 }
@@ -243,7 +243,7 @@ static int NonFatalXError(Display *dpy, XErrorEvent *e) {
 
 // True if the window carries _GNUSTEP_WM_ATTR. GNUstep sets this on every content
 // window it creates, unconditionally (XGServerWindow.m), so it is the reliable
-// marker of "a window the GNUstep backend will recognise" — unlike _NET_WM_PID,
+// marker of "a window the GNUstep backend will recognise" - unlike _NET_WM_PID,
 // which is only set under an EWMH window manager and is also copied onto the frame.
 static Bool HasGNUstepAttr(Display *d, Window w) {
     static Atom attr = None;
@@ -627,7 +627,7 @@ static KeySym KeysymForChar(unichar c) {
 
 // Type an arbitrary Unicode scalar that has no key on the active layout by
 // temporarily binding it to an unused keycode, sending a press/release addressed
-// to the target window, then restoring that keycode — the technique xdotool uses
+// to the target window, then restoring that keycode - the technique xdotool uses
 // for general text. GNUstep refreshes its keymap on the MappingNotify our remap
 // triggers (XGServerEvent.m:1499), then decodes the synthetic press to the bound
 // codepoint. X maps a codepoint to the keysym 0x01000000 + codepoint.

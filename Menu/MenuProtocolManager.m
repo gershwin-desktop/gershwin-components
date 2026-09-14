@@ -128,7 +128,7 @@
         if (handler) {
             BOOL has = [handler hasMenuForWindow:windowId];
             if (!has) {
-                // Cached protocol no longer claims this window — clear stale mapping
+                // Cached protocol no longer claims this window - clear stale mapping
                 [self.windowToProtocolMap removeObjectForKey:windowKey];
             }
             MENU_PROFILE_END(protocolManagerHasMenuForWindow);
@@ -159,7 +159,7 @@
  * alongside their native DBus menus.
  *
  * The stub may register slightly after the DBus menu due to startup timing.
- * When no stub is found yet, we return the DBus menu as-is — the stub's
+ * When no stub is found yet, we return the DBus menu as-is - the stub's
  * deferred menu check will trigger a re-display once it registers. */
 - (NSMenu *)prependGNUstepStubIfNeeded:(NSMenu *)dbusMenu
                              forWindow:(unsigned long)windowId
@@ -212,9 +212,9 @@
                     MENU_PROFILE_END(protocolManagerGetMenuForWindow);
                     return menu;
                 }
-                // Cached protocol returned nil — remove stale mapping so other protocols
+                // Cached protocol returned nil - remove stale mapping so other protocols
                 // can be tried on the next call and we don't keep hitting a broken handler.
-                NSDebugLLog(@"gwcomp", @"MenuProtocolManager: Cached protocol %@ returned nil for window %lu — clearing stale mapping", protoName, windowId);
+                NSDebugLLog(@"gwcomp", @"MenuProtocolManager: Cached protocol %@ returned nil for window %lu - clearing stale mapping", protoName, windowId);
                 [self.windowToProtocolMap removeObjectForKey:windowKey];
                 MENU_PROFILE_END(protocolManagerGetMenuForWindow);
                 return nil;

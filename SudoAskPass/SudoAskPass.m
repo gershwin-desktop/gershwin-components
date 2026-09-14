@@ -75,7 +75,7 @@ static int gw_askpass_pam_conv(int num_msg, const struct pam_message **msg,
     return PAM_SUCCESS;
 }
 
-/* Saved stdout fd for password output — set in main() before GNUstep init
+/* Saved stdout fd for password output - set in main() before GNUstep init
  * can pollute stdout with startup messages. */
 static int savedStdoutFd = -1;
 
@@ -377,7 +377,7 @@ static int savedStdoutFd = -1;
     // for DS-managed users, PAM for local OS accounts. The two coexist, so a
     // system running dshelper still authenticates its local users correctly.
     // If neither can render a verdict we accept and let sudo be the authority
-    // — an absent backend must not produce a dialog no password can satisfy.
+    // - an absent backend must not produce a dialog no password can satisfy.
 
     NSString *username = NSUserName();
     if (!username || [username length] == 0) {
@@ -454,7 +454,7 @@ static int savedStdoutFd = -1;
     withDirectoryServicesUser:(NSString *)username
 {
     // Establish whether Directory Services owns this account before asking it
-    // to authenticate. If it does, its verdict is final — falling back to PAM
+    // to authenticate. If it does, its verdict is final - falling back to PAM
     // for a DS-managed user would consult a stack that holds no hash for them,
     // and pam_unix's nullok accepts ANY password for an account with no shadow
     // entry. Local OS accounts are unknown to dshelper and fall through to PAM.
@@ -477,7 +477,7 @@ static int savedStdoutFd = -1;
 - (const char *)pamServiceName
 {
     // Only name a service that has a policy file. An unknown service falls
-    // through to the "other" policy, which denies on Linux — that would be
+    // through to the "other" policy, which denies on Linux - that would be
     // indistinguishable from a wrong password.
     static const char *candidates[] = { "sudo", "login", NULL };
     NSFileManager *fm = [NSFileManager defaultManager];

@@ -60,7 +60,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"efibootmgr not found — startup disk selection requires EFI boot manager";
+  return @"efibootmgr not found - startup disk selection requires EFI boot manager";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

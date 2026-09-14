@@ -158,7 +158,7 @@ NSString *const GWPackageManagerErrorDomain = @"GWPackageManagerErrorDomain";
 {
   if ([_packages count] == 0 && [_localFilePaths count] == 0 && !_isAppImage)
     {
-      NSLog(@"GWPackageInstallSpec [FAIL] isValid: NO — no packages, local files, or AppImage specified");
+      NSLog(@"GWPackageInstallSpec [FAIL] isValid: NO - no packages, local files, or AppImage specified");
       if (error)
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
                                     code:GWPackageManagerErrorPlistInvalid

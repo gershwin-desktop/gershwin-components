@@ -97,7 +97,7 @@ main(int argc, char *argv[], char *envp[])
       const char *val = argv[1];
       if (!strchr(val, ':'))
         {
-          fprintf(stderr, "efivar: Invalid value '%s' — expected format locale:number "
+          fprintf(stderr, "efivar: Invalid value '%s' - expected format locale:number "
                           "(e.g., de:3)\n", val);
           [pool release];
           return EXIT_FAILURE;

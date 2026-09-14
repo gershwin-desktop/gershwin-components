@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * AppMenuWidget — Displays the active application's menu in the global
+ * AppMenuWidget - Displays the active application's menu in the global
  * menu bar.  Optimized single-pass update path with coalescing.
  */
 

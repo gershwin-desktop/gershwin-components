@@ -32,7 +32,7 @@
 + (void)activateWindow:(unsigned long)xid;
 
 // Send a single key with zero or more modifiers held (e.g. Control+c, or just
-// Return) — for shortcuts and menu accelerators that plain text typing cannot
+// Return) - for shortcuts and menu accelerators that plain text typing cannot
 // express. Modifier names: "control"/"ctrl", "alt"/"meta", "shift",
 // "super"/"win". The key is either a single character or an X keysym name such
 // as "Return", "Left" or "F5".

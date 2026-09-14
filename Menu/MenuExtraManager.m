@@ -229,7 +229,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         if (!extra) return nil;
 
         // Check system compatibility before loading.
-        // Non-compatible extras are silently skipped — they won't appear
+        // Non-compatible extras are silently skipped - they won't appear
         // in the menu bar or the preferences panel.
         if ([extra respondsToSelector:@selector(isCompatibleWithSystem)]
             && ![extra isCompatibleWithSystem]) {
@@ -385,7 +385,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
     for (id obj in pending) {
         if (![obj isKindOfClass:[NSString class]]) {
-            NSLog(@"GSMenuExtra: reloadTimerFired — BAD identifier type: %@", [obj class]);
+            NSLog(@"GSMenuExtra: reloadTimerFired - BAD identifier type: %@", [obj class]);
             return;
         }
     }
@@ -534,7 +534,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     }
 
     if (enabledSet && [enabledSet count] > 0 && [newEnabled count] == 0 && [_allExtras count] > 0) {
-        NSLog(@"GSMenuExtra: enabledSet contains NO matching extras (%lu identifiers, %lu loaded) — ignoring",
+        NSLog(@"GSMenuExtra: enabledSet contains NO matching extras (%lu identifiers, %lu loaded) - ignoring",
               (unsigned long)[enabledSet count], (unsigned long)[_allExtras count]);
         newEnabled = [NSMutableArray arrayWithArray:_allExtras];
     }

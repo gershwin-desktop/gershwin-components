@@ -524,7 +524,7 @@ static NSString *findTool(NSString *name)
                 }
             }
             // Re-check internet / captive portal status when menu opens
-            // Use force-check to bypass the 60s rate limiter — the user
+            // Use force-check to bypass the 60s rate limiter - the user
             // explicitly asked for fresh data by opening the menu.
             if ([_connectedWLAN ssid]) {
                 _hasInternetAccess = NO;
@@ -598,7 +598,7 @@ static NSString *findTool(NSString *name)
             WLAN *oldConnected = _connectedWLAN;
             NSUInteger oldCount = [_networkList count];
 
-            // When already connected, skip the full scan — just check if
+            // When already connected, skip the full scan - just check if
             // the connection is still alive and update signal strength.
             WLAN *connected = nil;
             NSArray *nets = nil;
@@ -735,7 +735,7 @@ static NSString *findTool(NSString *name)
     [panel makeKeyAndOrderFront:self];
      */
 
-    // Just open the browser directly — no modal dialog needed.
+    // Just open the browser directly - no modal dialog needed.
     [self captivePortalOpenURL:redirectURL];
 }
 

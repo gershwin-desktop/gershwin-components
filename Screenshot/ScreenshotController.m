@@ -729,7 +729,7 @@
         [a addButtonWithTitle:@"OK"];
         [a runModal];
         [a release];
-        [self updateStatus:@"OCR failed — tesseract not installed"];
+        [self updateStatus:@"OCR failed - tesseract not installed"];
         return;
     }
 
@@ -737,7 +737,7 @@
     NSString *tmp = NSTemporaryDirectory();
     NSString *tmpPath = [tmp stringByAppendingPathComponent:@"screenshot_ocr.png"];
     if (![capturedImagePNG writeToFile:tmpPath atomically:NO]) {
-        [self updateStatus:@"OCR failed — could not write temp file"];
+        [self updateStatus:@"OCR failed - could not write temp file"];
         return;
     }
 
@@ -783,7 +783,7 @@
         [self updateStatus:[NSString stringWithFormat:@"OCR: %lu chars copied",
                             (unsigned long)[text length]]];
     } else {
-        [self updateStatus:@"OCR failed — clipboard error"];
+        [self updateStatus:@"OCR failed - clipboard error"];
     }
 }
 

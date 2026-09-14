@@ -138,7 +138,7 @@
         if (age < 30.0) {
             return NO; // Still within suppression window
         }
-        // Expired — allow retry
+        // Expired - allow retry
         [self.failedWindows removeObjectForKey:windowKey];
     }
 
@@ -516,7 +516,7 @@
 {
     NSNumber *windowKey = [NSNumber numberWithUnsignedLong:windowId];
     
-    // Clear any previous failure cache — the app has explicitly re-registered
+    // Clear any previous failure cache - the app has explicitly re-registered
     [self.failedWindows removeObjectForKey:windowKey];
 
     // Protect dictionary access with lock to prevent races during concurrent access
@@ -789,7 +789,7 @@
     
     // Get the calling service name from DBus context
     NSString *serviceName = @"unknown";
-    // Try to get the real service from X11 properties — the DBus message's
+    // Try to get the real service from X11 properties - the DBus message's
     // sender field is not passed through to this handler by our current
     // DBus framework, so we fall back to the X11 _KDE_NET_WM_APPMENU_*
     // properties which Chrome sets on its windows.

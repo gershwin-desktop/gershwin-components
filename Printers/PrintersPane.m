@@ -24,7 +24,7 @@
 }
 
 + (NSString *)compatibilityReason {
-    return @"CUPS printing service not available — the cupsd daemon must be running";
+    return @"CUPS printing service not available - the cupsd daemon must be running";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

@@ -235,7 +235,7 @@
     }
 
     // === (b) Install application to AppDir ===
-    // The .app bundle IS the AppDir — the application binary goes at the root
+    // The .app bundle IS the AppDir - the application binary goes at the root
     // (e.g. AppDir/Workspace) and its resources at AppDir/Resources/.
     // GNUstep dependencies are deployed separately into Resources/GNUstep/.
     {
@@ -307,7 +307,7 @@
         [fm createDirectoryAtPath:gsLibDir withIntermediateDirectories:YES
                        attributes:nil error:NULL];
 
-        // GNUstep.conf — relative paths resolve from Resources/GNUstep/GNUstep.conf
+        // GNUstep.conf - relative paths resolve from Resources/GNUstep/GNUstep.conf
         // back to the GNUstep Library directory alongside it.
         NSString *configPath = [[self _gnustepPath] stringByAppendingPathComponent:@"GNUstep.conf"];
         NSString *content =
@@ -738,7 +738,7 @@
     // === (l) Create AppRun (precompiled static binary + settings plist) ===
     // AppRun is compiled once during `make` and is the same for every AppImage.
     // It reads app-specific settings from AppRun.plist, which we write here.
-    // No compiler needed at packaging time — running make_appimage does not
+    // No compiler needed at packaging time - running make_appimage does not
     // require gcc or any C development tools.
     {
         NSString *appRunPath = [_appDirPath stringByAppendingPathComponent:@"AppRun"];
@@ -795,7 +795,7 @@
         }
 
         if (![fm fileExistsAtPath:appRunPath]) {
-            NSLog(@"make_appimage: FATAL: precompiled AppRun not found — "
+            NSLog(@"make_appimage: FATAL: precompiled AppRun not found - "
                   "run 'make install' in the make_appimage source dir first");
             return NO;
         }

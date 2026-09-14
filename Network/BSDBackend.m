@@ -468,7 +468,7 @@ static NSArray *ethernetPrefixes(void)
         return NetworkConnectionStateDisconnected;
     }
     if (hasUp && hasRunning) {
-        /* UP and RUNNING but no explicit status — assume connected */
+        /* UP and RUNNING but no explicit status - assume connected */
         return NetworkConnectionStateConnected;
     }
     if (hasUp) {

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * BundleBuilder — builds a self-contained .app bundle with all GNUstep
+ * BundleBuilder - builds a self-contained .app bundle with all GNUstep
  * dependencies deployed inside Resources/GNUstep/.  Used by both
  * make_appimage (via AppImagePackager) and make_standalone (standalone
  * .app bundles with AppRun as NSExecutable).

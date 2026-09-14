@@ -21,7 +21,7 @@ extern NSString *const PrefKeyYTDLPPath;
  *   - yt-dlp binary path
  *
  * Preferences are persisted via NSUserDefaults so they survive app restarts.
- * The controller is a one-shot window — call showPreferencesWindow: to
+ * The controller is a one-shot window - call showPreferencesWindow: to
  * display it modally.
  */
 @interface PreferencesController : NSObject

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Thin wrapper around whisper.cpp loaded at runtime via dlopen.
- * No link-time dependency on libwhisper — only the header is needed.
+ * No link-time dependency on libwhisper - only the header is needed.
  */
 
 #ifndef WHISPER_DLOPEN_H

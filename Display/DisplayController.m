@@ -255,7 +255,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [scaleFactorHintLabel setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
     [mainView addSubview:scaleFactorHintLabel];
 
-    // Do not call refreshDisplays: here — the DisplayPane's didSelect
+    // Do not call refreshDisplays: here - the DisplayPane's didSelect
     // will trigger it once the view is in the window hierarchy.
     // Calling it here races with didSelect and causes double async loads.
 
@@ -431,7 +431,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
         NSDebugLog(@"DisplayController: Preserving selection for display: %@", previouslySelectedOutput);
     }
 
-    // Query the X server directly — X11 calls on the main thread are fine
+    // Query the X server directly - X11 calls on the main thread are fine
     // since we always XSync after writes.
     NSArray *newDisplays = [x11 listOutputs];
 
@@ -985,7 +985,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
     if (!saveButton) return;
 
     if (!savedStateSnapshot) {
-        // No saved snapshot yet — take one now (initial state)
+        // No saved snapshot yet - take one now (initial state)
         savedStateSnapshot = [[self currentStateSnapshot] copy];
         [saveButton setEnabled:NO];
         return;

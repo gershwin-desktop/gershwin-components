@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * AppMenuWidget — Displays the active application's menu in the global
+ * AppMenuWidget - Displays the active application's menu in the global
  * menu bar.  Optimized single-pass update path with coalescing.
  */
 
@@ -140,7 +140,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
  * no-op (NSMenu.m:851), so our openFolderInWorkspace: was silently lost.
  *
  * We swizzle setSubmenu: to save the action/target before the call and restore
- * them afterwards — but only when a non-nil, non-submenuAction: action was
+ * them afterwards - but only when a non-nil, non-submenuAction: action was
  * already set.  This allows items with both a submenu and a custom action to
  * work: the submenu opens on hover (handled by NSMenuView's tracking loop,
  * which checks [item submenu], not the action), and the custom action fires
@@ -279,7 +279,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     NSUInteger attempt = [timer.userInfo unsignedIntegerValue];
 
     if (self.currentWindowId != 0) {
-        NSLog(@"AppMenuWidget: Startup desktop-menu load cancelled — already showing menu for window 0x%lx", self.currentWindowId);
+        NSLog(@"AppMenuWidget: Startup desktop-menu load cancelled - already showing menu for window 0x%lx", self.currentWindowId);
         return;
     }
 
@@ -386,7 +386,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 - (void)checkAndDisplayMenuForNewlyRegisteredWindow:(unsigned long)windowId
 {
-    /* Cancel any pending menu retry for this window — a real menu is now available. */
+    /* Cancel any pending menu retry for this window - a real menu is now available. */
     if (self.menuRetryTimer && self.menuRetryWindowId == windowId) {
         [self.menuRetryTimer invalidate];
         self.menuRetryTimer = nil;
@@ -458,7 +458,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     /* Ignore focus on Menu.app itself. */
     if (ctx.isSelfWindow) {
-        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Focus on self (0x%lx) — keeping current menu", windowId);
+        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Focus on self (0x%lx) - keeping current menu", windowId);
         self.lastSwitchTime = [NSDate timeIntervalSinceReferenceDate];
         return;
     }
@@ -481,7 +481,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     /* Dialog/transient of the same app: keep the owner's menu. */
     if (ctx.isDialog && self.currentMenu && self.currentWindowId != 0) {
         if (ctx.pid != 0 && ctx.pid == self.currentWindowPID) {
-            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Dialog 0x%lx of same app (PID %d) — preserving menu",
+            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Dialog 0x%lx of same app (PID %d) - preserving menu",
                   windowId, (int)ctx.pid);
             self.lastSwitchTime = [NSDate timeIntervalSinceReferenceDate];
             return;
@@ -500,7 +500,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         }
         pid_t newPID = [MenuUtils getWindowPID:windowId];
         if (newPID != 0 && newPID == self.currentWindowPID) {
-            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same PID %d — assuming menu unchanged", (int)newPID);
+            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same PID %d - assuming menu unchanged", (int)newPID);
             return;
         }
         /* Some apps do not set _NET_WM_PID, so getWindowPID: returns 0 and the
@@ -513,7 +513,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         NSMenu *current = [self.menuView menu];
         NSMenu *candidate = [self.protocolManager getMenuForWindow:windowId];
         if (current && candidate && [self topLevelMenusMatch:current with:candidate]) {
-            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same window 0x%lx, menu unchanged (PID unknown %d) — skipping rebuild", windowId, (int)newPID);
+            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same window 0x%lx, menu unchanged (PID unknown %d) - skipping rebuild", windowId, (int)newPID);
             return;
         }
     }
@@ -535,7 +535,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             return;
         }
 
-        /* Desktop window with no menu — just show system-only immediately. */
+        /* Desktop window with no menu - just show system-only immediately. */
         if (ctx.isDesktop) {
             [self clearToSystemOnly];
             return;
@@ -568,7 +568,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         return;
     }
 
-    /* Cancel any pending retry — we have a menu now. */
+    /* Cancel any pending retry - we have a menu now. */
     [self cancelMenuRetry];
 
     /* Fetch the menu from the protocol manager. */
@@ -591,7 +591,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         return;
     }
 
-    /* ── We have a real menu — load it. ────────────────────────── */
+    /* ── We have a real menu - load it. ────────────────────────── */
     [self loadMenu:menu forWindow:windowId];
 
     /* Pre-warm enabled/checkmark states on window switch so the user's first
@@ -637,17 +637,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     if (failTime) {
         NSTimeInterval age = -[failTime timeIntervalSinceNow];
         if (age < 30.0) {  /* 30 second TTL: skip retry for recently confirmed no-menu windows */
-            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Window 0x%lx recently confirmed to have no menu — skipping retry", windowId);
+            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Window 0x%lx recently confirmed to have no menu - skipping retry", windowId);
             return;
         }
-        /* TTL expired — allow retry in case properties now exist */
+        /* TTL expired - allow retry in case properties now exist */
         [self.windowsWithoutMenus removeObjectForKey:windowKey];
     }
 
     /* If already retrying this window, let the timer run. */
     if (self.menuRetryTimer && self.menuRetryWindowId == windowId) return;
 
-    /* New window — reset retry count. */
+    /* New window - reset retry count. */
     [self cancelMenuRetry];
     self.menuRetryWindowId = windowId;
     self.menuRetryCount = 0;
@@ -680,7 +680,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     /* Check if we've moved on to a different window. */
     unsigned long activeWindow = [self readActiveWindowFromX11];
     if (activeWindow != windowId && activeWindow != 0) {
-        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Retry for 0x%lx cancelled — active window is now 0x%lx", windowId, activeWindow);
+        NSDebugLLog(@"gwcomp", @"AppMenuWidget: Retry for 0x%lx cancelled - active window is now 0x%lx", windowId, activeWindow);
         [self cancelMenuRetry];
         return;
     }
@@ -699,7 +699,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     /* Budget exhausted? */
     if (self.menuRetryCount >= MENU_RETRY_MAX) {
-        NSLog(@"AppMenuWidget: Window 0x%lx still has no menu after %d retries — caching as no-menu window",
+        NSLog(@"AppMenuWidget: Window 0x%lx still has no menu after %d retries - caching as no-menu window",
               windowId, MENU_RETRY_MAX);
         /* Mark this window as confirmed to have no menu (30s TTL) to avoid retrying it again soon. */
         NSNumber *windowKey = [NSNumber numberWithUnsignedLong:windowId];
@@ -778,7 +778,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     pid_t newPID = [MenuUtils getWindowPID:windowId];
 
-    /* Skip rebuild when same window AND same PID — safe because only
+    /* Skip rebuild when same window AND same PID - safe because only
        process restarts (which change PID) can leave stale DBus service
        names embedded in menu items.  Window-ID reuse across restarts
        is rare but would also be caught by the PID change. */
@@ -1313,7 +1313,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 - (void)clearToSystemOnly
 {
-    /* Don't clear while the search panel is visible — it needs the
+    /* Don't clear while the search panel is visible - it needs the
        current app menu items to search through. */
     if ([[ActionSearchController sharedController] isSearchVisible]) {
         return;
@@ -1544,7 +1544,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     /* Throttle updates to avoid repeated app tree scanning. */
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
     if (now - self.lastSystemMenuUpdateTime < 0.5) {
-        /* Throttled — skip. */
+        /* Throttled - skip. */
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: menuNeedsUpdate throttled");
         return;
     }
@@ -1574,7 +1574,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
     BOOL cacheValid = (self.cachedAppBundleTree && (now - self.cachedAppBundleTreeTime) < SYSTEM_MENU_CACHE_TTL);
 
-    /* Already populated with current cache — skip. */
+    /* Already populated with current cache - skip. */
     if (cacheValid && self.systemMenuPopulatedFromCache) {
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: populateSystemMenu skipped (cached), has %ld items", (long)[menu numberOfItems]);
         return;
@@ -1615,7 +1615,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        otherwise re-insert the very same NSMenu object.  Rebuilding from scratch
        each open allocated one NSMenuItem + one -[NSWorkspace iconForFile:] (a
        stat of every .app bundle) per installed app and then tore the whole old
-       tree down again via NSMenu/NSMenuItem dealloc — a multi-hundred-object
+       tree down again via NSMenu/NSMenuItem dealloc - a multi-hundred-object
        cascade that showed up as the bulk of Menu's CPU. */
     NSMenu *appsSubmenu = self.cachedAppsSubmenu;
     if (!appsSubmenu || !cacheValid) {
@@ -1750,7 +1750,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         if (![fm fileExistsAtPath:fullPath isDirectory:&isDir]) continue;
 
         if ([[entry pathExtension] isEqualToString:@"app"]) {
-            /* .app bundle — deduplicate by bundle ID */
+            /* .app bundle - deduplicate by bundle ID */
             NSString *infoPath = [fullPath stringByAppendingPathComponent:@"Contents/Info.plist"];
             NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
             NSString *bundleID = info[@"CFBundleIdentifier"];
@@ -1763,7 +1763,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
                                    @"priority": @(pri), @"relPath": relPath};
             }
         } else if (isDir) {
-            /* Subdirectory — recurse (skip hidden directories) */
+            /* Subdirectory - recurse (skip hidden directories) */
             if (![entry hasPrefix:@"."]) {
                 [self scanDirectory:fullPath relativeTo:root priority:pri
                                into:appsByKey fileManager:fm depth:depth + 1];

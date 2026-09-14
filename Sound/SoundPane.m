@@ -29,7 +29,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"No audio system found — requires ALSA or OSS";
+  return @"No audio system found - requires ALSA or OSS";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

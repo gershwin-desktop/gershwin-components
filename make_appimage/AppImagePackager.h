@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * AppImagePackager — takes a fully-built .app bundle (from BundleBuilder)
+ * AppImagePackager - takes a fully-built .app bundle (from BundleBuilder)
  * and packages it as an AppImage: writes .desktop file, sets up .DirIcon,
  * and runs appimagetool.
  */

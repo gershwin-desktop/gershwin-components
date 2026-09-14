@@ -16,7 +16,7 @@
 #import "GWPackageInstallSpec.h"
 #import "GWAppImageDownloader.h"
 
-// Backend imports — included at compile time; only the relevant one is used
+// Backend imports - included at compile time; only the relevant one is used
 #import "GWDebBackend.h"
 #import "GWArchBackend.h"
 #import "GWFreeBSDBackend.h"
@@ -98,7 +98,7 @@ static GWPackageManager *sharedManager = nil;
         }
       else
         {
-          NSLog(@"GWPackageManager -> initWithBackend: nil — auto-detecting backend");
+          NSLog(@"GWPackageManager -> initWithBackend: nil - auto-detecting backend");
           _backend = _createBackend();
           NSLog(@"GWPackageManager -> selected backend: %@", [_backend backendName]);
         }

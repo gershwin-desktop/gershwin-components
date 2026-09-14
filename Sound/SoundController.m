@@ -869,7 +869,7 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputBalanceSlider setEnabled:hasDevices];
     
     // Select the default (saved) output device.
-    // The user can change this manually — we never override their choice.
+    // The user can change this manually - we never override their choice.
     AudioDevice *currentDevice = [backend defaultOutputDevice];
     [selectedOutputDevice release];
     selectedOutputDevice = [currentDevice retain];

@@ -22,7 +22,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"xinput not found — mouse configuration requires X11";
+  return @"xinput not found - mouse configuration requires X11";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

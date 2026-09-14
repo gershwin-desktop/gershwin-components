@@ -207,7 +207,7 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
         // time.  If the app has since reconnected to D-Bus it will have a new unique name;
         // calling the old one returns "ServiceUnknown".  Additionally, the stored actionPath
         // is typically the _GTK_MENUBAR_OBJECT_PATH (org.gtk.Menus), NOT the
-        // _GTK_APPLICATION_OBJECT_PATH (org.gtk.Actions) — using the wrong path causes the
+        // _GTK_APPLICATION_OBJECT_PATH (org.gtk.Actions) - using the wrong path causes the
         // same error even when the service is reachable.
         unsigned long activeWindowId = [[WindowMonitor sharedMonitor] currentActiveWindow];
         if (activeWindowId != 0) {
@@ -237,7 +237,7 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
                 }
             } else {
                 // Prefer the application object path (org.gtk.Actions) over the menubar
-                // object path (org.gtk.Menus) — they implement different D-Bus interfaces.
+                // object path (org.gtk.Menus) - they implement different D-Bus interfaces.
                 NSString *appPath = [MenuUtils getWindowProperty:activeWindowId
                                                        atomName:@"_GTK_APPLICATION_OBJECT_PATH"];
                 if (appPath && [appPath length] > 0) {

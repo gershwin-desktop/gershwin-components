@@ -142,7 +142,7 @@ static NSTimeInterval _lastCaptivePortalCheckTime = 0;
             if (effectiveURL
                 && strcasecmp(effectiveURL, CAPTIVE_PORTAL_PROBE_URL) != 0
                 && strcasecmp(effectiveURL, CAPTIVE_PORTAL_PROBE_URL "/") != 0) {
-                // The portal redirected us — the effective URL is the
+                // The portal redirected us - the effective URL is the
                 // actual login page.
                 redirectURL = [NSString stringWithUTF8String:effectiveURL];
                 isCaptive = YES;

@@ -47,7 +47,7 @@ static NSString *xdoPath = nil;
 static volatile int buildProgressPct = 0;
 static volatile BOOL buildThreadRunning = NO;
 
-// ── DockService protocol (forward decl — no link dependency) ────────
+// ── DockService protocol (forward decl - no link dependency) ────────
 @protocol DockService <NSObject>
 - (void)setProgressValue:(double)value;
 - (void)setProgressVisible:(BOOL)visible;
@@ -244,7 +244,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
         }
         [t release];
     }
-    // Last resort: raw OSS — cat WAV to /dev/dsp
+    // Last resort: raw OSS - cat WAV to /dev/dsp
     NSLog(@"playSubmarineSound: trying cat > /dev/dsp");
     NSTask *t = [[NSTask alloc] init];
     [t setLaunchPath:@"/bin/sh"];
@@ -536,7 +536,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
             attributesOfItemAtPath:modelPath error:NULL] fileSize];
         unsigned long long minSize = [self minimumModelSize:fname];
         if (fileSize > 0 && fileSize < minSize) {
-            NSLog(@"loadModel: file is only %llu bytes (expected >= %llu) — likely truncated",
+            NSLog(@"loadModel: file is only %llu bytes (expected >= %llu) - likely truncated",
                   fileSize, minSize);
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"Corrupt model file"];
@@ -706,7 +706,7 @@ static int download_progress_cb(void *clientp,
 }
 
 // Minimum expected file size (in bytes) for each model, at 90 % of declared
-// size — a file smaller than this is almost certainly a truncated download.
+// size - a file smaller than this is almost certainly a truncated download.
 static const unsigned long long modelMinSizes[] = {
     66 * 1000000,   // tiny.en    74 MB
     66 * 1000000,   // tiny       74 MB
@@ -740,7 +740,7 @@ static const unsigned long long modelMinSizes[] = {
     [progressBar setDoubleValue:v];
     [progressBar displayIfNeeded];
     [statusLabel setStringValue:[NSString stringWithFormat:
-        @"Downloading %@ — %.0f%%", downloadingModel, v]];
+        @"Downloading %@ - %.0f%%", downloadingModel, v]];
 }
 
 - (void)downloadFinishedWithName:(NSString *)name
@@ -852,7 +852,7 @@ static const unsigned long long modelMinSizes[] = {
         }
         NSString *modelPath = [self modelPathForName:selectedName];
         if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
-            [statusLabel setStringValue:@"Model not downloaded — select from Whisper menu"];
+            [statusLabel setStringValue:@"Model not downloaded - select from Whisper menu"];
             return;
         }
         [self loadModel:modelPath];
@@ -1075,7 +1075,7 @@ static const unsigned long long modelMinSizes[] = {
     int sr = 16000;
     // Find the active SoundBackend (same selection as Sound PrefPane)
     id<SoundBackend> snd = nil;
-    NSString *devPath = nil;  // ALSA: "plughw:N,M" — OSS: "/dev/dspN"
+    NSString *devPath = nil;  // ALSA: "plughw:N,M" - OSS: "/dev/dspN"
 
 #if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
     OSSBackend *oss = [[OSSBackend alloc] init];
@@ -1323,7 +1323,7 @@ static const unsigned long long modelMinSizes[] = {
 
     // Serialise: only one whisper_full at a time on the same context
     if (isTranscribing) {
-        NSLog(@"transcribeStreamingChunk: skip — already transcribing");
+        NSLog(@"transcribeStreamingChunk: skip - already transcribing");
         [pool release];
         return;
     }
@@ -2227,7 +2227,7 @@ static const unsigned long long modelMinSizes[] = {
     [copyTextButton setFrame:NSMakeRect(mx + w - copySz.width, bottomRowY,
                                         copySz.width, bh)];
 
-    // Export buttons removed — now in Whisper menu
+    // Export buttons removed - now in Whisper menu
 }
 
 - (void)windowDidResize:(NSNotification *)notification
@@ -2455,7 +2455,7 @@ static const unsigned long long modelMinSizes[] = {
         return;
     }
     if (!whisperCtx) {
-        // Model loading touches the UI — must happen on the main thread
+        // Model loading touches the UI - must happen on the main thread
         [self performSelectorOnMainThread:@selector(dictateLoadModel)
                                withObject:nil
                             waitUntilDone:YES];

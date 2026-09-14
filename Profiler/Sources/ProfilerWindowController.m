@@ -155,7 +155,7 @@
     _selectedPID = p.pid;
     [_cpuGraph clear];
     [_ramGraph clear];
-    _status.stringValue = [NSString stringWithFormat:@"Selected PID %d — %@", p.pid, p.name];
+    _status.stringValue = [NSString stringWithFormat:@"Selected PID %d - %@", p.pid, p.name];
 }
 
 - (void)showAlertSheet:(NSString *)title message:(NSString *)message
@@ -183,7 +183,7 @@
     [_ramGraph addValue:p.rssBytes / 1048576.0];
 
     _status.stringValue = [NSString stringWithFormat:
-                           @"PID %d — RSS %.1f MB — Virtual %.1f MB",
+                           @"PID %d - RSS %.1f MB - Virtual %.1f MB",
                            p.pid,
                            p.rssBytes / 1048576.0,
                            p.virtualBytes / 1048576.0];

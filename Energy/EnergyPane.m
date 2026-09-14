@@ -22,7 +22,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"xset not found — power management requires X11";
+  return @"xset not found - power management requires X11";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

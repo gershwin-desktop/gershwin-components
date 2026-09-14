@@ -644,7 +644,7 @@ static NSString *ConfigKey(NSString *key)
 
 /* Open a URL in the default browser without blocking the menu and without
    popping an alert.  NSWorkspace openURL: makes a blocking DO connection to
-   the handler app and, when none is found, calls NSRunAlertPanel — which must
+   the handler app and, when none is found, calls NSRunAlertPanel - which must
    run on the main thread or the alert buttons never become clickable (and the
    Eau theme can crash).  Instead resolve the browser ourselves and launch it
    with NSTask: the task launch returns immediately, so the menu never freezes

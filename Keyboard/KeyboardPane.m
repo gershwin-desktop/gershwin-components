@@ -23,7 +23,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"setxkbmap not found — keyboard configuration requires X11";
+  return @"setxkbmap not found - keyboard configuration requires X11";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

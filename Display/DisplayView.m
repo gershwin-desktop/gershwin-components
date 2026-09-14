@@ -136,7 +136,7 @@
 
     NSPoint parentPoint = [[self superview] convertPoint:windowPoint fromView:nil];
 
-    // When dragging the menu bar, don't move the display rect —
+    // When dragging the menu bar, don't move the display rect -
     // highlight whichever display the cursor is over as the drop target.
     if (isDraggingMenuBar) {
         menuBarDragPoint = parentPoint;
@@ -550,7 +550,7 @@
 - (void)setNeedsDisplay:(BOOL)flag
 {
     [super setNeedsDisplay:flag];
-    // Do NOT call updateDisplayRects here — setNeedsDisplay: is called
+    // Do NOT call updateDisplayRects here - setNeedsDisplay: is called
     // frequently by the view system (adding to window, resizing, etc.)
     // and updateDisplayRects removes/adds subviews which can re-enter
     // this method and crash.  Call updateDisplayRects explicitly when

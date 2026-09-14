@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * make_appimage — takes an already-built .app bundle, deploys all GNUstep
+ * make_appimage - takes an already-built .app bundle, deploys all GNUstep
  * dependencies into it (via BundleBuilder), then packages it as an AppImage
  * (via AppImagePackager).
  *

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * WindowSwitchContext — Caches all X11/PID/app state for a single
+ * WindowSwitchContext - Caches all X11/PID/app state for a single
  * window-switch event so that expensive X11 round-trips are performed
  * at most once per focus change.
  */

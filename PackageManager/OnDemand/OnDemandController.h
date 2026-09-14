@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * OnDemandController — Controller for the OnDemand installer app.
+ * OnDemandController - Controller for the OnDemand installer app.
  * Manages the progress window and orchestrates install/launch flow.
  */
 

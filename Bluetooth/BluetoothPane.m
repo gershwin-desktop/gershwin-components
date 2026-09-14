@@ -22,7 +22,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"bluetoothctl not found — Bluetooth configuration requires bluez";
+  return @"bluetoothctl not found - Bluetooth configuration requires bluez";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

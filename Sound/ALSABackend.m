@@ -313,7 +313,7 @@ static NSString *const kMicControl = @"Mic";
                   device.identifier, usable);
             if (!usable) {
                 NSDebugLLog(@"gwcomp",
-                    @"Skipping unusable output device %@ (%@) — probe failed",
+                    @"Skipping unusable output device %@ (%@) - probe failed",
                     device.displayName, device.identifier);
                 [device release];
                 continue;
@@ -426,7 +426,7 @@ static NSString *const kMicControl = @"Mic";
             // Probe input device to verify it is actually attached
             if (![self isInputDeviceUsable:device]) {
                 NSDebugLLog(@"gwcomp",
-                    @"Skipping unusable input device %@ (%@) — probe failed",
+                    @"Skipping unusable input device %@ (%@) - probe failed",
                     device.displayName, device.identifier);
                 [device release];
                 continue;
@@ -597,7 +597,7 @@ static NSString *const kMicControl = @"Mic";
                                 channels:@"2" rate:@"48000" probeId:probeId];
     if (result != -1) return (BOOL)result;
 
-    // Inconclusive — assume usable.
+    // Inconclusive - assume usable.
     return YES;
 }
 
@@ -1101,7 +1101,7 @@ static NSString *const kMicControl = @"Mic";
     if (volume < 0.0) volume = 0.0;
     if (volume > 1.0) volume = 1.0;
 
-    // ReadOnly devices have no hardware volume control — cache value only.
+    // ReadOnly devices have no hardware volume control - cache value only.
     if (defaultOutput.volumeControl && defaultOutput.volumeControl.isReadOnly) {
         defaultOutput.volumeControl.value = volume;
         return YES;
@@ -1782,7 +1782,7 @@ static NSString *const kMicControl = @"Mic";
             NSNumber *volFeedback = [prefs objectForKey:@"playVolumeFeedback"];
             
             if (outputId) {
-                // Stable device ID match — authoritative, always applies
+                // Stable device ID match - authoritative, always applies
                 AudioDevice *dev = [self outputDeviceWithStableId:outputId];
                 if (dev) {
                     dev.isDefault = YES;
@@ -1791,7 +1791,7 @@ static NSString *const kMicControl = @"Mic";
                     currentOutputCard = dev.cardIndex;
                     NSDebugLLog(@"gwcomp", @"ALSABackend: loaded default output by stable ID '%@'", outputId);
                 } else {
-                    // Legacy "hw:N,M" fallback — only use if asoundrc didn't
+                    // Legacy "hw:N,M" fallback - only use if asoundrc didn't
                     // already pick a default (avoid overriding a valid match
                     // when card indices have shifted since the plist was saved).
                     if (defaultOutput == nil) {

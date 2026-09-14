@@ -62,7 +62,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"Root filesystem is not ZFS or bectl not found — boot environment management requires both";
+  return @"Root filesystem is not ZFS or bectl not found - boot environment management requires both";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

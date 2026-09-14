@@ -386,7 +386,7 @@ static NSString *AlsaDefaultBlock(NSString *contents)
         if ([path hasPrefix:@"~"]) { drive[@"ImagePath"] = [path stringByExpandingTildeInPath]; continue; }
         if ([path isAbsolutePath]) {
             if ([fm isReadableFileAtPath:path]) continue;
-            /* Absolute path doesn't exist — try resolving filename relative to bundle */
+            /* Absolute path doesn't exist - try resolving filename relative to bundle */
             path = [path lastPathComponent];
         }
         /* Search in bundle subdirectories for the file */

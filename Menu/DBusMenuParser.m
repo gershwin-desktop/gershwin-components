@@ -128,7 +128,7 @@ static void cacheShortcut(NSString *service, NSNumber *itemId,
     }
     
     // First element is revision number (uint32). Guard against malformed
-    // payloads that send a non-number here — sending numeric messages to
+    // payloads that send a non-number here - sending numeric messages to
     // a string/variant below would dispatch via objc_msgSend_fpret and
     // crash on a freed/mistyped object.
     id revisionObj = [resultArray objectAtIndex:0];
@@ -553,7 +553,7 @@ static void cacheShortcut(NSString *service, NSNumber *itemId,
     [menuItem setRepresentedObject:itemId];
     
     // Set enabled state BEFORE setting shortcuts.
-    // Top-level items with submenus must NEVER be disabled — they always
+    // Top-level items with submenus must NEVER be disabled - they always
     // open their dropdown regardless of the app's transient enabled state.
     if (enabled && !isSubmenu) {
         [menuItem setEnabled:[enabled boolValue]];

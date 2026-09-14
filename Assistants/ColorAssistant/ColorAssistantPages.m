@@ -776,7 +776,7 @@
     if (NSWidth(bounds) < 2 || NSHeight(bounds) < 2) return;
     CGFloat midX = floor(NSWidth(bounds) / 2);
 
-    // Left half: solid 50% grey — at correct gamma (2.2), matches the stripes
+    // Left half: solid 50% grey - at correct gamma (2.2), matches the stripes
     [[NSColor colorWithCalibratedWhite:0.5 alpha:1.0] set];
     NSRectFill(NSMakeRect(0, 0, midX, NSHeight(bounds)));
 

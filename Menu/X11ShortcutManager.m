@@ -815,7 +815,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
 
     // Check if this shortcut is already taken
     if ([self isShortcutAlreadyTaken:keycode modifier:x11_modifier]) {
-        // Retry once — the old ungrab from a window switch may not have
+        // Retry once - the old ungrab from a window switch may not have
         // propagated to the X server yet.
         XSync(_display, False);
         if ([self isShortcutAlreadyTaken:keycode modifier:x11_modifier]) {
@@ -1267,7 +1267,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         return;
     }
     
-    int menuItemId = [tagNumber intValue] & 0xFFFF;  // Tag encodes (modBits << 16) | itemId — extract only the item ID
+    int menuItemId = [tagNumber intValue] & 0xFFFF;  // Tag encodes (modBits << 16) | itemId - extract only the item ID
     NSLog(@"X11ShortcutManager: Shortcut triggered for menu item ID=%d (service=%@, path=%@)", 
           menuItemId, serviceName, objectPath);
     
@@ -1331,7 +1331,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         NSLog(@"X11ShortcutManager: Using window action: %@ -> %@ on path: %@", 
               actionName, actualActionName, actualObjectPath);
     } else if ([actionName hasPrefix:@"unity."]) {
-        // Legacy unity actions — strip the prefix and activate on the
+        // Legacy unity actions - strip the prefix and activate on the
         // menu bar object path (_GTK_MENUBAR_OBJECT_PATH), which hosts
         // an org.gtk.Actions interface with Unity-style action names.
         actualActionName = [actionName substringFromIndex:6];

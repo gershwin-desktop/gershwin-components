@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// LibraryDeployer — copies resolved shared libraries into the AppDir.
+// LibraryDeployer - copies resolved shared libraries into the AppDir.
 //
 // Two exclusion layers: exact-match (by filename, same as LibraryResolver) and
 // prefix-match (libc-*, libm-*, etc.). The prefix list catches versioned
@@ -222,7 +222,7 @@ static NSArray *libcPrefixes(void)
         return NO;
     }
 
-    // Skip if the target already exists — avoids redundant copies and
+    // Skip if the target already exists - avoids redundant copies and
     // allows the tool to be re-run on a partially-built AppDir.
     @try {
         if ([fm fileExistsAtPath:targetPath]) {

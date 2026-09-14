@@ -7,7 +7,7 @@
 #import <Foundation/Foundation.h>
 
 /**
- * LibraryDeployer — copies resolved shared-library paths into the AppDir.
+ * LibraryDeployer - copies resolved shared-library paths into the AppDir.
  *
  * Applies two layers of exclusion (exact filename + prefix-match) to
  * skip host-system libraries. In standalone mode all exclusions are

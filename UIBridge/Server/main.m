@@ -1019,7 +1019,7 @@ static void RedirectLogs(void) {
                         if ([jsonResult isKindOfClass:[NSString class]]) {
                             result = ParseJSON(jsonResult);
                         } else if ([jsonResult isKindOfClass:[NSData class]]) {
-                            NSDebugLLog(@"gwcomp", @"[Server] App returned NSData — attempting to decode as UTF-8 JSON string");
+                            NSDebugLLog(@"gwcomp", @"[Server] App returned NSData - attempting to decode as UTF-8 JSON string");
                             NSString *s = [[NSString alloc] initWithData:jsonResult encoding:NSUTF8StringEncoding];
                             if (s) {
                                 result = ParseJSON(s);
@@ -1034,7 +1034,7 @@ static void RedirectLogs(void) {
                             result = nil;
                         } else {
                             // Fallback: try to stringify and parse
-                            NSDebugLLog(@"gwcomp", @"[Server] App returned unexpected type — using description() as fallback");
+                            NSDebugLLog(@"gwcomp", @"[Server] App returned unexpected type - using description() as fallback");
                             NSString *desc = [jsonResult description];
                             result = ParseJSON(desc);
                         }

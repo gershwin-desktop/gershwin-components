@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// InterpreterDeployer — detects and deploys the ld-linux (or ld-musl)
+// InterpreterDeployer - detects and deploys the ld-linux (or ld-musl)
 // dynamic linker/interpreter into the AppDir.
 //
 // Why .app bundle search: GNUstep apps are often bundles (.app directories)

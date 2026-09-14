@@ -539,7 +539,7 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
     return result;
 }
 
-// Synchronous helper — runs setxkbmap and parses its output.
+// Synchronous helper - runs setxkbmap and parses its output.
 // Only call from a background thread or during init.
 - (NSDictionary *)currentXkbmapSettingsSync
 {
@@ -1105,9 +1105,9 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
             }
 
             if (systemUpdated) {
-                [status appendString:@" — saved to /etc/default/keyboard."];
+                [status appendString:@" - saved to /etc/default/keyboard."];
             } else {
-                [status appendString:@" — saved for this user. System file not updated."];
+                [status appendString:@" - saved for this user. System file not updated."];
                 if ([systemError length]) {
                     [status appendFormat:@" (%@)", systemError];
                 }

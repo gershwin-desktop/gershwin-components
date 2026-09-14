@@ -864,7 +864,7 @@ static dispatch_once_t _sharedDisplayOnce;
     if (windowId == 0) return NO;
 
     // Canonical/KDE-style: app stores BOTH its D-Bus service name AND the object path.
-    // A service name alone is not enough — the window may simply be inheriting the
+    // A service name alone is not enough - the window may simply be inheriting the
     // property from its parent process.
     if ([self getWindowMenuService:windowId] != nil &&
         [self getWindowMenuPath:windowId] != nil) return YES;

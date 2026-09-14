@@ -271,7 +271,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     // "ready to read" on GNUstep (libdbus buffers internally), so immediate
     // re-arm would fire again on the very next run-loop iteration, spinning
     // the CPU indefinitely.  A short delay breaks the cycle while keeping
-    // DBus message latency under 150 ms — more than adequate for menu updates.
+    // DBus message latency under 150 ms - more than adequate for menu updates.
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(rearmDBusSource)
                                                object:nil];
@@ -950,7 +950,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         [[NSNotificationCenter defaultCenter] postNotificationName:@"BrightnessChanged" object:nil];
     }];
 
-    // Also register XF86 brightness keys — forwarded via notification to BrightnessExtra.
+    // Also register XF86 brightness keys - forwarded via notification to BrightnessExtra.
     X11ShortcutManager *mgr = [X11ShortcutManager sharedManager];
     if (mgr) {
         [mgr registerXF86Key:XF86XK_MonBrightnessUp target:self action:@selector(_xf86BrightnessUp)];
@@ -1630,7 +1630,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         }
     }
 
-    // Register XF86Audio volume keys — forwarded via notification to SoundExtra.
+    // Register XF86Audio volume keys - forwarded via notification to SoundExtra.
     X11ShortcutManager *volMgr = [X11ShortcutManager sharedManager];
     if (volMgr) {
         [volMgr registerXF86Key:XF86XK_AudioRaiseVolume target:self action:@selector(_xf86VolumeUp)];
@@ -1908,7 +1908,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         return;
     }
 
-    /* Ignore focus on Menu.app itself — but still forward to AppMenuWidget to
+    /* Ignore focus on Menu.app itself - but still forward to AppMenuWidget to
        cancel any stale coalesce timer left by a transient windowId==0 event.
        The widget's handleFocusChange: will return early via isSelfWindow.
 

@@ -200,7 +200,7 @@
     [scroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [content addSubview:scroll];
 
-    /* Bottom bar — stays at bottom when window resizes */
+    /* Bottom bar - stays at bottom when window resizes */
     NSView *bottomBar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, winW, bottomH)];
     [bottomBar setAutoresizingMask:NSViewWidthSizable];
 

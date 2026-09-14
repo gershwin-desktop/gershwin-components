@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// LibraryResolver — resolves ELF shared library dependencies for an AppDir.
+// LibraryResolver - resolves ELF shared library dependencies for an AppDir.
 //
 // Why ldd: Parsing ldd output is simpler and more portable than reimplementing
 // ELF DT_NEEDED traversal. ldd handles cross-arch, musl, and glibc transparently.
@@ -79,7 +79,7 @@ static NSString *lastPathComponent(NSString *path)
 
         // Exact-match exclusion list. These are glibc/musl internals, graphics
         // drivers, and other host-provided libraries that should not be bundled
-        // in non-standalone mode — they are guaranteed on any desktop Linux or
+        // in non-standalone mode - they are guaranteed on any desktop Linux or
         // pull in dozens of driver-specific variants that bloat the AppImage.
         _excludedLibraries = @[
             @"ld-linux.so.2",

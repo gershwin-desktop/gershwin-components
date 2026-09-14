@@ -284,7 +284,7 @@ static NSString *_detectPackageFormat(NSString *path)
 {
   // Dependency mode: we were called with a custom plist path (not our bundle's
   // Install.plist).  Parse it and install whatever packages it lists.
-  // We do NOT launch a postinstall_command — this mode is purely for
+  // We do NOT launch a postinstall_command - this mode is purely for
   // installing dependencies so the calling app can then proceed.
   NSError *error = nil;
   _spec = [[GWPackageInstallSpec alloc]
@@ -311,7 +311,7 @@ static NSString *_detectPackageFormat(NSString *path)
   if ([_appName length] == 0)
     _appName = @"Dependency";
 
-  // There is no postinstall_command to run after a dependency install — we
+  // There is no postinstall_command to run after a dependency install - we
   // simply exit once the packages are installed.
   _launchCommand = nil;
   _launchArgs = @[];
@@ -392,7 +392,7 @@ static BOOL _confirmInstall(NSString *pkgName, NSString *filePath, NSString *fmt
             detail = [NSString stringWithFormat:@"\n\n%@\n%@",
               summary, dlSize];
           else
-            detail = @"\n\nNo additional packages will be downloaded — the package is self-contained.";
+            detail = @"\n\nNo additional packages will be downloaded - the package is self-contained.";
         }
     }
   else if ([fmt isEqualToString:@"arch"])
@@ -532,7 +532,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
         return;
       }
 
-    /* User confirmed — show the progress window, then start the install.
+    /* User confirmed - show the progress window, then start the install.
        showWindow orders the window front synchronously, so it is visible
        before the install's progress updates arrive. */
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -818,7 +818,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)installDidProgress:(float)progress message:(NSString *)message
 {
-  NSLog(@"OnDemand -> installDidProgress: %.0f%% — %@", progress * 100, message);
+  NSLog(@"OnDemand -> installDidProgress: %.0f%% - %@", progress * 100, message);
   dispatch_async(dispatch_get_main_queue(), ^{
     [_statusField setStringValue:message ?: @""];
 
@@ -1013,7 +1013,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
   // Pass through the parent's environment so the launched app sees
   // the same PATH, DISPLAY, etc. as OnDemand
   [task setEnvironment:[[NSProcessInfo processInfo] environment]];
-  // Do NOT set standardOutput/standardError — leaving them unset
+  // Do NOT set standardOutput/standardError - leaving them unset
   // makes the child inherit the parent's stdio so output and exit
   // codes pass through to the caller.
 
@@ -1094,7 +1094,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
   });
 }
 
-/// Post-install launch step — called on the main thread after a successful install.
+/// Post-install launch step - called on the main thread after a successful install.
 - (void)_launchAfterInstall
 {
   [_progressBar setDoubleValue:1.0];
@@ -1263,7 +1263,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_showError:(NSString *)message
 {
-  NSLog(@"OnDemand: Error — %@", message);
+  NSLog(@"OnDemand: Error - %@", message);
 
   // Close the progress window before showing the error
   [_window orderOut:nil];
@@ -1441,7 +1441,7 @@ static double _parseSizeBefore(NSString *line, NSString *marker)
         }
     }
 
-    // 2c. FreeBSD pkg: "Fetching <pkg>: XX%" — track each file's completion
+    // 2c. FreeBSD pkg: "Fetching <pkg>: XX%" - track each file's completion
     {
       NSString *fetchPrefix = @"Fetching ";
       if ([line hasPrefix:fetchPrefix])

@@ -255,7 +255,7 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
 
 - (void)createSearchPanel
 {
-    // Minimal borderless panel — just a surface for the text field, no extras.
+    // Minimal borderless panel - just a surface for the text field, no extras.
     // Height is exactly one menu item so the search box aligns with the
     // results menu rows below it.
     CGFloat searchFieldHeight = [[GSTheme theme] menuItemHeight];

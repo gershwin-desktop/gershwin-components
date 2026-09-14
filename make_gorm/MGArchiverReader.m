@@ -105,7 +105,7 @@ static inline uint32_t r32(const uint8_t *b) {
       }
     }
   } @catch (NSException *e) {
-    /* NSUnarchiver failed — fall through to flat parse */
+    /* NSUnarchiver failed - fall through to flat parse */
   }
 
   if (!usedUnarchiver) {

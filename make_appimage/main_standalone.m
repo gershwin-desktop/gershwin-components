@@ -3,13 +3,13 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * make_standalone — takes an already-built .app bundle and deploys all
+ * make_standalone - takes an already-built .app bundle and deploys all
  * GNUstep dependencies into it, producing a self-contained .app bundle
  * instead of an AppImage.  The AppRun binary is set as the bundle's
  * NSExecutable so it runs when the .app bundle is launched directly.
  *
  * Shares BundleBuilder.m, LibraryResolver.m, LibraryDeployer.m,
- * InterpreterDeployer.m, and AppRun.c with make_appimage — no duplication.
+ * InterpreterDeployer.m, and AppRun.c with make_appimage - no duplication.
  *
  * Usage: make_standalone [options] <app-name>
  */
