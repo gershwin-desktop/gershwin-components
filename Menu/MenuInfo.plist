@@ -26,6 +26,8 @@
 	<string>MenuApplication</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>GSSuppressAppIcon</key>
+	<true/>
 	<key>Authors</key>
 	<array>
 		<string>Simon Peter</string>
