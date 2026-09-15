@@ -600,30 +600,21 @@ static NSString *ConfigKey(NSString *key)
     return m;
 }
 
-- (NSString *)statusSymbol
+/* The status glyphs are icons in Menu's resources rather than drawn text, so
+   they sit on the menu bar pixel grid with the weight of the text next to
+   them and stay sharp at every scale factor. */
+- (NSString *)statusIconName
 {
-    if (_repoCount == 0) return @"?";
-    if (_fetchError) return @"?";
-    if (_hasAnyFailure) return @"!";
-    if (_hasAnyRunning) return [NSString stringWithUTF8String: "\xE2\x97\x8B"]; // ○
-    return [NSString stringWithUTF8String: "\xE2\x9C\x93"]; // ✓
+    if (_repoCount == 0) return @"build-unknown";
+    if (_fetchError) return @"build-unknown";
+    if (_hasAnyFailure) return @"build-failed";
+    if (_hasAnyRunning) return @"build-running";
+    return @"build-passed";
 }
 
 - (NSImage *)image
 {
-    NSString *symbol = [self statusSymbol];
-    NSSize size = NSMakeSize(14, 14);
-    NSImage *img = [[NSImage alloc] initWithSize: size];
-    [img lockFocus];
-    [[NSColor clearColor] set];
-    NSRectFill(NSMakeRect(0, 0, size.width, size.height));
-    [[NSColor blackColor] set];
-    NSDictionary *attrs = @{ NSFontAttributeName: [NSFont boldSystemFontOfSize: 11] };
-    NSSize ts = [symbol sizeWithAttributes: attrs];
-    NSPoint tp = NSMakePoint((size.width - ts.width) / 2, (size.height - ts.height) / 2 - 0.5);
-    [symbol drawAtPoint: tp withAttributes: attrs];
-    [img unlockFocus];
-    return img;
+    return [NSImage imageNamed: [self statusIconName]];
 }
 
 - (NSString *)title

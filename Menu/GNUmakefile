@@ -119,7 +119,11 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/brightness.tiff \
 	Resources/Icons/clock.tiff \
 	Resources/Icons/cpu.tiff \
-	Resources/Icons/ram.tiff
+	Resources/Icons/ram.tiff \
+	Resources/Icons/build-failed.tiff \
+	Resources/Icons/build-unknown.tiff \
+	Resources/Icons/build-running.tiff \
+	Resources/Icons/build-passed.tiff
 
 # Libraries and frameworks - configured by configure script
 Menu_TOOL_LIBS += -ldbus-1 -lX11
