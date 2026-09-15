@@ -10,7 +10,7 @@
 
 static const char kUntintedImageKey;
 
-/* Menu bar icons are monochrome, so a highlighted one is redrawn in the
+/* Extra icons are monochrome, so a highlighted one is redrawn in the
    highlighted title color.  Each rep is tinted on its own so the icon stays
    sharp at every scale factor; going through TIFF also turns icons that were
    drawn at runtime into bitmaps. */
@@ -81,7 +81,7 @@ static const char kHighlightedKey;
 /* An icon that is already tinted is left alone, so a missed unhighlight can
    never leave it stuck in the highlight color; an icon set behind our back
    while highlighted is not replaced by the stale original. */
-static void UpdateMenuBarItemImage(NSMenuItem *item, BOOL highlighted)
+static void UpdateHighlightedItemImage(NSMenuItem *item, BOOL highlighted)
 {
   NSImage *image = [item image];
   NSImage *untinted = (image != nil)
@@ -128,10 +128,10 @@ static void UpdateMenuBarItemImage(NSMenuItem *item, BOOL highlighted)
 
   [self tinted_setHighlighted: flag];
 
-  /* Only menu bar icons are known to be monochrome; images in dropdown
-     menus may be colored and must not turn into silhouettes. */
-  if (flag != wasHighlighted && [[self menuView] isHorizontal])
-    UpdateMenuBarItemImage([self menuItem], flag);
+  /* Every image in Menu's menus is a monochrome extra icon, in the menu bar
+     and in the extras' own menus; imported application menus carry none. */
+  if (flag != wasHighlighted)
+    UpdateHighlightedItemImage([self menuItem], flag);
 }
 
 @end

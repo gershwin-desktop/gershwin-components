@@ -398,21 +398,15 @@ static NSString *findTool(NSString *name)
 
         WLANSecurityType secType = [net security];
         BOOL isSecure = (secType != WLANSecurityNone);
-        int signal = [net signalStrength];
-        int bars;
-        if (signal >= -50) bars = 4;
-        else if (signal >= -60) bars = 3;
-        else if (signal >= -70) bars = 2;
-        else if (signal >= -80) bars = 1;
-        else bars = 0;
+        NSString *iconName = [[self class] iconNameForSignalStrength:[net signalStrength]];
+        if (isSecure) {
+            iconName = [iconName stringByAppendingString:@"-locked"];
+        }
 
-        NSString *indicator = [@"\u25A0\u25A0\u25A0\u25A0" substringToIndex:bars];
-        NSString *secSuffix = isSecure ? @" \u26BF" : @"";
-        NSString *title = [NSString stringWithFormat:@"%@%@  %@", indicator, secSuffix, ssid];
-
-        NSMenuItem *netItem = [[NSMenuItem alloc] initWithTitle:title
+        NSMenuItem *netItem = [[NSMenuItem alloc] initWithTitle:ssid
                                                          action:@selector(connectToNetwork:)
                                                   keyEquivalent:@""];
+        [netItem setImage:[NSImage imageNamed:iconName]];
         [netItem setTarget:self];
         [netItem setRepresentedObject:ssid];
         [netItem setToolTip:isSecure ? @"WPA" : @""];
@@ -441,6 +435,16 @@ static NSString *findTool(NSString *name)
     return m;
 }
 
+/* The menu bar icon and the network list share these signal levels, so a
+   network looks the same in both. */
++ (NSString *)iconNameForSignalStrength:(int)dBm
+{
+    if (dBm >= -50) return @"wlan";
+    if (dBm >= -60) return @"wlan-good";
+    if (dBm >= -70) return @"wlan-ok";
+    return @"wlan-weak";
+}
+
 - (NSImage *)image
 {
     NSString *name;
@@ -448,20 +452,12 @@ static NSString *findTool(NSString *name)
         name = @"wlan-disabled";
     } else if (!_wlanEnabled) {
         name = @"wlan-off";
-    } else if (_signalStrength >= -50) {
-        name = @"wlan";
-    } else if (_signalStrength >= -60) {
-        name = @"wlan-good";
-    } else if (_signalStrength >= -70) {
-        name = @"wlan-ok";
-    } else if (_connectedWLAN) {
-        name = @"wlan-weak";
+    } else if (_connectedWLAN || _signalStrength >= -70) {
+        name = [[self class] iconNameForSignalStrength:_signalStrength];
     } else {
         name = @"wlan-disabled";
     }
-    NSImage *img = [NSImage imageNamed:name];
-    if (!img) img = [NSImage imageNamed:@"wlan-disabled"];
-    return img;
+    return [NSImage imageNamed:name];
 }
 
 - (NSString *)title

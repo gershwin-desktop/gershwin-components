@@ -123,7 +123,11 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/build-failed.tiff \
 	Resources/Icons/build-unknown.tiff \
 	Resources/Icons/build-running.tiff \
-	Resources/Icons/build-passed.tiff
+	Resources/Icons/build-passed.tiff \
+	Resources/Icons/wlan-locked.tiff \
+	Resources/Icons/wlan-good-locked.tiff \
+	Resources/Icons/wlan-ok-locked.tiff \
+	Resources/Icons/wlan-weak-locked.tiff
 
 # Libraries and frameworks - configured by configure script
 Menu_TOOL_LIBS += @DBUS_LIBS@ -lX11

@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-/* Highlighted menu bar icons follow the highlighted title color and stay
-   sharp at every scale factor.  Headless: run from this directory.  Whether
-   a cell belongs to the menu bar needs a real NSMenuView, which needs fonts
-   and so a display; that part is left to the live check. */
+/* Highlighted extra icons follow the highlighted title color and stay sharp
+   at every scale factor.  Headless: run from this directory.  A real
+   NSMenuItemCell needs fonts and so a display, so the cell calling into the
+   image swap is left to the live check. */
 
 #import <AppKit/AppKit.h>
 #import "Testing.h"
@@ -80,7 +80,7 @@ int main(void)
                                                keyEquivalent: @""];
         [item setImage: icon];
 
-        UpdateMenuBarItemImage(item, YES);
+        UpdateHighlightedItemImage(item, YES);
         NSImage *shown = [item image];
         PASS(shown != icon, "an item with a title shows a tinted icon");
         PASS([[shown representations] count] == 2,
@@ -90,20 +90,20 @@ int main(void)
                              highlight),
              "the shown icon has the highlighted title color");
 
-        UpdateMenuBarItemImage(item, YES);
+        UpdateHighlightedItemImage(item, YES);
         PASS([item image] == shown,
              "highlighting again does not tint the tinted icon");
 
-        UpdateMenuBarItemImage(item, NO);
+        UpdateHighlightedItemImage(item, NO);
         PASS([item image] == icon, "unhighlighting restores the original icon");
 
-        UpdateMenuBarItemImage(item, NO);
+        UpdateHighlightedItemImage(item, NO);
         PASS([item image] == icon, "unhighlighting again changes nothing");
 
-        UpdateMenuBarItemImage(item, YES);
+        UpdateHighlightedItemImage(item, YES);
         NSImage *replacement = [[NSImage alloc] initWithSize: iconSize];
         [item setImage: replacement];
-        UpdateMenuBarItemImage(item, NO);
+        UpdateHighlightedItemImage(item, NO);
         PASS([item image] == replacement,
              "an icon set while highlighted is not overwritten");
       END_SET("highlighted menu bar items")
@@ -119,7 +119,7 @@ int main(void)
         [item setMenuBarImage: icon];
         PASS([item image] == icon, "an unhighlighted item shows the icon as is");
 
-        UpdateMenuBarItemImage(item, YES);
+        UpdateHighlightedItemImage(item, YES);
         [item setMenuBarImage: update];
         NSImage *shown = [item image];
         PASS(shown != update,
@@ -129,14 +129,14 @@ int main(void)
                              highlight),
              "the updated icon has the highlighted title color");
 
-        UpdateMenuBarItemImage(item, NO);
+        UpdateHighlightedItemImage(item, NO);
         PASS([item image] == update,
              "unhighlighting shows the updated icon, not the one before");
 
-        UpdateMenuBarItemImage(item, YES);
+        UpdateHighlightedItemImage(item, YES);
         [item setMenuBarImage: nil];
         PASS([item image] == nil, "an extra can remove its icon while highlighted");
-        UpdateMenuBarItemImage(item, NO);
+        UpdateHighlightedItemImage(item, NO);
       END_SET("menu bar icons updated by an extra")
     }
   return 0;
