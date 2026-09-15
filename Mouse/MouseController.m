@@ -84,6 +84,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
 - (void)dealloc
 {
     [mainView release];
+    [mouseBox release];
+    [trackpadBox release];
+    [trackpointBox release];
     [mouseSpeedSlider release];
     [mouseSpeedLabel release];
     [trackpadSpeedSlider release];
@@ -346,8 +349,8 @@ static NSString *const kMouseDomain = @"MousePreferences";
                                inView:mainView];
     {
         CGFloat by = mouseBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
-        [self addCheckbox:leftHandedCheckbox = [[[NSButton alloc]
-                    initWithFrame:NSZeroRect] autorelease]
+        [self addCheckbox:leftHandedCheckbox = [[NSButton alloc]
+                    initWithFrame:NSZeroRect]
                     toBox:mouseBox y:by width:boxW];
         [leftHandedCheckbox setButtonType:NSSwitchButton];
         [leftHandedCheckbox setTitle:@"Swap left and right buttons"];
@@ -357,9 +360,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
         by -= rowGap + sliderRowH;
         [self addSliderRowWithLabel:@"Tracking speed:"
                              slider:mouseSpeedSlider =
-                             [[[NSSlider alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:mouseSpeedLabel =
-                             [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSTextField alloc] initWithFrame:NSZeroRect]
                               toBox:mouseBox y:by width:boxW];
         [mouseSpeedSlider setMinValue:-1.0];
         [mouseSpeedSlider setMaxValue:1.0];
@@ -380,7 +383,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
     {
         CGFloat by = trackpadBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
         [self addCheckbox:tapToClickCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:trackpadBox y:by width:boxW];
         [tapToClickCheckbox setButtonType:NSSwitchButton];
         [tapToClickCheckbox setTitle:@"Tap to click"];
@@ -389,7 +392,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
         by -= rowH;
 
         [self addCheckbox:twoFingerRightClickCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:trackpadBox y:by width:boxW];
         [twoFingerRightClickCheckbox setButtonType:NSSwitchButton];
         [twoFingerRightClickCheckbox setTitle:@"Two-finger tap = right click"];
@@ -398,7 +401,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
         by -= rowH;
 
         [self addCheckbox:threeFingerMiddleClickCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:trackpadBox y:by width:boxW];
         [threeFingerMiddleClickCheckbox setButtonType:NSSwitchButton];
         [threeFingerMiddleClickCheckbox setTitle:@"Three-finger tap = middle click"];
@@ -407,7 +410,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
         by -= rowH;
 
         [self addCheckbox:disableWhileTypingCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:trackpadBox y:by width:boxW];
         [disableWhileTypingCheckbox setButtonType:NSSwitchButton];
         [disableWhileTypingCheckbox setTitle:@"Disable trackpad while typing"];
@@ -416,7 +419,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
         by -= rowH;
 
         [self addCheckbox:naturalScrollingCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:trackpadBox y:by width:boxW];
         [naturalScrollingCheckbox setButtonType:NSSwitchButton];
         [naturalScrollingCheckbox setTitle:@"Reverse scrolling direction"];
@@ -426,9 +429,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
 
         [self addSliderRowWithLabel:@"Tracking speed:"
                              slider:trackpadSpeedSlider =
-                             [[[NSSlider alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:trackpadSpeedLabel =
-                             [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSTextField alloc] initWithFrame:NSZeroRect]
                               toBox:trackpadBox y:by width:boxW];
         [trackpadSpeedSlider setMinValue:-1.0];
         [trackpadSpeedSlider setMaxValue:1.0];
@@ -450,9 +453,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
         CGFloat by = trackpointBoxH - boxTitleInset - METRICS_SPACE_16 - sliderRowH;
         [self addSliderRowWithLabel:@"Tracking speed:"
                              slider:trackpointSpeedSlider =
-                             [[[NSSlider alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:trackpointSpeedLabel =
-                             [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSTextField alloc] initWithFrame:NSZeroRect]
                               toBox:trackpointBox y:by width:boxW];
         [trackpointSpeedSlider setMinValue:-1.0];
         [trackpointSpeedSlider setMaxValue:1.0];
@@ -515,7 +518,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
     }
 }
 
-/* Build a titled group box, top-anchored and width-flexible. */
+/* Build a titled group box, top-anchored and width-flexible. Builders return
+   retained objects so they can go straight into ivars that dealloc releases;
+   callers that do not keep one release it themselves. */
 - (NSBox *)groupBoxWithTitle:(NSString *)title frame:(NSRect)frame inView:(NSView *)parent
 {
     NSBox *box = [[NSBox alloc] initWithFrame:frame];
