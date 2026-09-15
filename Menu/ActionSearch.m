@@ -102,7 +102,6 @@ static const NSUInteger kIndexSearchMinQueryLength = 2;
 @interface NSTextView (ActionSearchSwizzle)
 - (void)gw_moveUp:(id)sender;
 - (void)gw_moveDown:(id)sender;
-- (void)gw_complete:(id)sender;
 @end
 
 @implementation NSTextView (ActionSearchSwizzle)
@@ -139,18 +138,6 @@ static const NSUInteger kIndexSearchMinQueryLength = 2;
     [self gw_moveDown:sender];
 }
 
-- (void)gw_complete:(id)sender
-{
-    ActionSearchController *ctrl = [ActionSearchController sharedController];
-    if ([ctrl.searchPanel isVisible]) {
-        [ctrl.searchField setStringValue:@""];
-        [ctrl hideSearchPopup];
-        [NSApp hide:nil];
-        return;
-    }
-    [self gw_complete:sender];
-}
-
 @end
 
 static const NSTimeInterval kFocusLossArmDelay = 0.05;
@@ -166,6 +153,34 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
 @property (nonatomic, strong) NSTask *indexSearchTask;
 @property (nonatomic, copy) NSString *indexSearchQuery;
 @property (nonatomic, copy) NSString *pendingIndexQuery;
+
+- (void)cancelSearch;
+@end
+
+
+#pragma mark - Search panel
+
+/* The theme's field editor consumes Escape to clear the search field (even an
+   empty one) and ends editing, so Escape never reaches the key bindings or the
+   field's delegate.  The panel sees every key event before its first
+   responder does, so the search is dismissed from here. */
+@interface ActionSearchPanel : NSPanel
+@end
+
+@implementation ActionSearchPanel
+
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSKeyDown) {
+        NSString *chars = [event charactersIgnoringModifiers];
+        if ([chars length] == 1 && [chars characterAtIndex:0] == 0x1B) {
+            [[ActionSearchController sharedController] cancelSearch];
+            return;
+        }
+    }
+    [super sendEvent:event];
+}
+
 @end
 
 @implementation ActionSearchController
@@ -186,12 +201,6 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
         Method swizzledMoveDown = class_getInstanceMethod([NSTextView class], @selector(gw_moveDown:));
         if (originalMoveDown && swizzledMoveDown) {
             method_exchangeImplementations(originalMoveDown, swizzledMoveDown);
-        }
-
-        Method originalComplete = class_getInstanceMethod([NSTextView class], @selector(complete:));
-        Method swizzledComplete = class_getInstanceMethod([NSTextView class], @selector(gw_complete:));
-        if (originalComplete && swizzledComplete) {
-            method_exchangeImplementations(originalComplete, swizzledComplete);
         }
 
         swizzled = YES;
@@ -261,10 +270,10 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     CGFloat searchFieldHeight = [[GSTheme theme] menuItemHeight];
     NSRect panelRect = NSMakeRect(0, 0, kSearchFieldWidth, searchFieldHeight);
 
-    self.searchPanel = [[NSPanel alloc] initWithContentRect:panelRect
-                                                  styleMask:NSBorderlessWindowMask
-                                                    backing:NSBackingStoreBuffered
-                                                      defer:NO];
+    self.searchPanel = [[ActionSearchPanel alloc] initWithContentRect:panelRect
+                                                            styleMask:NSBorderlessWindowMask
+                                                              backing:NSBackingStoreBuffered
+                                                                defer:NO];
     [self.searchPanel setLevel:NSStatusWindowLevel];
     [self.searchPanel setHasShadow:NO];
     [self.searchPanel setOpaque:NO];
@@ -444,6 +453,15 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     [self.searchPanel orderOut:nil];
     [[X11ShortcutManager sharedManager] resumeKeyGrabs];
     NSDebugLLog(@"gwcomp", @"ActionSearchController: Hiding search popup");
+}
+
+- (void)cancelSearch
+{
+    [self.searchField setStringValue:@""];
+    [self hideSearchPopup];
+    /* Deactivating hands the keyboard back to the application that was
+       frontmost before the search was opened; the menu bar cannot hide. */
+    [NSApp hide:nil];
 }
 
 - (void)toggleSearchPopupAtPoint:(NSPoint)point
@@ -1326,11 +1344,7 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
     }
 
     if (commandSelector == @selector(cancelOperation:)) {
-        [self.searchField setStringValue:@""];
-        [self hideSearchPopup];
-
-        [NSApp hide:nil];
-
+        [self cancelSearch];
         return YES;
     }
 
