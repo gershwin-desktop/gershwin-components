@@ -6,9 +6,55 @@
 
 #import "MouseController.h"
 #import "AppearanceMetrics.h"
-#import <dispatch/dispatch.h>
+#include <stdlib.h>
+#include <math.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#if defined(__linux__)
+#include <linux/input.h>
+#elif defined(__FreeBSD__)
+#include <dev/evdev/input.h>
+#endif
 
 static NSString *const kMouseDomain = @"MousePreferences";
+/* Indexed like the profile pop-up and like libinput's "Accel Profile
+   Enabled" flags (adaptive, flat, custom). */
+static NSString *const kCurveProfiles[] = { @"system", @"flat", @"custom" };
+static const NSUInteger kCurveProfileCount = 3;
+static const CGFloat kCurveLabelWidth = 74;
+static const CGFloat kCurveSliderWidth = 100;
+static const CGFloat kCurveValueWidth = 60;
+
+static NSInteger CurveProfileIndex(NSString *profile)
+{
+    for (NSUInteger i = 0; i < kCurveProfileCount; i++) {
+        if ([kCurveProfiles[i] isEqualToString:profile]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* libinput feeds the custom profile raw touchpad units, and X does not
+   expose the resolution needed to convert the curve to them; only the evdev
+   node does. Returns 0 where it cannot be read. */
+static double TouchpadUnitsPerMM(NSString *node)
+{
+#if defined(__linux__) || defined(__FreeBSD__)
+    struct input_absinfo abs;
+    int fd = open([node fileSystemRepresentation], O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
+        return 0.0;
+    }
+    int rc = ioctl(fd, EVIOCGABS(ABS_X), &abs);
+    close(fd);
+    return (rc == 0 && abs.resolution > 0) ? abs.resolution : 0.0;
+#else
+    (void)node;
+    return 0.0;
+#endif
+}
 
 @interface MouseController ()
 - (NSString *)findXinput;
@@ -16,8 +62,11 @@ static NSString *const kMouseDomain = @"MousePreferences";
 - (void)enumerateDevices;
 - (NSDictionary *)getPropertiesForDevice:(NSString *)device;
 - (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name;
-- (void)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value;
+- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value;
+- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device values:(NSArray *)values;
 - (void)setBoolProperty:(NSString *)prop forDevice:(NSString *)device value:(BOOL)value;
+- (BOOL)applyCurveProfile:(NSString *)profile curve:(AccelerationCurve)curve;
+- (void)updateCurveControls;
 - (void)applyAllSettings;
 - (void)updateStatus:(NSString *)message;
 
@@ -31,6 +80,19 @@ static NSString *const kMouseDomain = @"MousePreferences";
                         toBox:(NSBox *)box
                             y:(CGFloat)y
                         width:(CGFloat)w;
+
+/* Tab builders */
+- (NSTabViewItem *)tabItemWithIdentifier:(NSString *)identifier
+                                   label:(NSString *)label
+                                    size:(NSSize)size;
+- (NSSlider *)curveSliderRowWithLabel:(NSString *)text
+                               inView:(NSView *)view
+                                    x:(CGFloat)x
+                                    y:(CGFloat)y
+                                label:(NSTextField **)label
+                                value:(NSTextField **)value;
+- (void)createGeneralTab:(NSTabViewItem *)tab;
+- (void)createAccelerationTab:(NSTabViewItem *)tab;
 @end
 
 /* The pane view. When the host window gives us a width (which is not the
@@ -52,10 +114,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
 {
     [super viewDidMoveToWindow];
     if ([self window] && [self superview]) {
-        /* The host window does not necessarily size the pane view to its
-           content area; make it fill the box content and re-lay out so the
-           left/right margins stay symmetric.  GNUstep's setFrame: bypasses
-           setFrameSize:, so re-lay out explicitly here. */
         [self setFrame:[[self superview] bounds]];
         [_layoutOwner relayoutWithWidth:[self bounds].size.width];
     }
@@ -77,6 +135,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
         touchpadName = nil;
         mouseName = nil;
         trackpointName = nil;
+        currentCurveProfile = [@"custom" copy];
+        pendingCurve = AccelerationCurveDefaults();
+        savedCurve = pendingCurve;
     }
     return self;
 }
@@ -86,24 +147,41 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [mainView release];
     [mouseBox release];
     [trackpadBox release];
-    [trackpointBox release];
-    [mouseSpeedSlider release];
-    [mouseSpeedLabel release];
+    [trackpadTabView release];
     [trackpadSpeedSlider release];
     [trackpadSpeedLabel release];
-    [trackpointSpeedSlider release];
-    [trackpointSpeedLabel release];
     [naturalScrollingCheckbox release];
     [tapToClickCheckbox release];
     [twoFingerRightClickCheckbox release];
     [threeFingerMiddleClickCheckbox release];
     [disableWhileTypingCheckbox release];
+    [curveView release];
+    [curveProfilePopup release];
+    [precisionLabel release];
+    [precisionValue release];
+    [precisionSlider release];
+    [startLabel release];
+    [startValue release];
+    [startSlider release];
+    [endLabel release];
+    [endValue release];
+    [endSlider release];
+    [fastLabel release];
+    [fastValue release];
+    [fastSlider release];
+    [applyCurveButton release];
+    [restoreCurveButton release];
+    [mouseSpeedSlider release];
+    [mouseSpeedLabel release];
     [leftHandedCheckbox release];
+    [trackpointSpeedSlider release];
+    [trackpointSpeedLabel release];
     [statusLabel release];
     [xinputPath release];
     [touchpadName release];
     [mouseName release];
     [trackpointName release];
+    [currentCurveProfile release];
     [super dealloc];
 }
 
@@ -161,7 +239,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
     NSPipe *pipe = [NSPipe pipe];
     [task setStandardOutput:pipe];
 
-    // Force C locale for consistent tool output
     NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
     [env setObject:@"C" forKey:@"LC_ALL"];
     [task setEnvironment:env];
@@ -191,7 +268,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
     mouseName = nil;
     trackpointName = nil;
 
-    // Check for touchpad using multiple patterns
     NSArray *tpNames = [self xinputDeviceNamesMatching:@"Touchpad"];
     if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"Synaptics"];
     if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"ELAN"];
@@ -202,14 +278,12 @@ static NSString *const kMouseDomain = @"MousePreferences";
         touchpadName = [[tpNames objectAtIndex:0] copy];
     }
 
-    // TrackPoint
     NSArray *tppNames = [self xinputDeviceNamesMatching:@"TrackPoint"];
     if ([tppNames count] == 0) tppNames = [self xinputDeviceNamesMatching:@"Trackpoint"];
     if ([tppNames count] > 0) {
         trackpointName = [[tppNames objectAtIndex:0] copy];
     }
 
-    // Mouse: first non-excluded name that isn't already classified
     NSArray *all = [self xinputDeviceNamesMatching:@""];
     for (NSString *name in all) {
         if ([self matchesAny:name patterns:@[
@@ -240,7 +314,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
     NSPipe *pipe = [NSPipe pipe];
     [task setStandardOutput:pipe];
 
-    // Force C locale for consistent tool output
     NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
     [env setObject:@"C" forKey:@"LC_ALL"];
     [task setEnvironment:env];
@@ -251,8 +324,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [task waitUntilExit];
     NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
     [task release];
-    // xinput list-props output format:
-    //   libprop Name (ID): value...
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     NSArray *lines = [output componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
     for (NSString *line in lines) {
@@ -265,7 +336,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
         if ([propName length] == 0) {
             continue;
         }
-        // skip the parenthesized ID
         [scanner scanUpToString:@"):" intoString:nil];
         if (![scanner scanString:@"):" intoString:nil]) {
             continue;
@@ -282,33 +352,208 @@ static NSString *const kMouseDomain = @"MousePreferences";
     return result;
 }
 
+/* An exact key, because a substring also matches the driver's read-only
+   "<name> Default" twin and would report the default, not the current
+   value. */
 - (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name
 {
-    for (NSString *key in props) {
-        if ([key rangeOfString:name].location != NSNotFound) {
-            return [props objectForKey:key];
-        }
-    }
-    return nil;
+    return [props objectForKey:[@"libinput " stringByAppendingString:name]];
 }
 
-- (void)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value
+- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value
+{
+    return [self setProperty:prop forDevice:device values:[NSArray arrayWithObject:value]];
+}
+
+- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device values:(NSArray *)values
 {
     if (!xinputPath || !device || !prop) {
-        return;
+        return NO;
     }
+    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"set-prop", device, prop, nil];
+    [args addObjectsFromArray:values];
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:xinputPath];
-    [task setArguments:[NSArray arrayWithObjects:
-        @"set-prop", device, prop, value, nil]];
+    [task setArguments:args];
     [task launch];
     [task waitUntilExit];
+    BOOL ok = ([task terminationStatus] == 0);
     [task release];
+    return ok;
 }
 
 - (void)setBoolProperty:(NSString *)prop forDevice:(NSString *)device value:(BOOL)value
 {
     [self setProperty:prop forDevice:device value:(value ? @"1" : @"0")];
+}
+
+/* ---- Tab builders ---- */
+
+- (void)createGeneralTab:(NSTabViewItem *)tab
+{
+    NSView *content = [tab view];
+    const CGFloat tabW = [content frame].size.width;
+    const CGFloat rowH = 20;
+    const CGFloat rowGap = METRICS_SPACE_8;
+    const CGFloat sliderRowH = METRICS_TEXT_INPUT_FIELD_HEIGHT;
+
+    CGFloat by = [content frame].size.height - METRICS_SPACE_16 - rowH;
+
+    [self addCheckbox:tapToClickCheckbox =
+               [[NSButton alloc] initWithFrame:NSZeroRect]
+                toView:content y:by width:tabW];
+    [tapToClickCheckbox setButtonType:NSSwitchButton];
+    [tapToClickCheckbox setTitle:@"Tap to click"];
+    [tapToClickCheckbox setTarget:self];
+    [tapToClickCheckbox setAction:@selector(settingChanged:)];
+    by -= rowH;
+
+    [self addCheckbox:twoFingerRightClickCheckbox =
+               [[NSButton alloc] initWithFrame:NSZeroRect]
+                toView:content y:by width:tabW];
+    [twoFingerRightClickCheckbox setButtonType:NSSwitchButton];
+    [twoFingerRightClickCheckbox setTitle:@"Two-finger tap = right click"];
+    [twoFingerRightClickCheckbox setTarget:self];
+    [twoFingerRightClickCheckbox setAction:@selector(settingChanged:)];
+    by -= rowH;
+
+    [self addCheckbox:threeFingerMiddleClickCheckbox =
+               [[NSButton alloc] initWithFrame:NSZeroRect]
+                toView:content y:by width:tabW];
+    [threeFingerMiddleClickCheckbox setButtonType:NSSwitchButton];
+    [threeFingerMiddleClickCheckbox setTitle:@"Three-finger tap = middle click"];
+    [threeFingerMiddleClickCheckbox setTarget:self];
+    [threeFingerMiddleClickCheckbox setAction:@selector(settingChanged:)];
+    by -= rowH;
+
+    [self addCheckbox:disableWhileTypingCheckbox =
+               [[NSButton alloc] initWithFrame:NSZeroRect]
+                toView:content y:by width:tabW];
+    [disableWhileTypingCheckbox setButtonType:NSSwitchButton];
+    [disableWhileTypingCheckbox setTitle:@"Disable trackpad while typing"];
+    [disableWhileTypingCheckbox setTarget:self];
+    [disableWhileTypingCheckbox setAction:@selector(settingChanged:)];
+    by -= rowH;
+
+    [self addCheckbox:naturalScrollingCheckbox =
+               [[NSButton alloc] initWithFrame:NSZeroRect]
+                toView:content y:by width:tabW];
+    [naturalScrollingCheckbox setButtonType:NSSwitchButton];
+    [naturalScrollingCheckbox setTitle:@"Reverse scrolling direction"];
+    [naturalScrollingCheckbox setTarget:self];
+    [naturalScrollingCheckbox setAction:@selector(settingChanged:)];
+    by -= rowGap + sliderRowH;
+
+    [self addSliderRowWithLabel:@"Tracking speed:"
+                         slider:trackpadSpeedSlider =
+                         [[NSSlider alloc] initWithFrame:NSZeroRect]
+                          value:trackpadSpeedLabel =
+                         [[NSTextField alloc] initWithFrame:NSZeroRect]
+                          toView:content y:by width:tabW];
+    [trackpadSpeedSlider setMinValue:-1.0];
+    [trackpadSpeedSlider setMaxValue:1.0];
+    [trackpadSpeedSlider setFloatValue:0.0];
+    [trackpadSpeedSlider setNumberOfTickMarks:11];
+    [trackpadSpeedSlider setAllowsTickMarkValuesOnly:NO];
+    [trackpadSpeedSlider setContinuous:YES];
+    [trackpadSpeedSlider setTarget:self];
+    [trackpadSpeedSlider setAction:@selector(settingChanged:)];
+    [trackpadSpeedLabel setStringValue:@"0.00"];
+}
+
+- (void)createAccelerationTab:(NSTabViewItem *)tab
+{
+    NSView *content = [tab view];
+    const CGFloat tabW = [content frame].size.width;
+    const CGFloat tabH = [content frame].size.height;
+    const CGFloat pad = METRICS_SPACE_16;
+    const CGFloat gap = METRICS_SPACE_8;
+    const CGFloat rowH = METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    const CGFloat btnW = METRICS_BUTTON_MIN_WIDTH;
+    const CGFloat btnH = METRICS_BUTTON_HEIGHT;
+    const CGFloat profileLabelW = 50;
+    /* The tab is too short for the curve to sit above four slider rows, so
+       the sliders stack beside it and the curve gets the full height. */
+    const CGFloat columnW = kCurveLabelWidth + gap + kCurveSliderWidth + gap + kCurveValueWidth;
+    const CGFloat columnX = tabW - pad - columnW;
+
+    /* Profile row: pop-up on the left, Restore and Apply on the right */
+    CGFloat by = tabH - pad - rowH;
+
+    NSTextField *profileLabel = [self labelWithText:@"Profile:"
+                                             frame:NSMakeRect(pad, by + 1, profileLabelW, 20)
+                                         alignment:NSTextAlignmentLeft];
+    [profileLabel setAutoresizingMask:NSViewMaxXMargin | NSViewMinYMargin];
+    [content addSubview:profileLabel];
+    [profileLabel release];
+
+    curveProfilePopup = [[NSPopUpButton alloc] initWithFrame:
+        NSMakeRect(pad + profileLabelW + gap, by, 140, rowH) pullsDown:NO];
+    [curveProfilePopup removeAllItems];
+    [curveProfilePopup addItemsWithTitles:@[@"System", @"Flat", @"Custom"]];
+    /* Items follow the profiles the device offers, not the menu's own
+       validation. */
+    [curveProfilePopup setAutoenablesItems:NO];
+    [curveProfilePopup setTarget:self];
+    [curveProfilePopup setAction:@selector(curveProfileChanged:)];
+    [curveProfilePopup setAutoresizingMask:NSViewMaxXMargin | NSViewMinYMargin];
+    [content addSubview:curveProfilePopup];
+
+    restoreCurveButton = [[NSButton alloc] initWithFrame:
+        NSMakeRect(tabW - pad - 2 * btnW - gap, by + 1, btnW, btnH)];
+    [restoreCurveButton setTitle:@"Restore"];
+    [restoreCurveButton setBezelStyle:NSRoundedBezelStyle];
+    [restoreCurveButton setTarget:self];
+    [restoreCurveButton setAction:@selector(restoreCurve:)];
+    [restoreCurveButton setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
+    [content addSubview:restoreCurveButton];
+
+    applyCurveButton = [[NSButton alloc] initWithFrame:
+        NSMakeRect(tabW - pad - btnW, by + 1, btnW, btnH)];
+    [applyCurveButton setTitle:@"Apply"];
+    [applyCurveButton setBezelStyle:NSRoundedBezelStyle];
+    [applyCurveButton setTarget:self];
+    [applyCurveButton setAction:@selector(applyCurve:)];
+    [applyCurveButton setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
+    [content addSubview:applyCurveButton];
+
+    /* Curve editor on the left, slider column on the right */
+    CGFloat top = by - gap;
+    curveView = [[CurveView alloc] initWithFrame:
+        NSMakeRect(pad, pad, columnX - 2 * pad, top - pad)];
+    [curveView setDelegate:self];
+    [curveView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    [content addSubview:curveView];
+
+    by = top - rowH;
+    precisionSlider = [self curveSliderRowWithLabel:@"Precision:" inView:content
+                                                  x:columnX y:by
+                                              label:&precisionLabel value:&precisionValue];
+    [precisionSlider setMinValue:0.01];
+    [precisionSlider setMaxValue:2.0];
+
+    by -= rowH + gap;
+    startSlider = [self curveSliderRowWithLabel:@"Start:" inView:content
+                                              x:columnX y:by
+                                          label:&startLabel value:&startValue];
+    [startSlider setMinValue:0.0];
+    [startSlider setMaxValue:1.0];
+
+    by -= rowH + gap;
+    endSlider = [self curveSliderRowWithLabel:@"End:" inView:content
+                                            x:columnX y:by
+                                        label:&endLabel value:&endValue];
+    [endSlider setMinValue:0.0];
+    [endSlider setMaxValue:1.0];
+
+    by -= rowH + gap;
+    fastSlider = [self curveSliderRowWithLabel:@"Fast swipes:" inView:content
+                                             x:columnX y:by
+                                         label:&fastLabel value:&fastValue];
+    [fastSlider setMinValue:0.01];
+    [fastSlider setMaxValue:2.0];
+
+    [self updateCurveControls];
 }
 
 - (NSView *)createMainView
@@ -317,23 +562,20 @@ static NSString *const kMouseDomain = @"MousePreferences";
         return mainView;
     }
 
-    const CGFloat winW = 560, winH = 445;
-    const CGFloat sideMargin = METRICS_CONTENT_SIDE_MARGIN;      /* 24 */
-    const CGFloat topMargin = METRICS_CONTENT_TOP_MARGIN;        /* 15 */
-    const CGFloat bottomMargin = METRICS_CONTENT_BOTTOM_MARGIN;  /* 20 */
-    const CGFloat boxGap = METRICS_SPACE_12;                     /* between group boxes */
-    const CGFloat rowGap = METRICS_SPACE_8;
-    const CGFloat rowH = 20;                                     /* checkbox line spacing */
-    const CGFloat sliderRowH = METRICS_TEXT_INPUT_FIELD_HEIGHT;  /* 22 */
-    /* NSBox with NSAtTop title reserves ~14px for the title text before
-       its content area starts.  The first control must clear that. */
+    /* The pane area the host currently provides; the Trackpad box stretches
+       to whatever it really is. */
+    const CGFloat winW = 560, winH = 440;
+    const CGFloat sideMargin = METRICS_CONTENT_SIDE_MARGIN;
+    const CGFloat topMargin = METRICS_CONTENT_TOP_MARGIN;
+    const CGFloat bottomMargin = METRICS_CONTENT_BOTTOM_MARGIN;
+    const CGFloat boxGap = METRICS_SPACE_12;
+    const CGFloat rowH = 20;
+    const CGFloat sliderRowH = METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    const CGFloat statusH = 20;
     const CGFloat boxTitleInset = 14.0;
-    /* Group-box heights sized to their content (title inset + rows +
-       16px inner margin top and bottom), so the status line at the
-       bottom does not overlap the last box. */
-    const CGFloat mouseBoxH = 96;
-    const CGFloat trackpadBoxH = 176;
-    const CGFloat trackpointBoxH = 68;
+    /* The TrackPoint speed shares the Mouse box because a third box does not
+       fit the pane height. */
+    const CGFloat mouseBoxH = 126;
 
     mainView = [[MouseMainView alloc] initWithFrame:NSMakeRect(0, 0, winW, winH)];
     [(MouseMainView *)mainView setLayoutOwner:self];
@@ -357,7 +599,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
         [leftHandedCheckbox setTarget:self];
         [leftHandedCheckbox setAction:@selector(settingChanged:)];
 
-        by -= rowGap + sliderRowH;
+        by -= METRICS_SPACE_8 + sliderRowH;
         [self addSliderRowWithLabel:@"Tracking speed:"
                              slider:mouseSpeedSlider =
                              [[NSSlider alloc] initWithFrame:NSZeroRect]
@@ -373,90 +615,14 @@ static NSString *const kMouseDomain = @"MousePreferences";
         [mouseSpeedSlider setTarget:self];
         [mouseSpeedSlider setAction:@selector(settingChanged:)];
         [mouseSpeedLabel setStringValue:@"0.00"];
-    }
-    y -= mouseBoxH + boxGap;
 
-    /* ---- Trackpad group box ---- */
-    trackpadBox = [self groupBoxWithTitle:@"Trackpad"
-                                    frame:NSMakeRect(sideMargin, y - trackpadBoxH, boxW, trackpadBoxH)
-                                   inView:mainView];
-    {
-        CGFloat by = trackpadBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
-        [self addCheckbox:tapToClickCheckbox =
-                   [[NSButton alloc] initWithFrame:NSZeroRect]
-                    toBox:trackpadBox y:by width:boxW];
-        [tapToClickCheckbox setButtonType:NSSwitchButton];
-        [tapToClickCheckbox setTitle:@"Tap to click"];
-        [tapToClickCheckbox setTarget:self];
-        [tapToClickCheckbox setAction:@selector(settingChanged:)];
-        by -= rowH;
-
-        [self addCheckbox:twoFingerRightClickCheckbox =
-                   [[NSButton alloc] initWithFrame:NSZeroRect]
-                    toBox:trackpadBox y:by width:boxW];
-        [twoFingerRightClickCheckbox setButtonType:NSSwitchButton];
-        [twoFingerRightClickCheckbox setTitle:@"Two-finger tap = right click"];
-        [twoFingerRightClickCheckbox setTarget:self];
-        [twoFingerRightClickCheckbox setAction:@selector(settingChanged:)];
-        by -= rowH;
-
-        [self addCheckbox:threeFingerMiddleClickCheckbox =
-                   [[NSButton alloc] initWithFrame:NSZeroRect]
-                    toBox:trackpadBox y:by width:boxW];
-        [threeFingerMiddleClickCheckbox setButtonType:NSSwitchButton];
-        [threeFingerMiddleClickCheckbox setTitle:@"Three-finger tap = middle click"];
-        [threeFingerMiddleClickCheckbox setTarget:self];
-        [threeFingerMiddleClickCheckbox setAction:@selector(settingChanged:)];
-        by -= rowH;
-
-        [self addCheckbox:disableWhileTypingCheckbox =
-                   [[NSButton alloc] initWithFrame:NSZeroRect]
-                    toBox:trackpadBox y:by width:boxW];
-        [disableWhileTypingCheckbox setButtonType:NSSwitchButton];
-        [disableWhileTypingCheckbox setTitle:@"Disable trackpad while typing"];
-        [disableWhileTypingCheckbox setTarget:self];
-        [disableWhileTypingCheckbox setAction:@selector(settingChanged:)];
-        by -= rowH;
-
-        [self addCheckbox:naturalScrollingCheckbox =
-                   [[NSButton alloc] initWithFrame:NSZeroRect]
-                    toBox:trackpadBox y:by width:boxW];
-        [naturalScrollingCheckbox setButtonType:NSSwitchButton];
-        [naturalScrollingCheckbox setTitle:@"Reverse scrolling direction"];
-        [naturalScrollingCheckbox setTarget:self];
-        [naturalScrollingCheckbox setAction:@selector(settingChanged:)];
-        by -= rowGap + sliderRowH;
-
-        [self addSliderRowWithLabel:@"Tracking speed:"
-                             slider:trackpadSpeedSlider =
-                             [[NSSlider alloc] initWithFrame:NSZeroRect]
-                              value:trackpadSpeedLabel =
-                             [[NSTextField alloc] initWithFrame:NSZeroRect]
-                              toBox:trackpadBox y:by width:boxW];
-        [trackpadSpeedSlider setMinValue:-1.0];
-        [trackpadSpeedSlider setMaxValue:1.0];
-        [trackpadSpeedSlider setFloatValue:0.0];
-        [trackpadSpeedSlider setNumberOfTickMarks:11];
-        [trackpadSpeedSlider setAllowsTickMarkValuesOnly:NO];
-        [trackpadSpeedSlider setContinuous:YES];
-        [trackpadSpeedSlider setTarget:self];
-        [trackpadSpeedSlider setAction:@selector(settingChanged:)];
-        [trackpadSpeedLabel setStringValue:@"0.00"];
-    }
-    y -= trackpadBoxH + boxGap;
-
-    /* ---- TrackPoint group box ---- */
-    trackpointBox = [self groupBoxWithTitle:@"TrackPoint"
-                                      frame:NSMakeRect(sideMargin, y - trackpointBoxH, boxW, trackpointBoxH)
-                                     inView:mainView];
-    {
-        CGFloat by = trackpointBoxH - boxTitleInset - METRICS_SPACE_16 - sliderRowH;
-        [self addSliderRowWithLabel:@"Tracking speed:"
+        by -= METRICS_SPACE_8 + sliderRowH;
+        [self addSliderRowWithLabel:@"TrackPoint speed:"
                              slider:trackpointSpeedSlider =
                              [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:trackpointSpeedLabel =
                              [[NSTextField alloc] initWithFrame:NSZeroRect]
-                              toBox:trackpointBox y:by width:boxW];
+                              toBox:mouseBox y:by width:boxW];
         [trackpointSpeedSlider setMinValue:-1.0];
         [trackpointSpeedSlider setMaxValue:1.0];
         [trackpointSpeedSlider setFloatValue:0.0];
@@ -467,11 +633,44 @@ static NSString *const kMouseDomain = @"MousePreferences";
         [trackpointSpeedSlider setAction:@selector(settingChanged:)];
         [trackpointSpeedLabel setStringValue:@"0.00"];
     }
+    y -= mouseBoxH + boxGap;
 
-    // Status label at the bottom, bottom-anchored
+    /* ---- Trackpad group box (with tabs) ---- */
+    CGFloat trackpadBoxH = y - (bottomMargin + statusH + METRICS_SPACE_8);
+    trackpadBox = [self groupBoxWithTitle:@"Trackpad"
+                                    frame:NSMakeRect(sideMargin, y - trackpadBoxH, boxW, trackpadBoxH)
+                                   inView:mainView];
+    [trackpadBox setAutoresizingMask:NSViewHeightSizable];
+    {
+        trackpadTabView = [[NSTabView alloc] initWithFrame:
+            NSMakeRect(8, 8, boxW - 16, trackpadBoxH - 8 - boxTitleInset)];
+        [trackpadTabView setTabViewType:NSTopTabsBezelBorder];
+        [trackpadTabView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        /* Tab contents are laid out top-down from their real size; built at a
+           placeholder size their rows end up outside the tab. */
+        NSSize tabSize = [trackpadTabView contentRect].size;
+
+        NSTabViewItem *generalTab = [self tabItemWithIdentifier:@"general"
+                                                          label:@"General"
+                                                           size:tabSize];
+        [self createGeneralTab:generalTab];
+        [trackpadTabView addTabViewItem:generalTab];
+        [generalTab release];
+
+        NSTabViewItem *accelTab = [self tabItemWithIdentifier:@"accel"
+                                                        label:@"Acceleration Curve"
+                                                         size:tabSize];
+        [self createAccelerationTab:accelTab];
+        [trackpadTabView addTabViewItem:accelTab];
+        [accelTab release];
+
+        [trackpadBox addSubview:trackpadTabView];
+    }
+
+    /* Status label at the bottom */
     statusLabel = [self labelWithText:@""
                                 frame:NSMakeRect(sideMargin, bottomMargin,
-                                                contentW, 20)
+                                                contentW, statusH)
                               alignment:NSTextAlignmentLeft];
     [statusLabel setFont:[NSFont systemFontOfSize:10]];
     [statusLabel setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
@@ -484,12 +683,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
     return mainView;
 }
 
-/* Re-lay out the group boxes for the given view width, keeping the
-   left and right margins equal. Called whenever the host resizes the
-   pane view. */
 - (void)relayoutWithWidth:(CGFloat)width
 {
-    const CGFloat sideMargin = METRICS_CONTENT_SIDE_MARGIN;  /* 24 */
+    const CGFloat sideMargin = METRICS_CONTENT_SIDE_MARGIN;
     NSRect f;
 
     if (mouseBox) {
@@ -504,11 +700,10 @@ static NSString *const kMouseDomain = @"MousePreferences";
         f.size.width = width - 2 * sideMargin;
         [trackpadBox setFrame:f];
     }
-    if (trackpointBox) {
-        f = [trackpointBox frame];
-        f.origin.x = sideMargin;
-        f.size.width = width - 2 * sideMargin;
-        [trackpointBox setFrame:f];
+    if (trackpadTabView) {
+        f = [trackpadTabView frame];
+        f.size.width = [(NSView *)[trackpadBox contentView] frame].size.width - 16;
+        [trackpadTabView setFrame:f];
     }
     if (statusLabel) {
         f = [statusLabel frame];
@@ -518,26 +713,22 @@ static NSString *const kMouseDomain = @"MousePreferences";
     }
 }
 
-/* Build a titled group box, top-anchored and width-flexible. Builders return
-   retained objects so they can go straight into ivars that dealloc releases;
-   callers that do not keep one release it themselves. */
+/* ---- Layout helpers ---- */
+
+/* Builders return retained objects so they can go straight into ivars that
+   dealloc releases; callers that do not keep one release it themselves. */
 - (NSBox *)groupBoxWithTitle:(NSString *)title frame:(NSRect)frame inView:(NSView *)parent
 {
     NSBox *box = [[NSBox alloc] initWithFrame:frame];
     [box setTitle:title];
     [box setBoxType:NSBoxPrimary];
     [box setTitlePosition:NSAtTop];
-    /* Bezel border: Eau draws bezel boxes with rounded corners
-       (drawDarkBezel:), a plain line border stays square. */
     [box setBorderType:NSBezelBorder];
-    /* Width is managed by relayoutWithWidth: so margins stay symmetric;
-       keep vertical position only. */
     [box setAutoresizingMask:NSViewMinYMargin];
     [parent addSubview:box];
     return box;
 }
 
-/* A plain read-only label. */
 - (NSTextField *)labelWithText:(NSString *)text frame:(NSRect)frame alignment:(NSTextAlignment)align
 {
     NSTextField *label = [[NSTextField alloc] initWithFrame:frame];
@@ -551,9 +742,6 @@ static NSString *const kMouseDomain = @"MousePreferences";
     return label;
 }
 
-/* Position a checkbox in the top-left of a group box's content area.
-   Width-flexible so it tracks the box when the pane is wider than the
-   560px base layout the Mouse pane was designed for. */
 - (void)addCheckbox:(NSButton *)checkbox toBox:(NSBox *)box y:(CGFloat)y width:(CGFloat)w
 {
     [checkbox setFrame:NSMakeRect(METRICS_SPACE_16, y, w - 2 * METRICS_SPACE_16, 18)];
@@ -561,8 +749,15 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [box addSubview:checkbox];
 }
 
-/* A label + slider + value row in a group box: label on the left (right
-   aligned), slider stretching, value label on the right. */
+/* Tab contents follow the tab's height, so their rows keep their distance
+   from its top. */
+- (void)addCheckbox:(NSButton *)checkbox toView:(NSView *)view y:(CGFloat)y width:(CGFloat)w
+{
+    [checkbox setFrame:NSMakeRect(METRICS_SPACE_16, y, w - 2 * METRICS_SPACE_16, 18)];
+    [checkbox setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+    [view addSubview:checkbox];
+}
+
 - (void)addSliderRowWithLabel:(NSString *)label
                        slider:(NSSlider *)slider
                         value:(NSTextField *)value
@@ -598,11 +793,195 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [box addSubview:value];
 }
 
+- (void)addSliderRowWithLabel:(NSString *)label
+                       slider:(NSSlider *)slider
+                        value:(NSTextField *)value
+                        toView:(NSView *)view
+                            y:(CGFloat)y
+                        width:(CGFloat)w
+{
+    const CGFloat pad = METRICS_SPACE_16;
+    const CGFloat labelW = 110;
+    const CGFloat valueW = 50;
+    const CGFloat gap = METRICS_SPACE_8;
+    const CGFloat sliderW = w - 2 * pad - labelW - valueW - 2 * gap;
+
+    NSTextField *labelField = [self labelWithText:label
+                                            frame:NSMakeRect(pad, y + 1, labelW, 20)
+                                        alignment:NSTextAlignmentRight];
+    [labelField setFont:[NSFont systemFontOfSize:11]];
+    [labelField setAutoresizingMask:NSViewMaxXMargin | NSViewMinYMargin];
+    [view addSubview:labelField];
+    [labelField release];
+
+    [slider setFrame:NSMakeRect(pad + labelW + gap, y, sliderW, 22)];
+    [slider setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+    [view addSubview:slider];
+
+    [value setFrame:NSMakeRect(pad + labelW + gap + sliderW + gap, y, valueW, 20)];
+    [value setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
+    [value setBezeled:NO];
+    [value setEditable:NO];
+    [value setSelectable:NO];
+    [value setDrawsBackground:NO];
+    [value setFont:[NSFont systemFontOfSize:11]];
+    [view addSubview:value];
+}
+
+- (NSTabViewItem *)tabItemWithIdentifier:(NSString *)identifier
+                                   label:(NSString *)label
+                                    size:(NSSize)size
+{
+    NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:identifier];
+    [item setLabel:label];
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
+    [view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    [item setView:view];
+    [view release];
+    return item;
+}
+
+/* One row of the slider column beside the curve, anchored to the tab's top
+   right corner; the label and value fields come back retained for their
+   ivars. */
+- (NSSlider *)curveSliderRowWithLabel:(NSString *)text
+                               inView:(NSView *)view
+                                    x:(CGFloat)x
+                                    y:(CGFloat)y
+                                label:(NSTextField **)label
+                                value:(NSTextField **)value
+{
+    const CGFloat gap = METRICS_SPACE_8;
+    const NSUInteger mask = NSViewMinXMargin | NSViewMinYMargin;
+
+    *label = [self labelWithText:text
+                           frame:NSMakeRect(x, y + 1, kCurveLabelWidth, 20)
+                       alignment:NSTextAlignmentRight];
+    [*label setAutoresizingMask:mask];
+    [view addSubview:*label];
+
+    NSSlider *slider = [[NSSlider alloc] initWithFrame:
+        NSMakeRect(x + kCurveLabelWidth + gap, y, kCurveSliderWidth,
+                   METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+    [slider setContinuous:YES];
+    [slider setTarget:self];
+    [slider setAction:@selector(sliderValueChanged:)];
+    [slider setAutoresizingMask:mask];
+    [view addSubview:slider];
+
+    *value = [self labelWithText:@""
+                           frame:NSMakeRect(x + kCurveLabelWidth + gap + kCurveSliderWidth + gap,
+                                            y + 1, kCurveValueWidth, 20)
+                       alignment:NSTextAlignmentLeft];
+    [*value setAutoresizingMask:mask];
+    [view addSubview:*value];
+    return slider;
+}
+
+/* ---- Curve helpers ---- */
+
+- (void)syncCurveSlidersFromCurve:(AccelerationCurve)curve showsRange:(BOOL)showsRange
+{
+    [precisionSlider setDoubleValue:curve.precision];
+    [precisionValue setStringValue:[NSString stringWithFormat:@"%.2fx", curve.precision]];
+    [startSlider setDoubleValue:curve.start];
+    [endSlider setDoubleValue:curve.end];
+    if (showsRange) {
+        [startValue setStringValue:[NSString stringWithFormat:@"%.0f mm/s",
+            curve.start * AccelerationCurveMaxSpeed]];
+        [endValue setStringValue:[NSString stringWithFormat:@"%.0f mm/s",
+            curve.end * AccelerationCurveMaxSpeed]];
+    } else {
+        /* Flat accelerates nowhere, so there is no range to report. */
+        [startValue setStringValue:@"-"];
+        [endValue setStringValue:@"-"];
+    }
+    [fastSlider setDoubleValue:curve.fast];
+    [fastValue setStringValue:[NSString stringWithFormat:@"%.2fx", curve.fast]];
+}
+
+- (void)updateCurveControls
+{
+    BOOL isCustom = [currentCurveProfile isEqualToString:@"custom"];
+    BOOL edited = !AccelerationCurveEqualToCurve(pendingCurve, savedCurve);
+    double speed = [trackpadSpeedSlider doubleValue];
+    AccelerationCurve shown = pendingCurve;
+    NSArray *gains = nil;
+    BOOL showsRange = YES;
+
+    /* The built-in profiles are shown, read-only, as what they do at the
+       current tracking speed, so a custom curve can be compared with them. */
+    if ([currentCurveProfile isEqualToString:@"system"]) {
+        shown = AccelerationAdaptiveCurve(speed);
+        gains = AccelerationAdaptiveGains(speed, 101);
+    } else if ([currentCurveProfile isEqualToString:@"flat"]) {
+        double gain = AccelerationFlatGain(speed);
+        shown.precision = gain;
+        shown.start = 0.0;
+        shown.end = 1.0;
+        shown.fast = gain;
+        showsRange = NO;
+    }
+
+    [curveProfilePopup selectItemAtIndex:CurveProfileIndex(currentCurveProfile)];
+    /* Fast speed settings push the built-in curves above the editing range. */
+    [curveView setMaximum:MAX(2.0, ceil(MAX(shown.precision, shown.fast) * 2.0) / 2.0)];
+    [curveView setDisplayedGains:gains];
+    [curveView setShowsRange:showsRange];
+    [curveView setCurve:shown];
+    [curveView setCurveEnabled:isCustom];
+    [self syncCurveSlidersFromCurve:shown showsRange:showsRange];
+    [precisionSlider setEnabled:isCustom];
+    [startSlider setEnabled:isCustom];
+    [endSlider setEnabled:isCustom];
+    [fastSlider setEnabled:isCustom];
+    [applyCurveButton setEnabled:(isCustom && edited)];
+    [restoreCurveButton setEnabled:(isCustom && edited)];
+    /* libinput ignores the speed setting while the custom profile is on. */
+    [trackpadSpeedSlider setEnabled:!isCustom];
+}
+
+- (BOOL)applyCurveProfile:(NSString *)profile curve:(AccelerationCurve)curve
+{
+    if (!touchpadName) {
+        return NO;
+    }
+    NSArray *flags;
+    if ([profile isEqualToString:@"custom"]) {
+        if (touchpadUnitsPerMM <= 0.0) {
+            return NO;
+        }
+        NSMutableArray *points = [NSMutableArray array];
+        for (NSNumber *point in AccelerationCurvePoints(curve, touchpadUnitsPerMM)) {
+            [points addObject:[NSString stringWithFormat:@"%.4f", [point doubleValue]]];
+        }
+        /* The points go first so that enabling the profile never runs on
+           stale ones. */
+        if (![self setProperty:@"libinput Accel Custom Motion Points"
+                     forDevice:touchpadName values:points]
+            || ![self setProperty:@"libinput Accel Custom Motion Step"
+                        forDevice:touchpadName
+                            value:[NSString stringWithFormat:@"%.4f",
+                                      AccelerationCurvePointStep(touchpadUnitsPerMM)]]) {
+            return NO;
+        }
+        flags = [NSArray arrayWithObjects:@"0", @"0", @"1", nil];
+    } else if ([profile isEqualToString:@"flat"]) {
+        flags = [NSArray arrayWithObjects:@"0", @"1", @"0", nil];
+    } else {
+        flags = [NSArray arrayWithObjects:@"1", @"0", @"0", nil];
+    }
+    return [self setProperty:@"libinput Accel Profile Enabled" forDevice:touchpadName values:flags];
+}
+
 - (void)updateSectionTitles
 {
     BOOL hasTrackpoint = ([trackpointName length] > 0);
     [trackpointSpeedSlider setEnabled:hasTrackpoint];
+    [trackpadTabView setHidden:(![touchpadName length])];
 }
+
+/* ---- Actions ---- */
 
 - (IBAction)settingChanged:(id)sender
 {
@@ -611,14 +990,101 @@ static NSString *const kMouseDomain = @"MousePreferences";
         return;
     }
     [self applyAllSettings];
+    /* The built-in profiles' curves depend on the tracking speed. */
+    [self updateCurveControls];
 }
+
+- (IBAction)curveProfileChanged:(id)sender
+{
+    (void)sender;
+    if (isRefreshing) {
+        return;
+    }
+    NSString *profile = kCurveProfiles[[curveProfilePopup indexOfSelectedItem]];
+    /* Custom takes the curve on screen; a built-in profile drops unapplied
+       edits so the editor never shows a curve the device does not have. */
+    AccelerationCurve curve = [profile isEqualToString:@"custom"] ? pendingCurve : savedCurve;
+    if ([self applyCurveProfile:profile curve:curve]) {
+        [currentCurveProfile release];
+        currentCurveProfile = [profile copy];
+        savedCurve = curve;
+        pendingCurve = curve;
+        [self persistSettings];
+        [self updateStatus:@"Acceleration profile applied"];
+    } else {
+        [self updateStatus:@"Could not change the trackpad acceleration profile"];
+    }
+    [self updateCurveControls];
+}
+
+- (IBAction)sliderValueChanged:(id)sender
+{
+    if (isRefreshing) return;
+
+    if (sender == precisionSlider) {
+        pendingCurve.precision = [precisionSlider doubleValue];
+        if (pendingCurve.precision > pendingCurve.fast) {
+            pendingCurve.fast = pendingCurve.precision;
+        }
+    } else if (sender == startSlider) {
+        pendingCurve.start = [startSlider doubleValue];
+        if (pendingCurve.start >= pendingCurve.end - 0.02) {
+            pendingCurve.start = pendingCurve.end - 0.02;
+        }
+    } else if (sender == endSlider) {
+        pendingCurve.end = [endSlider doubleValue];
+        if (pendingCurve.end <= pendingCurve.start + 0.02) {
+            pendingCurve.end = pendingCurve.start + 0.02;
+        }
+    } else if (sender == fastSlider) {
+        pendingCurve.fast = [fastSlider doubleValue];
+        if (pendingCurve.fast < pendingCurve.precision) {
+            pendingCurve.fast = pendingCurve.precision;
+        }
+    }
+    [self updateCurveControls];
+}
+
+- (IBAction)applyCurve:(id)sender
+{
+    (void)sender;
+    if (isRefreshing) return;
+    if (![self applyCurveProfile:@"custom" curve:pendingCurve]) {
+        [self updateStatus:@"Could not apply the acceleration curve"];
+        return;
+    }
+    [currentCurveProfile release];
+    currentCurveProfile = [@"custom" copy];
+    savedCurve = pendingCurve;
+    [self persistSettings];
+    [self updateCurveControls];
+    [self updateStatus:@"Acceleration curve applied"];
+}
+
+- (IBAction)restoreCurve:(id)sender
+{
+    (void)sender;
+    if (isRefreshing) return;
+    pendingCurve = savedCurve;
+    [self updateCurveControls];
+    [self updateStatus:@"Acceleration curve restored"];
+}
+
+/* CurveViewDelegate */
+- (void)curveViewDidChange:(CurveView *)cv
+{
+    (void)cv;
+    pendingCurve = [curveView curve];
+    [self updateCurveControls];
+}
+
+/* ---- Settings application ---- */
 
 - (void)applyAllSettings
 {
     if (isRefreshing) {
         return;
     }
-    // -- Natural Scrolling --
     BOOL natural = ([naturalScrollingCheckbox state] == NSOnState);
     if (touchpadName) {
         [self setBoolProperty:@"libinput Natural Scrolling Enabled"
@@ -632,7 +1098,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
         [self setBoolProperty:@"libinput Natural Scrolling Enabled"
                     forDevice:trackpointName value:natural];
     }
-    // -- Left Handed --
+
     BOOL lefty = ([leftHandedCheckbox state] == NSOnState);
     if (touchpadName) {
         [self setBoolProperty:@"libinput Left Handed Enabled"
@@ -646,38 +1112,34 @@ static NSString *const kMouseDomain = @"MousePreferences";
         [self setBoolProperty:@"libinput Left Handed Enabled"
                     forDevice:trackpointName value:lefty];
     }
-    // -- Mouse Speed --
+
     float mSpeed = [mouseSpeedSlider floatValue];
     [mouseSpeedLabel setFloatValue:mSpeed];
-    if (touchpadName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:touchpadName
-                    value:[NSString stringWithFormat:@"%.3f", mSpeed]];
-    }
     if (mouseName) {
         [self setProperty:@"libinput Accel Speed" forDevice:mouseName
                     value:[NSString stringWithFormat:@"%.3f", mSpeed]];
     }
-    // -- Trackpad Speed --
+
     float tSpeed = [trackpadSpeedSlider floatValue];
     [trackpadSpeedLabel setFloatValue:tSpeed];
     if (touchpadName) {
         [self setProperty:@"libinput Accel Speed" forDevice:touchpadName
                     value:[NSString stringWithFormat:@"%.3f", tSpeed]];
     }
-    // -- TrackPoint Speed --
+
     float tpSpeed = [trackpointSpeedSlider floatValue];
     [trackpointSpeedLabel setFloatValue:tpSpeed];
     if (trackpointName) {
         [self setProperty:@"libinput Accel Speed" forDevice:trackpointName
                     value:[NSString stringWithFormat:@"%.3f", tpSpeed]];
     }
-    // -- Tap to Click --
+
     BOOL tap = ([tapToClickCheckbox state] == NSOnState);
     if (touchpadName) {
         [self setBoolProperty:@"libinput Tapping Enabled"
                     forDevice:touchpadName value:tap];
     }
-    // -- Tap Button Mapping --
+
     if (touchpadName) {
         BOOL twoFingerRC = ([twoFingerRightClickCheckbox state] == NSOnState);
         BOOL threeFingerMC = ([threeFingerMiddleClickCheckbox state] == NSOnState);
@@ -691,21 +1153,15 @@ static NSString *const kMouseDomain = @"MousePreferences";
         }
         [self setProperty:@"libinput Tapping Button Mapping"
                 forDevice:touchpadName value:mapVal];
-        if (threeFingerMC) {
-            [self setProperty:@"libinput Clickfinger Button Mapping"
-                    forDevice:touchpadName value:@"1, 0"];
-        } else {
-            [self setProperty:@"libinput Clickfinger Button Mapping"
-                    forDevice:touchpadName value:@"1, 0"];
-        }
+        [self setProperty:@"libinput Clickfinger Button Mapping"
+                forDevice:touchpadName value:@"1, 0"];
     }
-    // -- Disable While Typing --
+
     BOOL dwts = ([disableWhileTypingCheckbox state] == NSOnState);
     if (touchpadName) {
         [self setBoolProperty:@"libinput Disable While Typing Enabled"
                     forDevice:touchpadName value:dwts];
     }
-    // -- Persist --
     [self persistSettings];
 }
 
@@ -747,8 +1203,8 @@ static NSString *const kMouseDomain = @"MousePreferences";
             NSString *tpLeftStr = [self propertyValue:tpProps name:@"Left Handed Enabled"];
             NSString *mLeftStr = [self propertyValue:mProps name:@"Left Handed Enabled"];
             NSString *tpDwtStr = [self propertyValue:tpProps name:@"Disable While Typing Enabled"];
-            NSString *tpBtnMapStr = [self propertyValue:tpProps name:@"Tapping Button Mapping"];
-            // Set mouse speed (affects both touchpad and mouse via same slider)
+            NSString *tpBtnMapStr = [self propertyValue:tpProps name:@"Tapping Button Mapping Enabled"];
+
             if (mSpeedStr) {
                 [mouseSpeedSlider setFloatValue:[mSpeedStr floatValue]];
                 [mouseSpeedLabel setStringValue:[NSString stringWithFormat:@"%.2f", [mSpeedStr floatValue]]];
@@ -756,48 +1212,41 @@ static NSString *const kMouseDomain = @"MousePreferences";
                 [mouseSpeedSlider setFloatValue:[tpSpeedStr floatValue]];
                 [mouseSpeedLabel setStringValue:[NSString stringWithFormat:@"%.2f", [tpSpeedStr floatValue]]];
             }
-            // Set trackpad speed
             if (tpSpeedStr) {
                 [trackpadSpeedSlider setFloatValue:[tpSpeedStr floatValue]];
                 [trackpadSpeedLabel setStringValue:[NSString stringWithFormat:@"%.2f", [tpSpeedStr floatValue]]];
             }
-            // Set TrackPoint speed
             if (tppSpeedStr) {
                 [trackpointSpeedSlider setFloatValue:[tppSpeedStr floatValue]];
                 [trackpointSpeedLabel setStringValue:[NSString stringWithFormat:@"%.2f", [tppSpeedStr floatValue]]];
             }
-            // Natural scrolling
             if (tpNaturalStr) {
                 [naturalScrollingCheckbox setState:([tpNaturalStr intValue] ? NSOnState : NSOffState)];
             } else if (mNaturalStr) {
                 [naturalScrollingCheckbox setState:([mNaturalStr intValue] ? NSOnState : NSOffState)];
             }
-            // Left handed
             if (tpLeftStr) {
                 [leftHandedCheckbox setState:([tpLeftStr intValue] ? NSOnState : NSOffState)];
             } else if (mLeftStr) {
                 [leftHandedCheckbox setState:([mLeftStr intValue] ? NSOnState : NSOffState)];
             }
-            // Tap to click
             if (tpTapStr) {
                 [tapToClickCheckbox setState:([tpTapStr intValue] ? NSOnState : NSOffState)];
             }
-            // Tap button mapping
             if (tpBtnMapStr) {
                 NSArray *parts = [tpBtnMapStr componentsSeparatedByString:@","];
                 if ([parts count] >= 2) {
                     int v1 = [[parts objectAtIndex:0] intValue];
                     int v2 = [[parts objectAtIndex:1] intValue];
-                    // Default mapping: 1,0 = left/right; 0,1 = right/left; 0,0 = 3-finger
                     [twoFingerRightClickCheckbox setState:(v1 != 0 ? NSOnState : NSOffState)];
                     [threeFingerMiddleClickCheckbox setState:(v1 == 0 && v2 == 0 ? NSOnState : NSOffState)];
                 }
             }
-            // Disable while typing
             if (tpDwtStr) {
                 [disableWhileTypingCheckbox setState:([tpDwtStr intValue] ? NSOnState : NSOffState)];
             }
-            // Override with persisted user defaults (xinput may not persist across reboots)
+
+            /* Restore persisted settings */
             {
                 NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
                 NSDictionary *persisted = [defaults persistentDomainForName:kMouseDomain];
@@ -843,11 +1292,48 @@ static NSString *const kMouseDomain = @"MousePreferences";
                         [trackpointSpeedSlider setFloatValue:[val floatValue]];
                         [trackpointSpeedLabel setStringValue:[NSString stringWithFormat:@"%.2f", [val floatValue]]];
                     }
+
+                    /* Only the last applied curve lives solely in the
+                       defaults; the active profile is read from the device
+                       below. */
+                    val = [persisted objectForKey:@"curvePrecision"];
+                    if (val) savedCurve.precision = [val doubleValue];
+                    val = [persisted objectForKey:@"curveStart"];
+                    if (val) savedCurve.start = [val doubleValue];
+                    val = [persisted objectForKey:@"curveEnd"];
+                    if (val) savedCurve.end = [val doubleValue];
+                    val = [persisted objectForKey:@"curveFast"];
+                    if (val) savedCurve.fast = [val doubleValue];
                 }
             }
-            // Don't push here — let the user's toggle trigger applyAllSettings
+            pendingCurve = savedCurve;
+
+            /* The device, not the defaults, says which profile is active:
+               nothing re-applies the saved one at login. */
+            NSArray *available = [[self propertyValue:tpProps name:@"Accel Profiles Available"]
+                componentsSeparatedByString:@","];
+            NSArray *enabled = [[self propertyValue:tpProps name:@"Accel Profile Enabled"]
+                componentsSeparatedByString:@","];
+            NSString *node = [[tpProps objectForKey:@"Device Node"]
+                stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\""]];
+            touchpadUnitsPerMM = ([node length] > 0) ? TouchpadUnitsPerMM(node) : 0.0;
+            for (NSUInteger i = 0; i < kCurveProfileCount; i++) {
+                BOOL offered = (i < [available count]
+                                && [[available objectAtIndex:i] intValue] == 1);
+                /* Without the resolution the curve cannot be converted, so
+                   Custom is not offered rather than applied wrongly. */
+                if ([kCurveProfiles[i] isEqualToString:@"custom"] && touchpadUnitsPerMM <= 0.0) {
+                    offered = NO;
+                }
+                [[curveProfilePopup itemAtIndex:i] setEnabled:offered];
+                if (i < [enabled count] && [[enabled objectAtIndex:i] intValue] == 1) {
+                    [currentCurveProfile release];
+                    currentCurveProfile = [kCurveProfiles[i] copy];
+                }
+            }
+            [self updateCurveControls];
+
             isRefreshing = NO;
-            // Status message
             NSMutableString *status = [NSMutableString stringWithFormat:@"Applied"];
             if (touchpadName) {
                 [status appendFormat:@" | Trackpad: %@", touchpadName];
@@ -857,6 +1343,9 @@ static NSString *const kMouseDomain = @"MousePreferences";
             }
             if (trackpointName) {
                 [status appendFormat:@" | TrackPoint: %@", trackpointName];
+            }
+            if (touchpadName && touchpadUnitsPerMM <= 0.0) {
+                [status appendString:@" | Custom curve unavailable: touchpad resolution unreadable"];
             }
             [self updateStatus:status];
         });
@@ -875,6 +1364,14 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [domain setObject:[NSNumber numberWithBool:([twoFingerRightClickCheckbox state] == NSOnState)] forKey:@"twoFingerRightClick"];
     [domain setObject:[NSNumber numberWithBool:([threeFingerMiddleClickCheckbox state] == NSOnState)] forKey:@"threeFingerMiddleClick"];
     [domain setObject:[NSNumber numberWithBool:([disableWhileTypingCheckbox state] == NSOnState)] forKey:@"disableWhileTyping"];
+
+    /* Curve settings */
+    [domain setObject:currentCurveProfile forKey:@"curveProfile"];
+    [domain setObject:[NSNumber numberWithDouble:savedCurve.precision] forKey:@"curvePrecision"];
+    [domain setObject:[NSNumber numberWithDouble:savedCurve.start] forKey:@"curveStart"];
+    [domain setObject:[NSNumber numberWithDouble:savedCurve.end] forKey:@"curveEnd"];
+    [domain setObject:[NSNumber numberWithDouble:savedCurve.fast] forKey:@"curveFast"];
+
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setPersistentDomain:domain forName:kMouseDomain];
     [defaults synchronize];

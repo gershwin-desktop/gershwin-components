@@ -4,7 +4,7 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 Mouse_OBJCFLAGS += -Wall -Wextra -Werror -O2
 
 BUNDLE_NAME = Mouse
-Mouse_OBJC_FILES = MousePane.m MouseController.m
+Mouse_OBJC_FILES = MousePane.m MouseController.m CurveView.m
 Mouse_RESOURCE_FILES = Mouse.png
 Mouse_BUNDLE_LIBS = -lPreferencePanes
 Mouse_PRINCIPAL_CLASS = MousePane
