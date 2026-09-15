@@ -101,32 +101,25 @@ Menu_HEADER_FILES = \
 # Resources
 Menu_RESOURCE_FILES = \
 	Menu.png \
-	Resources/Icons/battery.png \
-	Resources/Icons/battery-medium.png \
-	Resources/Icons/battery-low.png \
-	Resources/Icons/battery-charged.png \
-	Resources/Icons/battery-charging.png \
-	Resources/Icons/volume-high.png \
-	Resources/Icons/volume-medium.png \
-	Resources/Icons/volume-low.png \
-	Resources/Icons/volume-muted.png \
-	Resources/Icons/wlan.png \
-	Resources/Icons/wlan-good.png \
-	Resources/Icons/wlan-ok.png \
-	Resources/Icons/wlan-weak.png \
-	Resources/Icons/wlan-disabled.png \
-	Resources/Icons/wlan-off.png \
-	Resources/Icons/brightness.png \
-	Resources/Icons/clock.png \
-	Resources/Icons/cpu.png \
-	Resources/Icons/ram.png
-
-
-# SVG-to-PNG conversion rules
-before-build:: $(patsubst %.svg,%.png,$(wildcard Resources/Icons/*.svg))
-
-Resources/Icons/%.png: Resources/Icons/%.svg
-	convert -background none -define png:color-type=6 $< -resize 18x18! $@
+	Resources/Icons/battery.tiff \
+	Resources/Icons/battery-medium.tiff \
+	Resources/Icons/battery-low.tiff \
+	Resources/Icons/battery-charged.tiff \
+	Resources/Icons/battery-charging.tiff \
+	Resources/Icons/volume-high.tiff \
+	Resources/Icons/volume-medium.tiff \
+	Resources/Icons/volume-low.tiff \
+	Resources/Icons/volume-muted.tiff \
+	Resources/Icons/wlan.tiff \
+	Resources/Icons/wlan-good.tiff \
+	Resources/Icons/wlan-ok.tiff \
+	Resources/Icons/wlan-weak.tiff \
+	Resources/Icons/wlan-disabled.tiff \
+	Resources/Icons/wlan-off.tiff \
+	Resources/Icons/brightness.tiff \
+	Resources/Icons/clock.tiff \
+	Resources/Icons/cpu.tiff \
+	Resources/Icons/ram.tiff
 
 # Libraries and frameworks - configured by configure script
 Menu_TOOL_LIBS += -ldbus-1 -lX11
@@ -176,6 +169,24 @@ AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && ech
 INSTALL_APPS_DIR = /System/Library/CoreServices/Applications
 
 include $(GNUSTEP_MAKEFILES)/application.make
+
+# The SVGs are drawn on the 18px menu extra grid and must be rendered 1:1;
+# any resampling blurs their pixel-aligned edges.  Each TIFF carries an 18px
+# 72 dpi page and a 36px 144 dpi page so NSImage picks a sharp bitmap at
+# GSScaleFactor 1 and 2.  The TIFFs are committed so that building does not
+# need an SVG renderer; run "make icons" after editing an SVG.  Defined after
+# application.make so it does not become the default goal.
+.PHONY: icons
+icons:
+	set -e; for svg in Resources/Icons/*.svg; do \
+	  tiff=$${svg%.svg}.tiff; \
+	  inkscape -w 18 -h 18 -o $$tiff.1x.png $$svg; \
+	  inkscape -w 36 -h 36 -o $$tiff.2x.png $$svg; \
+	  convert \( $$tiff.1x.png -set units PixelsPerInch -set density 72 \) \
+	    \( $$tiff.2x.png -set units PixelsPerInch -set density 144 \) \
+	    -type TrueColorAlpha -compress lzw -define tiff:alpha=associated $$tiff; \
+	  rm -f $$tiff.1x.png $$tiff.2x.png; \
+	done
 
 # Build standalone .gsmenuextra bundles after main app is compiled
 after-Menu-all::
