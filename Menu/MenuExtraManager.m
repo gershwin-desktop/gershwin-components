@@ -721,6 +721,16 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     }
 }
 
+/* An open menu is never rebuilt: replacing its items under the pointer drops
+   the highlight, and highlighting again changes an item, which updates the
+   menu once more, so it would rebuild itself over and over and flicker.
+   -[NSMenu display] updates a menu before it shows its window, so every menu
+   is still rebuilt each time it opens. */
+- (BOOL)isMenuOnScreen:(NSMenu *)menu
+{
+    return [[menu window] isVisible];
+}
+
 - (void)replaceMenu:(NSMenu *)target withMenu:(NSMenu *)source
 {
     if (!target || !source || target == source) return;
@@ -870,7 +880,8 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                                              afterDelay:0];
                     }
                 }
-                if ([provider respondsToSelector:@selector(menu)]) {
+                if ([provider respondsToSelector:@selector(menu)]
+                    && ![self isMenuOnScreen:[menuItem submenu]]) {
                     if ([provider respondsToSelector:@selector(menuWillOpen)]) {
                         [provider menuWillOpen];
                     }
@@ -896,7 +907,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
 - (void)menuNeedsUpdate:(NSMenu *)menu
 {
-    if (_needsUpdateGuard) return;
+    if (_needsUpdateGuard || [self isMenuOnScreen:menu]) return;
     _needsUpdateGuard = YES;
 
     NSString *identifier = objc_getAssociatedObject(menu, &kExtrasSubmenuIdentifierKey);
