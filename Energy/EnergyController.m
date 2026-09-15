@@ -30,6 +30,8 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 - (BOOL)writePowerFail:(BOOL)enable;
 - (void)applyAllSettings;
 - (void)updateStatus:(NSString *)message;
+- (void)stopInhibitor;
+- (void)applicationWillTerminate:(NSNotification *)notification;
 
 /* Layout helpers (HIG group boxes and rows). */
 - (NSBox *)groupBoxWithTitle:(NSString *)title frame:(NSRect)frame inView:(NSView *)parent;
@@ -92,13 +94,31 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         hddSleepState = NO;
         wakeNetworkState = NO;
         powerFailState = NO;
+        /* The host does not release its panes when it quits, so dealloc never
+           runs and the sleep inhibitor would otherwise outlive the app. */
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(applicationWillTerminate:)
+                   name:NSApplicationWillTerminateNotification
+                 object:nil];
     }
     return self;
 }
 
+- (void)applicationWillTerminate:(NSNotification *)notification
+{
+    (void)notification;
+    [self stopInhibitor];
+}
+
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self stopInhibitor];
     [mainView release];
+    [powerBox release];
+    [displayBox release];
+    [powerMgmtBox release];
     [sourceLabel release];
     [batteryPercentLabel release];
     [governorPopUp release];
@@ -109,10 +129,6 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [hddSleepCheckbox release];
     [wakeNetworkCheckbox release];
     [powerFailCheckbox release];
-    if (inhibitTask) {
-        [inhibitTask terminate];
-        [inhibitTask release];
-    }
     [statusLabel release];
     [super dealloc];
 }
@@ -203,17 +219,15 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         CGFloat by = powerBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
         sourceLabel = [self addInfoRowWithText:@"Source: reading..."
                                          toBox:powerBox y:by width:boxW];
-        [sourceLabel retain];
 
         by -= rowGap + rowH;
         batteryPercentLabel = [self addInfoRowWithText:@"Battery: --%"
                                                  toBox:powerBox y:by width:boxW];
-        [batteryPercentLabel retain];
 
         by -= rowGap + rowH;
         [self addPopUpRowWithLabel:@"Governor:"
                             popup:governorPopUp =
-                            [[[NSPopUpButton alloc] initWithFrame:NSZeroRect] autorelease]
+                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
                             toBox:powerBox y:by width:boxW];
     }
     y -= powerBoxH + boxGap;
@@ -226,9 +240,9 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         CGFloat by = displayBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
         [self addSliderRowWithLabel:@"Brightness:"
                              slider:brightnessSlider =
-                             [[[NSSlider alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:brightnessLabel =
-                             [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSTextField alloc] initWithFrame:NSZeroRect]
                               toBox:displayBox y:by width:boxW];
         [brightnessSlider setMinValue:1];
         [brightnessSlider setMaxValue:100];
@@ -243,7 +257,7 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         by -= rowGap + rowH;
         [self addPopUpRowWithLabel:@"Screen blanks:"
                             popup:blankPopUp =
-                            [[[NSPopUpButton alloc] initWithFrame:NSZeroRect] autorelease]
+                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
                             toBox:displayBox y:by width:boxW];
         [blankPopUp addItemWithTitle:@"Never"];
         [blankPopUp addItemWithTitle:@"1 minute"];
@@ -261,28 +275,28 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     {
         CGFloat by = powerMgmtBoxH - boxTitleInset - METRICS_SPACE_16 - checkboxRowH;
         [self addCheckbox:preventSleepCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:powerMgmtBox y:by width:boxW];
         [preventSleepCheckbox setButtonType:NSSwitchButton];
         [preventSleepCheckbox setTitle:@"Prevent computer from sleeping when display is off"];
         by -= checkboxRowH;
 
         [self addCheckbox:hddSleepCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:powerMgmtBox y:by width:boxW];
         [hddSleepCheckbox setButtonType:NSSwitchButton];
         [hddSleepCheckbox setTitle:@"Put hard disks to sleep when possible"];
         by -= checkboxRowH;
 
         [self addCheckbox:wakeNetworkCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:powerMgmtBox y:by width:boxW];
         [wakeNetworkCheckbox setButtonType:NSSwitchButton];
         [wakeNetworkCheckbox setTitle:@"Wake for network access"];
         by -= checkboxRowH;
 
         [self addCheckbox:powerFailCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:powerMgmtBox y:by width:boxW];
         [powerFailCheckbox setButtonType:NSSwitchButton];
         [powerFailCheckbox setTitle:@"Start up automatically after a power failure"];
@@ -335,7 +349,9 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 }
 
 /* Build a titled group box, top-anchored. Width is managed by
-   relayoutWithWidth: so margins stay symmetric. */
+   relayoutWithWidth: so margins stay symmetric. Builders return retained
+   objects so they can go straight into ivars that dealloc releases;
+   callers that do not keep one release it themselves. */
 - (NSBox *)groupBoxWithTitle:(NSString *)title frame:(NSRect)frame inView:(NSView *)parent
 {
     NSBox *box = [[NSBox alloc] initWithFrame:frame];
@@ -901,29 +917,40 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 #if defined(__linux__)
     if (enable) {
         if (inhibitTask && [inhibitTask isRunning]) return YES;
-        if (inhibitTask) {
-            [inhibitTask terminate];
-            [inhibitTask release];
-        }
+        [self stopInhibitor];
         inhibitTask = [[NSTask alloc] init];
         [inhibitTask setLaunchPath:@"/usr/bin/systemd-inhibit"];
+        /* The lock lives as long as the inhibited command. cat blocks on a
+           pipe whose only writer is this process (NSTask children close
+           inherited descriptors), so it sees EOF and releases the lock even
+           when the app crashes or is killed without a termination
+           notification; the next launch then cannot stack a second one. */
+        [inhibitTask setStandardInput:[NSPipe pipe]];
         [inhibitTask setArguments:[NSArray arrayWithObjects:
             @"--what=sleep",
             @"--who=EnergyPreferences",
             @"--why=User preference",
-            @"sleep", @"infinity", nil]];
+            @"cat", nil]];
         [inhibitTask launch];
     } else {
-        if (inhibitTask) {
-            [inhibitTask terminate];
-            [inhibitTask release];
-            inhibitTask = nil;
-        }
+        [self stopInhibitor];
     }
     return YES;
 #else
     return YES;
 #endif
+}
+
+- (void)stopInhibitor
+{
+    if (inhibitTask == nil) {
+        return;
+    }
+    if ([inhibitTask isRunning]) {
+        [inhibitTask terminate];
+    }
+    [inhibitTask release];
+    inhibitTask = nil;
 }
 
 - (BOOL)readHddSleep
