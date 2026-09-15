@@ -8,94 +8,130 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 
-static NSMutableDictionary *_tintCache = nil;
-static const char kOriginalImageKey;
-static BOOL _swizzleAttempted = NO;
+static const char kUntintedImageKey;
 
-static void _ensureSwizzle(void)
+/* Menu bar icons are monochrome, so a highlighted one is redrawn in the
+   highlighted title color.  Each rep is tinted on its own so the icon stays
+   sharp at every scale factor; going through TIFF also turns icons that were
+   drawn at runtime into bitmaps. */
+static NSImage *TintedMenuImage(NSImage *image, NSColor *color)
 {
-    if (_swizzleAttempted) return;
-    _swizzleAttempted = YES;
+  NSColor *rgb = [color colorUsingColorSpaceName: NSDeviceRGBColorSpace];
+  NSArray *reps = [NSBitmapImageRep imageRepsWithData: [image TIFFRepresentation]];
+  NSImage *tinted = [[NSImage alloc] initWithSize: [image size]];
 
-    Class cls = objc_getClass("NSMenuItemCell");
-    if (!cls) return;
+  for (NSBitmapImageRep *source in reps)
+    {
+      NSInteger width = [source pixelsWide];
+      NSInteger height = [source pixelsHigh];
+      NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes: NULL
+                      pixelsWide: width
+                      pixelsHigh: height
+                   bitsPerSample: 8
+                 samplesPerPixel: 4
+                        hasAlpha: YES
+                        isPlanar: NO
+                  colorSpaceName: NSDeviceRGBColorSpace
+                     bytesPerRow: 0
+                    bitsPerPixel: 0];
 
-    SEL sel = sel_registerName("setHighlighted:");
-    SEL tintedSel = sel_registerName("tinted_setHighlighted:");
-
-    Method origMethod = class_getInstanceMethod(cls, sel);
-    Method tintedMethod = class_getInstanceMethod(cls, tintedSel);
-    if (!origMethod || !tintedMethod) return;
-
-    IMP origIMP = method_getImplementation(origMethod);
-    IMP tintedIMP = method_getImplementation(tintedMethod);
-    if (origIMP == tintedIMP) return;
-
-    method_exchangeImplementations(origMethod, tintedMethod);
-}
-
-static NSImage *_tintedImage(NSImage *image)
-{
-    if (!_tintCache) {
-        _tintCache = [[NSMutableDictionary alloc] init];
+      for (NSInteger y = 0; y < height; y++)
+        {
+          for (NSInteger x = 0; x < width; x++)
+            {
+              CGFloat alpha = [[source colorAtX: x y: y] alphaComponent];
+              [rep setColor: [rgb colorWithAlphaComponent: [rgb alphaComponent] * alpha]
+                        atX: x
+                          y: y];
+            }
+        }
+      [rep setSize: [source size]];
+      [tinted addRepresentation: rep];
     }
-
-    NSString *name = [image name];
-    if (!name) return image;
-    NSImage *cached = [_tintCache objectForKey:name];
-    if (cached) return cached;
-
-    NSColor *tintColor = [NSColor selectedMenuItemTextColor];
-    if (!tintColor) tintColor = [NSColor whiteColor];
-
-    NSSize size = [image size];
-    NSImage *tinted = [[NSImage alloc] initWithSize:size];
-    [tinted lockFocus];
-    [image drawAtPoint:NSZeroPoint fromRect:NSZeroRect operation:NSCompositeCopy fraction:1.0];
-    [tintColor set];
-    NSRectFillUsingOperation(NSMakeRect(0, 0, size.width, size.height), NSCompositeSourceAtop);
-    [tinted unlockFocus];
-
-    [_tintCache setObject:tinted forKey:name];
-    return tinted;
+  return tinted;
 }
+
+/* Named icons are shared between all items showing them, so their tinted
+   copies are shared too.  The tinted copy remembers its original so that
+   unhighlighting can tell it apart from an icon the extra set meanwhile. */
+static NSImage *HighlightedImage(NSImage *image)
+{
+  static NSMutableDictionary *cache = nil;
+  NSString *name = [image name];
+  NSImage *tinted = (name != nil) ? [cache objectForKey: name] : nil;
+
+  if (tinted == nil)
+    {
+      tinted = TintedMenuImage(image, [NSColor selectedMenuItemTextColor]);
+      objc_setAssociatedObject(tinted, &kUntintedImageKey, image,
+                               OBJC_ASSOCIATION_RETAIN);
+      if (name != nil)
+        {
+          if (cache == nil)
+            cache = [NSMutableDictionary new];
+          [cache setObject: tinted forKey: name];
+        }
+    }
+  return tinted;
+}
+
+static const char kHighlightedKey;
+
+/* An icon that is already tinted is left alone, so a missed unhighlight can
+   never leave it stuck in the highlight color; an icon set behind our back
+   while highlighted is not replaced by the stale original. */
+static void UpdateMenuBarItemImage(NSMenuItem *item, BOOL highlighted)
+{
+  NSImage *image = [item image];
+  NSImage *untinted = (image != nil)
+    ? objc_getAssociatedObject(image, &kUntintedImageKey) : nil;
+
+  /* Extras refresh their icons while their menu is open; remembering the
+     state lets -setMenuBarImage: keep those icons in the highlight color. */
+  objc_setAssociatedObject(item, &kHighlightedKey,
+                           highlighted ? [NSNumber numberWithBool: YES] : nil,
+                           OBJC_ASSOCIATION_RETAIN);
+
+  if (highlighted && image != nil && untinted == nil)
+    [item setImage: HighlightedImage(image)];
+  else if (!highlighted && untinted != nil)
+    [item setImage: untinted];
+}
+
+@implementation NSMenuItem (TintedIcons)
+
+- (void) setMenuBarImage: (NSImage *)image
+{
+  if (image != nil && objc_getAssociatedObject(self, &kHighlightedKey) != nil)
+    image = HighlightedImage(image);
+  [self setImage: image];
+}
+
+@end
 
 @implementation NSMenuItemCell (TintedIcons)
 
-- (void)drawImage:(NSImage *)image
-        withFrame:(NSRect)cellFrame
-           inView:(NSView *)controlView
+/* The theme draws menu images itself instead of going through
+   -drawImage:withFrame:inView:, so the tinted icon has to be the item's
+   image while its cell is highlighted. */
++ (void) load
 {
-    _ensureSwizzle();
-    if (image && [self isHighlighted]) {
-        image = _tintedImage(image);
-    }
-    [super drawImage:image withFrame:cellFrame inView:controlView];
+  method_exchangeImplementations(
+    class_getInstanceMethod(self, @selector(setHighlighted:)),
+    class_getInstanceMethod(self, @selector(tinted_setHighlighted:)));
 }
 
-- (void)tinted_setHighlighted:(BOOL)flag
+- (void) tinted_setHighlighted: (BOOL)flag
 {
-    BOOL was = [self isHighlighted];
-    [self tinted_setHighlighted:flag];
+  BOOL wasHighlighted = [self isHighlighted];
 
-    if (flag == was) return;
+  [self tinted_setHighlighted: flag];
 
-    NSMenuItem *item = [self menuItem];
-    NSImage *image = [item image];
-    NSString *title = [item title];
-    if (!image) return;
-
-    if (flag && (!title || [title length] == 0)) {
-        objc_setAssociatedObject(item, &kOriginalImageKey,
-                                 image, OBJC_ASSOCIATION_RETAIN);
-        [item setImage:_tintedImage(image)];
-    } else if (!flag) {
-        NSImage *orig = objc_getAssociatedObject(item, &kOriginalImageKey);
-        if (orig) {
-            [item setImage:orig];
-            objc_setAssociatedObject(item, &kOriginalImageKey, nil, OBJC_ASSOCIATION_RETAIN);
-        }
-    }
+  /* Only menu bar icons are known to be monochrome; images in dropdown
+     menus may be colored and must not turn into silhouettes. */
+  if (flag != wasHighlighted && [[self menuView] isHorizontal])
+    UpdateMenuBarItemImage([self menuItem], flag);
 }
 
 @end

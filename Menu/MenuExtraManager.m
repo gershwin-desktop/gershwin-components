@@ -447,12 +447,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                                                 keyEquivalent:@""];
         NSLog(@"GSMenuExtra:   created item");
         if ([provider respondsToSelector:@selector(icon)]) {
-            NSImage *icon = [provider icon];
-            if (icon) {
-                CGFloat iconSize = _menuBarHeight - 4.0;
-                [icon setSize:NSMakeSize(iconSize, iconSize)];
-                [item setImage:icon];
-            }
+            [self showIconOfExtra:provider inItem:item];
         }
         NSLog(@"GSMenuExtra:   set icon");
         if ([provider respondsToSelector:@selector(menu)]) {
@@ -616,12 +611,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                                                 keyEquivalent:@""];
         if ([provider respondsToSelector:@selector(icon)]) {
             @try {
-                NSImage *icon = [provider icon];
-                if (icon) {
-                    CGFloat iconSize = _menuBarHeight - 4.0;
-                    [icon setSize:NSMakeSize(iconSize, iconSize)];
-                    [item setImage:icon];
-                }
+                [self showIconOfExtra:provider inItem:item];
             } @catch (NSException *e) {
                 NSLog(@"GSMenuExtra: exception in icon for %@: %@", ident, e);
             }
@@ -758,12 +748,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                                                        action:NULL
                                                 keyEquivalent:@""];
         if ([provider respondsToSelector:@selector(icon)]) {
-            NSImage *icon = [provider icon];
-            if (icon) {
-                CGFloat iconSize = _menuBarHeight - 4.0;
-                [icon setSize:NSMakeSize(iconSize, iconSize)];
-                [item setImage:icon];
-            }
+            [self showIconOfExtra:provider inItem:item];
         }
         if ([provider respondsToSelector:@selector(menu)]) {
             NSMenu *submenu = [provider menu];
@@ -854,6 +839,18 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
 #pragma mark - Presentation invalidation
 
+/* Every extra icon goes through here so that it gets the menu bar size and,
+   while the extra's menu is open, the highlight color. */
+- (void)showIconOfExtra:(GSMenuExtraInstance *)provider inItem:(NSMenuItem *)item
+{
+    NSImage *icon = [provider icon];
+    if (icon) {
+        CGFloat iconSize = _menuBarHeight - 4.0;
+        [icon setSize:NSMakeSize(iconSize, iconSize)];
+    }
+    [item setMenuBarImage:icon];
+}
+
 - (void)refreshExtraWithIdentifier:(NSString *)identifier
 {
     NSMenuItem *menuItem = [_extrasMenuItems objectForKey:identifier];
@@ -866,14 +863,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 if (title) [menuItem setTitle:title];
 
                 if ([provider respondsToSelector:@selector(icon)]) {
-                    NSImage *icon = [provider icon];
-                    if (icon) {
-                        CGFloat iconSize = _menuBarHeight - 4.0;
-                        [icon setSize:NSMakeSize(iconSize, iconSize)];
-                        [menuItem setImage:icon];
-                    } else {
-                        [menuItem setImage:nil];
-                    }
+                    [self showIconOfExtra:provider inItem:menuItem];
                     if (_extrasMenuView) {
                         [_extrasMenuView performSelector:@selector(display)
                                              withObject:nil
