@@ -8,6 +8,7 @@
 #import "GTKActionHandler.h"
 #import "DBusConnection.h"
 #import "X11ShortcutManager.h"
+#import "DBusMenuShortcutParser.h"
 #import "MenuUtils.h"
 #import "WindowMonitor.h"
 
@@ -72,14 +73,10 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
         NSDebugLog(@"GTKActionHandler: Registering shortcut for menu item '%@': key='%@' modifiers=%lu", 
               [menuItem title], keyEquivalent, (unsigned long)modifierMask);
         
-        // Only register shortcuts that have meaningful modifier keys to prevent capturing
-        // bare keys or Shift-only keys globally. Shift-only shortcuts should be handled
-        // locally by the application, not globally intercepted.
-        BOOL hasShiftOnly = (modifierMask == NSShiftKeyMask);
-        BOOL hasNoModifiers = (modifierMask == 0);
         BOOL hasCtrl = (modifierMask & NSControlKeyMask) != 0;
-        
-        if (!hasNoModifiers && !hasShiftOnly) {
+
+        if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
+                                                            modifiers:modifierMask]) {
             // Transform Ctrl+key shortcuts to Alt+key for global registration
             // This allows GIMP's Ctrl-N to be accessible globally as Alt-N
             NSUInteger globalModifierMask = modifierMask;
@@ -103,9 +100,8 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
                                                                  actionName:actionName
                                                              dbusConnection:dbusConnection];
         } else {
-            NSString *reason = hasNoModifiers ? @"no modifiers" : @"Shift-only modifier";
-            NSDebugLog(@"GTKActionHandler: Skipping registration of key '%@' for menu item '%@' - %@", 
-                  keyEquivalent, [menuItem title], reason);
+            NSDebugLog(@"GTKActionHandler: Skipping registration of key '%@' for menu item '%@' - it would be grabbed from every application",
+                  keyEquivalent, [menuItem title]);
         }
     }
     

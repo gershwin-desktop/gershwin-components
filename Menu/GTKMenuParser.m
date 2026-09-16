@@ -6,6 +6,7 @@
 
 
 #import "GTKMenuParser.h"
+#import "DBusMenuShortcutParser.h"
 #import "DBusConnection.h"
 #import "GTKActionHandler.h"
 #import "GTKSubmenuManager.h"
@@ -238,23 +239,11 @@
             if (accel && [accel length] > 0) {
                 NSString *keyEquivalent = [self parseKeyboardShortcut:accel];
                 if (keyEquivalent && [keyEquivalent length] > 0) {
+                    NSUInteger displayModifierMask = [self displayModifiersForAccel:accel];
                     [item setKeyEquivalent:keyEquivalent];
-                    NSUInteger modifierMask = [self parseKeyboardModifiers:accel];
-                    
-                    // WORKAROUND: GNUstep doesn't display Control shortcuts properly in menus
-                    // For display: Convert NSControlKeyMask to NSCommandKeyMask 
-                    NSUInteger displayModifierMask = modifierMask;
-                    BOOL hasControlKey = (modifierMask & NSControlKeyMask) != 0;
-                    
-                    if (hasControlKey) {
-                        // Display as Command in menu (which GNUstep renders properly)
-                        displayModifierMask = (modifierMask & ~NSControlKeyMask) | NSCommandKeyMask;
-                        NSDebugLog(@"GTKMenuParser: Converting Control to Command for display");
-                    }
-                    
                     [item setKeyEquivalentModifierMask:displayModifierMask];
-                    NSDebugLog(@"GTKMenuParser: Added shortcut '%@' to menu item '%@' (keyEq='%@', modifiers=%lu, display=%lu)", 
-                          accel, displayLabel, keyEquivalent, (unsigned long)modifierMask, (unsigned long)displayModifierMask);
+                    NSDebugLog(@"GTKMenuParser: Added shortcut '%@' to menu item '%@' (keyEq='%@', display=%lu)",
+                          accel, displayLabel, keyEquivalent, (unsigned long)displayModifierMask);
                 }
             }
             
@@ -535,10 +524,12 @@
     
     // Set key equivalent if available
     if (keyEquiv && [keyEquiv length] > 0) {
-        // TODO: Parse GTK-style accelerator format (e.g., "<Control>s")
-        // For now, just use first character
-        NSString *key = [keyEquiv substringToIndex:1];
-        [menuItem setKeyEquivalent:[key lowercaseString]];
+        NSString *key = [self parseKeyboardShortcut:keyEquiv];
+        if ([key length] > 0) {
+            [menuItem setKeyEquivalent:key];
+            [menuItem setKeyEquivalentModifierMask:
+                [self displayModifiersForAccel:keyEquiv]];
+        }
     }
     
     // Set up action if we have one
@@ -617,104 +608,35 @@
 
 + (NSString *)parseKeyboardShortcut:(NSString *)accel
 {
-    if (!accel || [accel length] == 0) {
+    if ([accel length] == 0) {
         return @"";
     }
-    
-    NSString *key = accel;
-    
-    // Handle x-canonical-accel format: "Ctrl+O", "Shift+Ctrl+V", etc.
-    if ([accel containsString:@"+"]) {
-        // Split by + and get the last component (the actual key)
-        NSArray *components = [accel componentsSeparatedByString:@"+"];
-        if ([components count] > 0) {
-            key = [components lastObject];
-        }
-    } else {
-        // Handle GTK accelerator format: <Control>o, <Primary><Shift>n, <Alt>F4, etc.
-        // Remove modifier prefixes (case-insensitive)
-        key = [key stringByReplacingOccurrencesOfString:@"<Control>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Primary>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Shift>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Alt>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Meta>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Super>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
+
+    return [[DBusMenuShortcutParser parseKeyCombo:accel] objectForKey:@"key"];
+}
+
+/* GNUstep draws a Control shortcut by slanting the key letter instead of
+ * showing a modifier, so the menu claims Command - which is what the user
+ * presses anyway, Command being Alt on this desktop. */
++ (NSUInteger)displayModifiersForAccel:(NSString *)accel
+{
+    NSUInteger modifierMask = [self parseKeyboardModifiers:accel];
+
+    if ((modifierMask & NSControlKeyMask) != 0) {
+        modifierMask = (modifierMask & ~NSControlKeyMask) | NSCommandKeyMask;
     }
-    
-    // Convert special keys - case-insensitive
-    NSString *lowerKey = [key lowercaseString];
-    if ([lowerKey isEqualToString:@"return"] || [lowerKey isEqualToString:@"enter"] ||
-        [lowerKey isEqualToString:@"kp_enter"]) {
-        return @"\r";
-    }
-    if ([lowerKey isEqualToString:@"tab"] || [lowerKey isEqualToString:@"kpad_tab"]) {
-        return @"\t";
-    }
-    if ([lowerKey isEqualToString:@"backspace"] || [lowerKey isEqualToString:@"back_space"] ||
-        [lowerKey isEqualToString:@"back"]) {
-        return @"\b";
-    }
-    if ([lowerKey isEqualToString:@"delete"] || [lowerKey isEqualToString:@"delete_key"]) {
-        return @"\x7f";
-    }
-    if ([lowerKey isEqualToString:@"escape"] || [lowerKey isEqualToString:@"esc"]) {
-        return @"\x1b";
-    }
-    if ([lowerKey isEqualToString:@"space"]) {
-        return @" ";
-    }
-    
-    // Function keys
-    if ([lowerKey hasPrefix:@"f"] && [lowerKey length] <= 4) {
-        NSString *fNumStr = [lowerKey substringFromIndex:1];
-        if ([fNumStr length] > 0) {
-            BOOL isNumeric = YES;
-            for (NSUInteger i = 0; i < [fNumStr length]; i++) {
-                if (![[NSCharacterSet decimalDigitCharacterSet] characterIsMember:[fNumStr characterAtIndex:i]]) {
-                    isNumeric = NO;
-                    break;
-                }
-            }
-            if (isNumeric) {
-                int fNum = [fNumStr intValue];
-                if (fNum >= 1 && fNum <= 24) {
-                    return lowerKey;
-                }
-            }
-        }
-    }
-    
-    // Return lowercase key for normal keys
-    return [key lowercaseString];
+
+    return modifierMask;
 }
 
 + (NSUInteger)parseKeyboardModifiers:(NSString *)accel
 {
-    if (!accel || [accel length] == 0) {
+    if ([accel length] == 0) {
         return 0;
     }
-    
-    NSUInteger modifiers = 0;
-    
-    // Case-insensitive matching for modifier names from Canonical AppMenu / GTK
-    NSString *lower = [accel lowercaseString];
-    
-    if ([lower containsString:@"<control>"] || [lower containsString:@"<primary>"] || 
-        [lower containsString:@"ctrl+"]) {
-        modifiers |= NSControlKeyMask;
-    }
-    if ([lower containsString:@"<shift>"] || [lower containsString:@"shift+"]) {
-        modifiers |= NSShiftKeyMask;
-    }
-    if ([lower containsString:@"<alt>"] || [lower containsString:@"alt+"]) {
-        modifiers |= NSAlternateKeyMask;
-    }
-    if ([lower containsString:@"<meta>"] || [lower containsString:@"<super>"] || 
-        [lower containsString:@"meta+"] || [lower containsString:@"super+"]) {
-        modifiers |= NSCommandKeyMask;
-    }
-    
-    return modifiers;
+
+    return [[[DBusMenuShortcutParser parseKeyCombo:accel]
+                objectForKey:@"modifiers"] unsignedIntegerValue];
 }
 
 @end

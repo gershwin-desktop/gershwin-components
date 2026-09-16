@@ -6,6 +6,7 @@
 
 
 #import "X11ShortcutManager.h"
+#import "DBusMenuShortcutParser.h"
 #import "DBusConnection.h"
 #import "WindowMonitor.h"
 #import "MenuUtils.h"
@@ -127,7 +128,8 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     NSString *keyEquivalent = [menuItem keyEquivalent];
     NSUInteger modifierMask = [menuItem keyEquivalentModifierMask];
     
-    if ([keyEquivalent length] == 0 || modifierMask == 0) {
+    if (![DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
+                                                         modifiers:modifierMask]) {
         return;
     }
     
@@ -908,53 +910,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
 
 - (KeySym)parseKeyString:(NSString *)keyStr
 {
-    if ([keyStr length] == 0) {
-        return NoSymbol;
-    }
-    
-    // Accept literal space character as 'space'
-    if ([keyStr isEqualToString:@" "]) {
-        return XK_space;
-    }
-    
-    // Handle special keys based on globalshortcutsd implementation
-    if ([keyStr length] == 1) {
-        // Normalise single-character keys to lowercase so that both "w" and "W"
-        // (as sent by different Canonical AppMenu / GTK clients) resolve to the
-        // same X11 keysym and therefore the same keycode.
-        NSString *lower = [keyStr lowercaseString];
-        KeySym sym = XStringToKeysym([lower UTF8String]);
-        if (sym != NoSymbol) {
-            return sym;
-        }
-        // Fall back to the original casing (e.g., non-Latin characters)
-        return XStringToKeysym([keyStr UTF8String]);
-    }
-    
-    // Case-insensitive named key matching
-    NSString *lowerStr = [keyStr lowercaseString];
-    if ([lowerStr isEqualToString:@"space"]) return XK_space;
-    if ([lowerStr isEqualToString:@"return"] || [lowerStr isEqualToString:@"enter"]) return XK_Return;
-    if ([lowerStr isEqualToString:@"tab"]) return XK_Tab;
-    if ([lowerStr isEqualToString:@"escape"] || [lowerStr isEqualToString:@"esc"]) return XK_Escape;
-    if ([lowerStr isEqualToString:@"backspace"]) return XK_BackSpace;
-    if ([lowerStr isEqualToString:@"delete"]) return XK_Delete;
-    
-    // Function keys (case-insensitive)
-    if ([lowerStr hasPrefix:@"f"] && [lowerStr length] <= 3) {
-        int fNum = [[lowerStr substringFromIndex:1] intValue];
-        if (fNum >= 1 && fNum <= 24) {
-            return XK_F1 + (fNum - 1);
-        }
-    }
-    
-    // Try direct keysym lookup with original casing first, then lowercase
-    const char *cStr = [keyStr UTF8String];
-    KeySym sym = XStringToKeysym(cStr);
-    if (sym != NoSymbol) {
-        return sym;
-    }
-    return XStringToKeysym([lowerStr UTF8String]);
+    return [DBusMenuShortcutParser keysymForKeyEquivalent:keyStr];
 }
 
 - (unsigned int)convertToX11Modifier:(NSUInteger)modifierMask

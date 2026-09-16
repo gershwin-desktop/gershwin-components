@@ -8,6 +8,7 @@
 #import "DBusMenuActionHandler.h"
 #import "DBusConnection.h"
 #import "X11ShortcutManager.h"
+#import "DBusMenuShortcutParser.h"
 #import "MenuProfiler.h"
 
 // DBus info is stored on each NSMenuItem via -setRepresentedObject: with a
@@ -51,7 +52,8 @@ static NSString *const kDBusInfoKey = @"dbusInfo";
           [menuItem title], (long)[menuItem tag], serviceName, objectPath);
     
     // Register global shortcut if we have a key equivalent and swapping is enabled
-    if ([[menuItem keyEquivalent] length] > 0 && [menuItem keyEquivalentModifierMask] > 0) {
+    if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:[menuItem keyEquivalent]
+                                                         modifiers:[menuItem keyEquivalentModifierMask]]) {
         NSDebugLLog(@"gwcomp", @"DBusMenuActionHandler: Menu item '%@' has shortcut: %@+%lu", 
               [menuItem title], [menuItem keyEquivalent], (unsigned long)[menuItem keyEquivalentModifierMask]);
         

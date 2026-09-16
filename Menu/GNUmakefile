@@ -146,19 +146,19 @@ endif
 ifeq ($(UNAME_S),FreeBSD)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_BSD_SOURCE -I.
 	ADDITIONAL_CPPFLAGS = $(DBUS_CFLAGS)
-	Menu_TOOL_LIBS += -lexecinfo
+	Menu_TOOL_LIBS += -lexecinfo -lintl
 endif
 ifeq ($(UNAME_S),NextBSD)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_BSD_SOURCE -I.
 	ADDITIONAL_CPPFLAGS = $(DBUS_CFLAGS)
-	Menu_TOOL_LIBS += -lexecinfo
+	Menu_TOOL_LIBS += -lexecinfo -lintl
 	Menu_GUI_LIBS += -L/usr/lib/system
 	Menu_LDFLAGS += -Wl,-rpath,/usr/lib/system
 endif
 ifeq ($(UNAME_S),OpenBSD)
 	ADDITIONAL_OBJCFLAGS = -Wall -Wextra -O2 -fobjc-runtime=gnustep-2.0 -fobjc-arc -Wno-unused-parameter -D_BSD_SOURCE -I.
 	ADDITIONAL_CPPFLAGS = $(DBUS_CFLAGS)
-	Menu_TOOL_LIBS += -L/usr/local/lib -lexecinfo
+	Menu_TOOL_LIBS += -L/usr/local/lib -lexecinfo -lintl
 	Menu_GUI_LIBS += -lc++abi
 endif
 

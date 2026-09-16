@@ -8,6 +8,8 @@
 #import "DBusMenuShortcutParser.h"
 #import <X11/Xlib.h>
 #import <X11/keysym.h>
+#include <libintl.h>
+#include <locale.h>
 
 /* Keysym ranges used to classify numeric shortcut values sent by
  * GTK / Canonical AppMenu clients.  GDK key values (which are what
@@ -45,6 +47,29 @@ static KeysymModEntry const modifier_map[] = {
 
 #define NUM_MODIFIER_MAP (sizeof(modifier_map) / sizeof(modifier_map[0]))
 
+
+/* The English names GTK renders accelerator labels from.  Every one of them
+ * is translated with the "keyboard label" message context in GTK's own
+ * catalogue, which is how "Strg+Umschalt+Entf" reaches us. */
+static char const * const gtk_keyboard_labels[] = {
+    "Ctrl", "Shift", "Alt", "Super", "Meta", "Hyper",
+    "Space", "Backslash", "Backspace", "Delete", "Return", "Enter", "Esc",
+    "Home", "End", "Page_Up", "Page_Down", "Insert", "Tab",
+    "Up", "Down", "Left", "Right",
+    "KP_Space", "KP_Tab", "KP_Enter", "KP_Home", "KP_Left", "KP_Up",
+    "KP_Right", "KP_Down", "KP_Page_Up", "KP_Page_Down", "KP_End",
+    "KP_Begin", "KP_Insert", "KP_Delete",
+};
+
+#define NUM_GTK_KEYBOARD_LABELS \
+    (sizeof(gtk_keyboard_labels) / sizeof(gtk_keyboard_labels[0]))
+
+/* GTK's message catalogues, newest first: an app may be built against any of
+ * them and they all translate the same message context. */
+static char const * const gtk_text_domains[] = { "gtk40", "gtk30", "gtk20" };
+
+#define NUM_GTK_TEXT_DOMAINS \
+    (sizeof(gtk_text_domains) / sizeof(gtk_text_domains[0]))
 
 @implementation DBusMenuShortcutParser
 
@@ -208,7 +233,7 @@ static KeysymModEntry const modifier_map[] = {
                 closeRange.location > openRange.location) {
                 NSRange modRange = NSMakeRange(openRange.location + 1, 
                                                closeRange.location - openRange.location - 1);
-                NSString *modName = [work substringWithRange:modRange];
+                NSString *modName = [self canonicalGTKKeyName:[work substringWithRange:modRange]];
                 NSString *lowerMod = [modName lowercaseString];
                 
                 if ([lowerMod isEqualToString:@"control"] || [lowerMod isEqualToString:@"primary"] ||
@@ -247,6 +272,12 @@ static KeysymModEntry const modifier_map[] = {
             NSString *cleanPart = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
             NSDebugLog(@"DBusMenuShortcutParser: Processing key combo part: '%@'", cleanPart);
             
+            /* GTK renders x-canonical-accel with gtk_accelerator_get_label(),
+             * so both the modifiers and the key arrive in the user's language
+             * ("Umschalt+Strg+Entf"); put them back into the English names
+             * the matching below is written against. */
+            cleanPart = [self canonicalGTKKeyName:cleanPart];
+
             // Case-insensitive modifier matching for Canonical AppMenu compatibility
             // Also handle "_L" and "_R" suffix variants (e.g. "Control_L", "Shift_R")
             NSString *lowerPart = [cleanPart lowercaseString];
@@ -283,61 +314,124 @@ static KeysymModEntry const modifier_map[] = {
     return @{@"key": key, @"modifiers": @(modifierMask)};
 }
 
-+ (NSString *)normalizeKeyName:(NSString *)keyName
+/* X11 keysym names that have no printable character.  They are returned
+ * unchanged so that both the menu renderer and XStringToKeysym() - which is
+ * what the global key grab needs - recognise them again. */
+/* Reverse of gtk_accelerator_get_label(): the translated label, lowercased,
+ * mapped back to the English name.  Built from GTK's own catalogue so it
+ * covers every language GTK ships rather than a table maintained here. */
++ (NSDictionary *)localizedGTKKeyNames
 {
-    if (!keyName || [keyName length] == 0) {
-        return @"";
+    static NSDictionary *names = nil;
+    static NSString *builtForLocale = nil;
+
+    /* GNUstep does not initialise the C locale, so LC_MESSAGES would still be
+     * "C" and GTK's catalogue would answer in English while the app speaks
+     * the user's language. */
+    const char *localeName = setlocale(LC_MESSAGES, NULL);
+    if (localeName == NULL || strcmp(localeName, "C") == 0
+            || strcmp(localeName, "POSIX") == 0) {
+        localeName = setlocale(LC_MESSAGES, "");
     }
-    
-    // Normalise to lowercase for case-insensitive matching
-    NSString *normalized = [keyName lowercaseString];
-    
-    // Handle special keys - also check common GTK-X11 keysym names
-    if ([normalized isEqualToString:@"return"] || [normalized isEqualToString:@"enter"] ||
-        [normalized isEqualToString:@"kp_enter"]) {
-        return @"\r";
-    } else if ([normalized isEqualToString:@"tab"] || [normalized isEqualToString:@"kpad_tab"]) {
-        return @"\t";
-    } else if ([normalized isEqualToString:@"space"] || [normalized isEqualToString:@"kpad_space"]) {
-        return @" ";
-    } else if ([normalized isEqualToString:@"escape"] || [normalized isEqualToString:@"esc"]) {
-        return @"\033";
-    } else if ([normalized isEqualToString:@"backspace"] || [normalized isEqualToString:@"back_space"] ||
-               [normalized isEqualToString:@"back"]) {
-        return @"\b";
-    } else if ([normalized isEqualToString:@"delete"] || [normalized isEqualToString:@"delete_key"]) {
-        return @"\177";
-    } else if ([normalized isEqualToString:@"page_up"] || [normalized isEqualToString:@"prior"]) {
-        return @"\x7f";
-    } else if ([normalized isEqualToString:@"page_down"] || [normalized isEqualToString:@"next"]) {
-        return @"\x7f";
-    } else if ([normalized isEqualToString:@"home"]) {
-        return @"\x7f";
-    } else if ([normalized isEqualToString:@"end"]) {
-        return @"\x7f";
-    } else if ([normalized hasPrefix:@"f"] && [normalized length] >= 2 && [normalized length] <= 4 &&
-               [normalized characterAtIndex:1] >= '0' && [normalized characterAtIndex:1] <= '9') {
-        // Function keys F1-F24 - return as is
-        // GTK may send "F1" or "f1", and we preserve the lowercase format
-        return normalized;
+
+    /* The catalogue answers in whatever LC_MESSAGES is set to; a language
+     * change has to rebuild the map. */
+    NSString *locale = localeName ? [NSString stringWithUTF8String:localeName] : @"";
+
+    if (names != nil && [builtForLocale isEqualToString:locale]) {
+        return names;
     }
-    
-    // Single character - ensure lowercase
-    if ([normalized length] == 1) {
-        unichar c = [normalized characterAtIndex:0];
-        if (c >= 'A' && c <= 'Z') {
-            c = c - 'A' + 'a';
+
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < NUM_GTK_KEYBOARD_LABELS; i++) {
+        const char *english = gtk_keyboard_labels[i];
+
+        /* GNU gettext encodes a message context as "context\004msgid" and
+         * returns that whole string again when there is no translation. */
+        char msgid[64];
+        snprintf(msgid, sizeof(msgid), "keyboard label%c%s", '\004', english);
+
+        for (NSUInteger d = 0; d < NUM_GTK_TEXT_DOMAINS; d++) {
+            const char *translated = dgettext(gtk_text_domains[d], msgid);
+            if (translated == NULL || strcmp(translated, msgid) == 0) {
+                continue;
+            }
+
+            NSString *localized = [[NSString stringWithUTF8String:translated] lowercaseString];
+            if ([localized length] > 0 && [map objectForKey:localized] == nil) {
+                [map setObject:[NSString stringWithUTF8String:english] forKey:localized];
+            }
+            break;
         }
-        return [NSString stringWithCharacters:&c length:1];
     }
-    
-    // Multi-character key names that aren't special keys.
-    // Many GTK apps send keysym names like "KP_Add", "minus", "equal", "bracketleft" etc.
-    // Try to map these to their single-character equivalents.
-    static NSDictionary *keySymToCharMap = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        keySymToCharMap = @{
+
+    names = [[NSDictionary alloc] initWithDictionary:map];
+    builtForLocale = [[NSString alloc] initWithString:locale];
+    NSDebugLog(@"DBusMenuShortcutParser: %lu localized GTK key names for locale '%@'",
+          (unsigned long)[names count], locale);
+    return names;
+}
+
++ (NSString *)canonicalGTKKeyName:(NSString *)name
+{
+    if ([name length] == 0) {
+        return name;
+    }
+
+    NSString *english = [[self localizedGTKKeyNames] objectForKey:[name lowercaseString]];
+    return english ?: name;
+}
+
++ (NSString *)namedKeyEquivalentFor:(NSString *)lowerName
+{
+    static NSDictionary *namedKeys = nil;
+
+    /* The cache takes ownership explicitly rather than storing the literal,
+     * so it survives a pool drain whether or not this file is compiled with
+     * ARC (the unit test includes it without). */
+    if (namedKeys == nil) {
+        NSDictionary *keys = @{
+            @"up":          @"Up",
+            @"down":        @"Down",
+            @"left":        @"Left",
+            @"right":       @"Right",
+            @"kp_up":       @"Up",
+            @"kp_down":     @"Down",
+            @"kp_left":     @"Left",
+            @"kp_right":    @"Right",
+            @"home":        @"Home",
+            @"kp_home":     @"Home",
+            @"end":         @"End",
+            @"kp_end":      @"End",
+            @"page_up":     @"Page_Up",
+            @"prior":       @"Page_Up",
+            @"kp_page_up":  @"Page_Up",
+            @"page_down":   @"Page_Down",
+            @"next":        @"Page_Down",
+            @"kp_page_down":@"Page_Down",
+            @"insert":      @"Insert",
+            @"kp_insert":   @"Insert",
+            @"delete":      @"Delete",
+            @"delete_key":  @"Delete",
+            @"kp_delete":   @"Delete",
+            @"menu":        @"Menu",
+            @"print":       @"Print",
+            @"pause":       @"Pause",
+        };
+        namedKeys = [[NSDictionary alloc] initWithDictionary:keys];
+    }
+
+    return [namedKeys objectForKey:lowerName];
+}
+
+/* GTK / X11 spell punctuation keys out ("equal", "minus"); a menu has to show
+ * the character the user actually presses. */
++ (NSString *)characterKeyEquivalentFor:(NSString *)lowerName
+{
+    static NSDictionary *characterKeys = nil;
+
+    if (characterKeys == nil) {
+        NSDictionary *keys = @{
             @"minus": @"-",
             @"equal": @"=",
             @"bracketleft": @"[",
@@ -354,7 +448,7 @@ static KeysymModEntry const modifier_map[] = {
             @"at": @"@",
             @"numbersign": @"#",
             @"dollar": @"$",
-            @"percent": @"%%",
+            @"percent": @"%",
             @"asciicircum": @"^",
             @"ampersand": @"&",
             @"asterisk": @"*",
@@ -371,9 +465,13 @@ static KeysymModEntry const modifier_map[] = {
             @"question": @"?",
             @"bar": @"|",
             @"kpad_add": @"+",
+            @"kp_add": @"+",
             @"kpad_subtract": @"-",
+            @"kp_subtract": @"-",
             @"kpad_multiply": @"*",
+            @"kp_multiply": @"*",
             @"kpad_divide": @"/",
+            @"kp_divide": @"/",
             @"kpad_0": @"0",
             @"kpad_1": @"1",
             @"kpad_2": @"2",
@@ -385,27 +483,170 @@ static KeysymModEntry const modifier_map[] = {
             @"kpad_8": @"8",
             @"kpad_9": @"9",
         };
-    });
-    
-    NSString *mapped = [keySymToCharMap objectForKey:normalized];
-    if (mapped) {
-        return mapped;
+        characterKeys = [[NSDictionary alloc] initWithDictionary:keys];
+    }
+
+    return [characterKeys objectForKey:lowerName];
+}
+
++ (NSString *)functionKeyEquivalentFor:(NSString *)lowerName
+{
+    if ([lowerName length] < 2 || [lowerName length] > 3
+            || [lowerName characterAtIndex:0] != 'f') {
+        return nil;
+    }
+
+    NSString *digits = [lowerName substringFromIndex:1];
+    NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    if ([digits rangeOfCharacterFromSet:nonDigits].location != NSNotFound) {
+        return nil;
+    }
+
+    int number = [digits intValue];
+    if (number < 1 || number > 35) {
+        return nil;
+    }
+
+    return [NSString stringWithFormat:@"F%d", number];
+}
+
++ (BOOL)isFunctionKeyEquivalent:(NSString *)keyEquivalent
+{
+    if ([keyEquivalent length] == 0) {
+        return NO;
+    }
+
+    return [self functionKeyEquivalentFor:[keyEquivalent lowercaseString]] != nil;
+}
+
++ (BOOL)shouldRegisterGlobalShortcutForKey:(NSString *)keyEquivalent
+                                 modifiers:(NSUInteger)modifierMask
+{
+    if ([keyEquivalent length] == 0) {
+        return NO;
+    }
+
+    /* A bare or Shift-only key would be grabbed away from every text field on
+     * the desktop.  Function keys are the exception: an exported menu bar
+     * takes the toolkit's own accelerator group with it, so nothing else can
+     * still deliver them to the application. */
+    if (modifierMask == 0 || modifierMask == NSShiftKeyMask) {
+        return [self isFunctionKeyEquivalent:keyEquivalent];
+    }
+
+    return YES;
+}
+
++ (NSString *)normalizeKeyName:(NSString *)keyName
+{
+    if (!keyName || [keyName length] == 0) {
+        return @"";
     }
     
-    // Last resort: if it looks like a multi-character keysym name, try to
-    // extract a single character by checking if X11 can translate it
-    if ([normalized length] > 1) {
-        // Try XStringToKeysym then back to character - only for ASCII printable
-        KeySym sym = XStringToKeysym([normalized UTF8String]);
-        if (sym != NoSymbol && sym >= 0x20 && sym <= 0x7E) {
+    // Normalise to lowercase for case-insensitive matching
+    NSString *normalized = [[self canonicalGTKKeyName:keyName] lowercaseString];
+    
+    // Handle special keys - also check common GTK-X11 keysym names
+    if ([normalized isEqualToString:@"return"] || [normalized isEqualToString:@"enter"] ||
+        [normalized isEqualToString:@"kp_enter"] || [normalized isEqualToString:@"kpad_enter"]) {
+        return @"\r";
+    } else if ([normalized isEqualToString:@"tab"] || [normalized isEqualToString:@"kpad_tab"]) {
+        return @"\t";
+    } else if ([normalized isEqualToString:@"space"] || [normalized isEqualToString:@"kpad_space"]) {
+        return @" ";
+    } else if ([normalized isEqualToString:@"escape"] || [normalized isEqualToString:@"esc"]) {
+        return @"\033";
+    } else if ([normalized isEqualToString:@"backspace"] || [normalized isEqualToString:@"back_space"] ||
+               [normalized isEqualToString:@"back"]) {
+        return @"\b";
+    }
+
+    NSString *functionKey = [self functionKeyEquivalentFor:normalized];
+    if (functionKey) {
+        return functionKey;
+    }
+
+    NSString *namedKey = [self namedKeyEquivalentFor:normalized];
+    if (namedKey) {
+        return namedKey;
+    }
+
+    NSString *characterKey = [self characterKeyEquivalentFor:normalized];
+    if (characterKey) {
+        return characterKey;
+    }
+    
+    // Single character - ensure lowercase
+    if ([normalized length] == 1) {
+        return normalized;
+    }
+    
+    /* Unknown multi-character keysym name: keep it when X11 knows it (the grab
+     * needs the name, not a character), otherwise use the character it
+     * stands for. */
+    KeySym sym = XStringToKeysym([keyName UTF8String]);
+    if (sym == NoSymbol) {
+        sym = XStringToKeysym([normalized UTF8String]);
+    }
+    if (sym != NoSymbol) {
+        if (sym >= 0x20 && sym <= 0x7E) {
             unichar c = (unichar)sym;
             return [NSString stringWithCharacters:&c length:1];
         }
-        // Fall back to first character
-        return [normalized substringToIndex:1];
+        char *canonical = XKeysymToString(sym);
+        if (canonical) {
+            return [NSString stringWithUTF8String:canonical];
+        }
     }
-    
-    return @"";
+
+    NSDebugLog(@"DBusMenuShortcutParser: Unknown key name '%@' - using its first character", keyName);
+    return [normalized substringToIndex:1];
+}
+
++ (KeySym)keysymForKeyEquivalent:(NSString *)keyEquivalent
+{
+    if ([keyEquivalent length] == 0) {
+        return NoSymbol;
+    }
+
+    if ([keyEquivalent length] == 1) {
+        unichar c = [keyEquivalent characterAtIndex:0];
+
+        switch (c) {
+            case '\r': case '\n': return XK_Return;
+            case '\t':            return XK_Tab;
+            case '\033':          return XK_Escape;
+            case '\b':            return XK_BackSpace;
+            case '\177':          return XK_Delete;
+            default: break;
+        }
+
+        /* X11 keysyms coincide with the code point over ASCII and Latin-1, so
+         * a printable key equivalent needs no name lookup at all - and for
+         * "=" or "-" there is none, X11 only knows "equal" and "minus". */
+        if (c >= 0x20 && c <= 0xFF) {
+            if (c >= 'A' && c <= 'Z') {
+                c = c - 'A' + 'a';
+            }
+            return (KeySym)c;
+        }
+
+        return NoSymbol;
+    }
+
+    /* Multi-character key equivalents are X11 keysym names ("Up", "Page_Up",
+     * "F5"), which normalizeKeyName: has already canonicalised. */
+    KeySym sym = XStringToKeysym([keyEquivalent UTF8String]);
+    if (sym != NoSymbol) {
+        return sym;
+    }
+
+    NSString *canonical = [self normalizeKeyName:keyEquivalent];
+    if (![canonical isEqualToString:keyEquivalent]) {
+        return [self keysymForKeyEquivalent:canonical];
+    }
+
+    return NoSymbol;
 }
 
 + (NSString *)modifierMaskToString:(NSUInteger)modifierMask

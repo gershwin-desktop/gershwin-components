@@ -6,6 +6,7 @@
 
 
 #import "GTKMenuImporter.h"
+#import "DBusMenuShortcutParser.h"
 #import "GTKMenuParser.h"
 #import "GTKSubmenuManager.h"
 #import "GTKActionHandler.h"
@@ -894,12 +895,9 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error) {
         NSString *keyEquivalent = [item keyEquivalent];
         if (keyEquivalent && [keyEquivalent length] > 0) {
             NSUInteger modifierMask = [item keyEquivalentModifierMask];
-            
-            // Apply the same filtering as GTKActionHandler
-            BOOL hasShiftOnly = (modifierMask == NSShiftKeyMask);
-            BOOL hasNoModifiers = (modifierMask == 0);
-            
-            if (!hasNoModifiers && !hasShiftOnly) {
+
+            if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
+                                                                modifiers:modifierMask]) {
                 // Get the action name from the menu item's representedObject or title
                 NSString *actionName = [item representedObject];
                 if (!actionName) {

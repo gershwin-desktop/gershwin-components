@@ -6,6 +6,7 @@
 
 
 #import "DBusMenuImporter.h"
+#import "DBusMenuShortcutParser.h"
 #import "DBusMenuParser.h"
 #import "DBusMenuActionHandler.h"
 #import "DBusSubmenuManager.h"
@@ -1078,12 +1079,9 @@
         NSString *keyEquivalent = [item keyEquivalent];
         if (keyEquivalent && [keyEquivalent length] > 0) {
             NSUInteger modifierMask = [item keyEquivalentModifierMask];
-            
-            // Apply the same filtering as DBusMenuActionHandler
-            BOOL hasShiftOnly = (modifierMask == NSShiftKeyMask);
-            BOOL hasNoModifiers = (modifierMask == 0);
-            
-            if (!hasNoModifiers && !hasShiftOnly) {
+
+            if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
+                                                                modifiers:modifierMask]) {
                 NSDebugLog(@"DBusMenuImporter: Re-registering DBus shortcut: %@", [item title]);
                 
                 // Re-register through DBusMenuActionHandler
