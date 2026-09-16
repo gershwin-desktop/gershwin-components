@@ -9,11 +9,13 @@
 @interface GNUStepMenuActionHandler : NSObject
 + (void)performMenuAction:(id)sender;
 
-// Returns the cached connection WITHOUT performing a DO name lookup, or nil.
+// Returns a connection to an already looked-up client that the CALLING thread
+// can use, WITHOUT performing a DO name lookup, or nil.
 // Safe to call on the main thread even if the client is stalled.
 + (NSConnection *)existingConnectionForClient:(NSString *)clientName;
 
-// Records a connection discovered by a background probe so later main-thread
-// lookups are served from the cache and never block on the name server.
+// Records the client port of a connection made by any thread (typically a
+// background probe) so later main-thread lookups never block on the name
+// server.
 + (void)cacheConnection:(NSConnection *)connection forClient:(NSString *)clientName;
 @end

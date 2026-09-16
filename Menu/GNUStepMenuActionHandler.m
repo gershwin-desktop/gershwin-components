@@ -10,46 +10,63 @@
 #import <Foundation/NSConnection.h>
 #import <AppKit/NSMenuItem.h>
 
-// Static cache of connections to GNUstep clients (keyed by clientName)
-static NSMutableDictionary *connectionCache = nil;
-static NSLock *connectionCacheLock = nil;
+/* Send ports of GNUstep clients (keyed by clientName), not NSConnections: a
+   connection receives its replies on the default receive port of the thread
+   that created it, so a synchronous call such as rootProxy made on any other
+   thread raises "Waiting for reply ... in wrong thread".  Connections made by
+   the background probes therefore must never reach the main thread. */
+static NSMutableDictionary *sendPortCache = nil;
+static NSLock *sendPortCacheLock = nil;
 
 @implementation GNUStepMenuActionHandler
 
 + (void)initialize
 {
     if (self == [GNUStepMenuActionHandler class]) {
-        connectionCache = [[NSMutableDictionary alloc] init];
-        connectionCacheLock = [[NSLock alloc] init];
+        sendPortCache = [[NSMutableDictionary alloc] init];
+        sendPortCacheLock = [[NSLock alloc] init];
     }
 }
 
-/* Return the cached connection WITHOUT doing a name lookup, or nil if the
- * client is not yet cached.  The main-thread refresh path uses this so a
- * blocking connectionWithRegisteredName: can never run on the main thread. */
+/* Return a connection for the CALLING thread to a client whose port is
+   cached, WITHOUT doing a name lookup, or nil if the client is not yet cached.
+   The main-thread refresh path uses this so a blocking
+   connectionWithRegisteredName: can never run on the main thread. */
 + (NSConnection *)existingConnectionForClient:(NSString *)clientName
 {
-    [connectionCacheLock lock];
-    NSConnection *connection = [connectionCache objectForKey:clientName];
-    if (connection && ![connection isValid]) {
-        [connectionCache removeObjectForKey:clientName];
-        connection = nil;
+    [sendPortCacheLock lock];
+    NSPort *sendPort = [sendPortCache objectForKey:clientName];
+    if (sendPort && ![sendPort isValid]) {
+        [sendPortCache removeObjectForKey:clientName];
+        sendPort = nil;
     }
-    [connectionCacheLock unlock];
-    return connection;
+    [sendPortCacheLock unlock];
+    if (!sendPort) return nil;
+
+    /* Same receive port choice as connectionWithRegisteredName:, so this
+       thread gets the very connection that lookup would have returned
+       (NSConnection reuses the connection of a receive/send port pair). */
+    NSPort *receivePort = [[NSConnection defaultConnection] receivePort];
+    if (![receivePort isMemberOfClass:[sendPort class]]) {
+        NSLog(@"GNUStepMenuActionHandler: cannot reach menu client %@: its %@ does not match this thread's %@",
+              clientName, [sendPort class], [receivePort class]);
+        return nil;
+    }
+    return [NSConnection connectionWithReceivePort:receivePort sendPort:sendPort];
 }
 
-/* Record a connection discovered by a background probe, so the main thread
- * finds it cached and skips the blocking DO name lookup entirely. */
+/* Record the port of a connection discovered by a background probe, so the
+   main thread finds it cached and skips the blocking DO name lookup entirely. */
 + (void)cacheConnection:(NSConnection *)connection forClient:(NSString *)clientName
 {
-    if (!connection || !clientName) return;
-    [connectionCacheLock lock];
-    NSConnection *existing = [connectionCache objectForKey:clientName];
+    NSPort *sendPort = [connection sendPort];
+    if (!sendPort || !clientName) return;
+    [sendPortCacheLock lock];
+    NSPort *existing = [sendPortCache objectForKey:clientName];
     if (existing == nil || ![existing isValid]) {
-        [connectionCache setObject:connection forKey:clientName];
+        [sendPortCache setObject:sendPort forKey:clientName];
     }
-    [connectionCacheLock unlock];
+    [sendPortCacheLock unlock];
 }
 
 + (void)performMenuAction:(id)sender
