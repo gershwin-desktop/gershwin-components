@@ -42,7 +42,7 @@
  * station icon caching/prefetching, and communicates with the UI layer through
  * RadioManagerDelegate.
  *
- * Singleton — one instance serves the entire application.
+ * Singleton - one instance serves the entire application.
  */
 @interface RadioManager : NSObject <StreamPlayerDelegate>
 {

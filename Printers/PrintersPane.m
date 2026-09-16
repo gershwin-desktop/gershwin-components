@@ -6,8 +6,26 @@
 
 #import "PrintersPane.h"
 #import "PrintersController.h"
+#include <cups/cups.h>
 
 @implementation PrintersPane
+
++ (BOOL)isCompatible {
+    /* The pane needs a running CUPS daemon (it talks to cupsd over IPP).
+       Connect to the CUPS server; anything but a working connection means
+       the pane cannot operate. */
+    http_t *http = httpConnect2(cupsServer(), ippPort(), NULL, AF_UNSPEC,
+                                cupsEncryption(), 1, 30000, NULL);
+    if (http) {
+        httpClose(http);
+        return YES;
+    }
+    return NO;
+}
+
++ (NSString *)compatibilityReason {
+    return @"CUPS printing service not available - the cupsd daemon must be running";
+}
 
 - (id)initWithBundle:(NSBundle *)bundle
 {
@@ -59,18 +77,21 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
+- (void)willSelect
 {
-    [controller refreshPrinters:nil];
-    [controller showPrivilegeWarningIfNeeded];
-    [self setInitialKeyView:nil];
+    [super willSelect];
+    /* Re-checked on every selection because cupsd may have been started or
+       stopped since the pane was last shown. */
+    [controller checkCupsAndPrivileges];
 }
 
 - (void)didSelect
 {
     [super didSelect];
     [controller refreshPrinters:nil];
+    [self startRefreshTimer];
     [self setInitialKeyView:nil];
+    [controller showPrivilegeWarningIfNeeded];
 }
 
 - (void)willUnselect

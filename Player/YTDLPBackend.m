@@ -165,11 +165,11 @@ static NSString *const kDefaultFormat = @"best/best";
 - (void)cancel
 {
     if (!_isRunning) {
-        NSLog( @"[YTDLPBackend] cancel — not running, ignoring");
+        NSLog( @"[YTDLPBackend] cancel - not running, ignoring");
         return;
     }
 
-    NSLog( @"[YTDLPBackend] cancel — terminating task");
+    NSLog( @"[YTDLPBackend] cancel - terminating task");
 
     _isRunning = NO;
 
@@ -196,7 +196,7 @@ static NSString *const kDefaultFormat = @"best/best";
 
 - (BOOL)checkAvailability
 {
-    NSLog( @"[YTDLPBackend] checkAvailability — path: %@", _ytdlpPath);
+    NSLog( @"[YTDLPBackend] checkAvailability - path: %@", _ytdlpPath);
     @try {
         NSTask *task = [[[NSTask alloc] init] autorelease];
         [task setLaunchPath:_ytdlpPath];
@@ -207,11 +207,11 @@ static NSString *const kDefaultFormat = @"best/best";
         [task launch];
         [task waitUntilExit];
         BOOL available = ([task terminationStatus] == 0);
-        NSLog( @"[YTDLPBackend] checkAvailability — %@: %@",
+        NSLog( @"[YTDLPBackend] checkAvailability - %@: %@",
                     _ytdlpPath, available ? @"available" : @"not found");
         return available;
     } @catch (NSException *e) {
-        NSLog( @"[YTDLPBackend] checkAvailability — exception: %@", [e reason]);
+        NSLog( @"[YTDLPBackend] checkAvailability - exception: %@", [e reason]);
         return NO;
     }
 }
@@ -309,10 +309,10 @@ static NSString *const kDefaultFormat = @"best/best";
 
     NSTimeInterval duration = [durStr doubleValue];
 
-    NSLog( @"[YTDLPBackend]   parsed — url: %@", url);
-    NSLog( @"[YTDLPBackend]   parsed — title: %@", title);
-    NSLog( @"[YTDLPBackend]   parsed — thumbnail: %@", thumb);
-    NSLog( @"[YTDLPBackend]   parsed — duration: %.1fs", duration);
+    NSLog( @"[YTDLPBackend]   parsed - url: %@", url);
+    NSLog( @"[YTDLPBackend]   parsed - title: %@", title);
+    NSLog( @"[YTDLPBackend]   parsed - thumbnail: %@", thumb);
+    NSLog( @"[YTDLPBackend]   parsed - duration: %.1fs", duration);
 
     // Cleanup task resources
     [[NSNotificationCenter defaultCenter] removeObserver:self

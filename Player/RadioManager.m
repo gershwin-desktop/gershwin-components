@@ -550,7 +550,7 @@ static const int kMaxDownloadRetries = 3;
         }
     }
 
-    // Need to download — check if already downloading
+    // Need to download - check if already downloading
     @synchronized(_downloadingKeys) {
         if ([_downloadingKeys containsObject:key]) return;
         [_downloadingKeys addObject:key];
@@ -584,7 +584,7 @@ static const int kMaxDownloadRetries = 3;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
         dispatch_semaphore_wait(self->_iconSemaphore, DISPATCH_TIME_FOREVER);
         @autoreleasepool {
-            // Build candidate URLs — try the original first, then fallback
+            // Build candidate URLs - try the original first, then fallback
             NSMutableArray *candidates = [NSMutableArray array];
             [candidates addObject:urlStr];
 
@@ -617,7 +617,7 @@ static const int kMaxDownloadRetries = 3;
                 // Log every URL we attempt
                 NSLog(@"[RadioManager] Icon GET %@", [url absoluteString]);
 
-                // Use raw POSIX sockets for HTTP download — GNUstep's NSURLConnection
+                // Use raw POSIX sockets for HTTP download - GNUstep's NSURLConnection
                 // chokes on Cloudflare response headers ("Bad encoded word" from
                 // NSHTTPHeader's RFC 2047 parser), causing timeouts on port 80 and
                 // stalls on port 443. Raw sockets bypass this entirely.
@@ -646,10 +646,10 @@ static const int kMaxDownloadRetries = 3;
                         }
                     }
                     if (asText) {
-                        NSLog(@"[RadioManager] Skipping unrecognized format for %@ — got %tu bytes (hex: %@) text: %@",
+                        NSLog(@"[RadioManager] Skipping unrecognized format for %@ - got %tu bytes (hex: %@) text: %@",
                               [url absoluteString], [data length], hex, asText);
                     } else {
-                        NSLog(@"[RadioManager] Skipping unrecognized format for %@ — got %tu bytes (hex: %@)",
+                        NSLog(@"[RadioManager] Skipping unrecognized format for %@ - got %tu bytes (hex: %@)",
                               [url absoluteString], [data length], hex);
                     }
                     continue;
@@ -883,7 +883,7 @@ static const int kMaxDownloadRetries = 3;
     NSString *host = [url host];
     if (!host || [host length] == 0) return nil;
 
-    // Use HTTP even for HTTPS URLs — both TuneIn CDNs serve on port 80.
+    // Use HTTP even for HTTPS URLs - both TuneIn CDNs serve on port 80.
     // For truly HTTPS-only servers this won't work, but in practice
     // Cloudflare CDNs respond on both ports and we avoid the header parser.
     int port = 80;
@@ -1026,7 +1026,7 @@ static const int kMaxDownloadRetries = 3;
                                               length:totalLen - headerEnd - 4];
                 NSString *bodyStr = [[[NSString alloc] initWithData:body
                                                            encoding:NSUTF8StringEncoding] autorelease];
-                NSLog(@"[RadioManager] HTTP %d for %@ — body: %.200s",
+                NSLog(@"[RadioManager] HTTP %d for %@ - body: %.200s",
                       statusCode, [url absoluteString],
                       bodyStr ? [bodyStr UTF8String] : "(binary)");
             }

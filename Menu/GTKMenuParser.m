@@ -6,6 +6,7 @@
 
 
 #import "GTKMenuParser.h"
+#import "DBusMenuShortcutParser.h"
 #import "DBusConnection.h"
 #import "GTKActionHandler.h"
 #import "GTKSubmenuManager.h"
@@ -40,19 +41,28 @@
     
     // Build a dictionary of menu_id -> menu_items for easy lookup
     NSMutableDictionary *menuDict = [NSMutableDictionary dictionary];
-    
+
     for (id menuResult in resultArray) {
         if ([menuResult isKindOfClass:[NSArray class]] && [menuResult count] >= 3) {
             NSArray *menuResultArray = (NSArray *)menuResult;
             NSNumber *menuId = [menuResultArray objectAtIndex:0];
             NSNumber *revision = [menuResultArray objectAtIndex:1];  // Menu revision number
-            NSArray *menuItems = [menuResultArray objectAtIndex:2];
-            
+            id menuItems = [menuResultArray objectAtIndex:2];
+
+            /* Type-check before storing: a malformed reply delivering a
+               non-array here would raise NSInvalidArgumentException further
+               down when the parser fast-enumerates it. */
+            if (![menuItems isKindOfClass:[NSArray class]]) {
+                NSDebugLog(@"GTKMenuParser: Menu %@ (revision %@) has non-array items (%@), skipping",
+                      menuId, revision, [menuItems class]);
+                continue;
+            }
+
             // Store as tuple key (menu_id, revision) - this is what the data actually represents
             NSArray *menuKey = @[menuId, revision];
             [menuDict setObject:menuItems forKey:menuKey];
-            
-            NSDebugLog(@"GTKMenuParser: Menu ID %@ (revision %@) has %lu items", 
+
+            NSDebugLog(@"GTKMenuParser: Menu ID %@ (revision %@) has %lu items",
                   menuId, revision, (unsigned long)[menuItems count]);
         }
     }
@@ -68,6 +78,7 @@
     if (!rootMenu) {
         NSDebugLog(@"GTKMenuParser: Could not create root menu, creating placeholder");
         rootMenu = [[NSMenu alloc] initWithTitle:@"GTK App Menu"];
+        [rootMenu setAutoenablesItems:NO];
     }
     
     return rootMenu;
@@ -80,16 +91,60 @@
                 actionPath:(NSString *)actionPath
             dbusConnection:(GNUDBusConnection *)dbusConnection
 {
+    /* The menu graph comes straight from the (app-controlled) D-Bus reply.
+       A section/submenu reference that points back at its own group would
+       recurse forever (stack overflow), and a shared (DAG) reference re-expands
+       the whole subtree per reference.  Track expanded group IDs so each group
+       is expanded at most once per parse, and cap the depth defensively. */
+    NSMutableSet *visited = [NSMutableSet set];
+    return [self exploreGTKMenu:menuId
+                     withLabels:labelList
+                       menuDict:menuDict
+                    serviceName:serviceName
+                     actionPath:actionPath
+                 dbusConnection:dbusConnection
+                          depth:0
+                        visited:visited];
+}
+
++ (NSMenu *)exploreGTKMenu:(NSArray *)menuId
+                withLabels:(NSArray *)labelList
+                  menuDict:(NSMutableDictionary *)menuDict
+               serviceName:(NSString *)serviceName
+                actionPath:(NSString *)actionPath
+            dbusConnection:(GNUDBusConnection *)dbusConnection
+                     depth:(NSUInteger)depth
+                   visited:(NSMutableSet *)visited
+{
     NSDebugLog(@"GTKMenuParser: Exploring GTK menu %@ with labels %@", menuId, labelList);
-    
-    NSArray *menuItems = [menuDict objectForKey:menuId];
-    if (!menuItems) {
-        NSDebugLog(@"GTKMenuParser: No menu items found for menu ID %@", menuId);
+
+    if (depth > 32) {
+        NSDebugLog(@"GTKMenuParser: Menu nesting exceeds depth limit at %@ - stopping", menuId);
         return nil;
     }
+
+    if (![menuId isKindOfClass:[NSArray class]] || [menuId count] < 2) {
+        return nil;
+    }
+    NSString *groupKey = [NSString stringWithFormat:@"%@|%@",
+                          [menuId objectAtIndex:0], [menuId objectAtIndex:1]];
+    if ([visited containsObject:groupKey]) {
+        NSDebugLog(@"GTKMenuParser: Menu group %@ already expanded (cycle/share) - skipping", menuId);
+        return nil;
+    }
+    [visited addObject:groupKey];
+
+    id menuItemsObj = [menuDict objectForKey:menuId];
+    if (![menuItemsObj isKindOfClass:[NSArray class]]) {
+        NSDebugLog(@"GTKMenuParser: No menu items found for menu ID %@", menuId);
+        [visited removeObject:groupKey];
+        return nil;
+    }
+    NSArray *menuItems = (NSArray *)menuItemsObj;
     
     NSString *menuTitle = ([labelList count] > 0) ? [labelList lastObject] : @"GTK Menu";
     NSMenu *menu = [[NSMenu alloc] initWithTitle:menuTitle];
+    [menu setAutoenablesItems:NO];
     
     NSDebugLog(@"GTKMenuParser: Processing %lu menu items for menu %@", 
           (unsigned long)[menuItems count], menuId);
@@ -144,7 +199,9 @@
                                                   menuDict:menuDict
                                                serviceName:serviceName
                                                 actionPath:actionPath
-                                            dbusConnection:dbusConnection];
+                                            dbusConnection:dbusConnection
+                                                     depth:depth + 1
+                                                   visited:visited];
                 
                 if (sectionMenu) {
                     NSDebugLog(@"GTKMenuParser: Section menu %@ has %lu items, adding to parent", 
@@ -182,23 +239,11 @@
             if (accel && [accel length] > 0) {
                 NSString *keyEquivalent = [self parseKeyboardShortcut:accel];
                 if (keyEquivalent && [keyEquivalent length] > 0) {
+                    NSUInteger displayModifierMask = [self displayModifiersForAccel:accel];
                     [item setKeyEquivalent:keyEquivalent];
-                    NSUInteger modifierMask = [self parseKeyboardModifiers:accel];
-                    
-                    // WORKAROUND: GNUstep doesn't display Control shortcuts properly in menus
-                    // For display: Convert NSControlKeyMask to NSCommandKeyMask 
-                    NSUInteger displayModifierMask = modifierMask;
-                    BOOL hasControlKey = (modifierMask & NSControlKeyMask) != 0;
-                    
-                    if (hasControlKey) {
-                        // Display as Command in menu (which GNUstep renders properly)
-                        displayModifierMask = (modifierMask & ~NSControlKeyMask) | NSCommandKeyMask;
-                        NSDebugLog(@"GTKMenuParser: Converting Control to Command for display");
-                    }
-                    
                     [item setKeyEquivalentModifierMask:displayModifierMask];
-                    NSDebugLog(@"GTKMenuParser: Added shortcut '%@' to menu item '%@' (keyEq='%@', modifiers=%lu, display=%lu)", 
-                          accel, displayLabel, keyEquivalent, (unsigned long)modifierMask, (unsigned long)displayModifierMask);
+                    NSDebugLog(@"GTKMenuParser: Added shortcut '%@' to menu item '%@' (keyEq='%@', display=%lu)",
+                          accel, displayLabel, keyEquivalent, (unsigned long)displayModifierMask);
                 }
             }
             
@@ -227,8 +272,10 @@
                                                       menuDict:menuDict
                                                    serviceName:serviceName
                                                     actionPath:actionPath
-                                                dbusConnection:dbusConnection];
-                        
+                                                dbusConnection:dbusConnection
+                                                         depth:depth + 1
+                                                       visited:visited];
+
                         if (submenu) {
                             [item setSubmenu:submenu];
                             NSDebugLog(@"GTKMenuParser: Added immediate submenu to item '%@'", displayLabel);
@@ -269,15 +316,18 @@
                                                           menuDict:menuDict
                                                        serviceName:serviceName
                                                         actionPath:actionPath
-                                                    dbusConnection:dbusConnection];
+                                                    dbusConnection:dbusConnection
+                                                             depth:depth + 1
+                                                           visited:visited];
                             
                             if (submenu) {
                                 [item setSubmenu:submenu];
                                 NSDebugLog(@"GTKMenuParser: Added loaded submenu to item '%@'", displayLabel);
                             } else {
-                                NSDebugLog(@"GTKMenuParser: Failed to create loaded submenu for item '%@', falling back to lazy loading", displayLabel);
+                                 NSDebugLog(@"GTKMenuParser: Failed to create loaded submenu for item '%@', falling back to lazy loading", displayLabel);
                                 // Fall back to lazy loading
                                 NSMenu *lazySubmenu = [[NSMenu alloc] initWithTitle:displayLabel];
+                                [lazySubmenu setAutoenablesItems:NO];
                                 [GTKSubmenuManager setupSubmenu:lazySubmenu
                                                      forMenuItem:item
                                                      serviceName:serviceName
@@ -288,9 +338,10 @@
                                                         menuDict:menuDict];
                             }
                         } else {
-                            NSDebugLog(@"GTKMenuParser: Failed to load additional menu group %@, setting up lazy loading", groupId);
+                             NSDebugLog(@"GTKMenuParser: Failed to load additional menu group %@, setting up lazy loading", groupId);
                             // Set up lazy loading as fallback
                             NSMenu *lazySubmenu = [[NSMenu alloc] initWithTitle:displayLabel];
+                            [lazySubmenu setAutoenablesItems:NO];
                             [GTKSubmenuManager setupSubmenu:lazySubmenu
                                                  forMenuItem:item
                                                  serviceName:serviceName
@@ -312,6 +363,9 @@
     }
     
     NSDebugLog(@"GTKMenuParser: Created GTK menu '%@' with %lu items", menuTitle, (unsigned long)[menu numberOfItems]);
+    /* Group fully expanded: allow other parents to reference it (sharing),
+       while the in-progress registration above still catches true cycles. */
+    [visited removeObject:groupKey];
     return menu;
 }
 
@@ -326,10 +380,16 @@
             NSNumber *menuId1 = [menuEntry objectAtIndex:1];
             NSArray *menuId = @[menuId0, menuId1];
             id menuItems = [menuEntry objectAtIndex:2];
-            
+
+            if (![menuItems isKindOfClass:[NSArray class]]) {
+                NSDebugLog(@"GTKMenuParser: Menu (%@, %@) has non-array items (%@), skipping",
+                      menuId0, menuId1, [menuItems class]);
+                continue;
+            }
+
             [menuDict setObject:menuItems forKey:menuId];
-            NSDebugLog(@"GTKMenuParser: Added menu (%@, %@) with %lu items to dict", 
-                  menuId0, menuId1, 
+            NSDebugLog(@"GTKMenuParser: Added menu (%@, %@) with %lu items to dict",
+                  menuId0, menuId1,
                   [menuItems isKindOfClass:[NSArray class]] ? (unsigned long)[menuItems count] : 0);
         }
     }
@@ -351,6 +411,7 @@
     NSArray *itemArray = (NSArray *)modelItem;
     NSString *menuTitle = isRoot ? @"GTK Menu" : @"Submenu";
     NSMenu *menu = [[NSMenu alloc] initWithTitle:menuTitle];
+    [menu setAutoenablesItems:NO];
     
     for (id item in itemArray) {
         NSMenuItem *menuItem = [self createMenuItemFromGModelItem:item 
@@ -463,10 +524,12 @@
     
     // Set key equivalent if available
     if (keyEquiv && [keyEquiv length] > 0) {
-        // TODO: Parse GTK-style accelerator format (e.g., "<Control>s")
-        // For now, just use first character
-        NSString *key = [keyEquiv substringToIndex:1];
-        [menuItem setKeyEquivalent:[key lowercaseString]];
+        NSString *key = [self parseKeyboardShortcut:keyEquiv];
+        if ([key length] > 0) {
+            [menuItem setKeyEquivalent:key];
+            [menuItem setKeyEquivalentModifierMask:
+                [self displayModifiersForAccel:keyEquiv]];
+        }
     }
     
     // Set up action if we have one
@@ -493,6 +556,7 @@
         if (!submenu) {
             // Create placeholder submenu
             submenu = [[NSMenu alloc] initWithTitle:label];
+            [submenu setAutoenablesItems:NO];
         }
         
         [menuItem setSubmenu:submenu];
@@ -544,104 +608,35 @@
 
 + (NSString *)parseKeyboardShortcut:(NSString *)accel
 {
-    if (!accel || [accel length] == 0) {
+    if ([accel length] == 0) {
         return @"";
     }
-    
-    NSString *key = accel;
-    
-    // Handle x-canonical-accel format: "Ctrl+O", "Shift+Ctrl+V", etc.
-    if ([accel containsString:@"+"]) {
-        // Split by + and get the last component (the actual key)
-        NSArray *components = [accel componentsSeparatedByString:@"+"];
-        if ([components count] > 0) {
-            key = [components lastObject];
-        }
-    } else {
-        // Handle GTK accelerator format: <Control>o, <Primary><Shift>n, <Alt>F4, etc.
-        // Remove modifier prefixes (case-insensitive)
-        key = [key stringByReplacingOccurrencesOfString:@"<Control>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Primary>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Shift>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Alt>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Meta>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
-        key = [key stringByReplacingOccurrencesOfString:@"<Super>" withString:@"" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [key length])];
+
+    return [[DBusMenuShortcutParser parseKeyCombo:accel] objectForKey:@"key"];
+}
+
+/* GNUstep draws a Control shortcut by slanting the key letter instead of
+ * showing a modifier, so the menu claims Command - which is what the user
+ * presses anyway, Command being Alt on this desktop. */
++ (NSUInteger)displayModifiersForAccel:(NSString *)accel
+{
+    NSUInteger modifierMask = [self parseKeyboardModifiers:accel];
+
+    if ((modifierMask & NSControlKeyMask) != 0) {
+        modifierMask = (modifierMask & ~NSControlKeyMask) | NSCommandKeyMask;
     }
-    
-    // Convert special keys - case-insensitive
-    NSString *lowerKey = [key lowercaseString];
-    if ([lowerKey isEqualToString:@"return"] || [lowerKey isEqualToString:@"enter"] ||
-        [lowerKey isEqualToString:@"kp_enter"]) {
-        return @"\r";
-    }
-    if ([lowerKey isEqualToString:@"tab"] || [lowerKey isEqualToString:@"kpad_tab"]) {
-        return @"\t";
-    }
-    if ([lowerKey isEqualToString:@"backspace"] || [lowerKey isEqualToString:@"back_space"] ||
-        [lowerKey isEqualToString:@"back"]) {
-        return @"\b";
-    }
-    if ([lowerKey isEqualToString:@"delete"] || [lowerKey isEqualToString:@"delete_key"]) {
-        return @"\x7f";
-    }
-    if ([lowerKey isEqualToString:@"escape"] || [lowerKey isEqualToString:@"esc"]) {
-        return @"\x1b";
-    }
-    if ([lowerKey isEqualToString:@"space"]) {
-        return @" ";
-    }
-    
-    // Function keys
-    if ([lowerKey hasPrefix:@"f"] && [lowerKey length] <= 4) {
-        NSString *fNumStr = [lowerKey substringFromIndex:1];
-        if ([fNumStr length] > 0) {
-            BOOL isNumeric = YES;
-            for (NSUInteger i = 0; i < [fNumStr length]; i++) {
-                if (![[NSCharacterSet decimalDigitCharacterSet] characterIsMember:[fNumStr characterAtIndex:i]]) {
-                    isNumeric = NO;
-                    break;
-                }
-            }
-            if (isNumeric) {
-                int fNum = [fNumStr intValue];
-                if (fNum >= 1 && fNum <= 24) {
-                    return lowerKey;
-                }
-            }
-        }
-    }
-    
-    // Return lowercase key for normal keys
-    return [key lowercaseString];
+
+    return modifierMask;
 }
 
 + (NSUInteger)parseKeyboardModifiers:(NSString *)accel
 {
-    if (!accel || [accel length] == 0) {
+    if ([accel length] == 0) {
         return 0;
     }
-    
-    NSUInteger modifiers = 0;
-    
-    // Case-insensitive matching for modifier names from Canonical AppMenu / GTK
-    NSString *lower = [accel lowercaseString];
-    
-    if ([lower containsString:@"<control>"] || [lower containsString:@"<primary>"] || 
-        [lower containsString:@"ctrl+"]) {
-        modifiers |= NSControlKeyMask;
-    }
-    if ([lower containsString:@"<shift>"] || [lower containsString:@"shift+"]) {
-        modifiers |= NSShiftKeyMask;
-    }
-    if ([lower containsString:@"<alt>"] || [lower containsString:@"alt+"]) {
-        modifiers |= NSAlternateKeyMask;
-    }
-    if ([lower containsString:@"<meta>"] || [lower containsString:@"<super>"] || 
-        [lower containsString:@"meta+"] || [lower containsString:@"super+"]) {
-        modifiers |= NSCommandKeyMask;
-    }
-    
-    return modifiers;
+
+    return [[[DBusMenuShortcutParser parseKeyCombo:accel]
+                objectForKey:@"modifiers"] unsignedIntegerValue];
 }
 
 @end

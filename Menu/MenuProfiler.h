@@ -1,6 +1,6 @@
 //
 //  MenuProfiler.h
-//  Menu — Lightweight CPU profiling instrumentation
+//  Menu - Lightweight CPU profiling instrumentation
 //
 //  Enabled at compile time with -DMENU_PROFILING=1.
 //  When disabled, all macros compile to nothing (zero overhead).

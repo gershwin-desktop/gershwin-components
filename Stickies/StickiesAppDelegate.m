@@ -42,7 +42,7 @@
 
     [self setupMenu];
 
-    // Clear stale database notes — controllers will register fresh documents
+    // Clear stale database notes - controllers will register fresh documents
     NSMutableArray *dbNotes = [[StickyNoteDatabase sharedDatabase] notes];
     NSArray *savedNotes = [[dbNotes copy] autorelease];
     [dbNotes removeAllObjects];

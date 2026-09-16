@@ -11,7 +11,7 @@
 "Vol:" = "Vol:";
 
 /* Status Messages */
-"Ready — open a media file to start playing" = "Ready — open a media file to start playing";
+"Ready - open a media file to start playing" = "Ready - open a media file to start playing";
 "Loading %@..." = "Loading %@...";
 "Loaded: %@" = "Loaded: %@";
 "Video file loaded (audio playback)" = "Video file loaded (audio playback)";

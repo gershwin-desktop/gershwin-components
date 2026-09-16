@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Placeholder app — main entry point.
+ * Placeholder app - main entry point.
  * Launches a window, reads install spec, installs packages if needed,
  * then runs the requested executable.
  */

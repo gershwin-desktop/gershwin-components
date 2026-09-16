@@ -9,6 +9,31 @@
 #import "NetworkBackend.h"
 #import <AppKit/AppKit.h>
 
+#pragma mark - Tool Lookup
+
+NSString *NetworkExecutablePath(NSString *name, NSArray *directories)
+{
+    NSMutableArray *searchPath = [NSMutableArray arrayWithArray:directories];
+    NSString *envPath = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"];
+    if (envPath) {
+        [searchPath addObjectsFromArray:[envPath componentsSeparatedByString:@":"]];
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *dir in searchPath) {
+        /* An empty PATH element means the current directory, which is
+           never where system network tools live. */
+        if ([dir length] == 0) {
+            continue;
+        }
+        NSString *candidate = [dir stringByAppendingPathComponent:name];
+        if ([fm isExecutableFileAtPath:candidate]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
 #pragma mark - IPConfiguration
 
 @implementation IPConfiguration
@@ -308,7 +333,7 @@
 @implementation NetworkConnection
 
 @synthesize uuid, identifier, name, type, autoConnect, interfaceName;
-@synthesize ssid, WLANSecurity, ipv4Config, ipv6Config;
+@synthesize ssid, WLANSecurity, clonedMacAddress, ipv4Config, ipv6Config;
 @synthesize eapMethod, identity, anonymousIdentity;
 @synthesize caCertPath, clientCertPath, privateKeyPath;
 
@@ -343,6 +368,7 @@
     [name release];
     [interfaceName release];
     [ssid release];
+    [clonedMacAddress release];
     [ipv4Config release];
     [ipv6Config release];
     [eapMethod release];
@@ -365,6 +391,7 @@
     copy.interfaceName = self.interfaceName;
     copy.ssid = self.ssid;
     copy.WLANSecurity = self.WLANSecurity;
+    copy.clonedMacAddress = self.clonedMacAddress;
     copy.ipv4Config = [[self.ipv4Config copy] autorelease];
     copy.ipv6Config = [[self.ipv6Config copy] autorelease];
     copy.eapMethod = self.eapMethod;

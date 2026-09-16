@@ -230,7 +230,7 @@
         }
 
         if (_audioStreamIndex < 0) {
-            NSLog(@"[StreamPlayer] No audio stream found — video-only mode");
+            NSLog(@"[StreamPlayer] No audio stream found - video-only mode");
         } else {
             // Set up audio codec
             AVCodecParameters *codecPar = fmtCtx->streams[_audioStreamIndex]->codecpar;
@@ -239,7 +239,7 @@
 
             const AVCodec *codec = avcodec_find_decoder(codecPar->codec_id);
             if (!codec) {
-                NSLog(@"[StreamPlayer] Audio codec not found — video-only mode");
+                NSLog(@"[StreamPlayer] Audio codec not found - video-only mode");
                 _audioStreamIndex = -1;
             } else {
                 _codecCtx = avcodec_alloc_context3(codec);
@@ -247,7 +247,7 @@
                     avcodec_parameters_to_context((AVCodecContext *)_codecCtx, codecPar);
                     ret = avcodec_open2((AVCodecContext *)_codecCtx, codec, NULL);
                     if (ret < 0) {
-                        NSLog(@"[StreamPlayer] Failed to open audio codec — video-only mode");
+                        NSLog(@"[StreamPlayer] Failed to open audio codec - video-only mode");
                         avcodec_free_context((AVCodecContext **)&_codecCtx);
                         _codecCtx = NULL;
                         _audioStreamIndex = -1;
@@ -331,7 +331,7 @@
             NSLog(@"[StreamPlayer] No video stream found, audio only");
         }
 
-        // Set up resampler (convert to stereo S16) — only if we have audio
+        // Set up resampler (convert to stereo S16) - only if we have audio
         if (_audioStreamIndex >= 0 && _codecCtx) {
             AVCodecContext *codecCtx = (AVCodecContext *)_codecCtx;
             AVChannelLayout outLayout = AV_CHANNEL_LAYOUT_STEREO;
@@ -341,7 +341,7 @@
                                       &codecCtx->ch_layout, codecCtx->sample_fmt, codecCtx->sample_rate,
                                       0, NULL);
             if (ret < 0 || swr_init((SwrContext *)_swrCtx) < 0) {
-                NSLog(@"[StreamPlayer] Failed to initialize resampler — audio disabled");
+                NSLog(@"[StreamPlayer] Failed to initialize resampler - audio disabled");
                 _swrCtx = NULL;
             }
         }
@@ -361,7 +361,7 @@
             return NO;
         }
 
-        // ---- Set up libao — only if we have audio ---- //
+        // ---- Set up libao - only if we have audio ---- //
         if (_audioStreamIndex >= 0 && _codecCtx && _swrCtx) {
             AVCodecContext *codecCtx = (AVCodecContext *)_codecCtx;
             int driver = ao_default_driver_id();
@@ -375,10 +375,10 @@
 
                 _aoDev = ao_open_live(driver, &aoFmt, NULL);
                 if (!_aoDev) {
-                    NSLog(@"[StreamPlayer] Failed to open audio device — video-only mode");
+                    NSLog(@"[StreamPlayer] Failed to open audio device - video-only mode");
                 }
             } else {
-                NSLog(@"[StreamPlayer] No audio output driver — video-only mode");
+                NSLog(@"[StreamPlayer] No audio output driver - video-only mode");
             }
         }
 
@@ -461,7 +461,7 @@
         if (_delegate != nil && [_delegate respondsToSelector:@selector(streamPlayerDidStop:)]) {
             NSUInteger gen = _generation;
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (self->_generation != gen) return;  // stale — a new stream opened
+                if (self->_generation != gen) return;  // stale - a new stream opened
                 [self->_delegate streamPlayerDidStop:self];
             });
         }
@@ -550,7 +550,7 @@
     @autoreleasepool {
         // Need at least a format context and a packet to decode anything.
         // Audio components (_codecCtx/_swrCtx/_aoDev) may be NULL for
-        // video-only files — that's fine, we'll just skip audio packets.
+        // video-only files - that's fine, we'll just skip audio packets.
         if (!_formatCtx || !_packet) {
             _isPlaying = NO;
             return;
@@ -561,7 +561,7 @@
         while (!_shouldStop) {
             if (!_formatCtx) break;
 
-            // Check pause state before each read — avoid blocking I/O while paused
+            // Check pause state before each read - avoid blocking I/O while paused
             if (_paused) {
                 [_pauseCondition lock];
                 while (_paused && !_shouldStop) {
@@ -639,7 +639,7 @@
         if (_delegate != nil && [_delegate respondsToSelector:@selector(streamPlayerDidStop:)]) {
             NSUInteger gen = _generation;
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (self->_generation != gen) return;  // stale — a new stream started
+                if (self->_generation != gen) return;  // stale - a new stream started
                 [self->_delegate streamPlayerDidStop:self];
             });
         }
@@ -746,7 +746,7 @@
 
 - (void)drainDecoders
 {
-    // Drain audio decoder — flush any buffered frames
+    // Drain audio decoder - flush any buffered frames
     if (_codecCtx) {
         AVCodecContext *codecCtx = (AVCodecContext *)_codecCtx;
         avcodec_send_packet(codecCtx, NULL);
@@ -877,7 +877,7 @@
         }
 
         // Pace frame dispatch based on PTS interval between consecutive
-        // frames — this keeps the decode loop running at real-time rate
+        // frames - this keeps the decode loop running at real-time rate
         // regardless of whether audio is present.
         if (hasPts && _lastFramePts > 0.0 && pts > _lastFramePts) {
             double sleepTime = pts - _lastFramePts;
@@ -886,7 +886,7 @@
             }
             _lastFramePts = pts;
         } else if (!hasPts && _frameDuration > 0.0) {
-            // Fallback: no valid PTS — use frame-rate duration
+            // Fallback: no valid PTS - use frame-rate duration
             if (_audioStreamIndex < 0) {
                 _accumulatedAudioTime += _frameDuration;
             }

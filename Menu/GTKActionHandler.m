@@ -8,6 +8,7 @@
 #import "GTKActionHandler.h"
 #import "DBusConnection.h"
 #import "X11ShortcutManager.h"
+#import "DBusMenuShortcutParser.h"
 #import "MenuUtils.h"
 #import "WindowMonitor.h"
 
@@ -72,14 +73,10 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
         NSDebugLog(@"GTKActionHandler: Registering shortcut for menu item '%@': key='%@' modifiers=%lu", 
               [menuItem title], keyEquivalent, (unsigned long)modifierMask);
         
-        // Only register shortcuts that have meaningful modifier keys to prevent capturing
-        // bare keys or Shift-only keys globally. Shift-only shortcuts should be handled
-        // locally by the application, not globally intercepted.
-        BOOL hasShiftOnly = (modifierMask == NSShiftKeyMask);
-        BOOL hasNoModifiers = (modifierMask == 0);
         BOOL hasCtrl = (modifierMask & NSControlKeyMask) != 0;
-        
-        if (!hasNoModifiers && !hasShiftOnly) {
+
+        if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
+                                                            modifiers:modifierMask]) {
             // Transform Ctrl+key shortcuts to Alt+key for global registration
             // This allows GIMP's Ctrl-N to be accessible globally as Alt-N
             NSUInteger globalModifierMask = modifierMask;
@@ -103,9 +100,8 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
                                                                  actionName:actionName
                                                              dbusConnection:dbusConnection];
         } else {
-            NSString *reason = hasNoModifiers ? @"no modifiers" : @"Shift-only modifier";
-            NSDebugLog(@"GTKActionHandler: Skipping registration of key '%@' for menu item '%@' - %@", 
-                  keyEquivalent, [menuItem title], reason);
+            NSDebugLog(@"GTKActionHandler: Skipping registration of key '%@' for menu item '%@' - it would be grabbed from every application",
+                  keyEquivalent, [menuItem title]);
         }
     }
     
@@ -207,7 +203,7 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
         // time.  If the app has since reconnected to D-Bus it will have a new unique name;
         // calling the old one returns "ServiceUnknown".  Additionally, the stored actionPath
         // is typically the _GTK_MENUBAR_OBJECT_PATH (org.gtk.Menus), NOT the
-        // _GTK_APPLICATION_OBJECT_PATH (org.gtk.Actions) — using the wrong path causes the
+        // _GTK_APPLICATION_OBJECT_PATH (org.gtk.Actions) - using the wrong path causes the
         // same error even when the service is reachable.
         unsigned long activeWindowId = [[WindowMonitor sharedMonitor] currentActiveWindow];
         if (activeWindowId != 0) {
@@ -237,7 +233,7 @@ static NSMutableSet *_servicesWithoutDescribeAction = nil;
                 }
             } else {
                 // Prefer the application object path (org.gtk.Actions) over the menubar
-                // object path (org.gtk.Menus) — they implement different D-Bus interfaces.
+                // object path (org.gtk.Menus) - they implement different D-Bus interfaces.
                 NSString *appPath = [MenuUtils getWindowProperty:activeWindowId
                                                        atomName:@"_GTK_APPLICATION_OBJECT_PATH"];
                 if (appPath && [appPath length] > 0) {

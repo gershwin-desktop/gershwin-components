@@ -31,7 +31,7 @@ int main(int argc, const char *argv[])
 
    [pool release];
 
-   // Run the application — createUI is called from applicationDidFinishLaunching:
+   // Run the application - createUI is called from applicationDidFinishLaunching:
    [[NSApplication sharedApplication] run];
    return 0;
 }

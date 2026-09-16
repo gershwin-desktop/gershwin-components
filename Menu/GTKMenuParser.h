@@ -54,5 +54,6 @@
 // Keyboard shortcut parsing helpers
 + (NSString *)parseKeyboardShortcut:(NSString *)accel;
 + (NSUInteger)parseKeyboardModifiers:(NSString *)accel;
++ (NSUInteger)displayModifiersForAccel:(NSString *)accel;
 
 @end

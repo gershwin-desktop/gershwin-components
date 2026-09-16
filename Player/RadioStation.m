@@ -22,7 +22,7 @@
         _name = [[dict objectForKey:@"text"] copy];
         _subtext = [[dict objectForKey:@"subtext"] copy];
 
-        // Try multiple keys for images — TuneIn API can vary
+        // Try multiple keys for images - TuneIn API can vary
         _imageURL = [[dict objectForKey:@"image"] copy];
         if (!_imageURL) _imageURL = [[dict objectForKey:@"logo"] copy];
         if (!_imageURL) _imageURL = [[dict objectForKey:@"image_url"] copy];
