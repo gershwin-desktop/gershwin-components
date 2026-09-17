@@ -1,4 +1,5 @@
 include $(GNUSTEP_MAKEFILES)/common.make
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 # NSS module naming conventions:
 # - FreeBSD: nss_<name>.so.1
@@ -27,6 +28,7 @@ install: $(NSS_LIB)
 	install -d $(INSTALL_DIR)
 	install -m 755 $(NSS_LIB) $(INSTALL_DIR)/$(NSS_LIB)
 ifeq ($(findstring linux,$(GNUSTEP_HOST_OS)),linux)
+	install -d /etc/ld.so.conf.d
 	@echo "$(INSTALL_DIR)" > /etc/ld.so.conf.d/gershwin.conf
 	ldconfig
 endif
@@ -35,3 +37,4 @@ ifeq ($(findstring freebsd,$(GNUSTEP_HOST_OS)),freebsd)
 	@echo "$(INSTALL_DIR)" > /usr/local/libdata/ldconfig/gershwin
 	ldconfig
 endif
+

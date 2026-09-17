@@ -12,6 +12,11 @@
 
 #import <Foundation/Foundation.h>
 
+/* Looks name up in directories, then in $PATH, on the file system only.
+   Backends use it instead of which(1) because they are created whenever
+   the pane is instantiated, and that must not spawn processes. */
+extern NSString *NetworkExecutablePath(NSString *name, NSArray *directories);
+
 // Network interface types
 typedef NS_ENUM(NSInteger, NetworkInterfaceType) {
     NetworkInterfaceTypeUnknown = 0,
@@ -160,6 +165,7 @@ typedef NS_ENUM(NSInteger, WLANSecurityType) {
     // WLAN specific
     NSString *ssid;
     WLANSecurityType WLANSecurity;
+    NSString *clonedMacAddress;
     
     // IP settings
     IPConfiguration *ipv4Config;
@@ -182,6 +188,7 @@ typedef NS_ENUM(NSInteger, WLANSecurityType) {
 @property (copy) NSString *interfaceName;
 @property (copy) NSString *ssid;
 @property WLANSecurityType WLANSecurity;
+@property (copy) NSString *clonedMacAddress;
 @property (retain) IPConfiguration *ipv4Config;
 @property (retain) IPConfiguration *ipv6Config;
 @property (copy) NSString *eapMethod;
@@ -232,6 +239,9 @@ typedef NS_ENUM(NSInteger, WLANSecurityType) {
 - (BOOL)connectToWLAN:(WLAN *)network withPassword:(NSString *)password;
 - (BOOL)disconnectFromWLAN;
 - (WLAN *)connectedWLAN;
+- (NSString *)connectedWLANSSID;
+- (NSString *)clonedMacAddressForSSID:(NSString *)ssid;
+- (BOOL)setClonedMacAddress:(NSString *)value forSSID:(NSString *)ssid;
 
 // Status
 - (NetworkConnectionState)globalConnectionState;

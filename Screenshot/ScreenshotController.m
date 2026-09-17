@@ -4,926 +4,647 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-
 #import "ScreenshotController.h"
-#import "ScreenshotCapture.h"
+#import "ScreenshotActionPanel.h"
 #import "AppearanceMetrics.h"
-#import <AppKit/NSApplication.h>
-#import <AppKit/NSWindow.h>
-#import <AppKit/NSPanel.h>
-#import <AppKit/NSButton.h>
-#import <AppKit/NSTextField.h>
-#import <AppKit/NSProgressIndicator.h>
-#import <AppKit/NSAlert.h>
-#import <AppKit/NSSavePanel.h>
-#import <AppKit/NSPasteboard.h>
-#import <Foundation/NSProcessInfo.h>
-#import <Foundation/NSFileManager.h>
-#import <Foundation/NSTimer.h>
-#import <unistd.h>
+
+/* Height of a one-line label in the 13pt system font without clipping. */
+static const CGFloat kLabelHeight = 17.0;
+static const CGFloat kDelayFieldWidth = 50.0;
+static const CGFloat kPreferencesWidth = 320.0;
+
+/* The countdown cannot be interrupted, so a typo must not lock the
+ * controls for a long time. */
+static const int kMaximumDelay = 60;
+
+/* orderOut: reaches the X server only once the run loop flushes, and the
+ * window manager and compositor then need to repaint what the window
+ * covered; capturing earlier would include our own window. */
+static const NSTimeInterval kWindowHideSettleDelay = 0.3;
 
 @implementation ScreenshotController
 
-@synthesize mainWindow;
-@synthesize statusLabel;
-@synthesize windowButton;
-@synthesize areaButton;
-@synthesize fullScreenButton;
-@synthesize saveButton;
-@synthesize copyButton;
-@synthesize delayField;
-@synthesize progressIndicator;
-
-- (id)init {
-    self = [super init];
-    if (self) {
-        currentMode = ScreenshotModeFullScreen;
-        lastSavedPath = nil;
-        capturedImage = nil;
-        capturedImagePNG = nil;
-        countdownTimer = nil;
-        delayCountdown = 0;
-    }
-    return self;
-}
-
-- (void)dealloc {
-    [lastSavedPath release];
+- (void)dealloc
+{
+    [countdownTimer invalidate];
+    [countdownTimer release];
+    [windowsHiddenForCapture release];
     [capturedImage release];
-    [capturedImagePNG release];
-    if (countdownTimer) {
-        [countdownTimer invalidate];
-        [countdownTimer release];
-    }
-    [ScreenshotCapture cleanupX11];
+    [capturedPNG release];
+    [ocrTask release];
+    [ocrInputPath release];
+    [statusLabel release];
+    [windowButton release];
+    [areaButton release];
+    [screenButton release];
+    [delayField release];
+    [progressIndicator release];
+    [frameCheckbox release];
+    [shadowCheckbox release];
+    [actionPanel release];
+    [preferencesWindow release];
+    [mainWindow release];
     [super dealloc];
 }
 
-- (void)createUI {
-    // Create main menu
-    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"MainMenu"];
-    
-    // Application menu
-    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"Screenshot" action:NULL keyEquivalent:@""];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Screenshot"];
-    [appMenu addItemWithTitle:@"About Screenshot" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+#pragma mark - User interface
+
+- (NSTextField *)labelWithString:(NSString *)string frame:(NSRect)frame
+{
+    NSTextField *label = [[NSTextField alloc] initWithFrame:frame];
+    [label setStringValue:string];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    [label setBezeled:NO];
+    [label setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+    // Opaque, so changing text never leaves stale glyphs behind
+    [label setDrawsBackground:YES];
+    [label setBackgroundColor:[NSColor windowBackgroundColor]];
+    return [label autorelease];
+}
+
+- (NSButton *)buttonWithTitle:(NSString *)title action:(SEL)action frame:(NSRect)frame
+{
+    NSButton *button = [[NSButton alloc] initWithFrame:frame];
+    [button setTitle:title];
+    [button setButtonType:NSMomentaryPushInButton];
+    [button setBezelStyle:NSRoundedBezelStyle];
+    [button setTarget:self];
+    [button setAction:action];
+    return [button autorelease];
+}
+
+- (NSButton *)checkboxWithTitle:(NSString *)title state:(BOOL)state
+                         action:(SEL)action frame:(NSRect)frame
+{
+    NSButton *checkbox = [[NSButton alloc] initWithFrame:frame];
+    [checkbox setButtonType:NSSwitchButton];
+    [checkbox setTitle:title];
+    [checkbox setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+    [checkbox setState:state ? NSOnState : NSOffState];
+    [checkbox setTarget:self];
+    [checkbox setAction:action];
+    return [checkbox autorelease];
+}
+
+- (NSMenu *)addSubmenuWithTitle:(NSString *)title toMenu:(NSMenu *)menu
+{
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:NULL keyEquivalent:@""];
+    NSMenu *submenu = [[NSMenu alloc] initWithTitle:title];
+    [item setSubmenu:submenu];
+    [menu addItem:item];
+    [item release];
+    return [submenu autorelease];
+}
+
+- (void)createMainMenu
+{
+    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"Screenshot"];
+
+    NSMenu *appMenu = [self addSubmenuWithTitle:@"Screenshot" toMenu:mainMenu];
+    [appMenu addItemWithTitle:NSLocalizedString(@"About Screenshot", @"")
+                       action:@selector(orderFrontStandardAboutPanel:)
+                keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
-    [appMenuItem setSubmenu:appMenu];
-    [mainMenu addItem:appMenuItem];
-    [appMenu release];
-    [appMenuItem release];
-    
-    [[NSApplication sharedApplication] setMainMenu:mainMenu];
+    // The controller is not in the responder chain, so target it directly
+    [[appMenu addItemWithTitle:NSLocalizedString(@"Preferences...", @"")
+                        action:@selector(showPreferences:)
+                 keyEquivalent:@","] setTarget:self];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [appMenu addItemWithTitle:NSLocalizedString(@"Hide Screenshot", @"")
+                       action:@selector(hide:) keyEquivalent:@"h"];
+    [appMenu addItemWithTitle:NSLocalizedString(@"Hide Others", @"")
+                       action:@selector(hideOtherApplications:) keyEquivalent:@""];
+    [appMenu addItemWithTitle:NSLocalizedString(@"Show All", @"")
+                       action:@selector(unhideAllApplications:) keyEquivalent:@""];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [appMenu addItemWithTitle:NSLocalizedString(@"Quit Screenshot", @"")
+                       action:@selector(terminate:) keyEquivalent:@"q"];
+
+    // Needed for the delay field's clipboard shortcuts
+    NSMenu *editMenu = [self addSubmenuWithTitle:NSLocalizedString(@"Edit", @"") toMenu:mainMenu];
+    [editMenu addItemWithTitle:NSLocalizedString(@"Cut", @"") action:@selector(cut:) keyEquivalent:@"x"];
+    [editMenu addItemWithTitle:NSLocalizedString(@"Copy", @"") action:@selector(copy:) keyEquivalent:@"c"];
+    [editMenu addItemWithTitle:NSLocalizedString(@"Paste", @"") action:@selector(paste:) keyEquivalent:@"v"];
+    [editMenu addItemWithTitle:NSLocalizedString(@"Select All", @"") action:@selector(selectAll:) keyEquivalent:@"a"];
+
+    NSMenu *windowMenu = [self addSubmenuWithTitle:NSLocalizedString(@"Window", @"") toMenu:mainMenu];
+    [windowMenu addItemWithTitle:NSLocalizedString(@"Minimize", @"")
+                          action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+    [windowMenu addItemWithTitle:NSLocalizedString(@"Close", @"")
+                          action:@selector(performClose:) keyEquivalent:@"w"];
+
+    [NSApp setMainMenu:mainMenu];
+    [NSApp setWindowsMenu:windowMenu];
     [mainMenu release];
-    
-    // Calculate window dimensions following metrics guidelines
-    // All spacing must be multiples of 4px and follow the dialog layout rules
-    CGFloat windowWidth = METRICS_WIN_MIN_WIDTH;
-    
-    // Build layout from bottom to top to calculate total height needed
-    // Bottom margin: METRICS_CONTENT_BOTTOM_MARGIN (20px)
-    CGFloat totalHeight = METRICS_CONTENT_BOTTOM_MARGIN;
-    
-    // Delay field: 16px label height + progress indicator
-    totalHeight += METRICS_SPACE_16;  // Spacing from buttons to delay control
-    totalHeight += METRICS_TEXT_INPUT_FIELD_HEIGHT;  // Input field height (22px)
-    
-    // Buttons row: METRICS_BUTTON_HEIGHT (20px)
-    totalHeight += METRICS_SPACE_16;  // Spacing between primary control groups
-    totalHeight += METRICS_BUTTON_HEIGHT;  // Button height
-    
-    // Mode selection label
-    totalHeight += METRICS_SPACE_8;  // Spacing between label and buttons
-    totalHeight += 14.0;  // Label height
-    
-    // Status label
-    totalHeight += METRICS_SPACE_20;  // Spacing between control groups
-    totalHeight += 16.0;  // Status label height
-    
-    // Top margin: METRICS_CONTENT_TOP_MARGIN (15px)
-    totalHeight += METRICS_CONTENT_TOP_MARGIN;
-    
-    CGFloat windowHeight = totalHeight;
-    
-    NSRect windowFrame = NSMakeRect(0, 0, windowWidth, windowHeight);
-    mainWindow = [[NSWindow alloc] initWithContentRect:windowFrame
+}
+
+- (void)createMainWindow
+{
+    CGFloat width = METRICS_WIN_MIN_WIDTH;
+    CGFloat height = METRICS_CONTENT_TOP_MARGIN + kLabelHeight
+                   + METRICS_SPACE_16 + kLabelHeight
+                   + METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT
+                   + METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT
+                   + METRICS_CONTENT_BOTTOM_MARGIN;
+    CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
+    CGFloat contentWidth = width - 2 * METRICS_CONTENT_SIDE_MARGIN;
+
+    mainWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
                                              styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
                                                backing:NSBackingStoreBuffered
                                                  defer:NO];
     [mainWindow setTitle:@"Screenshot"];
     [mainWindow setDelegate:self];
+    [mainWindow setReleasedWhenClosed:NO];
+    // Capturing another application deactivates us; the window must stay
     [mainWindow setHidesOnDeactivate:NO];
-    [mainWindow setLevel:NSNormalWindowLevel];
+    NSView *content = [mainWindow contentView];
 
-    // Tell X11 WM this is a normal app window, not a dialog/utility
-    x11_set_window_type_normal([mainWindow windowRef]);
-    
-    NSView *contentView = [mainWindow contentView];
-    
-    // Build layout from top to bottom
-    // Start with top margin
-    CGFloat currentY = windowHeight - METRICS_CONTENT_TOP_MARGIN - 16.0;
-    CGFloat contentWidth = windowWidth - (2 * METRICS_CONTENT_SIDE_MARGIN);
-    
-    // Create status label
-    NSRect statusFrame = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, currentY, contentWidth, 16);
-    statusLabel = [[NSTextField alloc] initWithFrame:statusFrame];
-    [statusLabel setStringValue:@"Ready to take screenshot"];
-    [statusLabel setEditable:NO];
-    [statusLabel setSelectable:NO];
-    [statusLabel setBezeled:NO];
-    [statusLabel setDrawsBackground:NO];
-    [statusLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
-    [contentView addSubview:statusLabel];
-    
-    // Spacing between control groups (20px)
-    currentY -= METRICS_SPACE_20 + 14.0;
-    
-    // Create mode selection label
-    NSRect modeLabelFrame = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, currentY, contentWidth, 14);
-    NSTextField *modeLabel = [[NSTextField alloc] initWithFrame:modeLabelFrame];
-    [modeLabel setStringValue:@"Select capture mode:"];
-    [modeLabel setEditable:NO];
-    [modeLabel setSelectable:NO];
-    [modeLabel setBezeled:NO];
-    [modeLabel setDrawsBackground:NO];
-    [modeLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
-    [contentView addSubview:modeLabel];
-    [modeLabel release];
-    
-    // Spacing between label and buttons (8px per metrics)
-    currentY -= METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT;
-    
-    // Create buttons for screenshot mode
-    // Using METRICS_BUTTON_HORIZ_INTERSPACE (10px) between buttons per HIG
-    // Distribute three buttons evenly across available width
-    CGFloat btnHeight = METRICS_BUTTON_HEIGHT;
-    CGFloat btnWidth = (contentWidth - (2 * METRICS_BUTTON_HORIZ_INTERSPACE)) / 3.0;
+    CGFloat y = height - METRICS_CONTENT_TOP_MARGIN - kLabelHeight;
+    statusLabel = [[self labelWithString:NSLocalizedString(@"Ready to take screenshot", @"")
+                                   frame:NSMakeRect(left, y, contentWidth, kLabelHeight)] retain];
+    [content addSubview:statusLabel];
+
+    y -= METRICS_SPACE_16 + kLabelHeight;
+    [content addSubview:[self labelWithString:NSLocalizedString(@"Select capture mode:", @"")
+                                        frame:NSMakeRect(left, y, contentWidth, kLabelHeight)]];
+
+    y -= METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT;
+    // Whole pixels keep the bezels crisp; the last button takes the remainder
     CGFloat spacing = METRICS_BUTTON_HORIZ_INTERSPACE;
-    CGFloat startX = METRICS_CONTENT_SIDE_MARGIN;
-    
-    NSRect windowBtnFrame = NSMakeRect(startX, currentY, btnWidth, btnHeight);
-    windowButton = [[NSButton alloc] initWithFrame:windowBtnFrame];
-    [windowButton setTitle:@"Window"];
-    [windowButton setButtonType:NSMomentaryLight];
-    [windowButton setTarget:self];
-    [windowButton setAction:@selector(takeWindowScreenshot:)];
-    [windowButton setEnabled:YES];
-    [contentView addSubview:windowButton];
-    
-    NSRect areaBtnFrame = NSMakeRect(startX + btnWidth + spacing, currentY, btnWidth, btnHeight);
-    areaButton = [[NSButton alloc] initWithFrame:areaBtnFrame];
-    [areaButton setTitle:@"Area"];
-    [areaButton setButtonType:NSMomentaryLight];
-    [areaButton setTarget:self];
-    [areaButton setAction:@selector(takeAreaScreenshot:)];
-    [contentView addSubview:areaButton];
-    
-    NSRect fullScreenBtnFrame = NSMakeRect(startX + 2 * (btnWidth + spacing), currentY, btnWidth, btnHeight);
-    fullScreenButton = [[NSButton alloc] initWithFrame:fullScreenBtnFrame];
-    [fullScreenButton setTitle:@"Full Screen"];
-    [fullScreenButton setButtonType:NSMomentaryLight];
-    [fullScreenButton setTarget:self];
-    [fullScreenButton setAction:@selector(takeFullScreenScreenshot:)];
-    [contentView addSubview:fullScreenButton];
-    
-    // Spacing between primary control groups (16px per metrics for mixed control dialogs)
-    currentY -= METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT;
-    
-    // Create delay field label and input
-    // Text input field height per metrics: 22px
-    // Use baseline-aligned layout for label and control
-    CGFloat labelWidth = 110.0;
-    CGFloat delayFieldY = currentY;
-    
-    NSRect delayLabelFrame = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, delayFieldY + 3, labelWidth, 16);
-    NSTextField *delayLabel = [[NSTextField alloc] initWithFrame:delayLabelFrame];
-    [delayLabel setStringValue:@"Delay (seconds):"];
-    [delayLabel setEditable:NO];
-    [delayLabel setSelectable:NO];
-    [delayLabel setBezeled:NO];
-    [delayLabel setDrawsBackground:NO];
-    [delayLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
-    [contentView addSubview:delayLabel];
-    [delayLabel release];
-    
-    // Place input field with METRICS_SPACE_8 (8px) gap from label text per metrics
-    NSRect delayFieldFrame = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN + labelWidth + METRICS_SPACE_8, 
-                                        delayFieldY, 50, METRICS_TEXT_INPUT_FIELD_HEIGHT);
-    delayField = [[NSTextField alloc] initWithFrame:delayFieldFrame];
-    [delayField setIntValue:0];
+    CGFloat buttonWidth = floor((contentWidth - 2 * spacing) / 3);
+    CGFloat lastWidth = contentWidth - 2 * (buttonWidth + spacing);
+    windowButton = [[self buttonWithTitle:NSLocalizedString(@"Window", @"")
+                                  action:@selector(takeWindowScreenshot:)
+                                   frame:NSMakeRect(left, y, buttonWidth, METRICS_BUTTON_HEIGHT)] retain];
+    areaButton = [[self buttonWithTitle:NSLocalizedString(@"Area", @"")
+                                action:@selector(takeAreaScreenshot:)
+                                 frame:NSMakeRect(left + buttonWidth + spacing, y,
+                                                  buttonWidth, METRICS_BUTTON_HEIGHT)] retain];
+    screenButton = [[self buttonWithTitle:NSLocalizedString(@"Full Screen", @"")
+                                  action:@selector(takeScreenScreenshot:)
+                                   frame:NSMakeRect(left + 2 * (buttonWidth + spacing), y,
+                                                    lastWidth, METRICS_BUTTON_HEIGHT)] retain];
+    [content addSubview:windowButton];
+    [content addSubview:areaButton];
+    [content addSubview:screenButton];
+
+    y -= METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    // Vertically centers the label text on the field text
+    CGFloat labelOffset = floor((METRICS_TEXT_INPUT_FIELD_HEIGHT - kLabelHeight) / 2);
+    NSTextField *delayLabel = [self labelWithString:NSLocalizedString(@"Delay (seconds):", @"")
+                                              frame:NSMakeRect(left, y + labelOffset, 0, kLabelHeight)];
+    [delayLabel sizeToFit];
+    [delayLabel setFrame:NSMakeRect(left, y + labelOffset,
+                                    ceil(NSWidth([delayLabel frame])), kLabelHeight)];
+    [content addSubview:delayLabel];
+
+    delayField = [[NSTextField alloc] initWithFrame:
+        NSMakeRect(NSMaxX([delayLabel frame]) + METRICS_SPACE_8, y,
+                   kDelayFieldWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
     [delayField setFont:METRICS_FONT_SYSTEM_REGULAR_13];
-    [contentView addSubview:delayField];
-    
-    // Create progress indicator (positioned at right side, vertically centered with delay field)
-    NSRect progressFrame = NSMakeRect(windowWidth - METRICS_CONTENT_SIDE_MARGIN - 20, 
-                                      delayFieldY + (METRICS_TEXT_INPUT_FIELD_HEIGHT - 16.0) / 2.0, 16, 16);
-    progressIndicator = [[NSProgressIndicator alloc] initWithFrame:progressFrame];
+    [delayField setBezeled:YES];
+    [delayField setDrawsBackground:YES];
+    [delayField setEditable:YES];
+    [delayField setAlignment:NSRightTextAlignment];
+    [delayField setIntValue:0];
+    [content addSubview:delayField];
+
+    CGFloat spinnerSize = 16.0;
+    progressIndicator = [[NSProgressIndicator alloc] initWithFrame:
+        NSMakeRect(width - METRICS_CONTENT_SIDE_MARGIN - spinnerSize,
+                   y + floor((METRICS_TEXT_INPUT_FIELD_HEIGHT - spinnerSize) / 2),
+                   spinnerSize, spinnerSize)];
     [progressIndicator setStyle:NSProgressIndicatorSpinningStyle];
-    [progressIndicator setHidden:YES];
-    [contentView addSubview:progressIndicator];
-    
-    // Initialize mode
-    [self setScreenshotMode:ScreenshotModeFullScreen];
+    [progressIndicator setDisplayedWhenStopped:NO];
+    [content addSubview:progressIndicator];
+
+    [mainWindow center];
 }
 
-#pragma mark - Window Delegate Methods
+- (void)createPreferencesWindow
+{
+    CGFloat width = kPreferencesWidth;
+    CGFloat height = METRICS_CONTENT_TOP_MARGIN + kLabelHeight + METRICS_SPACE_8
+                   + 2 * METRICS_RADIO_BUTTON_LINE_SPACING
+                   + METRICS_CONTENT_BOTTOM_MARGIN;
+    CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
+    CGFloat contentWidth = width - 2 * METRICS_CONTENT_SIDE_MARGIN;
 
-- (BOOL)windowShouldClose:(id)sender {
-    [[NSApplication sharedApplication] terminate:self];
-    return YES;
+    preferencesWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
+                                                    styleMask:NSTitledWindowMask | NSClosableWindowMask
+                                                      backing:NSBackingStoreBuffered
+                                                        defer:NO];
+    [preferencesWindow setTitle:NSLocalizedString(@"Screenshot Preferences", @"")];
+    [preferencesWindow setReleasedWhenClosed:NO];
+    [preferencesWindow setHidesOnDeactivate:NO];
+    NSView *content = [preferencesWindow contentView];
+
+    CGFloat y = height - METRICS_CONTENT_TOP_MARGIN - kLabelHeight;
+    NSTextField *hint = [self labelWithString:NSLocalizedString(@"These options apply to Window screenshots.", @"")
+                                        frame:NSMakeRect(left, y, contentWidth, kLabelHeight)];
+    [hint setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [content addSubview:hint];
+
+    y -= METRICS_SPACE_8 + METRICS_RADIO_BUTTON_LINE_SPACING;
+    frameCheckbox = [[self checkboxWithTitle:NSLocalizedString(@"Include window title", @"")
+                                      state:[ScreenshotPreferences includeWindowFrame]
+                                     action:@selector(toggleIncludeFrame:)
+                                      frame:NSMakeRect(left, y, contentWidth, METRICS_RADIO_BUTTON_SIZE)] retain];
+    [content addSubview:frameCheckbox];
+
+    y -= METRICS_RADIO_BUTTON_LINE_SPACING;
+    shadowCheckbox = [[self checkboxWithTitle:NSLocalizedString(@"Include shadow", @"")
+                                       state:[ScreenshotPreferences includeWindowShadow]
+                                      action:@selector(toggleIncludeShadow:)
+                                       frame:NSMakeRect(left, y, contentWidth, METRICS_RADIO_BUTTON_SIZE)] retain];
+    [content addSubview:shadowCheckbox];
+
+    [preferencesWindow center];
 }
 
-#pragma mark - Application Delegate Methods
-
-- (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    // Check if we were launched with command line arguments
-    NSArray *arguments = [[NSProcessInfo processInfo] arguments];
-    
-    if ([arguments count] > 1) {
-        [self handleCommandLineArguments];
-        return;
-    }
-    
-    // Initialize X11 system
-    if (![ScreenshotCapture initializeX11]) {
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"Screenshot Error"];
-        [alert setInformativeText:@"Failed to initialize screenshot system. Make sure X11 is running."];
-        [alert setAlertStyle:NSCriticalAlertStyle];
-        [alert runModal];
-        [alert release];
-        
-        [[NSApplication sharedApplication] terminate:self];
-        return;
-    }
-    
-    // Set up the application delegate
-    [[NSApplication sharedApplication] setDelegate:self];
-    
-    // Create the UI programmatically
-    [self createUI];
-    
-    // Show main window
-    if (mainWindow) {
-        [mainWindow makeKeyAndOrderFront:self];
-    }
+- (void)setStatus:(NSString *)status
+{
+    [statusLabel setStringValue:status];
 }
 
-- (void)applicationWillTerminate:(NSNotification *)notification {
-    [capturedImagePNG release];
-    capturedImagePNG = nil;
-    [ScreenshotCapture cleanupX11];
+- (void)setBusy:(BOOL)busy
+{
+    [windowButton setEnabled:!busy];
+    [areaButton setEnabled:!busy];
+    [screenButton setEnabled:!busy];
+    [delayField setEnabled:!busy];
+    if (busy)
+        [progressIndicator startAnimation:self];
+    else
+        [progressIndicator stopAnimation:self];
 }
 
-- (BOOL)application:(NSApplication *)application openFile:(NSString *)filename {
-    // Handle file opening requests
-    return NO;
-}
-
-#pragma mark - Screenshot Actions
-
-- (IBAction)takeWindowScreenshot:(id)sender {
-    NSDebugLLog(@"gwcomp", @"=== takeWindowScreenshot started ===");
-    [self setScreenshotMode:ScreenshotModeWindow];
-    
-    // Use the delayed selection flow (which lets user click on window to capture)
-    int delay = [delayField intValue];
-    NSDebugLLog(@"gwcomp", @"Performing window screenshot with delay=%d", delay);
-    [self performDelayedSelection:delay mode:ScreenshotModeWindow];
-}
-
-- (IBAction)takeAreaScreenshot:(id)sender {
-    [self setScreenshotMode:ScreenshotModeArea];
-    [self performScreenshotWithMode:ScreenshotModeArea];
-}
-
-- (IBAction)takeFullScreenScreenshot:(id)sender {
-    [self setScreenshotMode:ScreenshotModeFullScreen];
-    [self performScreenshotWithMode:ScreenshotModeFullScreen];
-}
-
-- (void)performScreenshotWithMode:(ScreenshotMode)mode {
-    int delay = [delayField intValue];
-    
-    // For window and area selection modes, delay happens BEFORE selection on live screen
-    // (the selection functions work on the live screen, not on a captured image)
-    if (mode == ScreenshotModeWindow || mode == ScreenshotModeArea) {
-        [self performDelayedSelection:delay mode:mode];
-        return;
-    }
-    
-    // For fullscreen mode, hide window, wait for it to be completely hidden, then proceed with capture
-    [self updateStatus:@"Taking screenshot..."];
-    [self showProgressIndicator:YES];
-    
-    // Hide the main window before fullscreen capture
-    BOOL windowWasVisible = NO;
-    if (mainWindow && [mainWindow isVisible]) {
-        [mainWindow orderOut:self];
-        windowWasVisible = YES;
-    }
-    
-    // Wait 250ms for window to be completely hidden before taking screenshot
-    if (windowWasVisible) {
-        usleep(250000);
-    }
-    
-    CaptureRect rect = {0, 0, 0, 0};
-    [self captureScreenshotWithRect:rect mode:mode delay:delay];
-}
-
-- (void)performDelayedSelection:(int)delay mode:(ScreenshotMode)mode {
-    currentMode = mode;
-    
-    if (delay <= 0) {
-        // No delay, proceed directly with selection
-        [self performSelectionOnLiveScreen];
-        return;
-    }
-    
-    delayCountdown = delay;
-    [self updateCountdownDisplay];
-    
-    // Create and schedule the countdown timer
-    if (countdownTimer) {
-        [countdownTimer invalidate];
-        [countdownTimer release];
-    }
-    
-    countdownTimer = [[NSTimer scheduledTimerWithTimeInterval:1.0
-                                                       target:self
-                                                     selector:@selector(updateCountdownDisplay)
-                                                     userInfo:nil
-                                                      repeats:YES] retain];
-}
-
-- (void)updateCountdownDisplay {
-    if (delayCountdown > 0) {
-        [self updateStatus:[NSString stringWithFormat:@"Selection begins in %d seconds...", delayCountdown]];
-        delayCountdown--;
-    } else {
-        // Timer expired, perform selection
-        if (countdownTimer) {
-            [countdownTimer invalidate];
-            [countdownTimer release];
-            countdownTimer = nil;
-        }
-        [self performSelectionOnLiveScreen];
-    }
-}
-
-- (void)performSelectionOnLiveScreen {
-    [self updateStatus:@"Taking screenshot..."];
-    [self showProgressIndicator:YES];
-    
-    CaptureRect rect = {0, 0, 0, 0};
-    
-    // Get selection rectangle for window/area modes from the live screen
-    if (currentMode == ScreenshotModeWindow) {
-        // Hide the main window while the user selects a window so it doesn't get captured
-        BOOL windowWasVisible = (mainWindow && [mainWindow isVisible]);
-        if (windowWasVisible) {
-            [mainWindow orderOut:self];
-            // Give the window manager more time to unmap the window before grabbing pointer
-            usleep(250000); // 250ms - needed for X11 pointer grab to succeed
-        }
-
-        rect = [ScreenshotCapture selectWindow];
-
-        [self showProgressIndicator:NO];
-        if (rect.width == 0 || rect.height == 0) {
-            [self updateStatus:@"Window selection cancelled or failed"];
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Window Selection Failed"];
-            [alert setInformativeText:@"Unable to select window. This may be due to an X11 error. Check the terminal for details."];
-            [alert setAlertStyle:NSWarningAlertStyle];
-            [alert runModal];
-            [alert release];
-            [mainWindow makeKeyAndOrderFront:self];
-            return;
-        }
-    } else if (currentMode == ScreenshotModeArea) {
-        // Hide the main window while the user selects an area so it doesn't get captured
-        BOOL windowWasVisible = (mainWindow && [mainWindow isVisible]);
-        if (windowWasVisible) {
-            [mainWindow orderOut:self];
-            // Give the window manager more time to unmap the window before grabbing pointer
-            usleep(250000); // 250ms - needed for X11 pointer grab to succeed
-        }
-
-        rect = [ScreenshotCapture selectArea];
-
-        [self showProgressIndicator:NO];
-        if (rect.width == 0 || rect.height == 0) {
-            [self updateStatus:@"Area selection cancelled or failed"];
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Area Selection Failed"];
-            [alert setInformativeText:@"Unable to select area. This may be due to an X11 error. Check the terminal for details."];
-            [alert setAlertStyle:NSWarningAlertStyle];
-            [alert runModal];
-            [alert release];
-            [mainWindow makeKeyAndOrderFront:self];
-            return;
-        }
-    }
-    
-    // Perform the capture with the selected rect
-    [self captureScreenshotWithRect:rect mode:currentMode delay:0];
-}
-
-- (void)captureScreenshotWithRect:(CaptureRect)rect mode:(ScreenshotMode)mode delay:(int)delay {
-    NSDebugLLog(@"gwcomp", @"=== captureScreenshotWithRect called: rect=(%d,%d,%d,%d), mode=%d, delay=%d ===", 
-          rect.x, rect.y, rect.width, rect.height, mode, delay);
-    
-    CaptureMode captureMode;
-    
-    switch (mode) {
-        case ScreenshotModeWindow:
-            captureMode = CaptureWindow;
-            break;
-        case ScreenshotModeArea:
-            captureMode = CaptureArea;
-            break;
-        case ScreenshotModeFullScreen:
-        default:
-            captureMode = CaptureFullScreen;
-            break;
-    }
-    
-    // Capture the image
-    NSDebugLLog(@"gwcomp", @"Calling captureImageWithMode");
-    NSImage *image = [ScreenshotCapture captureImageWithMode:captureMode delay:delay rect:rect];
-    NSDebugLLog(@"gwcomp", @"captureImageWithMode returned: image=%@", image);
-    
-    // Flash the screen after capture for visual feedback
-    if (captureMode == CaptureFullScreen || captureMode == CaptureArea || captureMode == CaptureWindow) {
-        NSDebugLLog(@"gwcomp", @"Flashing fullscreen");
-        [self flashScreenFullscreen];
-    }
-    
-    [self showProgressIndicator:NO];
-    
-    if (image) {
-        [capturedImage release];
-        capturedImage = [image retain];
-        
-        // Generate PNG data once and reuse for both save and clipboard operations
-        [self generatePNGData];
-        
-        [self updateStatus:@"Screenshot captured successfully"];
-        
-        // Show alert with save/copy options
-        [self showPostCaptureDialog];
-
-        // Restore window after user dismissed post-capture dialog
-        if (mainWindow) {
-            [mainWindow makeKeyAndOrderFront:self];
-        }
-    } else {
-        // Restore window after failure
-        if (mainWindow) {
-            [mainWindow makeKeyAndOrderFront:self];
-        }
-        [self updateStatus:@"Failed to capture screenshot"];
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"Screenshot Failed"];
-        [alert setInformativeText:@"Unable to capture screenshot. This may be due to an X11 error or insufficient permissions. Please try again."];
-        [alert setAlertStyle:NSWarningAlertStyle];
-        [alert runModal];
-        [alert release];
-    }
-}
-
-- (void)showPostCaptureDialog {
+- (void)runAlertWithTitle:(NSString *)title message:(NSString *)message
+{
     NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:@"Screenshot Captured"];
-    [alert setInformativeText:@"What would you like to do with the screenshot?"];
-    [alert addButtonWithTitle:@"Save to File"];
-    [alert addButtonWithTitle:@"Copy to Clipboard"];
-    [alert addButtonWithTitle:@"Cancel"];
-    [alert setAlertStyle:NSInformationalAlertStyle];
-    
-    NSInteger response = [alert runModal];
+    [alert setMessageText:title];
+    [alert setInformativeText:message];
+    [alert setAlertStyle:NSWarningAlertStyle];
+    [alert runModal];
     [alert release];
-    
-    if (response == NSAlertFirstButtonReturn) {
-        // Save to file
-        [self showSavePanel];
-    } else if (response == NSAlertSecondButtonReturn) {
-        // Copy to clipboard - show window and stay open
-        if ([self copyImageToClipboardAndReturnSuccess]) {
-            [self updateStatus:@"Screenshot copied to clipboard"];
-            // Make sure main window is visible
-            if (mainWindow) {
-                [mainWindow makeKeyAndOrderFront:self];
-            }
-        } else {
-            NSAlert *errorAlert = [[NSAlert alloc] init];
-            [errorAlert setMessageText:@"Copy Failed"];
-            [errorAlert setInformativeText:@"Unable to put image data on clipboard."];
-            [errorAlert setAlertStyle:NSWarningAlertStyle];
-            [errorAlert runModal];
-            [errorAlert release];
-            // Stay open after copy failure
-            if (mainWindow) {
-                [mainWindow makeKeyAndOrderFront:self];
-            }
-        }
-    } else {
-        // Cancel - stay open for next capture
-        [self updateStatus:@"Ready to take screenshot"];
-    }
 }
 
-- (IBAction)saveScreenshot:(id)sender {
-    if (!capturedImage) {
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"No Screenshot"];
-        [alert setInformativeText:@"Please take a screenshot first."];
-        [alert setAlertStyle:NSWarningAlertStyle];
-        [alert runModal];
-        [alert release];
+#pragma mark - Application and window delegate
+
+- (void)applicationWillFinishLaunching:(NSNotification *)notification
+{
+    [self createMainMenu];
+    [self createMainWindow];
+}
+
+- (void)applicationDidFinishLaunching:(NSNotification *)notification
+{
+    [mainWindow makeKeyAndOrderFront:self];
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification
+{
+    if ([ocrTask isRunning])
+        [ocrTask terminate];
+    if (ocrInputPath)
+        [[NSFileManager defaultManager] removeItemAtPath:ocrInputPath error:NULL];
+    x11_cleanup();
+}
+
+- (void)windowWillClose:(NSNotification *)notification
+{
+    [NSApp terminate:self];
+}
+
+#pragma mark - Actions
+
+- (IBAction)takeWindowScreenshot:(id)sender
+{
+    [self beginCaptureWithMode:ScreenshotModeWindow];
+}
+
+- (IBAction)takeAreaScreenshot:(id)sender
+{
+    [self beginCaptureWithMode:ScreenshotModeArea];
+}
+
+- (IBAction)takeScreenScreenshot:(id)sender
+{
+    [self beginCaptureWithMode:ScreenshotModeScreen];
+}
+
+- (IBAction)showPreferences:(id)sender
+{
+    if (!preferencesWindow)
+        [self createPreferencesWindow];
+    [preferencesWindow makeKeyAndOrderFront:self];
+}
+
+- (IBAction)toggleIncludeFrame:(id)sender
+{
+    [ScreenshotPreferences setIncludeWindowFrame:[sender state] == NSOnState];
+}
+
+- (IBAction)toggleIncludeShadow:(id)sender
+{
+    [ScreenshotPreferences setIncludeWindowShadow:[sender state] == NSOnState];
+}
+
+#pragma mark - Capture flow
+
+- (int)delaySeconds
+{
+    int delay = MAX(0, MIN([delayField intValue], kMaximumDelay));
+    [delayField setIntValue:delay];
+    return delay;
+}
+
+- (void)beginCaptureWithMode:(ScreenshotMode)mode
+{
+    pendingMode = mode;
+    remainingDelay = [self delaySeconds];
+    [self setBusy:YES];
+
+    if (remainingDelay == 0) {
+        [self hideWindowsAndCapture];
         return;
     }
-    
-    [self showSavePanel];
+
+    [self showCountdown];
+    countdownTimer = [[NSTimer timerWithTimeInterval:1.0
+                                              target:self
+                                            selector:@selector(countdownTick:)
+                                            userInfo:nil
+                                             repeats:YES] retain];
+    // Keep counting while a menu is being tracked
+    [[NSRunLoop currentRunLoop] addTimer:countdownTimer forMode:NSDefaultRunLoopMode];
+    [[NSRunLoop currentRunLoop] addTimer:countdownTimer forMode:NSEventTrackingRunLoopMode];
 }
 
-
-
-- (BOOL)copyImageToClipboardAndReturnSuccess {
-    NSDebugLLog(@"gwcomp", @"=== Copy to Clipboard Started ===");
-    
-    if (!capturedImagePNG) {
-        NSDebugLLog(@"gwcomp", @"ERROR: No PNG data available to copy");
-        return NO;
-    }
-    
-    NSDebugLLog(@"gwcomp", @"PNG data size: %lu bytes", (unsigned long)[capturedImagePNG length]);
-    
-    // Set GNUstep pasteboard for clipboard
-    NSDebugLLog(@"gwcomp", @"Setting GNUstep pasteboard");
-    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    if (!pasteboard) {
-        NSDebugLLog(@"gwcomp", @"ERROR: Failed to get pasteboard");
-        return NO;
-    }
-    
-    NSDebugLLog(@"gwcomp", @"Declaring PNG type on pasteboard");
-    NSArray *types = [NSArray arrayWithObject:NSPasteboardTypePNG];
-    
-    @try {
-        [pasteboard declareTypes:types owner:nil];
-        NSDebugLLog(@"gwcomp", @"Declared NSPasteboardTypePNG");
-    } @catch (NSException *exception) {
-        NSDebugLLog(@"gwcomp", @"EXCEPTION in declareTypes: %@", exception);
-        return NO;
-    }
-    
-    NSDebugLLog(@"gwcomp", @"Setting PNG data on pasteboard");
-    @try {
-        BOOL pngSuccess = [pasteboard setData:capturedImagePNG forType:NSPasteboardTypePNG];
-        NSDebugLLog(@"gwcomp", @"PNG setData result: %d", pngSuccess);
-        
-        if (pngSuccess) {
-            NSDebugLLog(@"gwcomp", @"=== Copy to Clipboard Completed Successfully ===");
-            return YES;
-        } else {
-            NSDebugLLog(@"gwcomp", @"ERROR: Failed to set PNG data on pasteboard");
-            return NO;
-        }
-    } @catch (NSException *exception) {
-        NSDebugLLog(@"gwcomp", @"EXCEPTION in setData: %@", exception);
-        return NO;
-    }
+- (void)showCountdown
+{
+    [self setStatus:[NSString stringWithFormat:
+        NSLocalizedString(@"Taking screenshot in %d seconds...", @""), remainingDelay]];
 }
 
-- (void)flashScreenFullscreen {
-    // Create a full-screen white window for flash effect
-    NSRect screenFrame = [[NSScreen mainScreen] frame];
-    NSWindow *flashWindow = [[NSWindow alloc] initWithContentRect:screenFrame
-                                                         styleMask:NSBorderlessWindowMask
-                                                           backing:NSBackingStoreBuffered
-                                                             defer:NO];
-    if (!flashWindow) return;
-    
-    [flashWindow setBackgroundColor:[NSColor whiteColor]];
-    [flashWindow setLevel:NSScreenSaverWindowLevel + 1];
-    [flashWindow setOpaque:YES];
-    [flashWindow setIgnoresMouseEvents:YES];
-    
-    // Show the flash window
-    [flashWindow orderFrontRegardless];
-    [flashWindow display];
-    
-    // Process events to ensure window is rendered
-    NSDate *endTime = [NSDate dateWithTimeIntervalSinceNow:0.25];
-    while ([endTime timeIntervalSinceNow] > 0) {
-        NSEvent *event = [[NSApplication sharedApplication] nextEventMatchingMask:NSAnyEventMask 
-                                                                         untilDate:[NSDate dateWithTimeIntervalSinceNow:0.01] 
-                                                                            inMode:NSDefaultRunLoopMode 
-                                                                           dequeue:YES];
-        if (event) {
-            [[NSApplication sharedApplication] sendEvent:event];
-        }
-    }
-    
-    // Remove and clean up the flash window
-    [flashWindow orderOut:nil];
-    [flashWindow release];
-}
-
-- (void)flashScreenInRect:(CaptureRect)rect {
-    // Create a white window only in the selected area
-    NSRect flashRect = NSMakeRect(rect.x, rect.y, rect.width, rect.height);
-    NSWindow *flashWindow = [[NSWindow alloc] initWithContentRect:flashRect
-                                                         styleMask:NSBorderlessWindowMask
-                                                           backing:NSBackingStoreBuffered
-                                                             defer:NO];
-    if (!flashWindow) return;
-    
-    [flashWindow setBackgroundColor:[NSColor whiteColor]];
-    [flashWindow setLevel:NSScreenSaverWindowLevel + 1];
-    [flashWindow setOpaque:YES];
-    [flashWindow setIgnoresMouseEvents:YES];
-    
-    // Show the flash window
-    [flashWindow orderFrontRegardless];
-    [flashWindow display];
-    
-    // Process events to ensure window is rendered
-    NSDate *endTime = [NSDate dateWithTimeIntervalSinceNow:0.25];
-    while ([endTime timeIntervalSinceNow] > 0) {
-        NSEvent *event = [[NSApplication sharedApplication] nextEventMatchingMask:NSAnyEventMask 
-                                                                         untilDate:[NSDate dateWithTimeIntervalSinceNow:0.01] 
-                                                                            inMode:NSDefaultRunLoopMode 
-                                                                           dequeue:YES];
-        if (event) {
-            [[NSApplication sharedApplication] sendEvent:event];
-        }
-    }
-    
-    // Remove and clean up the flash window
-    [flashWindow orderOut:nil];
-    [flashWindow release];
-}
-
-
-#pragma mark - Utility Methods
-
-- (void)updateStatus:(NSString *)status {
-    if (statusLabel) {
-        [statusLabel setStringValue:status];
-    } else {
-        NSDebugLLog(@"gwcomp", @"Screenshot: %@", status);
-    }
-}
-
-- (void)showProgressIndicator:(BOOL)show {
-    if (progressIndicator) {
-        if (show) {
-            [progressIndicator startAnimation:self];
-            [progressIndicator setHidden:NO];
-        } else {
-            [progressIndicator stopAnimation:self];
-            [progressIndicator setHidden:YES];
-        }
-    }
-}
-
-- (void)setScreenshotMode:(ScreenshotMode)mode {
-    currentMode = mode;
-    
-    // Update UI to reflect current mode
-    if (windowButton && areaButton && fullScreenButton) {
-        [windowButton setState:(mode == ScreenshotModeWindow) ? NSOnState : NSOffState];
-        [areaButton setState:(mode == ScreenshotModeArea) ? NSOnState : NSOffState];
-        [fullScreenButton setState:(mode == ScreenshotModeFullScreen) ? NSOnState : NSOffState];
-    }
-}
-
-- (NSString *)generateDefaultFileName {
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"yyyy-MM-dd-HHmmss"];
-    NSString *dateString = [formatter stringFromDate:[NSDate date]];
-    [formatter release];
-    
-    NSString *filename = [NSString stringWithFormat:@"Screenshot-%@.png", dateString];
-    
-    // Get desktop path
-    NSArray *desktopPaths = NSSearchPathForDirectoriesInDomains(NSDesktopDirectory, NSUserDomainMask, YES);
-    if ([desktopPaths count] > 0) {
-        NSString *desktopPath = [desktopPaths objectAtIndex:0];
-        return [desktopPath stringByAppendingPathComponent:filename];
-    }
-    
-    return filename;
-}
-
-- (void)generatePNGData {
-    if (!capturedImage) {
-        NSDebugLLog(@"gwcomp", @"ERROR: Cannot generate PNG data - no captured image");
+- (void)countdownTick:(NSTimer *)timer
+{
+    remainingDelay--;
+    if (remainingDelay > 0) {
+        [self showCountdown];
         return;
     }
-    
-    NSDebugLLog(@"gwcomp", @"Generating PNG data from captured image");
-    NSData *imageData = [capturedImage TIFFRepresentation];
-    NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:imageData];
-    
-    if (!bitmap) {
-        NSDebugLLog(@"gwcomp", @"ERROR: Failed to create bitmap from TIFF");
-        return;
-    }
-    
-    NSData *pngData = [bitmap representationUsingType:NSPNGFileType properties:nil];
-    if (!pngData) {
-        NSDebugLLog(@"gwcomp", @"ERROR: Failed to get PNG representation");
-        return;
-    }
-    
-    [capturedImagePNG release];
-    capturedImagePNG = [pngData retain];
-    NSDebugLLog(@"gwcomp", @"PNG data generated: %lu bytes", (unsigned long)[capturedImagePNG length]);
+    [countdownTimer invalidate];
+    [countdownTimer release];
+    countdownTimer = nil;
+    [self hideWindowsAndCapture];
 }
 
-- (BOOL)saveImageToFile:(NSString *)filepath {
-    if (!capturedImagePNG) {
-        NSDebugLLog(@"gwcomp", @"ERROR: No PNG data available to save");
-        return NO;
-    }
-    
-    NSDebugLLog(@"gwcomp", @"Saving PNG data to file: %@", filepath);
-    return [capturedImagePNG writeToFile:filepath atomically:YES];
+- (void)hideWindowsAndCapture
+{
+    NSMutableArray *visible = [NSMutableArray array];
+    if ([mainWindow isVisible])
+        [visible addObject:mainWindow];
+    if ([preferencesWindow isVisible])
+        [visible addObject:preferencesWindow];
+    [visible makeObjectsPerformSelector:@selector(orderOut:) withObject:nil];
+    windowsHiddenForCapture = [visible retain];
+
+    [self setStatus:NSLocalizedString(@"Taking screenshot...", @"")];
+    [self performSelector:@selector(performCapture)
+               withObject:nil
+               afterDelay:kWindowHideSettleDelay];
 }
 
-- (void)showSavePanel {
+- (void)restoreHiddenWindows
+{
+    [windowsHiddenForCapture makeObjectsPerformSelector:@selector(orderFront:) withObject:nil];
+    [windowsHiddenForCapture release];
+    windowsHiddenForCapture = nil;
+    [NSApp activateIgnoringOtherApps:YES];
+    [mainWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)performCapture
+{
+    CaptureStatus status;
+    NSBitmapImageRep *image = [ScreenshotCapture captureWithMode:pendingMode
+                                                    includeFrame:[ScreenshotPreferences includeWindowFrame]
+                                                   includeShadow:[ScreenshotPreferences includeWindowShadow]
+                                                          status:&status];
+    if (image)
+        [ScreenshotCapture flashScreen];
+
+    [self restoreHiddenWindows];
+    [self setBusy:NO];
+
+    if (status == CaptureStatusCancelled) {
+        [self setStatus:NSLocalizedString(@"Screenshot cancelled", @"")];
+        return;
+    }
+    if (!image) {
+        [self setStatus:NSLocalizedString(@"Failed to capture screenshot", @"")];
+        [self runAlertWithTitle:NSLocalizedString(@"Screenshot Failed", @"")
+                        message:[ScreenshotCapture messageForStatus:status]];
+        return;
+    }
+
+    [capturedImage release];
+    capturedImage = [image retain];
+    [capturedPNG release];
+    capturedPNG = nil;
+    [self setStatus:[NSString stringWithFormat:
+        NSLocalizedString(@"Screenshot captured (%d x %d)", @""),
+        (int)[image pixelsWide], (int)[image pixelsHigh]]];
+    [self offerCapturedImage];
+}
+
+- (void)offerCapturedImage
+{
+    // Kept for reuse: releasing the panel after each modal session crashed
+    // the next capture once a save panel had been shown in between
+    if (!actionPanel)
+        actionPanel = [[ScreenshotActionPanel alloc] init];
+    switch ([actionPanel runModal]) {
+    case ScreenshotActionSave:
+        [self saveCapturedImage];
+        break;
+    case ScreenshotActionCopy:
+        [self copyCapturedImage];
+        break;
+    case ScreenshotActionRecognizeText:
+        [self recognizeTextInCapturedImage];
+        break;
+    case ScreenshotActionCancel:
+        [self setStatus:NSLocalizedString(@"Ready to take screenshot", @"")];
+        break;
+    }
+}
+
+#pragma mark - Using the captured image
+
+- (NSData *)capturedPNG
+{
+    if (!capturedPNG)
+        capturedPNG = [[ScreenshotCapture PNGDataForImageRep:capturedImage] retain];
+    return capturedPNG;
+}
+
+- (void)saveCapturedImage
+{
+    NSString *defaultPath = [ScreenshotCapture defaultFilePath];
     NSSavePanel *panel = [NSSavePanel savePanel];
     [panel setAllowedFileTypes:[NSArray arrayWithObject:@"png"]];
     [panel setCanCreateDirectories:YES];
-    
-    // Generate default filename and set it
-    NSString *defaultPath = [self generateDefaultFileName];
-    [panel setNameFieldStringValue:[defaultPath lastPathComponent]];
-    
-    NSString *directory = [defaultPath stringByDeletingLastPathComponent];
-    if (directory && [directory length] > 0) {
-        [panel setDirectoryURL:[NSURL fileURLWithPath:directory]];
-    }
-    
-    NSInteger result = [panel runModal];
-    if (result == NSFileHandlingPanelOKButton) {
-        NSString *filepath = [[panel URL] path];
-        if ([self saveImageToFile:filepath]) {
-            [lastSavedPath release];
-            lastSavedPath = [filepath retain];
-            [self updateStatus:[NSString stringWithFormat:@"Saved to: %@", [filepath lastPathComponent]]];
-        } else {
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Save Failed"];
-            [alert setInformativeText:@"Unable to save screenshot to the specified location."];
-            [alert setAlertStyle:NSWarningAlertStyle];
-            [alert runModal];
-            [alert release];
-        }
-    } else {
-        // Cancel save - stay open
-        [self updateStatus:@"Save cancelled"];
-    }
-}
-
-#pragma mark - Command Line Handling
-
-- (void)handleCommandLineArguments {
-    // Hide the main window so we have a clean screenshot
-    [mainWindow orderOut:nil];
-    
-    NSArray *arguments = [[NSProcessInfo processInfo] arguments];
-    
-    // Parse arguments
-    BOOL showHelp = NO;
-    NSString *outputFile = nil;
-    int delay = 0;
-    ScreenshotMode mode = ScreenshotModeFullScreen;
-    
-    for (int i = 1; i < [arguments count]; i++) {
-        NSString *arg = [arguments objectAtIndex:i];
-        
-        if ([arg isEqualToString:@"-h"] || [arg isEqualToString:@"--help"]) {
-            showHelp = YES;
-            break;
-        } else if ([arg isEqualToString:@"-a"] || [arg isEqualToString:@"--area"]) {
-            mode = ScreenshotModeArea;
-        } else if ([arg isEqualToString:@"-s"] || [arg isEqualToString:@"--screen"]) {
-            mode = ScreenshotModeScreen;
-        } else if ([arg isEqualToString:@"-w"] || [arg isEqualToString:@"--window"]) {
-            mode = ScreenshotModeWindow;
-        } else if ([arg isEqualToString:@"-d"] || [arg isEqualToString:@"--delay"]) {
-            if (i + 1 < [arguments count]) {
-                delay = [[arguments objectAtIndex:++i] intValue];
-            }
-        } else if ([arg isEqualToString:@"-o"] || [arg isEqualToString:@"--output"]) {
-            if (i + 1 < [arguments count]) {
-                outputFile = [arguments objectAtIndex:++i];
-            }
-        } else if (![arg hasPrefix:@"-"] && !outputFile) {
-            outputFile = arg;
-        }
-    }
-    
-    if (showHelp) {
-        [self printUsageAndExit];
+    if ([panel runModalForDirectory:[defaultPath stringByDeletingLastPathComponent]
+                               file:[defaultPath lastPathComponent]] != NSOKButton) {
+        [self setStatus:NSLocalizedString(@"Save cancelled", @"")];
         return;
     }
-    
-    // Store parameters for delayed execution
-    currentMode = mode;
-    if (outputFile) {
-        [lastSavedPath release];
-        lastSavedPath = [outputFile copy];
+
+    NSString *path = [panel filename];
+    NSData *png = [self capturedPNG];
+    NSError *error = nil;
+    if (!png) {
+        [self runAlertWithTitle:NSLocalizedString(@"Save Failed", @"")
+                        message:NSLocalizedString(@"The screenshot could not be converted to PNG.", @"")];
+        return;
     }
-    
-    // Apply delay before any interaction
-    if (delay > 0) {
-        [self performSelector:@selector(executeCommandLineScreenshot) 
-                   withObject:nil 
-                   afterDelay:delay];
-    } else {
-        [self executeCommandLineScreenshot];
+    if (![png writeToFile:path options:NSDataWritingAtomic error:&error]) {
+        [self runAlertWithTitle:NSLocalizedString(@"Save Failed", @"")
+                        message:[error localizedDescription]];
+        return;
     }
+    [self setStatus:[NSString stringWithFormat:NSLocalizedString(@"Saved to %@", @""),
+                     [path lastPathComponent]]];
 }
 
-- (void)executeCommandLineScreenshot {
-    CaptureMode captureMode;
-    CaptureRect rect = {0, 0, 0, 0};
-    
-    switch (currentMode) {
-        case ScreenshotModeWindow:
-            captureMode = CaptureWindow;
-            rect = [ScreenshotCapture selectWindow];
-            if (rect.width == 0 || rect.height == 0) {
-                exit(1);
-            }
-            break;
-        case ScreenshotModeArea:
-            captureMode = CaptureArea;
-            rect = [ScreenshotCapture selectArea];
-            if (rect.width == 0 || rect.height == 0) {
-                exit(1);
-            }
-            break;
-        case ScreenshotModeScreen:
-            captureMode = CaptureFullScreen;
-            break;
-        case ScreenshotModeFullScreen:
-        default:
-            captureMode = CaptureFullScreen;
-            break;
+- (void)copyCapturedImage
+{
+    NSData *png = [self capturedPNG];
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard declareTypes:[NSArray arrayWithObject:NSPasteboardTypePNG] owner:nil];
+    if (!png || ![pasteboard setData:png forType:NSPasteboardTypePNG]) {
+        [self runAlertWithTitle:NSLocalizedString(@"Copy Failed", @"")
+                        message:NSLocalizedString(@"The screenshot could not be put on the clipboard.", @"")];
+        return;
     }
-    
-    NSString *outputFile = lastSavedPath;
-    if (!outputFile) {
-        outputFile = [self generateDefaultFileName];
-    }
-    
-    [ScreenshotCapture captureScreenshotWithMode:captureMode 
-                                                      filename:outputFile 
-                                                         delay:0
-                                                          rect:rect];
-    
-    // Flash the screen after capture
-    if (captureMode == CaptureFullScreen || captureMode == CaptureArea) {
-        [self flashScreenFullscreen];
-        // Give event loop time to process the flash
-        usleep(500000);
-    }
-    
-    // Exit after flash completes
-    exit(0);
+    [self setStatus:NSLocalizedString(@"Screenshot copied to clipboard", @"")];
 }
 
-- (void)printUsageAndExit {
-    printf("Screenshot - GNUstep Screenshot Application\n\n");
-    printf("Usage: Screenshot [options] [output-file]\n\n");
-    printf("Options:\n");
-    printf("  -h, --help         Show this help message\n");
-    printf("  -a, --area         Select area to screenshot\n");
-    printf("  -w, --window       Select window to screenshot\n");
-    printf("  -s, --screen       Capture the whole screen\n");
-    printf("  -d, --delay SEC    Wait SEC seconds before taking screenshot\n");
-    printf("  -o, --output FILE  Save screenshot to FILE\n");
-    printf("\n");
-    printf("If no options are specified, a full screen screenshot will be taken and saved.\n");
-    printf("If no output file is specified, a default name will be generated.\n");
-    
-    exit(0);
+- (NSString *)pathForTool:(NSString *)name
+{
+    NSString *searchPath = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"];
+    for (NSString *directory in [searchPath componentsSeparatedByString:@":"]) {
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        if ([[NSFileManager defaultManager] isExecutableFileAtPath:path])
+            return path;
+    }
+    return nil;
 }
 
-- (void)exitApp {
-    [[NSApplication sharedApplication] terminate:self];
+- (void)recognizeTextInCapturedImage
+{
+    NSString *tesseract = [self pathForTool:@"tesseract"];
+    if (!tesseract) {
+        [self setStatus:NSLocalizedString(@"Text recognition needs tesseract", @"")];
+        [self runAlertWithTitle:NSLocalizedString(@"Tesseract Not Found", @"")
+                        message:NSLocalizedString(@"Install tesseract with your package manager:\n\n"
+                                                  @"Debian/Ubuntu: sudo apt install tesseract-ocr\n"
+                                                  @"Arch: sudo pacman -S tesseract\n"
+                                                  @"FreeBSD: sudo pkg install tesseract\n"
+                                                  @"OpenBSD: doas pkg_add tesseract", @"")];
+        return;
+    }
+
+    NSData *png = [self capturedPNG];
+    NSString *input = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"Screenshot-OCR-%@.png",
+         [[NSProcessInfo processInfo] globallyUniqueString]]];
+    if (!png || ![png writeToFile:input atomically:YES]) {
+        [self runAlertWithTitle:NSLocalizedString(@"Text Recognition Failed", @"")
+                        message:NSLocalizedString(@"The screenshot could not be written to a temporary file.", @"")];
+        return;
+    }
+
+    NSPipe *output = [NSPipe pipe];
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:tesseract];
+    [task setArguments:[NSArray arrayWithObjects:input, @"stdout", nil]];
+    [task setStandardOutput:output];
+    [task setStandardError:[NSFileHandle fileHandleWithNullDevice]];
+    @try {
+        [task launch];
+    } @catch (NSException *exception) {
+        [task release];
+        [[NSFileManager defaultManager] removeItemAtPath:input error:NULL];
+        [self runAlertWithTitle:NSLocalizedString(@"Text Recognition Failed", @"")
+                        message:[exception reason]];
+        return;
+    }
+
+    ocrTask = task;
+    ocrInputPath = [input retain];
+    [self setBusy:YES];
+    [self setStatus:NSLocalizedString(@"Recognizing text...", @"")];
+
+    // Read in the background: a synchronous read would freeze the window
+    // for as long as tesseract runs
+    NSFileHandle *reader = [output fileHandleForReading];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(textRecognitionDidFinish:)
+                                                 name:NSFileHandleReadToEndOfFileCompletionNotification
+                                               object:reader];
+    [reader readToEndOfFileInBackgroundAndNotify];
 }
 
-#pragma mark - Timer and Delay Handling
+- (void)textRecognitionDidFinish:(NSNotification *)notification
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSFileHandleReadToEndOfFileCompletionNotification
+                                                  object:[notification object]];
+    NSData *data = [[notification userInfo] objectForKey:NSFileHandleNotificationDataItem];
+
+    // Output reached end of file, so the process is exiting and this is brief
+    [ocrTask waitUntilExit];
+    int exitStatus = [ocrTask terminationStatus];
+    [ocrTask release];
+    ocrTask = nil;
+    [[NSFileManager defaultManager] removeItemAtPath:ocrInputPath error:NULL];
+    [ocrInputPath release];
+    ocrInputPath = nil;
+    [self setBusy:NO];
+
+    if (exitStatus != 0) {
+        [self setStatus:NSLocalizedString(@"Text recognition failed", @"")];
+        [self runAlertWithTitle:NSLocalizedString(@"Text Recognition Failed", @"")
+                        message:[NSString stringWithFormat:
+                            NSLocalizedString(@"tesseract exited with status %d.", @""), exitStatus]];
+        return;
+    }
+
+    // tesseract ends its output with a form feed besides newlines
+    NSMutableCharacterSet *trim = [[[NSCharacterSet whitespaceAndNewlineCharacterSet] mutableCopy] autorelease];
+    [trim addCharactersInString:@"\f"];
+    NSString *text = [[[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease]
+                      stringByTrimmingCharactersInSet:trim];
+    if ([text length] == 0) {
+        [self setStatus:NSLocalizedString(@"No text found in the screenshot", @"")];
+        return;
+    }
+
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard declareTypes:[NSArray arrayWithObject:NSStringPboardType] owner:nil];
+    if (![pasteboard setString:text forType:NSStringPboardType]) {
+        [self runAlertWithTitle:NSLocalizedString(@"Copy Failed", @"")
+                        message:NSLocalizedString(@"The text could not be put on the clipboard.", @"")];
+        return;
+    }
+    [self setStatus:[NSString stringWithFormat:
+        NSLocalizedString(@"Recognized text copied to clipboard (%lu characters)", @""),
+        (unsigned long)[text length]]];
+}
 
 @end

@@ -8,6 +8,7 @@
 #import "MBDaemon.h"
 #import "MBConnection.h"
 #import "MBMessage.h"
+#import "MBVariant.h"
 #import "MBTransport.h"
 #import "MBServiceManager.h"
 #import <sys/select.h>
@@ -321,17 +322,14 @@
 
 - (void)processMessage:(MBMessage *)message fromConnection:(MBConnection *)connection
 {
-    // DEBUG: Log all incoming messages to debug handshake issues
-    NSDebugLLog(@"gwcomp", @">>> INCOMING MESSAGE <<<");
-    NSDebugLLog(@"gwcomp", @"    Type: %u (%@)", message.type, [self messageTypeString:message.type]);
-    NSDebugLLog(@"gwcomp", @"    Serial: %lu", (unsigned long)message.serial);
-    NSDebugLLog(@"gwcomp", @"    Destination: '%@'", message.destination ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Interface: '%@'", message.interface ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Member: '%@'", message.member ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Path: '%@'", message.path ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Signature: '%@'", message.signature ?: @"(null)");
-    NSDebugLLog(@"gwcomp", @"    Connection state: %lu", (unsigned long)connection.state);
-    NSDebugLLog(@"gwcomp", @"    Connection unique name: '%@'", connection.uniqueName ?: @"(null)");
+    NSLog(@"MBDaemon <<< INCOMING Type=%u(%@) serial=%lu dest='%@' iface='%@' member='%@' sig='%@' from=%@",
+          message.type, [self messageTypeString:message.type],
+          (unsigned long)message.serial,
+          message.destination ?: @"(null)",
+          message.interface ?: @"(null)",
+          message.member ?: @"(null)",
+          message.signature ?: @"(null)",
+          connection.uniqueName ?: @"(null)");
     
     // CRITICAL FIX: Only drop messages with truly malformed signatures
     // Allow valid 'v' signatures for method returns and other legitimate cases
@@ -373,16 +371,23 @@
     }
 
     if (!message.destination) {
+        if (message.type == MBMessageTypeSignal) {
+            // Signals without a destination are broadcast to matching
+            // connections; routeMessage implements that.
+            [self routeMessage:message fromConnection:connection];
+            return;
+        }
+
         // No destination means this message is addressed to the message bus itself
         // According to D-Bus spec: "when the DESTINATION field is absent, the call is taken to be
         // a standard one-to-one message and interpreted by the message bus itself"
-        NSDebugLLog(@"gwcomp", @"Message has no destination, treating as message bus call - interface: '%@', member: '%@', path: '%@'", 
+        NSDebugLLog(@"gwcomp", @"Message has no destination, treating as message bus call - interface: '%@', member: '%@', path: '%@'",
               message.interface, message.member, message.path);
-        
+
         // Set destination to the message bus itself for internal handling
         message.destination = @"org.freedesktop.DBus";
     }
-    
+
     // Handle Hello message
     if ([message.interface isEqualToString:@"org.freedesktop.DBus"] &&
         [message.member isEqualToString:@"Hello"]) {
@@ -398,10 +403,17 @@
                                         replySerial:message.serial
                                             message:@"Client tried to send a message other than Hello without being registered"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
     
+    // Driver-bound calls are consumed here, never relayed, so mirror them
+    // to monitors now; their replies are mirrored when sent.
+    if ([message.destination isEqualToString:@"org.freedesktop.DBus"]) {
+        [self broadcastToMonitors:message];
+    }
+
     // Handle name service methods
     if ([message.interface isEqualToString:@"org.freedesktop.DBus"]) {
         NSDebugLLog(@"gwcomp", @"Received D-Bus method call: member='%@', args=%@", message.member, message.arguments);
@@ -519,6 +531,7 @@
                                         replySerial:message.serial
                                             message:@"Hello already sent"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -539,9 +552,6 @@
     // Standard tools like dbus-send expect exactly one message in response to Hello
     [connection sendMessage:reply];
     
-    // Broadcast Hello reply to monitors
-    [self broadcastToMonitors:reply];
-    
     NSDebugLLog(@"gwcomp", @"Hello processed for connection %@, assigned name %@", connection, uniqueName);
 }
 
@@ -552,6 +562,7 @@
                                         replySerial:message.serial
                                             message:@"Missing name or flags argument"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -565,6 +576,7 @@
                                         replySerial:message.serial
                                             message:@"Cannot acquire reserved name org.freedesktop.DBus"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -592,7 +604,6 @@
         signal.signature = @"s";
         
         [connection sendMessage:signal];
-        [self broadcastToMonitors:signal];
         [signal release];
         
         NSDebugLLog(@"gwcomp", @"Sent NameAcquired signal for %@ to %@", name, connection.uniqueName);
@@ -726,6 +737,7 @@
                                         replySerial:message.serial
                                             message:@"Missing name argument"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -742,6 +754,7 @@
     NSUInteger result = success ? 1 : 2; // 1 = RELEASED, 2 = NON_EXISTENT
     MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
                                                     arguments:@[@(result)]];
+    reply.signature = @"u"; // Force correct D-Bus signature for uint32
     reply.sender = @"org.freedesktop.DBus";
     reply.destination = connection.uniqueName;
     [connection sendMessage:reply];
@@ -759,7 +772,6 @@
         signal.signature = @"s";
         
         [connection sendMessage:signal];
-        [self broadcastToMonitors:signal];
         [signal release];
         
         NSDebugLLog(@"gwcomp", @"Sent NameLost signal for %@ to %@", name, connection.uniqueName);
@@ -808,6 +820,7 @@
                                         replySerial:message.serial
                                             message:@"Missing name argument"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
         return;
     }
@@ -819,12 +832,14 @@
         MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
                                                         arguments:@[owner.uniqueName]];
         reply.sender = @"org.freedesktop.DBus";
+        reply.destination = connection.uniqueName;
         [connection sendMessage:reply];
     } else {
         MBMessage *error = [MBMessage errorWithName:@"org.freedesktop.DBus.Error.NameHasNoOwner"
                                         replySerial:message.serial
                                             message:@"Name has no owner"];
         error.sender = @"org.freedesktop.DBus";
+        error.destination = connection.uniqueName;
         [connection sendMessage:error];
     }
 }
@@ -924,34 +939,26 @@
 
 - (void)routeMessage:(MBMessage *)message fromConnection:(MBConnection *)connection
 {
-    // Broadcast to monitors first (before any modification)
-    [self broadcastToMonitors:message];
-    
+
     // Set sender if not already set
     if (!message.sender && connection.uniqueName) {
         message.sender = connection.uniqueName;
     }
-    
-    // Add debugging for problematic messages
-    if (!message.destination || !message.interface || !message.member) {
-        NSDebugLLog(@"gwcomp", @"DEBUG: Problematic message - type=%u serial=%lu", message.type, (unsigned long)message.serial);
-        NSDebugLLog(@"gwcomp", @"       destination='%@' interface='%@' member='%@' path='%@'", 
-              message.destination, message.interface, message.member, message.path);
-        if (message.arguments && [message.arguments count] > 0) {
-            NSDebugLLog(@"gwcomp", @"       arguments: %@", message.arguments);
-        }
-        if (message.signature) {
-            NSDebugLLog(@"gwcomp", @"       signature: '%@'", message.signature);
-        }
-    }
 
     if (!message.destination) {
+        if (message.type == MBMessageTypeSignal) {
+            // Broadcast signal: deliver to every connection with a matching
+            // rule (including the sender, like dbus-daemon does).
+            [self deliverBroadcastSignal:message];
+            return;
+        }
+
         // No destination means this message is addressed to the message bus itself
         // According to D-Bus spec: "when the DESTINATION field is absent, the call is taken to be
         // a standard one-to-one message and interpreted by the message bus itself"
-        NSDebugLLog(@"gwcomp", @"Message has no destination, treating as message bus call - interface: '%@', member: '%@', path: '%@'", 
+        NSDebugLLog(@"gwcomp", @"Message has no destination, treating as message bus call - interface: '%@', member: '%@', path: '%@'",
               message.interface, message.member, message.path);
-        
+
         // Set destination to the message bus itself for internal handling
         message.destination = @"org.freedesktop.DBus";
     }
@@ -973,14 +980,16 @@
     }
     
     if (destConnection) {
+        NSLog(@"MBDaemon ROUTE -> %@ (socket=%d) type=%u serial=%lu dest='%@'",
+              destConnection.uniqueName, (int)destConnection.socket,
+              message.type, (unsigned long)message.serial, message.destination);
         [destConnection sendMessage:message];
-        NSDebugLLog(@"gwcomp", @"Routed message to %@", destConnection);
         
         // If this generates a reply, monitors should see that too
         // (this will be handled when the reply is processed)
         
     } else {
-        NSDebugLLog(@"gwcomp", @"No destination found for %@", message.destination);
+        NSLog(@"MBDaemon NO DEST for '%@' type=%u serial=%lu", message.destination, message.type, (unsigned long)message.serial);
         
         // Try auto-activation for method calls to well-known names
         if (message.type == MBMessageTypeMethodCall && 
@@ -1009,9 +1018,6 @@
                 error.sender = @"org.freedesktop.DBus";
                 error.destination = connection.uniqueName;
                 
-                // Broadcast error to monitors too
-                [self broadcastToMonitors:error];
-                
                 [connection sendMessage:error];
                 return;
             }
@@ -1023,9 +1029,7 @@
                                             replySerial:message.serial
                                                 message:@"Service not found"];
             error.sender = @"org.freedesktop.DBus";
-            
-            // Broadcast error to monitors too
-            [self broadcastToMonitors:error];
+            error.destination = connection.uniqueName;
             
             [connection sendMessage:error];
         }
@@ -1083,7 +1087,6 @@
         signal.signature = @"s";
         
         [nextOwner sendMessage:signal];
-        [self broadcastToMonitors:signal];
         [signal release];
         
         NSDebugLLog(@"gwcomp", @"Sent NameAcquired signal for %@ to new owner %@", name, nextOwner.uniqueName);
@@ -1102,13 +1105,8 @@
     ownerChangedSignal.arguments = @[name, oldOwner, newOwner];
     ownerChangedSignal.signature = @"sss";
     
-    // Broadcast to all connections
-    for (MBConnection *conn in _connections) {
-        if (conn.state == MBConnectionStateActive) {
-            [conn sendMessage:ownerChangedSignal];
-        }
-    }
-    [self broadcastToMonitors:ownerChangedSignal];
+    // Deliver to connections with matching rules (also mirrors to monitors once)
+    [self deliverBroadcastSignal:ownerChangedSignal];
     [ownerChangedSignal release];
     
     NSDebugLLog(@"gwcomp", @"Released name %@ from %@, new owner: %@", name, oldOwner, newOwner.length > 0 ? newOwner : @"(none)");
@@ -1163,23 +1161,15 @@
 
 - (void)broadcastToMonitors:(MBMessage *)message
 {
-    // Send message to all monitor connections
-    for (MBConnection *monitor in _monitorConnections) {
-        // Create a copy of the message for monitoring
-        MBMessage *monitorMessage = [[MBMessage alloc] init];
-        monitorMessage.type = message.type;
-        monitorMessage.destination = message.destination;
-        monitorMessage.sender = message.sender;
-        monitorMessage.interface = message.interface;
-        monitorMessage.member = message.member;
-        monitorMessage.path = message.path;
-        monitorMessage.signature = message.signature;
-        monitorMessage.serial = message.serial;
-        monitorMessage.replySerial = message.replySerial;
-        monitorMessage.arguments = message.arguments;
-        
-        [monitor sendMessage:monitorMessage];
-        [monitorMessage release];
+    [self monitorOutgoingMessage:message];
+}
+
+- (void)monitorOutgoingMessage:(MBMessage *)message
+{
+    // Mirror a message the daemon has just delivered (or is delivering) to
+    // every monitor connection. Sent without further mirroring.
+    for (MBConnection *monitor in [_monitorConnections copy]) {
+        [monitor sendMessage:message mirrorToMonitors:NO];
     }
 }
 
@@ -1359,8 +1349,8 @@
      @"  </interface>\n"];
     
     // Add child nodes for active services
-    @synchronized(_nameOwners) {
-        NSArray *sortedNames = [[_nameOwners allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    @synchronized(_nameOwnerships) {
+        NSArray *sortedNames = [[_nameOwnerships allKeys] sortedArrayUsingSelector:@selector(compare:)];
         for (NSString *name in sortedNames) {
             if (![name hasPrefix:@":"]) { // Only well-known names, not unique names
                 // Escape XML special characters in service names
@@ -1606,8 +1596,16 @@
             return;
         }
         
+        // Properties.Get must return a variant wrapping the actual value
+        MBVariant *variant = nil;
+        if ([propertyValue isKindOfClass:[NSArray class]]) {
+            NSString *innerSig = [MBMessage signatureForValue:propertyValue];
+            variant = [MBVariant variantWithSignature:innerSig value:propertyValue];
+        } else {
+            variant = [MBVariant variantWithSignature:@"s" value:propertyValue ?: @""];
+        }
         MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
-                                                        arguments:@[propertyValue]];
+                                                        arguments:@[variant]];
         reply.sender = @"org.freedesktop.DBus";
         reply.destination = connection.uniqueName;
         [connection sendMessage:reply];
@@ -1642,17 +1640,14 @@
     
     // For org.freedesktop.DBus interface, return the standard properties
     if ([interfaceName isEqualToString:@"org.freedesktop.DBus"]) {
-        // For now, return an empty dictionary since our serializer doesn't support a{sv} properly
-        // TODO: Implement proper D-Bus dictionary serialization
-        
+        // Return an empty dictionary - the serializer handles a{sv} correctly
         MBMessage *reply = [MBMessage methodReturnWithReplySerial:message.serial
-                                                        arguments:@[]];
-        reply.signature = @"a{sv}";  // Set correct signature manually
+                                                        arguments:@[@{}]];
         reply.sender = @"org.freedesktop.DBus";
         reply.destination = connection.uniqueName;
         [connection sendMessage:reply];
         
-        NSDebugLLog(@"gwcomp", @"Properties.GetAll for interface '%@' - returned empty dictionary (serialization limitation)", interfaceName);
+        NSDebugLLog(@"gwcomp", @"Properties.GetAll for interface '%@' - returned empty dictionary", interfaceName);
     } else {
         NSDebugLLog(@"gwcomp", @"Unimplemented: Properties.GetAll for interface '%@' - interface not supported", interfaceName);
         
@@ -1783,7 +1778,6 @@
             nameLostSignal.signature = @"s";
             
             [currentOwner sendMessage:nameLostSignal];
-            [self broadcastToMonitors:nameLostSignal];
             [nameLostSignal release];
             
             // Send NameOwnerChanged signal
@@ -1817,25 +1811,171 @@
 // Helper method to send NameOwnerChanged signal
 - (void)sendNameOwnerChangedSignal:(NSString *)name oldOwner:(NSString *)oldOwner newOwner:(NSString *)newOwner
 {
-    MBMessage *signal = [[MBMessage alloc] init];
-    signal.type = MBMessageTypeSignal;
-    signal.interface = @"org.freedesktop.DBus";
-    signal.member = @"NameOwnerChanged";
-    signal.path = @"/org/freedesktop/DBus";
+    MBMessage *signal = [MBMessage signalWithPath:@"/org/freedesktop/DBus"
+                                        interface:@"org.freedesktop.DBus"
+                                           member:@"NameOwnerChanged"
+                                       arguments:@[name, oldOwner ?: @"", newOwner ?: @""]];
     signal.sender = @"org.freedesktop.DBus";
-    signal.arguments = @[name, oldOwner, newOwner];
-    signal.signature = @"sss";
-    
-    // Broadcast to all connections
-    for (MBConnection *conn in _connections) {
-        if (conn.state == MBConnectionStateActive) {
-            [conn sendMessage:signal];
+
+    // Delivered to connections with matching rules only, like dbus-daemon
+    [self deliverBroadcastSignal:signal];
+
+    NSDebugLLog(@"gwcomp", @"Sent NameOwnerChanged signal: %@ from '%@' to '%@'", name, oldOwner, newOwner);
+}
+
+#pragma mark - Match rules
+
+// Parse "key='value',key2='value2'" into a dictionary
+- (NSDictionary *)parseMatchRule:(NSString *)rule
+{
+    NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+    NSUInteger i = 0;
+    NSUInteger len = [rule length];
+
+    while (i < len) {
+        while (i < len && ([rule characterAtIndex:i] == ',' || [rule characterAtIndex:i] == ' ')) i++;
+        NSUInteger keyStart = i;
+        while (i < len && [rule characterAtIndex:i] != '=') i++;
+        if (i >= len || i == keyStart) break;
+        NSString *key = [rule substringWithRange:NSMakeRange(keyStart, i - keyStart)];
+        i++; // skip '='
+        if (i >= len || [rule characterAtIndex:i] != '\'') break;
+        i++;
+        NSMutableString *value = [NSMutableString string];
+        while (i < len && [rule characterAtIndex:i] != '\'') {
+            unichar c = [rule characterAtIndex:i];
+            if (c == '\\' && i + 1 < len) {
+                i++;
+                c = [rule characterAtIndex:i];
+            }
+            [value appendFormat:@"%C", c];
+            i++;
+        }
+        if (i < len) i++; // skip closing quote
+        if ([key length] > 0) {
+            dict[key] = value;
         }
     }
-    [self broadcastToMonitors:signal];
-    [signal release];
-    
-    NSDebugLLog(@"gwcomp", @"Sent NameOwnerChanged signal: %@ from '%@' to '%@'", name, oldOwner, newOwner);
+    return dict;
+}
+
+- (NSString *)senderNameForMatchRuleValue:(NSString *)value
+{
+    // Rules may name a connection by unique or well-known name; well-known
+    // names resolve to the current owner's unique name.
+    if (!value || [value hasPrefix:@":"]) {
+        return value;
+    }
+    MBConnection *owner = [self ownerOfName:value];
+    return owner ? owner.uniqueName : value;
+}
+
+- (BOOL)matchRule:(NSString *)rule matchesMessage:(MBMessage *)message
+{
+    NSDictionary *r = [self parseMatchRule:rule];
+
+    NSString *v = r[@"type"];
+    if (v) {
+        NSString *typeName;
+        switch (message.type) {
+            case MBMessageTypeMethodCall:   typeName = @"method_call"; break;
+            case MBMessageTypeMethodReturn: typeName = @"method_return"; break;
+            case MBMessageTypeError:        typeName = @"error"; break;
+            case MBMessageTypeSignal:       typeName = @"signal"; break;
+            default:                        typeName = @""; break;
+        }
+        if (![v isEqualToString:typeName]) return NO;
+    }
+
+    v = r[@"sender"];
+    if (v) {
+        NSString *sender = [self senderNameForMatchRuleValue:v];
+        if (![sender isEqualToString:message.sender ?: @""]) return NO;
+    }
+
+    v = r[@"interface"];
+    if (v && ![v isEqualToString:message.interface ?: @""]) return NO;
+
+    v = r[@"member"];
+    if (v && ![v isEqualToString:message.member ?: @""]) return NO;
+
+    v = r[@"path"];
+    if (v && ![v isEqualToString:message.path ?: @""]) return NO;
+
+    v = r[@"path_namespace"];
+    if (v) {
+        NSString *path = message.path ?: @"";
+        if (![path isEqualToString:v] && ![path hasPrefix:[v stringByAppendingString:@"/"]]) return NO;
+    }
+
+    v = r[@"destination"];
+    if (v && ![v isEqualToString:message.destination ?: @""]) return NO;
+
+    // argN, argNpath, argNnamespace: only string arguments are supported
+    for (NSString *key in r) {
+        NSString *suffix = nil;
+        BOOL isPath = NO, isNamespace = NO;
+
+        if ([key hasPrefix:@"arg"] && [key length] > 3) {
+            suffix = [key substringFromIndex:3];
+        } else {
+            continue;
+        }
+
+        if ([suffix hasSuffix:@"path"]) {
+            isPath = YES;
+            suffix = [suffix substringToIndex:[suffix length] - 4];
+        } else if ([suffix hasSuffix:@"namespace"]) {
+            isNamespace = YES;
+            suffix = [suffix substringToIndex:[suffix length] - 9];
+        }
+
+        long long argIndexValue = 0;
+        NSScanner *scanner = [NSScanner scannerWithString:suffix];
+        if (argIndexValue < 0 || ![scanner scanLongLong:&argIndexValue] || ![scanner isAtEnd] || argIndexValue < 0) {
+            continue; // unknown key: ignore it
+        }
+        NSUInteger argIndex = (NSUInteger)argIndexValue;
+
+        if (argIndex >= [message.arguments count]) return NO;
+        id arg = [message.arguments objectAtIndex:argIndex];
+        if (![arg isKindOfClass:[NSString class]]) return NO;
+
+        if (isPath) {
+            if (![(NSString *)arg hasPrefix:[v stringByAppendingString:@"/"]] &&
+                ![(NSString *)arg isEqualToString:v]) return NO;
+        } else if (isNamespace) {
+            NSString *argStr = (NSString *)arg;
+            if (![argStr isEqualToString:v] &&
+                ![argStr hasPrefix:[v stringByAppendingString:@"."]]) return NO;
+        } else {
+            if (![v isEqualToString:(NSString *)arg]) return NO;
+        }
+    }
+
+    return YES;
+}
+
+// Deliver a broadcast signal to all connections with a matching rule
+- (void)deliverBroadcastSignal:(MBMessage *)message
+{
+    [self broadcastToMonitors:message];
+
+    for (MBConnection *conn in [_connections copy]) {
+        if (conn.state != MBConnectionStateActive || conn.socket < 0) {
+            continue;
+        }
+        NSArray *rules = self.matchRules[conn.uniqueName];
+        if (!rules) continue;
+
+        for (NSString *rule in rules) {
+            if ([self matchRule:rule matchesMessage:message]) {
+                // The broadcast was already mirrored to monitors once
+                [conn sendMessage:message mirrorToMonitors:NO];
+                break;
+            }
+        }
+    }
 }
 
 // Helper method to clean up match rules when connection closes
@@ -2028,9 +2168,6 @@
             
             NSDebugLLog(@"gwcomp", @"Sending timeout error for %@.%@ (serial %lu) to %@", 
                   message.interface, message.member, (unsigned long)message.serial, connection.uniqueName);
-            
-            // Broadcast error to monitors too
-            [self broadcastToMonitors:error];
             
             [connection sendMessage:error];
         } else {

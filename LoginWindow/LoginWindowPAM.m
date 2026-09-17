@@ -145,7 +145,7 @@ int loginwindow_pam_conv(int num_msg, const struct pam_message **msg,
     } else if (!sp) {
         // No shadow entry (e.g. user has * in passwd but no shadow).
         // Without a shadow entry PAM has no hash to verify against,
-        // so nullok accepts any password — treat as passwordless.
+        // so nullok accepts any password - treat as passwordless.
         accountIsPasswordless = YES;
     }
 #endif
@@ -202,7 +202,7 @@ int loginwindow_pam_conv(int num_msg, const struct pam_message **msg,
             return NO;
         }
     } else {
-        NSDebugLLog(@"gwcomp", @"[PAM] Passwordless account with empty password — skipping pam_authenticate");
+        NSDebugLLog(@"gwcomp", @"[PAM] Passwordless account with empty password - skipping pam_authenticate");
     }
     result = pam_acct_mgmt(pam_handle, PAM_SILENT);
     NSDebugLLog(@"gwcomp", @"[PAM] pam_acct_mgmt result: %d (%s)", result, pam_strerror(pam_handle, result));

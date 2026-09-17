@@ -6,8 +6,24 @@
 
 #import "MousePane.h"
 #import "MouseController.h"
+#include <stdlib.h>
 
 @implementation MousePane
+
++ (BOOL)isCompatible {
+  NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
+  NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
+  for (NSString *dir in paths) {
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
+          [dir stringByAppendingPathComponent: @"xinput"]])
+      return YES;
+  }
+  return NO;
+}
+
++ (NSString *)compatibilityReason {
+  return @"xinput not found - mouse configuration requires X11";
+}
 
 - (id)initWithBundle:(NSBundle *)bundle
 {
@@ -37,11 +53,9 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
-{
-    [controller refreshFromSystem];
-}
-
+/* The host also loads the main view without selecting it (to index its
+   labels for search), so querying and loading device state must wait until
+   the pane is actually shown. */
 - (void)didSelect
 {
     [super didSelect];

@@ -117,7 +117,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
         if (oldPid && [oldPid intValue] > 0) {
             pid_t pid = [oldPid intValue];
             if (kill(pid, 0) == 0) {
-                // Process exists and we can signal it — kill it
+                // Process exists and we can signal it - kill it
                 kill(pid, SIGTERM);
                 // Give it a moment then reap
                 int status;
@@ -420,7 +420,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
     // Stop any existing publisher for this service type first
     [self stopBackgroundPublisher:serviceType];
 
-    // Convert to C strings before forking — ObjC messaging is not
+    // Convert to C strings before forking - ObjC messaging is not
     // async-signal-safe and must not happen in the child.
     const char *hostnameC = [hostname UTF8String];
     const char *typeC = [typeStr UTF8String];
@@ -429,7 +429,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
 
     pid_t pid = fork();
     if (pid == 0) {
-        // Child — daemonize, then exec the mDNS publisher
+        // Child - daemonize, then exec the mDNS publisher
         setsid();
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
@@ -443,13 +443,13 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
         // Fallback to dns-sd -R (name type domain port)
         execlp("dns-sd", "dns-sd", "-R",
                hostnameC, typeC, "local.", portStr, NULL);
-        // Neither found — exit
+        // Neither found - exit
         _exit(1);
     } else if (pid > 0) {
-        // Parent — store the PID so we can stop it later
+        // Parent - store the PID so we can stop it later
         [backgroundPIDs setObject:[NSNumber numberWithInt:pid]
                            forKey:[NSNumber numberWithInt:serviceType]];
-        // Don't waitpid — the child is a daemon; we reap on stop
+        // Don't waitpid - the child is a daemon; we reap on stop
     }
 }
 
@@ -480,7 +480,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
 
     pid_t pid = fork();
     if (pid == 0) {
-        // Child — daemonize
+        // Child - daemonize
         setsid();
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
@@ -501,7 +501,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
                hostnameC, "_workstation._tcp.", "local.", "9", NULL);
         _exit(1);
     } else if (pid > 0) {
-        // Parent — store the PID so we can stop it later
+        // Parent - store the PID so we can stop it later
         [backgroundPIDs setObject:[NSNumber numberWithInt:pid]
                            forKey:[NSNumber numberWithInt:-1]];
     }

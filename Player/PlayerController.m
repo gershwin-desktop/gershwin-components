@@ -35,6 +35,13 @@
     BOOL _usingStreamPlayer;
     BOOL _soundAlertShown;
     BOOL _suppressFlowSelection;
+
+    // Quit-time fade-out of running sound
+    BOOL _quittingAfterFade;
+    NSTimer *_fadeTimer;
+    NSDate *_fadeStartDate;
+    float _fadeStartStreamVolume;
+    float _fadeStartAudioVolume;
 }
 - (void)restoreWindowTitle;
 - (void)handleDroppedFiles:(NSArray *)filePaths;
@@ -49,6 +56,8 @@
                         placeholder:(NSString *)placeholder;
 - (void)_dismissInputDialog:(id)sender;
 - (void)_setupAVPlayerWithURL:(NSURL *)streamURL;
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender;
+- (void)fadeOutTick:(NSTimer *)timer;
 @end
 
 // Default window size (content rect, excl. titlebar)
@@ -232,7 +241,7 @@
     _frameWidth = width;
     _frameHeight = height;
 
-    // Force immediate synchronous drawing — display triggers
+    // Force immediate synchronous drawing - display triggers
     // drawRect: directly without waiting for the next run-loop iteration.
     [self display];
     [[self window] flushWindow];
@@ -562,7 +571,7 @@
                                                     keyEquivalent:@""];
     NSMenu *radioMenu = [[NSMenu alloc] initWithTitle:@"Radio"];
 
-    // Browse Radio Stations — Cmd+R (Repeat moved to Cmd+Shift+R to avoid conflict)
+    // Browse Radio Stations - Cmd+R (Repeat moved to Cmd+Shift+R to avoid conflict)
     radioModeMenuItem = (NSMenuItem *)
         [radioMenu addItemWithTitle:@"Browse Radio Stations"
                              action:@selector(toggleRadioMode:)
@@ -570,7 +579,7 @@
     [radioModeMenuItem setTarget:self];
     [radioModeMenuItem setKeyEquivalentModifierMask:NSCommandKeyMask];
 
-    // Open Radio Stream — Cmd+U
+    // Open Radio Stream - Cmd+U
     [radioMenu addItemWithTitle:@"Open Radio Stream..."
                          action:@selector(openRadioStream:)
                   keyEquivalent:@"u"];
@@ -581,7 +590,7 @@
     // Separator
     [radioMenu addItem:[NSMenuItem separatorItem]];
 
-    // Stop Radio — Cmd+.
+    // Stop Radio - Cmd+.
     [radioMenu addItemWithTitle:@"Stop Radio"
                          action:@selector(radioStop:)
                   keyEquivalent:@"."];
@@ -792,7 +801,20 @@
     [contentView addSubview:detailsLabel];
 
     // ===== RADIO MODE UI ELEMENTS (hidden initially) =====
-    searchField = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    BOOL themeSearch = [NSSearchFieldCell instancesRespondToSelector:@selector(EAUsearchButtonRectForBounds:)];
+    if (themeSearch)
+      {
+        searchField = [[NSSearchField alloc] initWithFrame:NSZeroRect];
+      }
+    else
+      {
+        NSTextField *tf = [[NSTextField alloc] initWithFrame:NSZeroRect];
+        [tf setBezeled:YES];
+        [tf setBezelStyle:NSTextFieldRoundedBezel];
+        [tf setEditable:YES];
+        [tf setSelectable:YES];
+        searchField = tf;
+      }
     [[searchField cell] setPlaceholderString:@"Search Radio Stations..."];
     [searchField setTarget:self];
     [searchField setAction:@selector(radioSearchAction:)];
@@ -1395,7 +1417,7 @@
     // Restore persisted volume slider for the current mode
     [volumeSlider setDoubleValue:(playerMode == PlayerModeRadio) ? radioVolume : localVolume];
 
-    // Restore persisted radio mode — reset guard so enterRadioMode runs
+    // Restore persisted radio mode - reset guard so enterRadioMode runs
     if (playerMode == PlayerModeRadio) {
         playerMode = PlayerModeLocal;
         [self enterRadioMode];
@@ -1417,7 +1439,7 @@
         NSLog(@"[Player] yt-dlp not found - URL resolution disabled");
     }
 
-    [self updateStatus:@"Ready — open a media file to start playing"];
+    [self updateStatus:@"Ready - open a media file to start playing"];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification
@@ -1426,6 +1448,11 @@
         [playbackTimer invalidate];
         [playbackTimer release];
         playbackTimer = nil;
+    }
+    if (_fadeTimer) {
+        [_fadeTimer invalidate];
+        [_fadeTimer release];
+        _fadeTimer = nil;
     }
     if (overlayHideTimer) {
         [overlayHideTimer invalidate];
@@ -1437,6 +1464,72 @@
     }
     if (audioPlayer) {
         [audioPlayer stop];
+    }
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+    // Second pass: the fade is done, let the app die
+    if (_quittingAfterFade) {
+        return NSTerminateNow;
+    }
+
+    NSLog(@"[Player] applicationShouldTerminate: checking for running sound");
+
+    BOOL streamPlaying = [[StreamPlayer sharedPlayer] isPlaying];
+    BOOL avPlaying = (avPlayer != nil && [avPlayer rate] > 0.0f);
+    BOOL audioPlaying = (audioPlayer != nil && [audioPlayer isPlaying]);
+    if (!streamPlaying && !avPlaying && !audioPlaying) {
+        return NSTerminateNow;
+    }
+
+    // Hide the windows first so the app is out of sight while the
+    // sound fades away behind the scenes.
+    [[NSApp windows] makeObjectsPerformSelector:@selector(orderOut:) withObject:nil];
+
+    _fadeStartStreamVolume = [[StreamPlayer sharedPlayer] volume];
+    _fadeStartAudioVolume = (audioPlayer != nil) ? [audioPlayer volume] : 0.0f;
+    [_fadeStartDate release];
+    _fadeStartDate = [[NSDate alloc] init];
+
+    _fadeTimer = [NSTimer scheduledTimerWithTimeInterval:0.02
+                                                  target:self
+                                                selector:@selector(fadeOutTick:)
+                                                userInfo:nil
+                                                 repeats:YES];
+
+    return NSTerminateLater;
+}
+
+- (void)fadeOutTick:(NSTimer *)timer
+{
+    static const NSTimeInterval fadeDuration = 1.0;
+
+    NSTimeInterval elapsed = -[_fadeStartDate timeIntervalSinceNow];
+    CGFloat t = elapsed / fadeDuration;
+    if (t > 1.0) {
+        t = 1.0;
+    }
+
+    // Smoothstep easing so the fade starts and ends gently
+    CGFloat eased = t * t * (3.0 - 2.0 * t);
+    float remaining = 1.0f - (float)eased;
+
+    [[StreamPlayer sharedPlayer] setVolume:_fadeStartStreamVolume * remaining];
+    if (audioPlayer != nil) {
+        [audioPlayer setVolume:_fadeStartAudioVolume * remaining];
+    }
+
+    if (t >= 1.0) {
+        NSLog(@"[Player] fade-out done, terminating");
+        [_fadeTimer invalidate];
+        [_fadeTimer release];
+        _fadeTimer = nil;
+        [_fadeStartDate release];
+        _fadeStartDate = nil;
+        [[StreamPlayer sharedPlayer] setVolume:0.0f];
+        _quittingAfterFade = YES;
+        [NSApp replyToApplicationShouldTerminate:YES];
     }
 }
 
@@ -1691,16 +1784,16 @@
         if ([[StreamPlayer sharedPlayer] openURL:filePath error:&err]) {
             _usingStreamPlayer = YES;
             if ([[StreamPlayer sharedPlayer] hasVideo]) {
-                // Show videoView immediately — a video track was found
+                // Show videoView immediately - a video track was found
                 [videoView setHidden:NO];
                 [flowView setHidden:YES];
             } else {
-                // Audio-only file with a video extension — show flow
+                // Audio-only file with a video extension - show flow
                 [videoView setHidden:YES];
                 [flowView setHidden:NO];
             }
         } else {
-            NSLog(@"[Player] StreamPlayer failed for %@: %@ — falling back to AVPlayer audio-only",
+            NSLog(@"[Player] StreamPlayer failed for %@: %@ - falling back to AVPlayer audio-only",
                   filePath, [err localizedDescription]);
             [videoView setHidden:YES];
             [flowView setHidden:NO];
@@ -2315,7 +2408,7 @@
         return;
     }
 
-    // Retain for MRC — released in the main-thread callback
+    // Retain for MRC - released in the main-thread callback
     [pathsToExtract retain];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
         @autoreleasepool {
@@ -2528,7 +2621,7 @@
         NSArray *urls = [panel URLs];
         if ([urls count] == 0) return;
 
-        // Clear existing playlist and stop playback — Open replaces, not appends
+        // Clear existing playlist and stop playback - Open replaces, not appends
         [self stopPlayback];
         [playlist removeAllObjects];
         [flowView reloadData];
@@ -2546,7 +2639,7 @@
             BOOL isDir = NO;
             [[NSFileManager defaultManager] fileExistsAtPath:[paths firstObject] isDirectory:&isDir];
             if (!isDir) {
-                // Single file — original fast path
+                // Single file - original fast path
                 [self loadFile:[paths firstObject]];
                 [self play];
                 return;
@@ -3043,10 +3136,14 @@
                                                  forKey:@"PlayerRadioVolume"];
         [[RadioManager sharedManager] setVolume:vol];
     } else {
-        // Local mode — persist and apply
+        // Local mode - persist and apply
         localVolume = vol;
         [[NSUserDefaults standardUserDefaults] setFloat:localVolume
                                                  forKey:@"PlayerLocalVolume"];
+        if (_usingStreamPlayer) {
+            // Local video files play through StreamPlayer
+            [[StreamPlayer sharedPlayer] setVolume:vol];
+        }
         if (audioPlayer) {
             [audioPlayer setVolume:vol];
             // Also try through NSSound directly if available
@@ -3066,6 +3163,9 @@
     } else {
         // Local mode: mute by setting volume to 0, unmute by restoring slider value
         float targetVol = isMuted ? 0.0f : [volumeSlider floatValue];
+        if (_usingStreamPlayer) {
+            [[StreamPlayer sharedPlayer] setMuted:isMuted];
+        }
         if (audioPlayer) {
             [audioPlayer setVolume:targetVol];
             NSSound *sound = [audioPlayer valueForKey:@"sound"];
@@ -3135,12 +3235,12 @@
     [input setSelectable:YES];
     [cv addSubview:input];
 
-    // Buttons — default (OK) in lower-right corner, Cancel to its left per HIG
+    // Buttons - default (OK) in lower-right corner, Cancel to its left per HIG
     CGFloat buttonY = METRICS_CONTENT_BOTTOM_MARGIN;
     CGFloat buttonW = METRICS_BUTTON_MIN_WIDTH;
     CGFloat buttonH = METRICS_BUTTON_HEIGHT;
 
-    // OK button (rightmost — lower-right corner)
+    // OK button (rightmost - lower-right corner)
     CGFloat okX = pw - METRICS_CONTENT_SIDE_MARGIN - buttonW;
     NSButton *okButton = [[[NSButton alloc]
         initWithFrame:NSMakeRect(okX, buttonY, buttonW, buttonH)] autorelease];

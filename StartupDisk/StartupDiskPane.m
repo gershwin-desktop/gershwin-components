@@ -6,8 +6,62 @@
 
 #import "StartupDiskPane.h"
 #import "StartupDiskController.h"
+#include <stdlib.h>
+
+@class StartupDiskController;
+
+/* The pane view.  The host sizes it to the preferences-box content area
+   (640x440 on this stack); fill the superview exactly and let the controller
+   re-lay out the controls to the actual width, so margins stay symmetric and
+   nothing is clipped. */
+@interface StartupDiskMainView : NSView
+{
+    StartupDiskController *_layoutOwner;
+}
+- (void)setLayoutOwner:(StartupDiskController *)owner;
+@end
+
+@implementation StartupDiskMainView
+- (void)setFrameSize:(NSSize)newSize
+{
+    [super setFrameSize:newSize];
+    [_layoutOwner relayoutWithWidth:newSize.width];
+}
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    if ([self window] && [self superview]) {
+        [self setFrame:[[self superview] bounds]];
+        [_layoutOwner relayoutWithWidth:NSWidth([[self superview] bounds])];
+    }
+}
+- (void)setLayoutOwner:(StartupDiskController *)owner
+{
+    _layoutOwner = owner;
+}
+@end
 
 @implementation StartupDiskPane
+
++ (BOOL)isCompatible {
+  /* A minimal launcher environment may not set PATH at all, and
+     stringWithUTF8String: raises on the resulting NULL. */
+  const char *pathEnv = getenv("PATH");
+  if (pathEnv == NULL)
+    return NO;
+  NSArray *paths = [[NSString stringWithUTF8String: pathEnv]
+                     componentsSeparatedByString: @":"];
+  for (NSString *dir in paths) {
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
+          [dir stringByAppendingPathComponent: @"efibootmgr"]])
+      return YES;
+  }
+  return NO;
+}
+
++ (NSString *)compatibilityReason {
+  return @"efibootmgr not found - startup disk selection requires EFI boot manager";
+}
 
 - (id)initWithBundle:(NSBundle *)bundle
 {
@@ -23,42 +77,30 @@
     return self;
 }
 
+/* The host calls this on every selection, and its search index calls it
+   without selecting the pane at all, so the view must be built exactly once
+   and building it must not touch EFI state; boot entries are fetched in
+   didSelect. */
 - (NSView *)loadMainView
 {
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: loadMainView called");
-    
-    // Create the main view if it doesn't exist
     if (![self mainView]) {
-        NSDebugLLog(@"gwcomp", @"StartupDiskPane: No main view exists, creating one");
-        NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
+        StartupDiskMainView *view = [[StartupDiskMainView alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
         [self setMainView:view];
         [view release];
-        NSDebugLLog(@"gwcomp", @"StartupDiskPane: Created main view with frame: %@", NSStringFromRect([view frame]));
+        [self mainViewDidLoad];
     }
-    
-    NSView *mainView = [super loadMainView];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: super loadMainView completed, returned view = %@", mainView);
-    [self mainViewDidLoad];
-    return mainView;
+    return [self mainView];
 }
 
 - (void)mainViewDidLoad
 {
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainViewDidLoad called");
-    
-    NSView *mainView = [self mainView];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainView = %@", mainView);
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainView frame = %@", NSStringFromRect([mainView frame]));
-    
+    /* A second controller would add a duplicate set of controls to the same
+       view and orphan the first one's helper process. */
+    if (startupDiskController) {
+        return;
+    }
     startupDiskController = [[StartupDiskController alloc] init];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: Created startupDiskController = %@", startupDiskController);
-    
-    [startupDiskController setMainView:mainView];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: Set main view on controller");
-    
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: About to call refreshBootEntries");
-    [self refreshBootEntries];
-    NSDebugLLog(@"gwcomp", @"StartupDiskPane: mainViewDidLoad completed");
+    [startupDiskController setMainView:[self mainView]];
 }
 
 - (void)refreshBootEntries

@@ -23,16 +23,22 @@
     WindowSwitchContext *ctx = [[WindowSwitchContext alloc] init];
     ctx.windowId = windowId;
 
-    /* Check if this is a Menu.app-owned window (should be ignored) */
+    /* Check if this is a Menu.app-owned window (should be ignored).
+       Also match by PID to catch NSMenuWindow popups that [NSApp
+       windowWithWindowNumber:] does not track (e.g. results menu popup). */
     ctx.isSelfWindow = ([NSApp windowWithWindowNumber:windowId] != nil);
+    if (!ctx.isSelfWindow) {
+        pid_t windowPID = [MenuUtils getWindowPID:windowId];
+        ctx.isSelfWindow = (windowPID == [[NSProcessInfo processInfo] processIdentifier]);
+    }
     if (ctx.isSelfWindow) {
         return ctx;
     }
 
-    /* PID — single X11 round-trip */
+    /* PID - single X11 round-trip */
     ctx.pid = [MenuUtils getWindowPID:windowId];
 
-    /* App name — may require several X11 property reads but done once */
+    /* App name - may require several X11 property reads but done once */
     @try {
         ctx.appName = [MenuUtils getApplicationNameForWindow:windowId];
     } @catch (NSException *exception __attribute__((unused))) {
@@ -43,10 +49,10 @@
     ctx.isDialog  = [MenuUtils isDialogWindow:windowId];
     ctx.isDesktop = [MenuUtils isDesktopWindow:windowId];
 
-    /* Validity — XGetWindowAttributes */
+    /* Validity - XGetWindowAttributes */
     ctx.isValid = [MenuUtils isWindowValid:windowId] && [MenuUtils isWindowMapped:windowId];
 
-    /* Menu availability — protocol manager lookup */
+    /* Menu availability - protocol manager lookup */
     ctx.hasRegisteredMenu = [pm hasMenuForWindow:windowId];
 
     return ctx;

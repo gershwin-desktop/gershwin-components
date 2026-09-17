@@ -1,6 +1,6 @@
 //
 //  MenuProfiler.m
-//  Menu — Lightweight CPU profiling instrumentation
+//  Menu - Lightweight CPU profiling instrumentation
 //
 //  Collects per-probe call counts, total/min/max times since launch.
 //  Dumps a sorted summary to stderr every MENU_PROFILE_INTERVAL seconds.
@@ -71,9 +71,9 @@ static int compareByTotal(const void *a, const void *b) {
 
 int menuProbeRegister(const char *name) {
     ensureInitialized();
-    // Linear scan is fine — only called once per probe site (static local caches index).
+    // Linear scan is fine - only called once per probe site (static local caches index).
     for (int i = 0; i < sProbeCount; i++) {
-        if (sProbes[i].name == name) return i;   // pointer comparison — same literal
+        if (sProbes[i].name == name) return i;   // pointer comparison - same literal
     }
     if (sProbeCount >= MENU_MAX_PROBES) {
         fprintf(stderr, "[Profile] WARNING: probe limit (%d) reached, ignoring '%s'\n",
@@ -166,7 +166,7 @@ void menuProfileInstallSignalHandler(void) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     sigaction(SIGUSR1, &sa, NULL);
-    fprintf(stderr, "[Profile] Instrumentation active — dump with: kill -USR1 %d\n", getpid());
+    fprintf(stderr, "[Profile] Instrumentation active - dump with: kill -USR1 %d\n", getpid());
 }
 
 #endif /* MENU_PROFILING */

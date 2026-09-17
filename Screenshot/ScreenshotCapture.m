@@ -4,105 +4,112 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-
 #import "ScreenshotCapture.h"
-#import <AppKit/NSBitmapImageRep.h>
-#import <AppKit/NSImage.h>
-#import <Foundation/NSPathUtilities.h>
-#import <Foundation/NSDate.h>
-#import <Foundation/NSDateFormatter.h>
+#import <AppKit/AppKit.h>
+#import <GNUstepGUI/GSTheme.h>
 
-// Import the C interface
-extern int x11_init(void);
-extern void x11_cleanup(void);
-extern unsigned char* x11_capture_data(CaptureMode mode, int delay, CaptureRect* rect, 
-                                         int* width, int* height, int* bytes_per_pixel);
-extern void x11_free_data(unsigned char* data);
-extern CaptureRect x11_select_window(void);
-extern CaptureRect x11_select_area(void);
-extern CaptureRect x11_get_active_window(void);
+/* Long enough to be noticed, short enough not to be in the way. */
+static const NSTimeInterval kFlashDuration = 0.15;
+
+static NSString * const kIncludeWindowFrameKey = @"ScreenshotIncludeWindowTitle";
+static NSString * const kIncludeWindowShadowKey = @"ScreenshotIncludeWindowShadow";
+
+// Optional theme methods (implemented by some themes, e.g. Eau); queried
+// with respondsToSelector: like the window manager does.
+@interface NSObject (ScreenshotThemeCornerRadii)
+- (CGFloat)titlebarCornerRadius;
+- (CGFloat)windowBottomCornerRadius;
+@end
+
+@implementation ScreenshotPreferences
+
++ (void)initialize
+{
+    if (self == [ScreenshotPreferences class]) {
+        [[NSUserDefaults standardUserDefaults] registerDefaults:
+            [NSDictionary dictionaryWithObjectsAndKeys:
+                [NSNumber numberWithBool:YES], kIncludeWindowFrameKey,
+                [NSNumber numberWithBool:YES], kIncludeWindowShadowKey,
+                nil]];
+    }
+}
+
++ (BOOL)includeWindowFrame
+{
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kIncludeWindowFrameKey];
+}
+
++ (void)setIncludeWindowFrame:(BOOL)flag
+{
+    [[NSUserDefaults standardUserDefaults] setBool:flag forKey:kIncludeWindowFrameKey];
+}
+
++ (BOOL)includeWindowShadow
+{
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kIncludeWindowShadowKey];
+}
+
++ (void)setIncludeWindowShadow:(BOOL)flag
+{
+    [[NSUserDefaults standardUserDefaults] setBool:flag forKey:kIncludeWindowShadowKey];
+}
+
+@end
 
 @implementation ScreenshotCapture
 
-+ (BOOL)initializeX11 {
-    return x11_init() == 1;
-}
++ (NSBitmapImageRep *)captureWithMode:(ScreenshotMode)mode
+                         includeFrame:(BOOL)includeFrame
+                        includeShadow:(BOOL)includeShadow
+                               status:(CaptureStatus *)status
+{
+    CaptureSnapshot *snapshot = NULL;
+    *status = x11_snapshot_take(&snapshot);
+    if (*status != CaptureStatusOK)
+        return nil;
 
-+ (void)cleanupX11 {
-    x11_cleanup();
-}
+    unsigned char *pixels = NULL;
+    int width = 0, height = 0;
 
-+ (NSString *)captureScreenshotWithMode:(CaptureMode)mode 
-                               filename:(NSString *)filename 
-                                  delay:(int)delay 
-                                   rect:(CaptureRect)rect {
-    // Capture image first
-    NSImage *image = [self captureImageWithMode:mode delay:delay rect:rect];
-    if (!image) {
-        return nil;
+    switch (mode) {
+    case ScreenshotModeWindow: {
+        WindowSelection selection;
+        *status = x11_select_window(snapshot, includeFrame, &selection);
+        if (*status != CaptureStatusOK)
+            break;
+        // Match the corners the window manager draws for the current theme
+        id theme = [GSTheme theme];
+        float topRadius = 0, bottomRadius = 0;
+        if ([theme respondsToSelector:@selector(titlebarCornerRadius)])
+            topRadius = [theme titlebarCornerRadius];
+        if ([theme respondsToSelector:@selector(windowBottomCornerRadius)])
+            bottomRadius = [theme windowBottomCornerRadius];
+        pixels = x11_capture_window(snapshot, &selection, includeShadow,
+                                    topRadius, bottomRadius, &width, &height);
+        break;
     }
-    
-    // Generate filename if not provided
-    NSString *filepath = filename;
-    if (!filepath || [filepath length] == 0) {
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyy-MM-dd-HHmmss"];
-        NSString *dateString = [formatter stringFromDate:[NSDate date]];
-        [formatter release];
-        
-        NSString *defaultName = [NSString stringWithFormat:@"Screenshot-%@.png", dateString];
-        NSArray *desktopPaths = NSSearchPathForDirectoriesInDomains(NSDesktopDirectory, NSUserDomainMask, YES);
-        if ([desktopPaths count] > 0) {
-            NSString *desktopPath = [desktopPaths objectAtIndex:0];
-            filepath = [desktopPath stringByAppendingPathComponent:defaultName];
-        } else {
-            filepath = defaultName;
-        }
+    case ScreenshotModeArea: {
+        CaptureRect rect;
+        *status = x11_select_area(snapshot, &rect);
+        if (*status != CaptureStatusOK)
+            break;
+        pixels = x11_capture_area(snapshot, rect, &width, &height);
+        break;
     }
-    
-    // Convert to PNG and save
-    NSData *imageData = [image TIFFRepresentation];
-    NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:imageData];
-    if (!bitmap) {
-        return nil;
+    case ScreenshotModeScreen:
+        pixels = x11_capture_screen(snapshot, &width, &height);
+        break;
     }
-    
-    NSData *pngData = [bitmap representationUsingType:NSPNGFileType properties:nil];
-    if (!pngData) {
-        return nil;
-    }
-    
-    if ([pngData writeToFile:filepath atomically:YES]) {
-        return filepath;
-    }
-    
-    return nil;
-}
+    x11_snapshot_free(snapshot);
 
-+ (NSImage *)captureImageWithMode:(CaptureMode)mode 
-                            delay:(int)delay 
-                             rect:(CaptureRect)rect {
-    CaptureRect* c_rect = (rect.width > 0 && rect.height > 0) ? &rect : NULL;
-    int width, height, bytes_per_pixel;
-    
-    unsigned char* data = x11_capture_data((int)mode, delay, c_rect, 
-                                           &width, &height, &bytes_per_pixel);
-    if (!data) {
+    if (*status != CaptureStatusOK)
+        return nil;
+    if (!pixels) {
+        *status = CaptureStatusReadFailed;
         return nil;
     }
-    
-    // Copy the data since NSBitmapImageRep might not take ownership
-    int dataLength = width * height * bytes_per_pixel;
-    unsigned char* dataCopy = malloc(dataLength);
-    if (!dataCopy) {
-        x11_free_data(data);
-        return nil;
-    }
-    memcpy(dataCopy, data, dataLength);
-    
-    // Create NSBitmapImageRep from the raw data
-    // Pass NULL for planes to let it allocate, then copy our data
-    NSBitmapImageRep* bitmap = [[NSBitmapImageRep alloc] 
+
+    NSBitmapImageRep *imageRep = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:NULL
                       pixelsWide:width
                       pixelsHigh:height
@@ -110,41 +117,68 @@ extern CaptureRect x11_get_active_window(void);
                  samplesPerPixel:4
                         hasAlpha:YES
                         isPlanar:NO
-                  colorSpaceName:NSCalibratedRGBColorSpace
+                  colorSpaceName:NSDeviceRGBColorSpace
                     bitmapFormat:NSAlphaNonpremultipliedBitmapFormat
-                     bytesPerRow:width * bytes_per_pixel
+                     bytesPerRow:width * 4
                     bitsPerPixel:32];
-    
-    if (!bitmap) {
-        free(dataCopy);
-        x11_free_data(data);
-        return nil;
+    memcpy([imageRep bitmapData], pixels, (size_t)width * height * 4);
+    free(pixels);
+    *status = CaptureStatusOK;
+    return [imageRep autorelease];
+}
+
++ (NSString *)messageForStatus:(CaptureStatus)status
+{
+    switch (status) {
+    case CaptureStatusNoDisplay:
+        return NSLocalizedString(@"The X11 display could not be opened.", @"");
+    case CaptureStatusGrabFailed:
+        return NSLocalizedString(@"Another application is holding the mouse or keyboard, so no selection could be made.", @"");
+    case CaptureStatusReadFailed:
+        return NSLocalizedString(@"The screen contents could not be read.", @"");
+    case CaptureStatusOK:
+    case CaptureStatusCancelled:
+        break;
     }
-    
-    // Copy our data into the bitmap's buffer
-    unsigned char* bitmapData = [bitmap bitmapData];
-    memcpy(bitmapData, dataCopy, dataLength);
-    
-    // Create NSImage from the bitmap
-    NSImage* image = [[NSImage alloc] init];
-    [image addRepresentation:bitmap];
-    [bitmap release];
-    
-    free(dataCopy);
-    x11_free_data(data);
-    return [image autorelease];
+    return nil;
 }
 
-+ (CaptureRect)selectWindow {
-    return x11_select_window();
++ (NSData *)PNGDataForImageRep:(NSBitmapImageRep *)imageRep
+{
+    return [imageRep representationUsingType:NSPNGFileType
+                                  properties:[NSDictionary dictionary]];
 }
 
-+ (CaptureRect)selectArea {
-    return x11_select_area();
++ (NSString *)defaultFilePath
+{
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"yyyy-MM-dd-HHmmss"];
+    NSString *name = [NSString stringWithFormat:@"Screenshot-%@.png",
+                      [formatter stringFromDate:[NSDate date]]];
+    [formatter release];
+
+    NSArray *desktops = NSSearchPathForDirectoriesInDomains(NSDesktopDirectory,
+                                                            NSUserDomainMask, YES);
+    return [[desktops objectAtIndex:0] stringByAppendingPathComponent:name];
 }
 
-+ (CaptureRect)getActiveWindow {
-    return x11_get_active_window();
++ (void)flashScreen
+{
+    NSWindow *flash = [[NSWindow alloc] initWithContentRect:[[NSScreen mainScreen] frame]
+                                                  styleMask:NSBorderlessWindowMask
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO];
+    [flash setBackgroundColor:[NSColor whiteColor]];
+    [flash setLevel:NSScreenSaverWindowLevel + 1];
+    [flash setIgnoresMouseEvents:YES];
+    [flash orderFrontRegardless];
+    [flash display];
+    // Blocking on purpose: running the run loop here would let queued clicks
+    // start actions in the middle of a capture.  Ordering and displaying
+    // already flush the requests to the X server.
+    [NSThread sleepForTimeInterval:kFlashDuration];
+    [flash orderOut:nil];
+    [flash release];
 }
 
 @end

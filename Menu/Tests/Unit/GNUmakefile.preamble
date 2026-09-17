@@ -1,0 +1,9 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+# Testing.h releases its own objects, so the tests are built without ARC.
+ADDITIONAL_OBJCFLAGS += -fobjc-runtime=gnustep-2.0 -Wno-unused-parameter
+
+t_TintedMenuItemCell_TOOL_LIBS += -lgnustep-gui
+
+# The shortcut parser resolves X11 keysym names, so it links against Xlib.
+t_ShortcutParsing_TOOL_LIBS += -lgnustep-gui -lX11

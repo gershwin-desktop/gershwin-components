@@ -6,8 +6,24 @@
 
 #import "EnergyPane.h"
 #import "EnergyController.h"
+#include <stdlib.h>
 
 @implementation EnergyPane
+
++ (BOOL)isCompatible {
+  NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
+  NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
+  for (NSString *dir in paths) {
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
+          [dir stringByAppendingPathComponent: @"xset"]])
+      return YES;
+  }
+  return NO;
+}
+
++ (NSString *)compatibilityReason {
+  return @"xset not found - power management requires X11";
+}
 
 - (id)initWithBundle:(NSBundle *)bundle
 {
@@ -39,14 +55,12 @@
     return nil;
 }
 
-- (void)mainViewDidLoad
-{
-    [controller refreshFromSystem];
-}
-
 - (void)didSelect
 {
     [super didSelect];
+    /* Hosts may build the main view only to index its labels, so reading
+       system state (external tools, sysfs) and re-applying the saved sleep
+       inhibitor must wait until the pane is really shown. */
     [controller refreshFromSystem];
     // Poll battery/power status every second while visible
     [self startPolling];

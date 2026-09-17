@@ -4,70 +4,49 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-
- #ifndef ScreenshotCapture_h
+#ifndef ScreenshotCapture_h
 #define ScreenshotCapture_h
 
-#import <AppKit/AppKit.h>
+#import <Foundation/Foundation.h>
+#import "x11_capture.h"
 
-// C interface for X11 screenshot functionality
-#ifdef __cplusplus
-extern "C" {
-#endif
+@class NSBitmapImageRep;
 
 typedef enum {
-    CaptureWindow,
-    CaptureArea,
-    CaptureFullScreen
-} CaptureMode;
+    ScreenshotModeWindow,
+    ScreenshotModeArea,
+    ScreenshotModeScreen
+} ScreenshotMode;
 
-typedef struct {
-    int x, y, width, height;
-} CaptureRect;
-
-// Initialize X11 system
-int x11_init(void);
-
-// Cleanup X11 system
-void x11_cleanup(void);
-
-// Take screenshot and return path to saved file
-// If filename is NULL, a default name will be generated
-char* x11_capture(CaptureMode mode, const char* filename, int delay, CaptureRect* rect);
-
-// Take screenshot and return image data (for clipboard/preview)
-unsigned char* x11_capture_data(CaptureMode mode, int delay, CaptureRect* rect, 
-                                  int* width, int* height, int* bytes_per_pixel);
-
-// Free image data returned by x11_capture_data
-void x11_free_data(unsigned char* data);
-
-// Interactive window/area selection
-CaptureRect x11_select_window(void);
-CaptureRect x11_select_area(void);
-CaptureRect x11_get_active_window(void);
-
-// Set X11 _NET_WM_WINDOW_TYPE_NORMAL to prevent window disappearing on focus loss
-void x11_set_window_type_normal(void *window_ref);
-
-#ifdef __cplusplus
-}
-#endif
+/* Window capture options, persisted in the user defaults and shared by the
+ * window and the command line. */
+@interface ScreenshotPreferences : NSObject
++ (BOOL)includeWindowFrame;
++ (void)setIncludeWindowFrame:(BOOL)flag;
++ (BOOL)includeWindowShadow;
++ (void)setIncludeWindowShadow:(BOOL)flag;
+@end
 
 @interface ScreenshotCapture : NSObject
 
-+ (BOOL)initializeX11;
-+ (void)cleanupX11;
-+ (NSString *)captureScreenshotWithMode:(CaptureMode)mode 
-                               filename:(NSString *)filename 
-                                  delay:(int)delay 
-                                   rect:(CaptureRect)rect;
-+ (NSImage *)captureImageWithMode:(CaptureMode)mode 
-                            delay:(int)delay 
-                             rect:(CaptureRect)rect;
-+ (CaptureRect)selectWindow;
-+ (CaptureRect)selectArea;
-+ (CaptureRect)getActiveWindow;
+/* Freezes the screen, lets the user pick a window or an area on the frozen
+ * image (nothing to pick for the whole screen), then cuts out the pixels.  Returns nil with *status set when the
+ * user cancelled or the capture failed. */
++ (NSBitmapImageRep *)captureWithMode:(ScreenshotMode)mode
+                         includeFrame:(BOOL)includeFrame
+                        includeShadow:(BOOL)includeShadow
+                               status:(CaptureStatus *)status;
+
+/* User-facing explanation of a failed capture. */
++ (NSString *)messageForStatus:(CaptureStatus)status;
+
++ (NSData *)PNGDataForImageRep:(NSBitmapImageRep *)imageRep;
+
+/* Full path on the Desktop with a name that sorts by capture time. */
++ (NSString *)defaultFilePath;
+
+/* Brief white flash as the shutter feedback. */
++ (void)flashScreen;
 
 @end
 

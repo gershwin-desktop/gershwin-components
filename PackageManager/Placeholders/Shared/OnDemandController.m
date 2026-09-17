@@ -3,11 +3,11 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * OnDemandController — implementation.
+ * OnDemandController - implementation.
  *
  * Supports two resource formats:
  *   1. Install.plist in plist format (preferred)
- *   2. packages (one-per-line text) + executable (single-line path) — legacy compat
+ *   2. packages (one-per-line text) + executable (single-line path) - legacy compat
  */
 
 #import "OnDemandController.h"
@@ -82,7 +82,7 @@ static const CGFloat kGapNormal = 16.0;
       if (_spec)
         {
           _commandPath = [_spec postCommand];
-          NSLog(@"Placeholder [OK] setupFromBundle: plist format resolved — packages=%@ command=%@",
+          NSLog(@"Placeholder [OK] setupFromBundle: plist format resolved - packages=%@ command=%@",
                 [_spec packages], _commandPath);
           return YES;
         }
@@ -92,7 +92,7 @@ static const CGFloat kGapNormal = 16.0;
   // Fallback: legacy helloSystem text-file format
   NSString *execPath = [appPath stringByAppendingPathComponent:@"Resources/executable"];
   NSString *pkgPath = [appPath stringByAppendingPathComponent:@"Resources/packages"];
-  NSLog(@"Placeholder -> setupFromBundle: checking legacy files — executable=%@ packages=%@",
+  NSLog(@"Placeholder -> setupFromBundle: checking legacy files - executable=%@ packages=%@",
         execPath, pkgPath);
 
   if (execPath)
@@ -220,7 +220,7 @@ static const CGFloat kGapNormal = 16.0;
 
 - (void)installDidProgress:(float)progress message:(NSString *)message
 {
-  NSLog(@"Placeholder -> installDidProgress: %.0f%% — %@", progress * 100, message);
+  NSLog(@"Placeholder -> installDidProgress: %.0f%% - %@", progress * 100, message);
   dispatch_async(dispatch_get_main_queue(), ^{
     [_statusField setStringValue:message ?: @""];
   });
@@ -321,7 +321,7 @@ static const CGFloat kGapNormal = 16.0;
   // Pass through the parent's environment so the launched app sees
   // the same PATH, DISPLAY, etc.
   [task setEnvironment:[[NSProcessInfo processInfo] environment]];
-  // Do NOT set standardOutput/standardError — leaving them unset
+  // Do NOT set standardOutput/standardError - leaving them unset
   // makes the child inherit the parent's stdio so output and exit
   // codes pass through to the caller.
 
@@ -450,7 +450,7 @@ static const CGFloat kGapNormal = 16.0;
 
 - (void)_showError:(NSString *)message
 {
-  NSLog(@"Placeholder: Error — %@", message);
+  NSLog(@"Placeholder: Error - %@", message);
   [_spinner stopAnimation:nil];
   [_statusField setStringValue:[NSString stringWithFormat:@"Error: %@", message]];
   [_cancelButton setTitle:@"Quit"];

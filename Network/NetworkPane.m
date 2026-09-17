@@ -8,8 +8,29 @@
 
 #import "NetworkPane.h"
 #import "NetworkController.h"
+#include <stdlib.h>
 
 @implementation NetworkPane
+
++ (BOOL)isCompatible {
+  NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
+  NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
+  for (NSString *dir in paths) {
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
+          [dir stringByAppendingPathComponent: @"nmcli"]])
+      return YES;
+  }
+  for (NSString *dir in paths) {
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
+          [dir stringByAppendingPathComponent: @"ifconfig"]])
+      return YES;
+  }
+  return NO;
+}
+
++ (NSString *)compatibilityReason {
+  return @"Neither nmcli nor ifconfig found on PATH — Network configuration requires one of these";
+}
 
 - (id)initWithBundle:(NSBundle *)bundle
 {
@@ -22,30 +43,9 @@
 
 - (void)dealloc
 {
-    [self stopRefreshTimer];
+    [controller stopRefreshing];
     [controller release];
     [super dealloc];
-}
-
-- (void)startRefreshTimer
-{
-    if (!refreshTimer) {
-        refreshTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
-                                                        target:controller
-                                                      selector:@selector(refreshInterfaces:)
-                                                      userInfo:nil
-                                                       repeats:YES];
-        [refreshTimer retain];
-    }
-}
-
-- (void)stopRefreshTimer
-{
-    if (refreshTimer) {
-        [refreshTimer invalidate];
-        [refreshTimer release];
-        refreshTimer = nil;
-    }
 }
 
 - (NSView *)loadMainView
@@ -61,31 +61,24 @@
     return nil; // We create the view programmatically
 }
 
-- (void)mainViewDidLoad
-{
-    // Initial data refresh
-    [controller refreshInterfaces:nil];
-    [self setInitialKeyView:nil];
-}
-
+/* The host also loads the main view without selecting the pane (to index
+   its widgets for search), so all data loading waits for selection. */
 - (void)didSelect
 {
     [super didSelect];
-    // Refresh data when the pane is selected
-    [controller refreshInterfaces:nil];
-    [self startRefreshTimer];
+    [controller startRefreshing];
     [self setInitialKeyView:nil];
 }
 
 - (void)willUnselect
 {
     NSDebugLLog(@"gwcomp", @"NetworkPane: willUnselect called");
+    [controller stopRefreshing];
 }
 
 - (void)didUnselect
 {
     [super didUnselect];
-    [self stopRefreshTimer];
     NSDebugLLog(@"gwcomp", @"NetworkPane: didUnselect called");
 }
 

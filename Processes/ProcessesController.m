@@ -11,7 +11,7 @@
 #include <stdint.h>
 #ifndef __linux__
 #import <sys/sysctl.h>
-#ifdef __FreeBSD__
+#if __has_include(<sys/user.h>)
 #import <sys/user.h>
 #endif
 #endif
@@ -21,6 +21,20 @@
 #ifndef P_SYSTEM
 #define P_SYSTEM 0x00000004
 #endif
+
+// OpenBSD struct kinfo_proc uses p_ prefix instead of ki_.  Map to ki_ names
+// so the shared code path compiles on both FreeBSD and OpenBSD.
+#ifdef __OpenBSD__
+#define ki_flag p_flag
+#define ki_pid p_pid
+#define ki_ppid p_ppid
+#define ki_comm p_comm
+#define ki_uid p_uid
+#define ki_stat p_stat
+#define ki_rssize p_vm_rssize
+// OpenBSD does not have p_vm_dsize/p_vm_ssize; handled via #ifdef at use site.
+#endif
+
 #import <errno.h>
 #import <sys/wait.h>
 #import <string.h>
@@ -156,6 +170,7 @@ static ProcessesController *sharedController = nil;
         _processesLock = [[NSLock alloc] init];
         _refreshInterval = 5.0; // Refresh every 5 seconds
         _prevCpuTimes = [[NSMutableDictionary alloc] init];
+        _searchFilter = @"";
     }
     return self;
 }
@@ -398,8 +413,8 @@ static ProcessesController *sharedController = nil;
             PC_DBG(@"/proc scanned entries=%d added=%d", procDirEntries, procAdded);
             if ([newProcesses count] == 0) {
                 PC_INFO(@"/proc scan yielded no processes; attempting sysctl fallback");
-                // Fall back to sysctl on FreeBSD when /proc yields nothing
-#if defined(__FreeBSD__)
+                // Fall back to sysctl KERN_PROC_ALL when /proc yields nothing
+#if defined(CTL_KERN) && defined(KERN_PROC) && defined(KERN_PROC_ALL) && __has_include(<sys/user.h>)
                 int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
                 size_t len2 = 0;
                 if (sysctl(mib, 4, NULL, &len2, NULL, 0) == 0 && len2 > 0) {
@@ -420,10 +435,19 @@ static ProcessesController *sharedController = nil;
                                 struct passwd *pw = getpwuid(p->ki_uid);
                                 if (pw) info.user = [NSString stringWithUTF8String:pw->pw_name]; else info.user = @"unknown";
                                 info.residentMemory = (long)((long)p->ki_rssize * pageSize2 / 1024); // KB
+#ifdef __OpenBSD__
+                                info.virtualMemory = 0;
+#else
                                 info.virtualMemory = (long)(p->ki_size / 1024);
+#endif
                                 // CPU
+#ifdef __OpenBSD__
+                                unsigned long utime_ticks = p->p_uticks;
+                                unsigned long stime_ticks = p->p_sticks;
+#else
                                 unsigned long utime_ticks = (unsigned long)(p->ki_rusage.ru_utime.tv_sec * ticksPerSec2 + p->ki_rusage.ru_utime.tv_usec * ticksPerSec2 / 1000000);
                                 unsigned long stime_ticks = (unsigned long)(p->ki_rusage.ru_stime.tv_sec * ticksPerSec2 + p->ki_rusage.ru_stime.tv_usec * ticksPerSec2 / 1000000);
+#endif
                                 unsigned long totalTicks = utime_ticks + stime_ticks;
                                 NSTimeInterval now2 = [[NSDate date] timeIntervalSince1970];
                                 NSString *pidKey2 = [NSString stringWithFormat:@"%d", info.pid];
@@ -459,41 +483,10 @@ static ProcessesController *sharedController = nil;
 #endif
             }
 
-            // If both /proc and sysctl fail to yield processes, fallback to parsing `ps aux`
-            if ([newProcesses count] == 0) {
-                PC_INFO(@"Falling back to parsing `ps aux`");
-                FILE *ps = popen("ps aux", "r");
-                if (ps) {
-                    char line[2048];
-                    // Skip header
-                    if (fgets(line, sizeof(line), ps)) {
-                        // header line skipped
-                    }
-                    while (fgets(line, sizeof(line), ps)) {
-                        // Trim newline
-                        size_t l = strlen(line);
-                        if (l > 0 && line[l-1] == '\n') line[l-1] = '\0';
-                        @autoreleasepool {
-                            NSString *s = [NSString stringWithUTF8String:line];
-                            ProcessInfo *pi = [[ProcessInfo alloc] initWithPsLine:s];
-                            if (pi && pi.pid > 0) {
-                                // Skip kernel threads (command starts with '[')
-                                if ([pi.command hasPrefix:@"["]) continue;
-                                [newProcesses addObject:pi];
-                            }
-                        }
-                    }
-                    pclose(ps);
-                    PC_INFO(@"ps aux fallback added %lu processes", (unsigned long)[newProcesses count]);
-                } else {
-                    PC_INFO(@"ps aux popen failed");
-                }
-            }
-
             closedir(procDir);
         } else {
-#if defined(__FreeBSD__)
-            // /proc not available - use sysctl on FreeBSD
+#if defined(CTL_KERN) && defined(KERN_PROC) && defined(KERN_PROC_ALL) && __has_include(<sys/user.h>)
+            // /proc not available - use sysctl
             PC_DBG(@"/proc not available - attempting sysctl KERN_PROC_ALL");
             int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
             size_t len = 0;
@@ -526,22 +519,41 @@ static ProcessesController *sharedController = nil;
 
                             // Memory
                             info.residentMemory = (long)((long)p->ki_rssize * pageSize / 1024); // KB
+#ifdef __OpenBSD__
+                            info.virtualMemory = 0;
+#else
                             info.virtualMemory = (long)(p->ki_size / 1024);
+#endif
 
                             // State
                             char stateChar = '?';
                             switch (p->ki_stat) {
+#ifdef __OpenBSD__
+                                // OpenBSD does not expose state constants in userspace;
+                                // use numeric values: 2=SRUN, 3=SSLEEP, 4=SSTOP, 5=SZOMB
+                                case 5: stateChar = 'Z'; break;
+                                case 4: stateChar = 'T'; break;
+                                case 2: stateChar = 'R'; break;
+                                case 3: stateChar = 'S'; break;
+                                default: stateChar = 'R'; break;
+#else
                                 case SZOMB: stateChar = 'Z'; break;
                                 case SSTOP: stateChar = 'T'; break;
                                 case SRUN: stateChar = 'R'; break;
                                 case SSLEEP: stateChar = 'S'; break;
                                 default: stateChar = 'R'; break;
+#endif
                             }
                             info.state = [NSString stringWithFormat:@"%c", stateChar];
 
                             // CPU: use ki_rusage (utime + stime)
+#ifdef __OpenBSD__
+                            unsigned long utime_ticks = p->p_uticks;
+                            unsigned long stime_ticks = p->p_sticks;
+#else
                             unsigned long utime_ticks = (unsigned long)(p->ki_rusage.ru_utime.tv_sec * ticksPerSec + p->ki_rusage.ru_utime.tv_usec * ticksPerSec / 1000000);
                             unsigned long stime_ticks = (unsigned long)(p->ki_rusage.ru_stime.tv_sec * ticksPerSec + p->ki_rusage.ru_stime.tv_usec * ticksPerSec / 1000000);
+#endif
                             unsigned long totalTicks = utime_ticks + stime_ticks;
 
                             NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
@@ -583,6 +595,34 @@ static ProcessesController *sharedController = nil;
                 PC_INFO(@"Failed to get process buffer size via sysctl or no processes found");
             }
 #endif
+        }
+
+        // Fallback to parsing `ps aux` if no processes found
+        if ([newProcesses count] == 0) {
+            PC_INFO(@"Falling back to parsing `ps aux`");
+            FILE *ps = popen("LC_ALL=C ps aux", "r");
+            if (ps) {
+                char line[2048];
+                // Skip header
+                if (fgets(line, sizeof(line), ps)) {
+                }
+                while (fgets(line, sizeof(line), ps)) {
+                    size_t l = strlen(line);
+                    if (l > 0 && line[l-1] == '\n') line[l-1] = '\0';
+                    @autoreleasepool {
+                        NSString *s = [NSString stringWithUTF8String:line];
+                        ProcessInfo *pi = [[ProcessInfo alloc] initWithPsLine:s];
+                        if (pi && pi.pid > 0) {
+                            if ([pi.command hasPrefix:@"["]) continue;
+                            [newProcesses addObject:pi];
+                        }
+                    }
+                }
+                pclose(ps);
+                PC_INFO(@"ps aux fallback added %lu processes", (unsigned long)[newProcesses count]);
+            } else {
+                PC_INFO(@"ps aux popen failed");
+            }
         }
 
         // Apply results on main thread (or directly if app not running)
@@ -627,6 +667,41 @@ static ProcessesController *sharedController = nil;
     [self sortProcesses];
 
     _isRefreshing = NO;
+}
+
+- (NSArray *)_filteredProcesses
+{
+    if (_searchFilter == nil || [_searchFilter length] == 0) {
+        return _processes;
+    }
+    NSMutableArray *filtered = [NSMutableArray array];
+    NSString *lowerFilter = [_searchFilter lowercaseString];
+    for (ProcessInfo *info in _processes) {
+        if ([[info.command lowercaseString] containsString:lowerFilter] ||
+            [[info.user lowercaseString] containsString:lowerFilter]) {
+            [filtered addObject:info];
+        }
+    }
+    return filtered;
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification
+{
+    if ([notification object] == _searchField) {
+        _searchFilter = [_searchField stringValue];
+        [_processesTableView reloadData];
+    }
+}
+
+- (void)clearSearchFilter
+{
+    _searchFilter = @"";
+    [_processesTableView reloadData];
+}
+
+- (void)handleSearchFieldClear:(NSNotification *)notification
+{
+    [self clearSearchFilter];
 }
 
 - (IBAction)forceQuitProcess:(id)sender
@@ -680,7 +755,8 @@ static ProcessesController *sharedController = nil;
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
     [_processesLock lock];
-    NSInteger count = [_processes count];
+    NSArray *displayProcesses = [self _filteredProcesses];
+    NSInteger count = [displayProcesses count];
     [_processesLock unlock];
     PC_DBG(@"numberOfRowsInTableView returning %ld", (long)count);
     return count;
@@ -689,11 +765,12 @@ static ProcessesController *sharedController = nil;
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
 {
     [_processesLock lock];
-    if (row < 0 || row >= [_processes count]) {
+    NSArray *displayProcesses = [self _filteredProcesses];
+    if (row < 0 || row >= [displayProcesses count]) {
         [_processesLock unlock];
         return @"";
     }
-    ProcessInfo *info = [_processes objectAtIndex:row];
+    ProcessInfo *info = [displayProcesses objectAtIndex:row];
     [_processesLock unlock];
     
     NSString *identifier = [tableColumn identifier];
@@ -722,9 +799,10 @@ static ProcessesController *sharedController = nil;
     NSInteger selectedRow = [_processesTableView selectedRow];
     if (selectedRow >= 0) {
         [_processesLock lock];
+        NSArray *displayProcesses = [self _filteredProcesses];
         ProcessInfo *info = nil;
-        if (selectedRow < [_processes count]) {
-            info = [_processes objectAtIndex:selectedRow];
+        if (selectedRow < [displayProcesses count]) {
+            info = [displayProcesses objectAtIndex:selectedRow];
         }
         [_processesLock unlock];
         
@@ -816,7 +894,7 @@ static ProcessesController *sharedController = nil;
     [self startMonitoring];
     PC_INFO(@"started monitoring");
     [_mainWindow makeKeyAndOrderFront:self];
-    
+
     // Force a couple of refresh attempts to ensure background worker runs
     [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:0.1];
     [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:1.0];
@@ -845,6 +923,7 @@ static ProcessesController *sharedController = nil;
     NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
     [windowMenu addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     [windowMenu addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
+    [windowMenu addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];
     [mainMenu setSubmenu:windowMenu forItem:windowMenuItem];
     [NSApp setWindowsMenu:windowMenu];
     
@@ -863,8 +942,15 @@ static ProcessesController *sharedController = nil;
     
     [self setupMenu];
     
+    // Search field at the top
+    _searchField = [[NSSearchField alloc] initWithFrame:NSMakeRect(0, 0, 200, 22)];
+    [_searchField setPlaceholderString:@"Filter processes..."];
+    [_searchField setDelegate:self];
+    [[_searchField cell] setRecentsAutosaveName:@"ProcessesFilter"];
+    
     // Create scroll view for table
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:[[_mainWindow contentView] bounds]];
+    NSRect contentViewBounds = [[_mainWindow contentView] bounds];
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(contentViewBounds), NSHeight(contentViewBounds) - 26)];
     [scrollView setHasVerticalScroller:YES];
     [scrollView setHasHorizontalScroller:YES];
     [scrollView setAutohidesScrollers:YES];
@@ -924,6 +1010,10 @@ static ProcessesController *sharedController = nil;
     
     [scrollView setDocumentView:_processesTableView];
     [[_mainWindow contentView] addSubview:scrollView];
+
+    // Position search field at top-right
+    [_searchField setFrame:NSMakeRect(NSWidth(contentViewBounds) - 220, NSHeight(contentViewBounds) - 26, 200, 22)];
+    [[_mainWindow contentView] addSubview:_searchField];
 
 #if PROCESSES_DEBUG
     // Diagnostic: log frames and column count to ensure table is visible and sized correctly

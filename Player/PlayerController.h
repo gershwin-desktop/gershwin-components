@@ -106,7 +106,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     // Persisted volume level for radio playback
     float radioVolume;
 
-    // Debounce radio station selection — don't play until 200ms idle
+    // Debounce radio station selection - don't play until 200ms idle
     RadioStation *_pendingRadioStation;
     NSTimeInterval _lastSelectionTime;
     BOOL _debounceScheduled;

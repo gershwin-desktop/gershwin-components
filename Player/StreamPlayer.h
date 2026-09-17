@@ -34,7 +34,7 @@
  *
  * Audio/video stream player using FFmpeg (libavformat/libavcodec/libswresample)
  * and libao. Handles HTTP streaming URLs with progressive decode/playback.
- * Singleton — one instance shared across the application.
+ * Singleton - one instance shared across the application.
  */
 @interface StreamPlayer : NSObject
 {
@@ -80,7 +80,7 @@
     int _videoHeight;
     NSString *_currentURL;
 
-    // Delegate (assigned — not retained to avoid cycles)
+    // Delegate (assigned - not retained to avoid cycles)
     id<StreamPlayerDelegate> _delegate;
 
     // ICY metadata tracking
@@ -98,14 +98,14 @@
     double _lastFramePts;       // PTS of last presented frame in seconds
     double _frameDuration;      // approximated frame duration from stream FPS (fallback pacing)
 
-    // Generation counter — incremented each openURL: so stale
+    // Generation counter - incremented each openURL: so stale
     // async delegate callbacks can be detected and dropped.
     NSUInteger _generation;
 }
 
 @property (nonatomic, assign) id<StreamPlayerDelegate> delegate;
 @property (nonatomic, readonly) BOOL isPlaying;
-@property (nonatomic, assign) float volume;   // 0.0 — 1.0
+@property (nonatomic, assign) float volume;   // 0.0 - 1.0
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, readonly, copy) NSString *currentURL;
 /// YES if the stream contains a video track.
