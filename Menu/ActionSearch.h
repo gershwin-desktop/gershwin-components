@@ -45,7 +45,7 @@
  */
 @interface ActionSearchController : NSObject <NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate>
 
-@property (nonatomic, strong) NSPanel *searchPanel;
+@property (nonatomic, strong) NSWindow *searchPanel;
 @property (nonatomic, strong) NSTextField *searchField;
 @property (nonatomic, strong) NSMenu *resultsMenu;
 @property (nonatomic, strong) NSMutableArray *allMenuItems;

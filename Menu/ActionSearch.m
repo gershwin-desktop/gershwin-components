@@ -9,6 +9,7 @@
 #import "AppMenuWidget.h"
 #import "X11ShortcutManager.h"
 #import "MenuUtils.h"
+#import <X11/Xatom.h>
 #import "WindowMonitor.h"
 #import "DBusConnection.h"
 #import <GNUstepGUI/GSTheme.h>
@@ -164,10 +165,27 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
    empty one) and ends editing, so Escape never reaches the key bindings or the
    field's delegate.  The panel sees every key event before its first
    responder does, so the search is dismissed from here. */
-@interface ActionSearchPanel : NSPanel
+/* Deliberately not an NSPanel: the theme gives every panel the dialog window
+   type, and the window manager restacks dialogs after the popups of the same
+   application - which let the box land on top of its own results.  A plain
+   borderless window at status level is typed as a dock instead, and docks are
+   restacked before those popups. */
+@interface ActionSearchPanel : NSWindow
 @end
 
 @implementation ActionSearchPanel
+
+/* A borderless window refuses to become key, but the search field has to take
+   the keyboard. */
+- (BOOL)canBecomeKeyWindow
+{
+    return YES;
+}
+
+- (BOOL)canBecomeMainWindow
+{
+    return NO;
+}
 
 - (void)sendEvent:(NSEvent *)event
 {
@@ -278,14 +296,10 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     [self.searchPanel setHasShadow:NO];
     [self.searchPanel setOpaque:NO];
     [self.searchPanel setBackgroundColor:[NSColor clearColor]];
-    [self.searchPanel setBecomesKeyOnlyIfNeeded:NO];
     [self.searchPanel setReleasedWhenClosed:NO];
-    /* NSPanel defaults to hidesOnDeactivate:YES.  That makes GNUstep remember
-       the panel when the app deactivates and order it front again when the
-       app reactivates - which would reopen the search box the moment the
-       user clicks back on the menu bar after it was dismissed.  The search
-       panel is closed explicitly (hideSearchPopup), so it must not be
-       auto-hidden and auto-re-shown by the app activation cycle. */
+    /* Never let the activation cycle hide and re-show the box: it is closed
+       explicitly (hideSearchPopup), and being remembered across a deactivate
+       would reopen it the moment the user clicks back on the menu bar. */
     [self.searchPanel setHidesOnDeactivate:NO];
 
     // Search field inset 4px from the left/right edges of the background rect
@@ -320,6 +334,28 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     /* The field tracks the panel width (keeping the 4px side padding) so the
        search box can stretch to match the results menu below it. */
     [self.searchField setAutoresizingMask:NSViewWidthSizable];
+
+    /* The window manager restacks this application's windows whenever one of
+       them is raised, and it does so in a fixed order: dock windows first,
+       then the popups belonging to a dock's application.  Left untyped, the
+       box and the results window are both popups and their order is decided
+       by chance, so the box lands on top of its own results and draws its
+       drop shadow across them.  As a dock window the box is restacked in the
+       earlier pass and left out of the popup pass, which puts the results
+       above it for good.  The window manager reads the type when the window
+       is first mapped, and the box is not mapped yet. */
+    {
+        Display *display = [MenuUtils sharedDisplay];
+        Window panelXid = (Window)(uintptr_t)[self.searchPanel windowRef];
+        if (display && panelXid) {
+            Atom typeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+            Atom dockAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DOCK",
+                                        False);
+            XChangeProperty(display, panelXid, typeAtom, XA_ATOM, 32,
+                            PropModeReplace, (unsigned char *)&dockAtom, 1);
+            XFlush(display);
+        }
+    }
 
     NSAttributedString *placeholder = [[NSAttributedString alloc]
         initWithString:@"Search menus..."
@@ -1080,15 +1116,6 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
         if (!NSEqualRects(wanted, [menuWindow frame])) {
             [menuWindow setFrame:wanted display:YES];
         }
-
-        /* Search box and results are one dropdown, so the results must always
-           sit on top of the box - otherwise the box's drop shadow is drawn
-           across the results.  A menu window's level is below the panel's
-           status level, which would let the box win the stacking, so lift the
-           results to the same level and put the box below them. */
-        [menuWindow setLevel:[self.searchPanel level]];
-        [self.searchPanel orderWindow:NSWindowBelow
-                           relativeTo:[menuWindow windowNumber]];
     }
 }
 
