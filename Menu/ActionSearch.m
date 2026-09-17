@@ -373,7 +373,6 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     // Position panel at the given point, constrained to screen bounds
     NSRect panelFrame = [self.searchPanel frame];
     NSRect screenFrame = [[NSScreen mainScreen] frame];
-    const CGFloat menuBarHeight = [[GSTheme theme] menuBarHeight];
 
     panelFrame.origin.x = point.x;
     panelFrame.origin.y = point.y;
@@ -388,11 +387,12 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     if (panelFrame.origin.x < screenFrame.origin.x) {
         panelFrame.origin.x = screenFrame.origin.x;
     }
-    /* In GNUstep y-up coordinates, position the panel exactly 1 menu bar height
-       below the top of the screen. The panel's bottom will be at
-       screenHeight - menuBarHeight, and since the anchor is at the bottom of the
-       widget, origin.y places the panel just below the menu bar. */
-    panelFrame.origin.y = screenFrame.size.height - 2 * menuBarHeight;
+    /* Hang the search box off the menu bar window's real bottom edge instead
+       of off a computed menu bar height: at a fractional scale factor the
+       theme's height rounds to whole device pixels while the screen height
+       does not, and the difference shows as a seam or an overlap. */
+    NSWindow *menuBarWindow = [self.appMenuWidget window];
+    panelFrame.origin.y = NSMinY([menuBarWindow frame]) - NSHeight(panelFrame);
 
     [self.searchPanel setFrame:panelFrame display:YES];
 
@@ -945,6 +945,17 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
         return;
     }
 
+    /* Show no more rows than fit between the search box and the bottom of the
+       screen.  A taller menu makes the theme's menu overflow handling move the
+       dropdown up, where it covers the search box - so how many results fit
+       depends on the row height, which changes with the scale factor. */
+    NSRect panelFrame = [self.searchPanel frame];
+    NSUInteger rowsThatFit = (NSUInteger)floor(NSMinY(panelFrame) / NSHeight(panelFrame));
+    if ([self.filteredResults count] > rowsThatFit) {
+        [self.filteredResults removeObjectsInRange:
+            NSMakeRange(rowsThatFit, [self.filteredResults count] - rowsThatFit)];
+    }
+
     NSString *previousTopLevelMenu = @"";
     NSString *previousGroup = nil;
     for (NSUInteger i = 0; i < [self.filteredResults count]; i++) {
@@ -1003,10 +1014,14 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
         self.resultsMenuTracking = NO;
     }
 
-    // Position menu flush below the search field using the panel's content view
+    /* Position the menu flush below the search field.  The location is added
+       to the view's own screen rect to form the rectangle the menu attaches
+       below, so it must be the view's origin: any offset lifts that rectangle
+       and the menu with it, which would hide the first result behind the
+       search panel (and, depending on which of the two windows won the X11
+       stacking, cover the search field itself). */
     NSView *contentView = [self.searchPanel contentView];
-    NSRect contentViewFrame = [contentView frame];
-    NSPoint menuLocation = NSMakePoint(0, NSHeight(contentViewFrame));
+    NSPoint menuLocation = NSZeroPoint;
 
     self.resultsMenuTracking = YES;
     [self.resultsMenu popUpMenuPositioningItem:nil
@@ -1038,6 +1053,42 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
             panelFrame.size.width = menuWidth;
             [self.searchPanel setFrame:panelFrame display:YES];
         }
+    }
+
+    /* The menu window is sized as if every row were a full menu item, while
+       the theme draws separators only a few pixels high - so a results list
+       containing separators leaves an unused strip at the top of the window,
+       which shows up as a gap between the search field and the first result.
+       How many separators a query produces varies, so trim the window to the
+       height the menu view really occupies and hang it right under the search
+       field. */
+    NSMenuView *menuView = [self.resultsMenu menuRepresentation];
+    if (menuView && menuWindow) {
+        NSRect panelFrame = [self.searchPanel frame];
+        /* Window frames are in base coordinates, the menu view's frame is in
+           points, and at a fractional scale factor those differ - so take the
+           view's height through the window's own coordinate system. */
+        NSRect contentInWindow = [menuView convertRect:[menuView bounds] toView:nil];
+        NSRect wanted = [menuWindow frame];
+        wanted.size.height = NSHeight(contentInWindow);
+        wanted.origin.y = NSMinY(panelFrame) - NSHeight(wanted);
+        /* The menu window also carries the menu view's left border offset, so
+           it is a pixel wider than the box and starts left of it; match the
+           box so the dropdown has one straight edge on either side. */
+        wanted.origin.x = NSMinX(panelFrame);
+        wanted.size.width = NSWidth(panelFrame);
+        if (!NSEqualRects(wanted, [menuWindow frame])) {
+            [menuWindow setFrame:wanted display:YES];
+        }
+
+        /* Search box and results are one dropdown, so the results must always
+           sit on top of the box - otherwise the box's drop shadow is drawn
+           across the results.  A menu window's level is below the panel's
+           status level, which would let the box win the stacking, so lift the
+           results to the same level and put the box below them. */
+        [menuWindow setLevel:[self.searchPanel level]];
+        [self.searchPanel orderWindow:NSWindowBelow
+                           relativeTo:[menuWindow windowNumber]];
     }
 }
 
