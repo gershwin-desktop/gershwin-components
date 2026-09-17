@@ -27,11 +27,16 @@ Screenshot_LANGUAGES = English
 #
 Screenshot_HEADER_FILES = \
 	ScreenshotController.h \
+	ScreenshotActionPanel.h \
+	ScreenshotCommandLine.h \
 	ScreenshotCapture.h \
+	x11_capture.h \
 	shadow_mask.h
 
 Screenshot_OBJC_FILES = \
 	ScreenshotController.m \
+	ScreenshotActionPanel.m \
+	ScreenshotCommandLine.m \
 	ScreenshotCapture.m
 
 Screenshot_C_FILES = \
