@@ -26,20 +26,21 @@ end
 # Make a real application window frontmost, so the search runs from another
 # application (not from Menu.app itself).
 activate application "Workspace"
-wait 500ms
 
 # Open the Action Search with the global shortcut. The key events are real,
 # so Menu.app's global Alt+Space grab fires even though the focus is on
 # another application.
 press "Cmd+Space"
-wait 1s
 
 # The search box lives in Menu.app; retarget so typing and the visibility
 # assertions below inspect Menu's window tree, not the frontmost app's.
-# Use `target` (not `activate`): raising Menu by clicking its menu bar would
+# Use `target` (not `activate`): moving the keyboard to Menu's menu bar would
 # dismiss the search box that Cmd+Space just opened.
 target application "Menu"
-wait 500ms
+
+# Menu.app shows no text field until the search box is up; on a busy machine
+# that takes well over a second, and keys typed before it would be lost.
+wait until textfield timeout 10s
 
 # Type the application name; the search field receives the keys directly and
 # the results menu appears below it.
