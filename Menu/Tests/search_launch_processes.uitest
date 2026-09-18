@@ -14,6 +14,15 @@
 #
 # Run with: run_uitest Menu/Tests/search_launch_processes.uitest
 
+# Self-healing start: a Processes left running by an earlier test would already
+# satisfy the window check below, whatever the search really launched.
+if application "Processes"
+  activate application "Processes"
+  wait until menu bar "Processes" timeout 10s
+  press "Alt+Q"
+  wait until not exists application "Processes" timeout 10s
+end
+
 # Make a real application window frontmost, so the search runs from another
 # application (not from Menu.app itself).
 activate application "Workspace"
