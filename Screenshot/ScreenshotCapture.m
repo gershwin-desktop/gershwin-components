@@ -132,8 +132,6 @@ static NSString * const kIncludeWindowShadowKey = @"ScreenshotIncludeWindowShado
     switch (status) {
     case CaptureStatusNoDisplay:
         return NSLocalizedString(@"The X11 display could not be opened.", @"");
-    case CaptureStatusGrabFailed:
-        return NSLocalizedString(@"Another application is holding the mouse or keyboard, so no selection could be made.", @"");
     case CaptureStatusReadFailed:
         return NSLocalizedString(@"The screen contents could not be read.", @"");
     case CaptureStatusOK:

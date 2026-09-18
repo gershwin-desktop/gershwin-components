@@ -19,7 +19,6 @@ typedef enum {
     CaptureStatusOK = 0,
     CaptureStatusCancelled,
     CaptureStatusNoDisplay,
-    CaptureStatusGrabFailed,
     CaptureStatusReadFailed
 } CaptureStatus;
 

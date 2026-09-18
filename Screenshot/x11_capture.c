@@ -20,11 +20,9 @@
 #include "x11_capture.h"
 #include "shadow_mask.h"
 
-/* Right after the click that started a capture, the toolkit or the window
- * manager can still hold a grab for a moment, so grabs are retried for up to
- * GRAB_ATTEMPTS * GRAB_RETRY_USEC before giving up. */
-#define GRAB_ATTEMPTS 20
-#define GRAB_RETRY_USEC 50000
+/* Polling interval while another client holds a grab; short so that a
+ * press which ends that grab still finds the button down once ours starts. */
+#define GRAB_RETRY_USEC 10000
 
 static Display *disp = NULL;
 static Window root = None;
@@ -81,34 +79,40 @@ void x11_cleanup(void)
 
 /* Input grabs */
 
-static int grab_input(unsigned int event_mask, Cursor cursor)
+/* Waits for the grabs instead of failing: after a delay the user typically
+ * has a menu open in another application, which holds the pointer until the
+ * user clicks.  The frozen overlay already shows that menu, and the click
+ * that dismisses it becomes the start of the selection (see
+ * pressed_button_at). */
+static void grab_input(unsigned int event_mask, Cursor cursor)
 {
-    int status = GrabNotViewable;
-    for (int i = 0; i < GRAB_ATTEMPTS; i++) {
-        status = XGrabPointer(disp, root, False, event_mask,
-                              GrabModeAsync, GrabModeAsync,
-                              root, cursor, CurrentTime);
-        if (status == GrabSuccess)
-            break;
+    while (XGrabPointer(disp, root, False, event_mask,
+                        GrabModeAsync, GrabModeAsync,
+                        root, cursor, CurrentTime) != GrabSuccess)
         usleep(GRAB_RETRY_USEC);
-    }
-    if (status != GrabSuccess) {
-        fprintf(stderr, "Screenshot: pointer grab failed (%d)\n", status);
-        return 0;
-    }
 
     /* Without the keyboard grab Escape would reach the focused application
      * instead of cancelling the selection. */
-    for (int i = 0; i < GRAB_ATTEMPTS; i++) {
-        status = XGrabKeyboard(disp, root, False, GrabModeAsync,
-                               GrabModeAsync, CurrentTime);
-        if (status == GrabSuccess)
-            return 1;
+    while (XGrabKeyboard(disp, root, False, GrabModeAsync,
+                         GrabModeAsync, CurrentTime) != GrabSuccess)
         usleep(GRAB_RETRY_USEC);
-    }
-    fprintf(stderr, "Screenshot: keyboard grab failed (%d)\n", status);
-    XUngrabPointer(disp, CurrentTime);
-    XFlush(disp);
+}
+
+/* A press made before our grab went to the client holding the pointer, so
+ * its ButtonPress never reaches us; the button state tells us about it. */
+static unsigned int pressed_button_at(int *x, int *y)
+{
+    Window root_return, child;
+    int win_x, win_y;
+    unsigned int mask = 0;
+
+    if (!XQueryPointer(disp, root, &root_return, &child, x, y,
+                       &win_x, &win_y, &mask))
+        return 0;
+    if (mask & Button1Mask)
+        return Button1;
+    if (mask & Button3Mask)
+        return Button3;
     return 0;
 }
 
@@ -336,17 +340,15 @@ CaptureStatus x11_select_window(CaptureSnapshot *snapshot, int include_frame,
 {
     Window overlay = map_frozen_overlay(snapshot);
     Cursor cursor = XCreateFontCursor(disp, XC_crosshair);
-    if (!grab_input(ButtonPressMask | ButtonReleaseMask, cursor)) {
-        XFreeCursor(disp, cursor);
-        XDestroyWindow(disp, overlay);
-        XSync(disp, False);
-        return CaptureStatusGrabFailed;
-    }
+    grab_input(ButtonPressMask | ButtonReleaseMask, cursor);
 
     Window toplevel = None;
-    unsigned int pressed_button = 0;
     int cancelled = 0;
     XEvent event;
+    int press_x, press_y;
+    unsigned int pressed_button = pressed_button_at(&press_x, &press_y);
+    if (pressed_button != 0)
+        toplevel = toplevel_at(overlay, press_x, press_y);
 
     for (;;) {
         wait_for_event(&event);
@@ -431,13 +433,7 @@ CaptureStatus x11_select_area(CaptureSnapshot *snapshot, CaptureRect *rect)
 {
     Window overlay = map_frozen_overlay(snapshot);
     Cursor cursor = XCreateFontCursor(disp, XC_crosshair);
-    if (!grab_input(ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
-                    cursor)) {
-        XFreeCursor(disp, cursor);
-        XDestroyWindow(disp, overlay);
-        XSync(disp, False);
-        return CaptureStatusGrabFailed;
-    }
+    grab_input(ButtonPressMask | ButtonReleaseMask | PointerMotionMask, cursor);
 
     /* Alternating black and white dashes stay visible on any content,
      * without tinting the area being selected. */
@@ -452,9 +448,10 @@ CaptureStatus x11_select_area(CaptureSnapshot *snapshot, CaptureRect *rect)
     char dashes[] = { 4, 4 };
     XSetDashes(disp, gc, 0, dashes, 2);
 
-    int start_x = 0, start_y = 0, end_x = 0, end_y = 0;
+    int start_x = 0, start_y = 0;
+    unsigned int pressed_button = pressed_button_at(&start_x, &start_y);
+    int end_x = start_x, end_y = start_y;
     int marquee_x = 0, marquee_y = 0, marquee_w = 0, marquee_h = 0;
-    unsigned int pressed_button = 0;
     int cancelled = 0;
     XEvent event;
 
