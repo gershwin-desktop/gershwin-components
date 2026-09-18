@@ -284,12 +284,9 @@ static dispatch_once_t _sharedDisplayOnce;
     return mapped;
 }
 
-+ (BOOL)isRealApplicationWindow:(unsigned long)windowId
++ (BOOL)isRealApplicationWindow:(unsigned long)windowId onDisplay:(Display *)display
 {
-    if (windowId == 0) return NO;
-
-    Display *display = [self openDisplay];
-    if (!display) return NO;
+    if (windowId == 0 || !display) return NO;
 
     XWindowAttributes attrs;
     BOOL real = NO;
@@ -350,7 +347,6 @@ static dispatch_once_t _sharedDisplayOnce;
         }
     }
 
-    [self closeDisplay:display];
     return real;
 }
 
@@ -365,7 +361,18 @@ static dispatch_once_t _sharedDisplayOnce;
     if (!display) {
         return NO;
     }
-    
+
+    BOOL isDesktop = [self isDesktopWindow:windowId onDisplay:display];
+    XCloseDisplay(display);
+    return isDesktop;
+}
+
++ (BOOL)isDesktopWindow:(unsigned long)windowId onDisplay:(Display *)display
+{
+    if (windowId == 0 || !display) {
+        return NO;
+    }
+
     // Check if window has _NET_WM_WINDOW_TYPE_DESKTOP
     Atom actualType;
     int actualFormat;
@@ -389,8 +396,7 @@ static dispatch_once_t _sharedDisplayOnce;
         }
         XFree(prop);
     }
-    
-    XCloseDisplay(display);
+
     return isDesktop;
 }
 

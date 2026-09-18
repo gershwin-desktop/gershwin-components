@@ -20,7 +20,6 @@
     Window _rootWindow;
     Atom _netActiveWindowAtom;
     Atom _gershwinActiveAppAtom;
-    Atom _gstepAppAtom;
     unsigned long _currentActiveWindow;
     BOOL _monitoring;
     BOOL _stopMonitoring;
@@ -68,7 +67,6 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         _rootWindow = 0;
         _netActiveWindowAtom = 0;
         _gershwinActiveAppAtom = 0;
-        _gstepAppAtom = 0;
         _currentActiveWindow = 0;
         _monitoring = NO;
         _stopMonitoring = NO;
@@ -118,7 +116,6 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         _rootWindow = DefaultRootWindow(_display);
         _netActiveWindowAtom = XInternAtom(_display, "_NET_ACTIVE_WINDOW", False);
         _gershwinActiveAppAtom = XInternAtom(_display, "_GERSHWIN_ACTIVE_APP", False);
-        _gstepAppAtom = XInternAtom(_display, "_GNUSTEP_WM_ATTR", False);
         Atom netSupportedAtom = XInternAtom(_display, "_NET_SUPPORTED", False);
         XSelectInput(_display, _rootWindow, PropertyChangeMask | SubstructureNotifyMask);
         XSync(_display, False);
@@ -213,8 +210,8 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     
     // Same ICCCM/EWMH filter as checkActiveWindow - ignore internal windows.
     if (newActiveWindow != 0
-        && ![MenuUtils isDesktopWindow:newActiveWindow]
-        && ![MenuUtils isRealApplicationWindow:newActiveWindow]) {
+        && ![MenuUtils isDesktopWindow:newActiveWindow onDisplay:_display]
+        && ![MenuUtils isRealApplicationWindow:newActiveWindow onDisplay:_display]) {
         NSDebugLLog(@"gwcomp", @"WindowMonitor: Initial active window %lu is not a real app window - ignoring", newActiveWindow);
         newActiveWindow = 0;
     }
@@ -289,8 +286,8 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     // clearing to system-only.  The desktop is still reported as-is so the
     // menu can go to its system-only state.
     if (newActiveWindow != 0
-        && ![MenuUtils isDesktopWindow:newActiveWindow]
-        && ![MenuUtils isRealApplicationWindow:newActiveWindow]) {
+        && ![MenuUtils isDesktopWindow:newActiveWindow onDisplay:_display]
+        && ![MenuUtils isRealApplicationWindow:newActiveWindow onDisplay:_display]) {
         NSDebugLLog(@"gwcomp", @"WindowMonitor: Active window %lu is not a real app window - keeping current %lu", newActiveWindow, _currentActiveWindow);
         newActiveWindow = _currentActiveWindow;
     }
@@ -319,15 +316,23 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     /* Signal the event-loop thread to exit; it owns _display and closes it. */
     _stopMonitoring = YES;
     if (_display) {
-        /* Wake the thread out of XNextEvent with a client message. */
-        XEvent e;
-        memset(&e, 0, sizeof(e));
-        e.type = ClientMessage;
-        e.xclient.window = _rootWindow;
-        e.xclient.message_type = _netActiveWindowAtom;
-        XSendEvent(_display, _rootWindow, False,
-                   SubstructureRedirectMask | SubstructureNotifyMask, &e);
-        XSync(_display, False);
+        /* Wake the thread out of XNextEvent with a client message.  It is sent
+         * on a connection of our own: _display belongs to the event-loop
+         * thread, and Xlib aborts when two threads use one connection. */
+        Display *waker = XOpenDisplay(NULL);
+        if (waker) {
+            XEvent e;
+            memset(&e, 0, sizeof(e));
+            e.type = ClientMessage;
+            e.xclient.window = _rootWindow;
+            e.xclient.message_type = _netActiveWindowAtom;
+            XSendEvent(waker, _rootWindow, False,
+                       SubstructureRedirectMask | SubstructureNotifyMask, &e);
+            XSync(waker, False);
+            XCloseDisplay(waker);
+        } else {
+            NSLog(@"WindowMonitor: Cannot open X display to stop the event loop");
+        }
     }
     for (int i = 0; i < 100 && _monitoring; i++) {
         [NSThread sleepForTimeInterval:0.02];
@@ -336,28 +341,7 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
 }
 
 // Compatibility Accessors
-- (Display *)display { return _display; }
 - (Window)rootWindow { return _rootWindow; }
-- (BOOL)isGNUstepWindow:(unsigned long)windowId {
-    if (!_display || windowId == 0) return NO;
-    
-    Atom actualType;
-    int actualFormat;
-    unsigned long nitems, bytesAfter;
-    unsigned char *prop = NULL;
-    BOOL isGNUstep = NO;
-    
-    if (XGetWindowProperty(_display, (Window)windowId, _gstepAppAtom,
-                          0, 1, False, AnyPropertyType,
-                          &actualType, &actualFormat, &nitems, &bytesAfter,
-                          &prop) == Success && prop) {
-        isGNUstep = YES;
-        XFree(prop);
-    }
-    
-    return isGNUstep;
-}
-
 - (unsigned long)currentActiveWindow
 {
     return _currentActiveWindow;
