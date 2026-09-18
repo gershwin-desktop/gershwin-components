@@ -143,6 +143,7 @@ static NSTimeInterval _lastBrightnessAdjust = 0;
     volatile BOOL _powerKeyMonitorRunning;
     int _powerKeyFDs[16];
     int _powerKeyFDCount;
+    NSTimeInterval _lastMenuAtomsReassertTime;
 }
 @end
 
@@ -1822,6 +1823,13 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                                                                                  name:WindowMonitorActiveWindowChangedNotification
                                                                                              object:nil];
 
+        // Re-merge our _NET_SUPPORTED atoms when someone (e.g. a WM
+        // reassertion timer) rewrites the root property without them.
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(rootPropertyChanged:)
+                                                     name:WindowMonitorRootPropertyChangedNotification
+                                                   object:nil];
+
         // Announce global menu support
     [self announceGlobalMenuSupport];
     
@@ -2047,52 +2055,16 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
     
     Window root = DefaultRootWindow(display);
-    
-    // Set _NET_SUPPORTING_WM property to identify ourselves as the window manager
-    // that supports global menus (even though we're not actually a WM)
-    Atom supportingWmAtom = XInternAtom(display, "_NET_SUPPORTING_WM", False);
-    Atom windowAtom = XInternAtom(display, "WINDOW", False);
-    
-    // Use our menu bar window as the supporting window
-    Window menuBarWindow = 0;
-    if (self.menuBar) {
-        menuBarWindow = (Window)[self.menuBar windowNumber];
-    }
-    
-    if (menuBarWindow) {
-        XChangeProperty(display, root, supportingWmAtom, windowAtom, 32,
-                       PropModeReplace, (unsigned char*)&menuBarWindow, 1);
-        
-        NSDebugLLog(@"gwcomp", @"MenuController: Set _NET_SUPPORTING_WM property");
-    }
-    
-    // Advertise our global-menu atoms by merging them into the WM-owned
-    // _NET_SUPPORTED property, never replacing it.
-    Atom supportedAtoms[] = {
-        XInternAtom(display, "_NET_WM_WINDOW_TYPE", False),
-        XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False),
-        XInternAtom(display, "_NET_ACTIVE_WINDOW", False),
-        XInternAtom(display, "_KDE_NET_WM_APPMENU_SERVICE_NAME", False),
-        XInternAtom(display, "_KDE_NET_WM_APPMENU_OBJECT_PATH", False),
-        XInternAtom(display, "_GTK_MENUBAR_OBJECT_PATH", False),
-        XInternAtom(display, "_GTK_APPLICATION_OBJECT_PATH", False),
-        XInternAtom(display, "_GTK_WINDOW_OBJECT_PATH", False),
-        XInternAtom(display, "_GTK_APP_MENU_OBJECT_PATH", False)
-    };
-    [MenuUtils mergeNetSupportedAtoms:supportedAtoms
-                                count:sizeof(supportedAtoms) / sizeof(Atom)
-                                onRoot:root
-                              display:display];
-    
-    NSDebugLLog(@"gwcomp", @"MenuController: Merged global menu atoms into _NET_SUPPORTED");
-    
-    // Set Unity-specific properties that Chrome looks for
-    Atom atomAtom = XInternAtom(display, "ATOM", False);
-    Atom unityGlobalMenuAtom = XInternAtom(display, "_UNITY_SUPPORTED", False);
-    XChangeProperty(display, root, unityGlobalMenuAtom, atomAtom, 32,
-                   PropModeReplace, (unsigned char*)supportedAtoms, 1);
-    
-    NSDebugLLog(@"gwcomp", @"MenuController: Set _UNITY_SUPPORTED property");
+
+    /* Menu deliberately does not write _NET_SUPPORTING_WM_CHECK (or a
+       nonstandard variant): that property identifies the window manager,
+       which Menu is not, and claiming it provoked the WM's defensive
+       property-reassertion timer.  Clients looking for global-menu support
+       consult the AppMenu registrar on D-Bus. */
+
+    // Merged into the WM-owned _NET_SUPPORTED property, never replacing it.
+    [MenuUtils announceGlobalMenuAtomsOnRoot:root display:display];
+    NSDebugLLog(@"gwcomp", @"MenuController: Merged global menu atoms into _NET_SUPPORTED and _UNITY_SUPPORTED");
     
     XSync(display, False);
     
@@ -2122,11 +2094,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     MENU_PROFILE_BEGIN(activeWindowChanged);
 
     NSDebugLog(@"MenuController: Active window changed to 0x%lx", windowId);
-    
+
     // Update app menu widget on main thread
     if (self.appMenuWidget) {
         [self.appMenuWidget updateForActiveWindowId:windowId];
-        
+
         // After updating for active window, scan for menus (debounced)
         // Applications may register menus after window activation
         NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
@@ -2138,6 +2110,24 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
 
     MENU_PROFILE_END(activeWindowChanged);
+}
+
+/* The root _NET_SUPPORTED list was rewritten without our global-menu atoms
+   (e.g. by a window-manager property-reassertion timer).  Restore them.
+   Rate-limited so a wipe/re-merge ping-pong cannot spin: our own merge
+   triggers another PropertyNotify, which lands here and finds the atoms
+   present (a no-op). */
+- (void)rootPropertyChanged:(NSNotification *)notification
+{
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - _lastMenuAtomsReassertTime < 2.0) {
+        return;
+    }
+    _lastMenuAtomsReassertTime = now;
+
+    if ([MenuUtils reassertGlobalMenuAtomsOnRootIfNeeded]) {
+        NSDebugLLog(@"gwcomp", @"MenuController: re-merged global-menu atoms into root _NET_SUPPORTED");
+    }
 }
 
 - (void)createTimeMenu

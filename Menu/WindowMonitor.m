@@ -31,6 +31,15 @@
 @implementation WindowMonitor
 
 NSString * const WindowMonitorActiveWindowChangedNotification = @"WindowMonitorActiveWindowChangedNotification";
+NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorRootPropertyChangedNotification";
+
+- (void)_postRootPropertyNotification:(NSDictionary *)userInfo
+{
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:WindowMonitorRootPropertyChangedNotification
+                      object:self
+                    userInfo:userInfo];
+}
 
 
 - (void)_postWindowNotification:(NSDictionary *)userInfo
@@ -110,6 +119,7 @@ NSString * const WindowMonitorActiveWindowChangedNotification = @"WindowMonitorA
         _netActiveWindowAtom = XInternAtom(_display, "_NET_ACTIVE_WINDOW", False);
         _gershwinActiveAppAtom = XInternAtom(_display, "_GERSHWIN_ACTIVE_APP", False);
         _gstepAppAtom = XInternAtom(_display, "_GNUSTEP_WM_ATTR", False);
+        Atom netSupportedAtom = XInternAtom(_display, "_NET_SUPPORTED", False);
         XSelectInput(_display, _rootWindow, PropertyChangeMask | SubstructureNotifyMask);
         XSync(_display, False);
 
@@ -132,6 +142,16 @@ NSString * const WindowMonitorActiveWindowChangedNotification = @"WindowMonitorA
                    re-evaluates its application-level menu. */
                 NSDictionary *userInfo = @{@"windowId": @(_currentActiveWindow)};
                 [self performSelectorOnMainThread:@selector(_postWindowNotification:)
+                                       withObject:userInfo
+                                    waitUntilDone:NO];
+            } else if (event.type == PropertyNotify
+                && event.xproperty.window == _rootWindow
+                && event.xproperty.atom == netSupportedAtom) {
+                /* Something rewrote the WM-owned _NET_SUPPORTED list (e.g. a
+                   window-manager property-reassertion timer); let the
+                   controller restore our merged global-menu atoms. */
+                NSDictionary *userInfo = @{@"atom": @"_NET_SUPPORTED"};
+                [self performSelectorOnMainThread:@selector(_postRootPropertyNotification:)
                                        withObject:userInfo
                                     waitUntilDone:NO];
             } else if (event.type == DestroyNotify || event.type == UnmapNotify) {

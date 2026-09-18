@@ -906,22 +906,31 @@ static dispatch_once_t _sharedDisplayOnce;
                            &bytesAfter, &propData) != Success) {
         return;
     }
-    if (actualFormat != 32 || numItems == 0 || propData == NULL) {
+    if (propData == NULL || numItems == 0) {
+        // Property absent or empty: publish our atoms (creates the list).
         if (propData) XFree(propData);
-        // No list to preserve: just publish our atoms.
         XChangeProperty(display, root, supportedAtom, XA_ATOM, 32,
                         PropModeReplace, (unsigned char *)atoms, count);
         return;
     }
 
-    /* Cap the merged list: _NET_SUPPORTED is written by the WM and a
-       pathological value (millions of atoms) would overflow a stack VLA.
-       Beyond the cap, keep the WM's existing entries and drop ours - the WM
-       list is the one other clients rely on. */
+    if (actualFormat != 32) {
+        /* The list exists but is not atom-shaped; leave it untouched rather
+           than destroying whatever the window manager stored there. */
+        if (propData) XFree(propData);
+        NSDebugLLog(@"gwcomp", @"MenuUtils: _NET_SUPPORTED has unexpected format %d - not merging", actualFormat);
+        return;
+    }
+
+    /* Pathologically long list: append ours without reading/merging the
+       whole thing.  PropModeAppend never removes existing entries, so the
+       WM's list survives intact (the previous REPLACE here dropped the WM's
+       entire list - the exact disaster the surrounding comments warn
+       about). */
     if (numItems > 4096) {
         XFree(propData);
         XChangeProperty(display, root, supportedAtom, XA_ATOM, 32,
-                        PropModeReplace, (unsigned char *)atoms, count);
+                        PropModeAppend, (unsigned char *)atoms, count);
         return;
     }
 
@@ -952,6 +961,91 @@ static dispatch_once_t _sharedDisplayOnce;
     free(merged);
 }
 
+/* The global-menu atoms Menu publishes into the WM-owned _NET_SUPPORTED
+   list.  Clients (Chromium/Chrome among them) consult these before
+   exporting their global menus. */
+static char *globalMenuAtomNames[] = {
+    "_NET_WM_WINDOW_TYPE",
+    "_NET_WM_WINDOW_TYPE_NORMAL",
+    "_NET_ACTIVE_WINDOW",
+    "_KDE_NET_WM_APPMENU_SERVICE_NAME",
+    "_KDE_NET_WM_APPMENU_OBJECT_PATH",
+    "_GTK_MENUBAR_OBJECT_PATH",
+    "_GTK_APPLICATION_OBJECT_PATH",
+    "_GTK_WINDOW_OBJECT_PATH",
+    "_GTK_APP_MENU_OBJECT_PATH"
+};
+#define GLOBAL_MENU_ATOM_COUNT \
+    (sizeof(globalMenuAtomNames) / sizeof(globalMenuAtomNames[0]))
+
++ (void)mergeDefaultGlobalMenuAtomsOnRoot:(Window)root
+                                  display:(Display *)display
+{
+    Atom atoms[GLOBAL_MENU_ATOM_COUNT];
+    XInternAtoms(display, globalMenuAtomNames, GLOBAL_MENU_ATOM_COUNT, False, atoms);
+    [self mergeNetSupportedAtoms:atoms
+                           count:GLOBAL_MENU_ATOM_COUNT
+                          onRoot:root
+                         display:display];
+}
+
++ (void)announceGlobalMenuAtomsOnRoot:(Window)root
+                              display:(Display *)display
+{
+    Atom atoms[GLOBAL_MENU_ATOM_COUNT];
+    XInternAtoms(display, globalMenuAtomNames, GLOBAL_MENU_ATOM_COUNT, False, atoms);
+    [self mergeNetSupportedAtoms:atoms
+                           count:GLOBAL_MENU_ATOM_COUNT
+                          onRoot:root
+                         display:display];
+
+    // Chrome looks for _UNITY_SUPPORTED; Unity advertises the full list of
+    // supported hints there, not just one atom.
+    XChangeProperty(display, root, XInternAtom(display, "_UNITY_SUPPORTED", False),
+                    XA_ATOM, 32, PropModeReplace, (unsigned char *)atoms,
+                    GLOBAL_MENU_ATOM_COUNT);
+}
+
+/* Re-merge the global-menu atoms when the WM-owned _NET_SUPPORTED list was
+   rewritten without them (e.g. by a window-manager property-reassertion
+   timer).  Returns YES when a write was needed. */
++ (BOOL)reassertGlobalMenuAtomsOnRootIfNeeded
+{
+    Display *display = [self sharedDisplay];
+    if (!display) {
+        return NO;
+    }
+
+    Window root = DefaultRootWindow(display);
+    Atom supportedAtom = XInternAtom(display, "_NET_SUPPORTED", False);
+    Atom marker = XInternAtom(display, "_KDE_NET_WM_APPMENU_SERVICE_NAME", False);
+    BOOL missing = YES;
+
+    Atom actualType;
+    int actualFormat;
+    unsigned long numItems = 0, bytesAfter = 0;
+    unsigned char *propData = NULL;
+    if (XGetWindowProperty(display, root, supportedAtom, 0, 8192, False, XA_ATOM,
+                           &actualType, &actualFormat, &numItems, &bytesAfter,
+                           &propData) == Success && propData) {
+        Atom *existing = (Atom *)propData;
+        for (unsigned long i = 0; i < numItems; i++) {
+            if (existing[i] == marker) {
+                missing = NO;
+                break;
+            }
+        }
+        XFree(propData);
+    }
+
+    if (missing) {
+        [self mergeDefaultGlobalMenuAtomsOnRoot:root display:display];
+        XFlush(display);
+        NSDebugLLog(@"gwcomp", @"MenuUtils: re-merged global-menu atoms into _NET_SUPPORTED");
+    }
+    return missing;
+}
+
 + (BOOL)advertiseGlobalMenuSupport
 {
     Display *display = [self openDisplay];
@@ -961,39 +1055,18 @@ static dispatch_once_t _sharedDisplayOnce;
     
     Window root = DefaultRootWindow(display);
     BOOL success = YES;
-    
-    // Set _NET_SUPPORTING_WM_CHECK to advertise window manager support
-    Atom supportingWmAtom = XInternAtom(display, "_NET_SUPPORTING_WM_CHECK", False);
-    if (supportingWmAtom != None) {
-        // Create a dummy window for WM identification
-        Window dummyWindow = XCreateSimpleWindow(display, root, -100, -100, 1, 1, 0, 0, 0);
-        XChangeProperty(display, root, supportingWmAtom, XA_WINDOW, 32,
-                       PropModeReplace, (unsigned char*)&dummyWindow, 1);
-        XChangeProperty(display, dummyWindow, supportingWmAtom, XA_WINDOW, 32,
-                       PropModeReplace, (unsigned char*)&dummyWindow, 1);
-        
-        // Set WM name
-        Atom wmNameAtom = XInternAtom(display, "_NET_WM_NAME", False);
-        const char *wmName = "Menu.app Global Menu";
-        XChangeProperty(display, dummyWindow, wmNameAtom, XInternAtom(display, "UTF8_STRING", False), 8,
-                       PropModeReplace, (unsigned char*)wmName, strlen(wmName));
-        
-        NSDebugLLog(@"gwcomp", @"MenuUtils: Set _NET_SUPPORTING_WM_CHECK for global menu support");
-    }
-    
+
+    /* Menu deliberately does NOT write _NET_SUPPORTING_WM_CHECK: that
+       property identifies the window manager, which Menu is not.  Claiming
+       WM identity here (a dummy window) used to trip the window manager's
+       defensive root-property reassertion timer, whose 5-second
+       XCB_PROP_MODE_REPLACE of _NET_SUPPORTED wiped our merged global-menu
+       atoms.  The WM reasserts the check property itself; clients that care
+       about global menus consult the AppMenu registrar on D-Bus instead. */
+
     // Advertise our global-menu atoms by merging them into the WM-owned
     // _NET_SUPPORTED property, never replacing it.
-    Atom supportedFeatures[] = {
-        XInternAtom(display, "_NET_WM_NAME", False),
-        XInternAtom(display, "_NET_ACTIVE_WINDOW", False),
-        XInternAtom(display, "_KDE_NET_WM_APPMENU_SERVICE_NAME", False),
-        XInternAtom(display, "_KDE_NET_WM_APPMENU_OBJECT_PATH", False)
-    };
-    [self mergeNetSupportedAtoms:supportedFeatures
-                           count:sizeof(supportedFeatures) / sizeof(Atom)
-                           onRoot:root
-                         display:display];
-    
+    [self mergeDefaultGlobalMenuAtomsOnRoot:root display:display];
     NSDebugLLog(@"gwcomp", @"MenuUtils: Merged global menu atoms into _NET_SUPPORTED");
     
     // Set KDE-specific property to indicate global menu support

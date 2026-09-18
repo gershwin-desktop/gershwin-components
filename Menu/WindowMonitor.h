@@ -15,6 +15,11 @@
 // Notification posted on main thread when active window changes
 extern NSString * const WindowMonitorActiveWindowChangedNotification;
 
+// Posted on the main thread when a root-window property we track is
+// rewritten by someone else (e.g. a WM reassertion timer).  userInfo
+// contains the property's atom name under @"atom".
+extern NSString * const WindowMonitorRootPropertyChangedNotification;
+
 /**
  * WindowMonitor
  * 

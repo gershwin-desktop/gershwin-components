@@ -58,6 +58,20 @@
                          onRoot:(Window)root
                        display:(Display *)display;
 
+/* Merge the standard set of global-menu atoms into root _NET_SUPPORTED. */
++ (void)mergeDefaultGlobalMenuAtomsOnRoot:(Window)root
+                                  display:(Display *)display;
+
+/* Like mergeDefaultGlobalMenuAtomsOnRoot:display:, and also publish the same
+ * atoms as _UNITY_SUPPORTED. */
++ (void)announceGlobalMenuAtomsOnRoot:(Window)root
+                              display:(Display *)display;
+
+/* Re-merge the global-menu atoms when the WM-owned _NET_SUPPORTED list was
+ * rewritten without them (e.g. by a window-manager property-reassertion
+ * timer).  Returns YES when a write was needed. */
++ (BOOL)reassertGlobalMenuAtomsOnRootIfNeeded;
+
 /**
  * Returns YES if the window has any X11 property that indicates it intends to
  * export an application menu (GTK _GTK_UNIQUE_BUS_NAME, Canonical/KDE
