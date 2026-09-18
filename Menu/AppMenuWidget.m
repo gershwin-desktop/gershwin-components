@@ -17,6 +17,7 @@
 #import "DBusConnection.h"
 #import "ActionSearch.h"
 #import "SystemActions.h"
+#import "ForceQuitPanel.h"
 #import "MenuProfiler.h"
 #import <X11/Xlib.h>
 #import <X11/Xutil.h>
@@ -1074,6 +1075,14 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     [prefsItem setTarget:self];
     [sysMenu addItem:prefsItem];
     [prefsItem setSubmenu:prefsSubmenu];
+    [sysMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *forceQuitItem = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"Force Quit...", nil)
+                                                           action:@selector(showPanel:)
+                                                    keyEquivalent:@"\033"];
+    [forceQuitItem setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
+    [forceQuitItem setTarget:[ForceQuitPanelController sharedController]];
+    [sysMenu addItem:forceQuitItem];
     [sysMenu addItem:[NSMenuItem separatorItem]];
 
     /* Power actions: shut down, restart and log out, ported from the

@@ -5,28 +5,17 @@
  */
 
 #import "SystemActions.h"
+#import "RunningApplicationList.h"
 
 #import <AppKit/AppKit.h>
 #import <dispatch/dispatch.h>
 #import <signal.h>
 #import <stdlib.h>
 #import <sys/utsname.h>
-#import <X11/Xlib.h>
-#import <X11/Xutil.h>
-#import <X11/Xatom.h>
 
 /* How long to wait for applications to terminate gracefully before offering
  * to kill them, matching the Workspace's logout countdown. */
 #define POWER_APP_TERMINATE_TIMEOUT 30.0
-
-/* Windows in _NET_CLIENT_LIST may already be gone; ignore the error instead
- * of letting the default handler terminate the process. */
-static int SystemActionsXErrorHandler(Display *display, XErrorEvent *error)
-{
-    (void)display;
-    (void)error;
-    return 0;
-}
 
 /* Operating systems that carry the BSD shutdown(8) command syntax. */
 static BOOL SystemActionsIsBSD(NSString *system)
@@ -324,59 +313,9 @@ static NSString *SystemActionsExecutable(NSArray *paths)
 {
     (void)action;
     NSMutableDictionary *apps = [NSMutableDictionary dictionary]; /* name -> pid */
-    Display *display = XOpenDisplay(NULL);
-    if (display == NULL) {
-        return @[];
+    for (NSDictionary *app in [RunningApplicationList applicationsOwningWindows]) {
+        [apps setObject:[app objectForKey:@"pid"] forKey:[app objectForKey:@"name"]];
     }
-
-    /* A stale window in the client list must not crash the process. */
-    XErrorHandler previousHandler = XSetErrorHandler(SystemActionsXErrorHandler);
-
-    Atom clientListAtom = XInternAtom(display, "_NET_CLIENT_LIST", False);
-    Atom pidAtom = XInternAtom(display, "_NET_WM_PID", False);
-    Atom wmClassAtom = XInternAtom(display, "WM_CLASS", False);
-    Atom listType, propType, pidType;
-    int listFormat, propFormat, pidFormat;
-    unsigned long listNitems, propNitems, pidNitems;
-    unsigned long listBytesAfter, propBytesAfter, pidBytesAfter;
-    unsigned char *prop = NULL;
-
-    if (XGetWindowProperty(display, DefaultRootWindow(display), clientListAtom,
-                           0, 1024, False, XA_WINDOW,
-                           &listType, &listFormat, &listNitems, &listBytesAfter,
-                           &prop) == 0 && prop) {
-        Window *wins = (Window *)prop;
-        for (unsigned long i = 0; i < listNitems; i++) {
-            /* WM_CLASS is two null-terminated strings; the class (used as the
-               application's DO service name) is the second one. */
-            unsigned char *classProp = NULL;
-            if (XGetWindowProperty(display, wins[i], wmClassAtom, 0, 32, False,
-                                   XA_STRING, &propType, &propFormat, &propNitems,
-                                   &propBytesAfter, &classProp) == 0
-                && classProp && propFormat == 8) {
-                char *p = strchr((char *)classProp, '\0');
-                if (p && p[1] != '\0') {
-                    NSString *name = [NSString stringWithUTF8String:p + 1];
-                    unsigned char *pidProp = NULL;
-                    pid_t pid = 0;
-                    if (XGetWindowProperty(display, wins[i], pidAtom, 0, 1, False,
-                                           XA_CARDINAL, &pidType, &pidFormat,
-                                           &pidNitems, &pidBytesAfter,
-                                           &pidProp) == 0 && pidProp && pidFormat == 32) {
-                        pid = (pid_t)((long *)pidProp)[0];
-                        XFree(pidProp);
-                    }
-                    if (pid > 0) {
-                        [apps setObject:[NSNumber numberWithInt:(int)pid] forKey:name];
-                    }
-                }
-                XFree(classProp);
-            }
-        }
-        XFree(prop);
-    }
-    XCloseDisplay(display);
-    XSetErrorHandler(previousHandler);
 
     /* Never terminate ourselves - Menu must stay alive until the OS power
        command has actually been launched (and, for logout, until it has asked

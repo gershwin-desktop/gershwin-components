@@ -42,6 +42,8 @@ Menu_OBJC_FILES = \
 	RoundedCornersView.m \
 	ActionSearch.m \
 	SystemActions.m \
+	RunningApplicationList.m \
+	ForceQuitPanel.m \
 	MenuExtraManager.m \
 	GSMenuExtraContext.m \
 	GSMenuExtraBundle.m \
@@ -82,6 +84,8 @@ Menu_HEADER_FILES = \
 	RoundedCornersView.h \
 	ActionSearch.h \
 	SystemActions.h \
+	RunningApplicationList.h \
+	ForceQuitPanel.h \
 	GSMenuExtra.h \
 	GSMenuExtraContext.h \
 	GSMenuExtraBundle.h \

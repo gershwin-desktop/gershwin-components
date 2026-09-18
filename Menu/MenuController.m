@@ -26,6 +26,7 @@
 #import "EvdevBrightnessKeySource.h"
 #import "ALSABackend.h"
 #import "SystemActions.h"
+#import "ForceQuitPanel.h"
 
 @interface GSVolumeControl : NSObject
 + (void)increaseVolume;
@@ -1596,40 +1597,19 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     [self performSelector:@selector(applyMenuBarDockAndStrutProperties) withObject:nil afterDelay:1.0];
     [self performSelector:@selector(applyMenuBarDockAndStrutProperties) withObject:nil afterDelay:2.0];
 
-    // Register global Cmd-Space shortcut to toggle the Action Search panel (if available)
     // NOTE: What we call "Cmd" here is actually the "Alt" key technically but we refer to it as "Cmd" in the UI
-    NSString *cmdSpaceShortcut = @"alt+space";
-    X11ShortcutManager *mgr = [X11ShortcutManager sharedManager];
-    if (mgr && ![mgr isShortcutAlreadyTaken:cmdSpaceShortcut]) {
-        NSMenuItem *cmdSpaceItem = [[NSMenuItem alloc] initWithTitle:@"Toggle Action Search"
-                                                               action:@selector(toggleSearch:)
-                                                        keyEquivalent:@" "];
-        [cmdSpaceItem setKeyEquivalentModifierMask:NSCommandKeyMask];
-        // Register directly to call the ActionSearchController without DBus
-        BOOL regOK = [mgr registerDirectShortcutForMenuItem:cmdSpaceItem
-                                                     target:[ActionSearchController sharedController]
-                                                     action:@selector(toggleSearch:)];
-        if (regOK) {
-            NSDebugLLog(@"gwcomp", @"MenuController: Registered global shortcut Cmd-Space for Action Search");
-        } else {
-            NSDebugLLog(@"gwcomp", @"MenuController: Failed to register Cmd-Space as global shortcut");
-            // Notify user with alert so failure is visible
-            NSLog(@"NSAlert: Cannot register global shortcut");
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:NSLocalizedString(@"Cannot register global shortcut", @"Alert title for shortcut failure")];
-            [alert setInformativeText:NSLocalizedString(@"Menu.app failed to register the Cmd-Space global shortcut. Please check for conflicts or permissions.", @"Alert text for shortcut failure")];
-            [alert addButtonWithTitle:NSLocalizedString(@"OK", @"OK button")];
-            [alert setAlertStyle:NSWarningAlertStyle];
-            // Run non-modally to avoid blocking the app startup
-            [alert beginSheetModalForWindow:self.menuBar completionHandler:nil];
-        }
-    } else {
-        if (!mgr) {
-            NSDebugLLog(@"gwcomp", @"MenuController: Warning - cannot register Cmd-Space because X11ShortcutManager is unavailable");
-        } else {
-            NSDebugLLog(@"gwcomp", @"MenuController: Cmd-Space already taken - not registering global shortcut");
-        }
-    }
+    [self registerGlobalShortcut:@"alt+space"
+                           title:@"Toggle Action Search"
+                             key:@" "
+                       modifiers:NSCommandKeyMask
+                          target:[ActionSearchController sharedController]
+                          action:@selector(toggleSearch:)];
+    [self registerGlobalShortcut:@"alt+shift+Escape"
+                           title:@"Force Quit"
+                             key:@"\033"
+                       modifiers:NSCommandKeyMask | NSShiftKeyMask
+                          target:[ForceQuitPanelController sharedController]
+                          action:@selector(showPanel:)];
 
     // Register XF86Audio volume keys - forwarded via notification to SoundExtra.
     X11ShortcutManager *volMgr = [X11ShortcutManager sharedManager];
@@ -1687,6 +1667,44 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                    selector:@selector(checkScaleFactor:)
                                    userInfo:nil
                                     repeats:YES];
+}
+
+/* Registers a desktop-wide shortcut that Menu handles itself, independent of
+ * the application that is in front.  Failing to get it is shown to the user
+ * because the shortcut would otherwise silently do nothing. */
+- (void)registerGlobalShortcut:(NSString *)shortcut
+                         title:(NSString *)title
+                           key:(NSString *)key
+                     modifiers:(NSUInteger)modifiers
+                        target:(id)target
+                        action:(SEL)action
+{
+    X11ShortcutManager *mgr = [X11ShortcutManager sharedManager];
+    if (!mgr) {
+        NSDebugLLog(@"gwcomp", @"MenuController: Warning - cannot register %@ because X11ShortcutManager is unavailable", shortcut);
+        return;
+    }
+    if ([mgr isShortcutAlreadyTaken:shortcut]) {
+        NSDebugLLog(@"gwcomp", @"MenuController: %@ already taken - not registering global shortcut", shortcut);
+        return;
+    }
+
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:key];
+    [item setKeyEquivalentModifierMask:modifiers];
+    // Register directly to call the target without DBus
+    if ([mgr registerDirectShortcutForMenuItem:item target:target action:action]) {
+        NSDebugLLog(@"gwcomp", @"MenuController: Registered global shortcut %@ for %@", shortcut, title);
+        return;
+    }
+
+    NSLog(@"MenuController: Failed to register %@ as global shortcut", shortcut);
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:NSLocalizedString(@"Cannot register global shortcut", @"Alert title for shortcut failure")];
+    [alert setInformativeText:[NSString stringWithFormat:NSLocalizedString(@"Menu.app failed to register the %@ global shortcut. Please check for conflicts or permissions.", @"Alert text for shortcut failure"), shortcut]];
+    [alert addButtonWithTitle:NSLocalizedString(@"OK", @"OK button")];
+    [alert setAlertStyle:NSWarningAlertStyle];
+    // Run non-modally to avoid blocking the app startup
+    [alert beginSheetModalForWindow:self.menuBar completionHandler:nil];
 }
 
 - (void)setupMenuBar
