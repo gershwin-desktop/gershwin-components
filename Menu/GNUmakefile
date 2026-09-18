@@ -249,7 +249,6 @@ custom-install: $(APP_NAME).app
 		cp Menu.png $(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources/; \
 		echo "Installing menu extra bundles..."; \
 			mkdir -p /System/Library/MenuExtras; \
-			mkdir -p /Local/Library/MenuExtras; \
 			cp -R MenuExtras/ClockExtra/Clock.gsmenuextra /System/Library/MenuExtras/ || true; \
 			cp -R MenuExtras/BatteryExtra/Battery.gsmenuextra /System/Library/MenuExtras/ || true; \
 			cp -R MenuExtras/CPUExtra/CPU.gsmenuextra /System/Library/MenuExtras/ || true; \
