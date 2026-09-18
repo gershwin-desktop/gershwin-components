@@ -431,20 +431,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Reconcile purging %lu stale window(s)",
           (unsigned long)[staleKeys count]);
     for (NSNumber *windowKey in staleKeys) {
-        [self.menusByWindow removeObjectForKey:windowKey];
-        [self.clientNamesByWindow removeObjectForKey:windowKey];
-        [self.lastMenuDataByWindow removeObjectForKey:windowKey];
-        [self.lastMenuUpdateTimeByWindow removeObjectForKey:windowKey];
-        [self.lastStateRefreshByWindow removeObjectForKey:windowKey];
-        @synchronized (_materializationTimeByWindow) {
-            NSString *prefix = [NSString stringWithFormat:@"%lu:",
-                                          [windowKey unsignedLongValue]];
-            NSArray *mkeys = [_materializationTimeByWindow allKeys];
-            for (NSString *mk in mkeys) {
-                if ([mk hasPrefix:prefix])
-                    [_materializationTimeByWindow removeObjectForKey:mk];
-            }
-        }
+        [self forgetWindow:windowKey];
     }
 
     /* Drop application-level menus whose owning process has exited.  A
@@ -489,7 +476,68 @@ static GNUStepMenuImporter *sSharedImporter = nil;
           (unsigned long)[deadClients count]);
 }
 
+/* A cached menu is only used while it still belongs to the process that owns
+   the window (see forgetMenusOfPreviousOwnerOfWindow:). */
 - (BOOL)hasMenuForWindow:(unsigned long)windowId
+{
+    if ([self findCachedMenuForWindow:windowId]
+        && ![self forgetMenusOfPreviousOwnerOfWindow:windowId]) {
+        return YES;
+    }
+    [self requestMenuFromOwnerOfWindow:windowId];
+    return NO;
+}
+
+/* The X server hands a disconnected client's window IDs to the next client,
+   so a relaunched app's window can show up under an ID whose cached menu
+   belongs to the instance that just quit - also through the copies that
+   findCachedMenuForWindow: makes under a parent window's ID, which later
+   pushes never update.  Such a menu would send its actions to the dead
+   process, which drops them.  If the window now belongs to another process,
+   forget every window menu of the cached client: an ID is only reused once
+   its client has disconnected, so all of its windows are gone.  Returns YES
+   if the cached menu was stale. */
+- (BOOL)forgetMenusOfPreviousOwnerOfWindow:(unsigned long)windowId
+{
+    NSString *cachedClient = [self.clientNamesByWindow objectForKey:@(windowId)];
+    pid_t owner = [MenuUtils getWindowPID:windowId];
+
+    /* Without _NET_WM_PID the owner cannot be compared. */
+    if (cachedClient == nil || owner == 0
+        || [cachedClient isEqualToString:[self _clientNameForPID:owner]]) {
+        return NO;
+    }
+    for (NSNumber *key in [self.clientNamesByWindow allKeysForObject:cachedClient]) {
+        [self forgetWindow:key];
+    }
+    return YES;
+}
+
+/* Drop everything cached for one window. */
+- (void)forgetWindow:(NSNumber *)windowKey
+{
+    [self.menusByWindow removeObjectForKey:windowKey];
+    [self.clientNamesByWindow removeObjectForKey:windowKey];
+    [self.lastMenuDataByWindow removeObjectForKey:windowKey];
+    [self.lastMenuUpdateTimeByWindow removeObjectForKey:windowKey];
+    [self.lastStateRefreshByWindow removeObjectForKey:windowKey];
+
+    /* Clear the materialization cache for this window so that if the window
+       reopens (same or new app instance), the next updateMenuForWindow: call
+       performs a fresh proxy materialization instead of skipping it.  Keys are
+       "<windowId>:<clientName>", so remove every entry for this window. */
+    @synchronized (_materializationTimeByWindow) {
+        NSString *prefix = [NSString stringWithFormat:@"%lu:",
+                                      [windowKey unsignedLongValue]];
+        NSArray *keys = [_materializationTimeByWindow allKeys];
+        for (NSString *k in keys) {
+            if ([k hasPrefix:prefix])
+                [_materializationTimeByWindow removeObjectForKey:k];
+        }
+    }
+}
+
+- (BOOL)findCachedMenuForWindow:(unsigned long)windowId
 {
     NSNumber *key = [NSNumber numberWithUnsignedLong:windowId];
     if ([self.menusByWindow objectForKey:key]) {
@@ -557,11 +605,16 @@ static GNUStepMenuImporter *sSharedImporter = nil;
       }
     }
 
-    // Proactively probe the client for this window if we don't have a menu
-    // This handles the case where a new GNUstep app window appears but hasn't pushed its menu yet
+    return NO;
+}
+
+/* A new GNUstep app window may appear before it has pushed its menu, so ask
+   the window's owner for it. */
+- (void)requestMenuFromOwnerOfWindow:(unsigned long)windowId
+{
     pid_t pid = [MenuUtils getWindowPID:windowId];
     if (pid != 0) {
-        NSString *clientName = [NSString stringWithFormat:@"org.gnustep.Gershwin.MenuClient.%d", pid];
+        NSString *clientName = [self _clientNameForPID:pid];
         
         // Log the probe attempt to help debug why Processes.app might fail
         // Using static to avoid spamming the log every frame/check
@@ -616,8 +669,6 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     } else {
         NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Could not determine PID for window %lu", windowId);
     }
-    
-    return NO;
 }
 
 - (NSMenu *)getMenuForWindow:(unsigned long)windowId
@@ -646,25 +697,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
 - (void)unregisterWindow:(unsigned long)windowId
 {
-    NSNumber *windowKey = @(windowId);
-    [self.menusByWindow removeObjectForKey:windowKey];
-    [self.clientNamesByWindow removeObjectForKey:windowKey];
-    [self.lastMenuDataByWindow removeObjectForKey:windowKey];
-    [self.lastMenuUpdateTimeByWindow removeObjectForKey:windowKey];
-    [self.lastStateRefreshByWindow removeObjectForKey:windowKey];
-
-    /* Clear the materialization cache for this window so that if the window
-       reopens (same or new app instance), the next updateMenuForWindow: call
-       performs a fresh proxy materialization instead of skipping it.  Keys are
-       "<windowId>:<clientName>", so remove every entry for this window. */
-    @synchronized (_materializationTimeByWindow) {
-        NSString *prefix = [NSString stringWithFormat:@"%lu:", windowId];
-        NSArray *keys = [_materializationTimeByWindow allKeys];
-        for (NSString *k in keys) {
-            if ([k hasPrefix:prefix])
-                [_materializationTimeByWindow removeObjectForKey:k];
-        }
-    }
+    [self forgetWindow:@(windowId)];
 
     if (self.appMenuWidget && self.appMenuWidget.currentWindowId == windowId) {
         NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Current menu window %lu unregistered - refreshing menu", windowId);
@@ -709,7 +742,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
                 return;
             }
 
-            NSString *clientName = [NSString stringWithFormat:@"org.gnustep.Gershwin.MenuClient.%d", pid];
+            NSString *clientName = [self _clientNameForPID:pid];
             NSDebugLog(@"GNUStepMenuImporter: Found window %@ (pid: %d) - probing client %@", windowNum, pid, clientName);
 
             @try {
@@ -978,10 +1011,17 @@ static GNUStepMenuImporter *sSharedImporter = nil;
                        clientName:(bycopy NSString *)clientName
 {
     @try {
-        (void)clientName;
         if (!windowId) return;
         NSNumber *safeId = [(id)windowId isProxy] ? [windowId copy] : windowId;
         if (!safeId) return;
+        /* X reuses window IDs across app relaunches, so a late unregister
+           from the instance that just quit must not remove the menu that the
+           new instance has already registered for the same ID. */
+        NSString *current = [self.clientNamesByWindow objectForKey:
+          @([safeId unsignedLongValue])];
+        if (current && clientName && ![current isEqualToString:clientName]) {
+            return;
+        }
         [self unregisterWindow:[safeId unsignedLongValue]];
     }
     @catch (NSException *exception) {
@@ -1000,6 +1040,12 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     NSString *pidPart = [parts lastObject];
     if (!pidPart || [pidPart length] == 0) return 0;
     return (pid_t)[pidPart integerValue];
+}
+
+/* Eau registers each app instance's menu client under this name. */
+- (NSString *)_clientNameForPID:(pid_t)pid
+{
+    return [NSString stringWithFormat:@"org.gnustep.Gershwin.MenuClient.%d", (int)pid];
 }
 
 /* Rewrite the _GERSHWIN_MENU_APPS root property with the PIDs of every app

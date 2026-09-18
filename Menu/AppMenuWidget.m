@@ -495,26 +495,40 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        structure is unchanged to prevent infinite retry loops when the menu
        load transiently returns nil (e.g. slow DBus response). */
     if (windowId == self.currentWindowId && self.currentMenu && self.menuView && ![self.menuView isHidden]) {
-        if (![self.protocolManager hasMenuForWindow:windowId]) {
-            return;
-        }
         pid_t newPID = [MenuUtils getWindowPID:windowId];
-        if (newPID != 0 && newPID == self.currentWindowPID) {
-            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same PID %d - assuming menu unchanged", (int)newPID);
-            return;
-        }
-        /* Some apps do not set _NET_WM_PID, so getWindowPID: returns 0 and the
-           PID check above cannot fire.  In that case still skip the rebuild if
-           the fetched menu is structurally identical to what we already show:
-           rebuilding is expensive (tears down and re-creates the whole menu
-           view tree, draining a large autorelease pool) and doing it on every
-           focus notification for a PID-less window is what made Menu.app burn
-           CPU and become unresponsive over long sessions. */
-        NSMenu *current = [self.menuView menu];
-        NSMenu *candidate = [self.protocolManager getMenuForWindow:windowId];
-        if (current && candidate && [self topLevelMenusMatch:current with:candidate]) {
-            NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same window 0x%lx, menu unchanged (PID unknown %d) - skipping rebuild", windowId, (int)newPID);
-            return;
+        if (![self.protocolManager hasMenuForWindow:windowId]) {
+            /* X hands a relaunched app the window IDs of the instance that
+               just quit.  If another process owns the window now, the menu on
+               show is the dead instance's and its items would act on nothing:
+               clear it and wait for the new owner's menu below, like for any
+               window that has no menu yet. */
+            if (newPID == 0 || newPID == self.currentWindowPID) {
+                return;
+            }
+            [self clearToSystemOnly];
+        } else {
+            if (newPID != 0 && newPID == self.currentWindowPID) {
+                NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same PID %d - assuming menu unchanged", (int)newPID);
+                return;
+            }
+            /* Some apps do not set _NET_WM_PID, so getWindowPID: returns 0 and the
+               PID check above cannot fire.  In that case still skip the rebuild if
+               the fetched menu is structurally identical to what we already show:
+               rebuilding is expensive (tears down and re-creates the whole menu
+               view tree, draining a large autorelease pool) and doing it on every
+               focus notification for a PID-less window is what made Menu.app burn
+               CPU and become unresponsive over long sessions.  Only then: when
+               the PID changed, a relaunched app shows an identical menu under the
+               reused window ID, and keeping the old one would leave items bound
+               to the dead instance. */
+            if (newPID == 0) {
+                NSMenu *current = [self.menuView menu];
+                NSMenu *candidate = [self.protocolManager getMenuForWindow:windowId];
+                if (current && candidate && [self topLevelMenusMatch:current with:candidate]) {
+                    NSDebugLLog(@"gwcomp", @"AppMenuWidget: Same window 0x%lx, menu unchanged (PID unknown) - skipping rebuild", windowId);
+                    return;
+                }
+            }
         }
     }
 
