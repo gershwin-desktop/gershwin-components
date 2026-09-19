@@ -11,6 +11,7 @@
 #import <GNUstepGUI/GSDisplayServer.h>
 #import <GL/gl.h>
 #import <X11/Xlib.h>
+#import <X11/extensions/shape.h>
 #import <math.h>
 
 // Configuration Constants
@@ -108,8 +109,43 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
     [added minusSet:before];
     NSAssert1([added count] == 1, @"Expected one new GL subwindow, found %lu",
               (unsigned long)[added count]);
-    XSetWindowBackgroundPixmap(display, (Window)[[added anyObject] unsignedLongValue], None);
+    _pictureWindow = [[added anyObject] unsignedLongValue];
+    XSetWindowBackgroundPixmap(display, (Window)_pictureWindow, None);
+    [self applyUncoveredRects];
     return context;
+}
+
+- (void)setUncoveredRects:(NSArray *)rects {
+    if (rects == _uncoveredRects || [rects isEqualToArray:_uncoveredRects]) {
+        return;
+    }
+    _uncoveredRects = [rects copy];
+    [self applyUncoveredRects];
+}
+
+// The picture's window is cut away where the view is to show through; its
+// shape is in the pixels of that window, with y growing downwards.
+- (void)applyUncoveredRects {
+    NSWindow *window = [self window];
+    if (_pictureWindow == 0 || window == nil) {
+        return;
+    }
+    Display *display = (Display *)[GSServerForWindow(window) serverDevice];
+    NSRect pixels = [self convertRect:[self bounds] toView:nil];
+    XRectangle whole = { 0, 0, (unsigned short)NSWidth(pixels), (unsigned short)NSHeight(pixels) };
+    XShapeCombineRectangles(display, (Window)_pictureWindow, ShapeBounding, 0, 0,
+                            &whole, 1, ShapeSet, Unsorted);
+
+    for (NSValue *value in _uncoveredRects) {
+        NSRect rect = [self convertRect:[value rectValue] toView:nil];
+        XRectangle hole = { (short)floor(NSMinX(rect) - NSMinX(pixels)),
+                            (short)floor(NSHeight(pixels) - (NSMaxY(rect) - NSMinY(pixels))),
+                            (unsigned short)ceil(NSWidth(rect)),
+                            (unsigned short)ceil(NSHeight(rect)) };
+        XShapeCombineRectangles(display, (Window)_pictureWindow, ShapeBounding, 0, 0,
+                                &hole, 1, ShapeSubtract, Unsorted);
+    }
+    XFlush(display);
 }
 
 - (void)viewDidMoveToSuperview {
@@ -291,6 +327,7 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
 }
 
 - (void)reshape {
+    [self applyUncoveredRects];
     [super reshape];
     NSRect bounds = [self bounds];
     // If we are in a scroll view, use the visible bounds for perspective aspect ratio

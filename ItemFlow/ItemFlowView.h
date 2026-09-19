@@ -19,6 +19,10 @@
 @end
 
 @interface ItemFlowView : NSOpenGLView
+{
+    NSArray *_uncoveredRects;
+    unsigned long _pictureWindow;
+}
 
 @property (nonatomic, assign) id<ItemFlowViewDataSource> dataSource;
 @property (nonatomic, assign) id<ItemFlowViewDelegate> delegate;
@@ -34,5 +38,13 @@
  * that are removed have their GL textures freed.
  */
 - (void)setItemCount:(NSUInteger)count;
+
+/**
+ * Areas of the view (its own coordinates) the carousel leaves free, so
+ * views lying over them show through: the picture is drawn in a window of
+ * its own that would otherwise cover them.  NSValue rects; nil or an empty
+ * array covers everything again.
+ */
+- (void)setUncoveredRects:(NSArray *)rects;
 
 @end

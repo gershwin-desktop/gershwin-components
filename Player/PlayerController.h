@@ -66,10 +66,6 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 
     // Full screen
     BOOL isFullscreen;
-    // The controls float above the picture in full screen: a window of
-    // their own, as the carousel's own X window covers everything in this
-    // one
-    NSPanel *controlsPanel;
 
     // Local playback
     PlayerSession *session;

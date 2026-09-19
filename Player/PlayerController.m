@@ -34,11 +34,6 @@ static const CGFloat kTransportButtonWidth = 40.0;
 static const CGFloat kTransportButtonHeight = 24.0;
 static const CGFloat kVolumeSliderWidth = 120.0;
 static const CGFloat kMuteWidth = 56.0;
-static const CGFloat kOverlayHeight = 64.0;
-// The floating controls in full screen
-static const CGFloat kControlsPanelWidth = 560.0;
-static const CGFloat kControlsPanelBottomMargin = 40.0;
-static const CGFloat kControlsPanelRadius = 12.0;
 // How much higher the bottom edge is at the sides than in the middle, and
 // how round its corners are
 static const CGFloat kBottomCurveDepth = 18.0;
@@ -271,18 +266,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [videoRenderView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [videoView addSubview:videoRenderView];
 
-    // The controls float above the picture in full screen, in a window of
-    // their own: the carousel draws into an X window of its own that covers
-    // every view of the window it is in
-    controlsPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 100, kOverlayHeight)
-                                               styleMask:NSBorderlessWindowMask
-                                                 backing:NSBackingStoreBuffered
-                                                   defer:NO];
-    [controlsPanel setBackgroundColor:[NSColor blackColor]];
-    [controlsPanel setLevel:NSPopUpMenuWindowLevel];
-    [controlsPanel setBecomesKeyOnlyIfNeeded:YES];
-    [controlsPanel setHidesOnDeactivate:YES];
-    [controlsPanel setReleasedWhenClosed:NO];
 
     // Small, beside text: over the covers the carousel's GL subwindow would
     // hide it
@@ -517,7 +500,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
     [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:YES];
-    [self putControlsInPanel:NO];
+    [flowView setUncoveredRects:nil];
     [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:NO];
     [self setViews:[self positionViews] hidden:NO];
@@ -577,75 +560,24 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (void)layoutFullscreen
 {
     NSRect bounds = [contentView bounds];
-    // Radio has no position to show; the panel names the station instead
-    BOOL radio = (playerMode == PlayerModeRadio);
-    [self setViews:@[searchField, radioTextLabel] hidden:YES];
-    [statusLabel setHidden:!radio];
+    // Only the buttons: their bezels fill what the picture gives up for
+    // them, while a text would stand on a black patch of window instead
+    [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:YES];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self volumeViews] hidden:YES];
-    [self setViews:[self positionViews] hidden:radio];
+    [self setViews:[self positionViews] hidden:YES];
     [self setViews:[self transportViews] hidden:NO];
     [contentView setBlackBackground:YES];
 
-    // The picture has the whole screen; the controls float above it
+    // The picture has the whole screen
     [self setPictureFrame:bounds];
-    [self putControlsInPanel:YES];
-}
+    [self layoutTransportCenteredAt:NSMidX(bounds) y:METRICS_SPACE_16];
 
-// In full screen the controls live in a window of their own above the
-// picture; back in the window otherwise.
-- (void)putControlsInPanel:(BOOL)inPanel
-{
-    NSMutableArray *views = [NSMutableArray arrayWithArray:[self transportViews]];
-    [views addObjectsFromArray:[self positionViews]];
-    [views addObject:statusLabel];
-    NSView *home = inPanel ? [controlsPanel contentView] : contentView;
-    for (NSView *view in views) {
-        if ([view superview] != home) {
-            [view removeFromSuperview];
-            [home addSubview:view];
-        }
-    }
-    if (!inPanel) {
-        [controlsPanel orderOut:nil];
-        return;
-    }
-
-    NSRect screen = [[mainWindow screen] frame];
-    CGFloat width = MIN(kControlsPanelWidth, NSWidth(screen) - 4 * METRICS_CONTENT_SIDE_MARGIN);
-    NSRect frame = NSMakeRect(floor(NSMidX(screen) - width / 2.0),
-                              NSMinY(screen) + kControlsPanelBottomMargin,
-                              width, kOverlayHeight);
-    [controlsPanel setFrame:frame display:NO];
-    // Only the panel itself, with rounded corners, lies over the picture
-    PlayerSetWindowShapePath(controlsPanel, PlayerRoundedRectShapePath(kControlsPanelRadius));
-
-    CGFloat y = METRICS_SPACE_12;
-    [self layoutTransportCenteredAt:width / 2.0 y:y];
-    y += kTransportButtonHeight + METRICS_SPACE_8;
-    if (playerMode == PlayerModeRadio) {
-        [statusLabel setFrame:NSMakeRect(METRICS_SPACE_12, y,
-                                         width - 2 * METRICS_SPACE_12, 17)];
-        [self placeRadioSpinner];
-    } else {
-        [self layoutPositionRowFrom:METRICS_SPACE_12 to:width - METRICS_SPACE_12 y:y];
-    }
-    [controlsPanel orderFront:nil];
-    // Above the window: the window manager raises that one when it goes
-    // full screen, which would leave the controls underneath
-    PlayerSetWindowAbove(controlsPanel, YES);
-    PlayerRaiseWindow(controlsPanel);
-    [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                             selector:@selector(raiseControlsPanel)
-                                               object:nil];
-    [self performSelector:@selector(raiseControlsPanel) withObject:nil afterDelay:0.3];
-}
-
-- (void)raiseControlsPanel
-{
-    if (isFullscreen && [controlsPanel isVisible]) {
-        PlayerRaiseWindow(controlsPanel);
-    }
+    // The picture is drawn in a window of its own that would cover the
+    // buttons: it is cut away where they are, so they show on it
+    NSRect transport = NSUnionRect([previousButton frame], [nextButton frame]);
+    [flowView setUncoveredRects:@[[NSValue valueWithRect:
+        [flowView convertRect:transport fromView:contentView]]]];
 }
 
 #pragma mark - Full screen
@@ -687,7 +619,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     isFullscreen = NO;
     [mainWindow setShowsResizeIndicator:YES];
-    [self putControlsInPanel:NO];
+    [flowView setUncoveredRects:nil];
     [self setOverlayTextColor:[NSColor controlTextColor]];
     PlayerSetWindowFullScreen(mainWindow, NO);
     [self layoutSubviews];
@@ -1446,9 +1378,14 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (NSImage *)itemFlowView:(ItemFlowView *)view imageAtIndex:(NSUInteger)index
 {
     if (playerMode == PlayerModeRadio) {
-        NSArray *stations = [[RadioManager sharedManager] stations];
-        return index < [stations count]
-            ? [[RadioManager sharedManager] imageForStation:[stations objectAtIndex:index]] : nil;
+        RadioManager *radio = [RadioManager sharedManager];
+        NSArray *stations = [radio stations];
+        if (index >= [stations count]) {
+            return nil;
+        }
+        // Drawn, so its icon is worth having
+        [radio prefetchIconForStationAtIndex:index];
+        return [radio imageForStation:[stations objectAtIndex:index]];
     }
     return [coverImages objectForKey:[[session playlist] itemAtIndex:index]];
 }

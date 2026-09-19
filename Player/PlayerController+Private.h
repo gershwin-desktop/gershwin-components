@@ -18,7 +18,7 @@ extern NSString *const PlayerDefaultsRadioPlaying;
 @interface PlayerController (Private)
 - (void)rememberRadioPlaying:(BOOL)playing;
 - (void)placeRadioSpinner;
-- (void)putControlsInPanel:(BOOL)inPanel;
+- (void)prepareRadioIconsAround:(NSUInteger)index;
 - (NSTextField *)labelWithFont:(NSFont *)font;
 - (void)layoutSubviews;
 - (void)updateWindowShape;

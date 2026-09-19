@@ -99,63 +99,8 @@ NSData *PlayerBottomCurveShapePath(CGFloat depth, CGFloat radius)
     return [NSData dataWithBytes:v length:sizeof(v)];
 }
 
-NSData *PlayerRoundedRectShapePath(CGFloat radius)
-{
-    const double k = 0.5522847498;   // control distance of a quarter circle
-    double r = radius;
-    int32_t v[] = {
-        1,
-        0, 0, fixed(r), 0, 0,
-        1, fixed(1), fixed(-r), 0, 0,
-        2, fixed(1), fixed(-r + k * r), 0, 0,
-           fixed(1), 0, 0, fixed(r - k * r),
-           fixed(1), 0, 0, fixed(r),
-        1, fixed(1), 0, fixed(1), fixed(-r),
-        2, fixed(1), 0, fixed(1), fixed(-r + k * r),
-           fixed(1), fixed(-r + k * r), fixed(1), 0,
-           fixed(1), fixed(-r), fixed(1), 0,
-        1, 0, fixed(r), fixed(1), 0,
-        2, 0, fixed(r - k * r), fixed(1), 0,
-           0, 0, fixed(1), fixed(-r + k * r),
-           0, 0, fixed(1), fixed(-r),
-        1, 0, 0, 0, fixed(r),
-        2, 0, 0, 0, fixed(r - k * r),
-           0, fixed(r - k * r), 0, 0,
-           0, fixed(r), 0, 0,
-        3
-    };
-    return [NSData dataWithBytes:v length:sizeof(v)];
-}
 
-void PlayerSetWindowAbove(NSWindow *window, BOOL above)
-{
-    Display *display = NULL;
-    Window xid = 0;
-    PlayerXWindowOf(window, &display, &xid);
 
-    XEvent event;
-    memset(&event, 0, sizeof(event));
-    event.xclient.type = ClientMessage;
-    event.xclient.window = xid;
-    event.xclient.message_type = XInternAtom(display, "_NET_WM_STATE", False);
-    event.xclient.format = 32;
-    event.xclient.data.l[0] = above ? NetWMStateAdd : NetWMStateRemove;
-    event.xclient.data.l[1] = XInternAtom(display, "_NET_WM_STATE_ABOVE", False);
-    event.xclient.data.l[2] = 0;
-    event.xclient.data.l[3] = 1;   // source: an application
-    XSendEvent(display, DefaultRootWindow(display), False,
-               SubstructureRedirectMask | SubstructureNotifyMask, &event);
-    XFlush(display);
-}
-
-void PlayerRaiseWindow(NSWindow *window)
-{
-    Display *display = NULL;
-    Window xid = 0;
-    PlayerXWindowOf(window, &display, &xid);
-    XRaiseWindow(display, xid);
-    XFlush(display);
-}
 
 void PlayerSetWindowShapePath(NSWindow *window, NSData *path)
 {

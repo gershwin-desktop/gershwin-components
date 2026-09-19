@@ -57,16 +57,8 @@ void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen);
 /// the bottom corners rounded by `radius` pixels.
 NSData *PlayerBottomCurveShapePath(CGFloat depth, CGFloat radius);
 
-/// _WM_SHAPE_PATH value for a window with all four corners rounded by
-/// `radius` pixels.
-NSData *PlayerRoundedRectShapePath(CGFloat radius);
 
-/// Puts the window at the top of the stack, above a window the window
-/// manager has just raised (a window gone full screen).
-void PlayerRaiseWindow(NSWindow *window);
 
-/// Asks the window manager to keep the window above the others.
-void PlayerSetWindowAbove(NSWindow *window, BOOL above);
 
 /// Asks the window manager for this outline on the window (nil: none).
 /// Does nothing when the window manager does not draw outlines.

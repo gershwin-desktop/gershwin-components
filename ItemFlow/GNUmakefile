@@ -10,7 +10,7 @@ ItemFlow_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 
 # OpenGL support
 ADDITIONAL_OBJCFLAGS += -fobjc-arc -fobjc-arc-exceptions
-ADDITIONAL_LDFLAGS += -lGL -lGLU -lX11
+ADDITIONAL_LDFLAGS += -lGL -lGLU -lX11 -lXext
 
 include $(GNUSTEP_MAKEFILES)/framework.make
 

@@ -55,19 +55,6 @@ int main(void)
     PASS(v[55] == 3, "and closed");
   END_SET("window with a curved bottom")
 
-  START_SET("rounded outline")
-    /* Move, four sides, four corner curves, close */
-    NSData *path = PlayerRoundedRectShapePath(12);
-    const int32_t *v = [path bytes];
-    PASS([path length] == 79 * sizeof(int32_t), "one outline, 79 values");
-    PASS(v[1] == 0 && v[2] == 0 && v[3] == F(12) && v[4] == 0 && v[5] == 0,
-         "starting right of the top left corner");
-    PASS(v[6] == 1 && v[7] == F(1) && v[8] == F(-12) && v[9] == 0 && v[10] == 0,
-         "along the top to where the next corner begins");
-    PASS(v[11] == 2 && v[20] == F(1) && v[21] == 0 && v[22] == 0 && v[23] == F(12),
-         "a quarter circle down into the right side");
-    PASS(v[78] == 3, "and closed");
-  END_SET("rounded outline")
 
   [arp release];
   return 0;
