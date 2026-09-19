@@ -177,15 +177,19 @@ NSData *PlayerBottomCurveShapePath(CGFloat depth, CGFloat radius)
     [[self window] makeFirstResponder:self];
 }
 
-- (void)mouseMoved:(NSEvent *)event
+- (void)setBlackBackground:(BOOL)black
 {
-    [_controller contentViewMouseMoved:event];
+    if (black != _blackBackground) {
+        _blackBackground = black;
+        [self setNeedsDisplay:YES];
+    }
 }
 
 - (void)drawRect:(NSRect)rect
 {
-    // Opaque, so hidden views leave no stale pixels behind
-    [[NSColor windowBackgroundColor] set];
+    // Opaque, so hidden views leave no stale pixels behind; black in full
+    // screen, where the picture is all there is to see
+    [(_blackBackground ? [NSColor blackColor] : [NSColor windowBackgroundColor]) set];
     NSRectFill(rect);
 }
 
@@ -304,12 +308,12 @@ NSTextField *PlayerMakeLabel(NSFont *font)
     return label;
 }
 
-@implementation OverlayBarView
+@implementation PlayerOverlayBarView
 
-- (void)drawRect:(NSRect)rect
+// Nothing of its own: the controls stand on what is behind them
+- (BOOL)isOpaque
 {
-    [[NSColor colorWithCalibratedWhite:0.0 alpha:0.6] set];
-    NSRectFillUsingOperation(rect, NSCompositeSourceOver);
+    return NO;
 }
 
 @end

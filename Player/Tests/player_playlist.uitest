@@ -9,8 +9,9 @@
 # Run with: run_uitest Player/Tests/player_playlist.uitest
 # Self-healing start: a run that stopped half way leaves Player open
 shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
-# Player reopens in Internet radio mode if it was quit in it
+# Player reopens in Internet radio mode, or with its last list, as it was quit
 shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track One' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/One.mp3"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Two' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Two.mp3"
@@ -23,15 +24,20 @@ assert text contains "Uitest Band"
 assert text contains "Uitest Album"
 assert text contains "1 of 3"
 wait until button "Pause" timeout 5s
-# Full screen is for video
-assert menu item "View/Enter Full Screen" disabled
-
 click button "Next" and wait until window "Player - Track Two" timeout 5s
 assert text contains "2 of 3"
 click button "Pause" and wait until button "Play" timeout 5s
 click button "Stop" and wait until textfield "0:00" timeout 5s
 assert menu item "Playback/Stop" disabled
 assert window "Player - Track Two"
+
+# Full screen shows the cover art of audio too, not only video
+select menu "View/Enter Full Screen"
+wait until not exists button "Mute" timeout 5s
+assert menu item "View/Exit Full Screen"
+press key "Escape"
+wait until button "Mute" timeout 5s
+assert menu item "View/Enter Full Screen"
 
 # Space plays again, whatever was clicked last
 press key "space"

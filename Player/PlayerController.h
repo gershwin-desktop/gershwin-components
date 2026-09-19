@@ -66,8 +66,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 
     // Full screen
     BOOL isFullscreen;
-    OverlayBarView *overlayBar;
-    NSTimer *overlayHideTimer;
+    PlayerOverlayBarView *overlayBar;
 
     // Local playback
     PlayerSession *session;

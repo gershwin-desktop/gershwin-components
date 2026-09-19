@@ -11,14 +11,12 @@
 
 /**
  * What the player window's content view hands to its controller: dropped
- * files, the keys that work anywhere in the window, and mouse movement
- * (to show the controls in full screen).
+ * files and the keys that work anywhere in the window.
  */
 @protocol PlayerContentViewController <NSObject>
 - (void)handleDroppedFiles:(NSArray *)paths;
 /// Returns NO if the key is not one of the player's keys.
 - (BOOL)handleKeyDown:(NSEvent *)event;
-- (void)contentViewMouseMoved:(NSEvent *)event;
 - (void)contentViewDragEntered:(BOOL)entered;
 @end
 
@@ -27,7 +25,10 @@
 @interface PlayerContentView : NSView
 {
     id<PlayerContentViewController> _controller;   // not retained
+    BOOL _blackBackground;
 }
+/// Black behind the picture in full screen instead of the window colour.
+- (void)setBlackBackground:(BOOL)black;
 - (instancetype)initWithFrame:(NSRect)frame
                    controller:(id<PlayerContentViewController>)controller;
 @end
@@ -41,8 +42,8 @@
 - (void)clear;
 @end
 
-/// The dark strip behind the controls in full screen.
-@interface OverlayBarView : NSView
+/// Holds the controls in full screen, without a look of its own.
+@interface PlayerOverlayBarView : NSView
 @end
 
 /// A one-line label that shortens text too long for it in the middle, so

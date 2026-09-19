@@ -18,6 +18,7 @@ NSString *const PlayerDefaultsMode = @"PlayerMode";
 NSString *const PlayerDefaultsRadioSearch = @"PlayerRadioSearch";
 NSString *const PlayerDefaultsRadioStation = @"PlayerRadioStation";
 NSString *const PlayerDefaultsRadioPlaying = @"PlayerRadioPlaying";
+NSString *const PlayerDefaultsPlaylist = @"PlayerPlaylist";
 
 // Content size the window opens with
 static const CGFloat kDefaultWidth = 520.0;
@@ -36,7 +37,7 @@ static const CGFloat kMuteWidth = 56.0;
 static const CGFloat kOverlayHeight = 64.0;
 // How much higher the bottom edge is at the sides than in the middle, and
 // how round its corners are
-static const CGFloat kBottomCurveDepth = 12.0;
+static const CGFloat kBottomCurveDepth = 18.0;
 static const CGFloat kBottomCornerRadius = 10.0;
 
 // Arrow keys move this far through a track
@@ -45,7 +46,6 @@ static const float kVolumeStep = 0.05f;
 // How long browsing the covers must rest before the track under the
 // cursor plays, so flicking through them does not start every track
 static const NSTimeInterval kBrowseDelay = 0.5;
-static const NSTimeInterval kOverlayHideDelay = 3.0;
 
 @implementation PlayerController
 
@@ -89,7 +89,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 - (void)dealloc
 {
     [positionTimer invalidate];
-    [overlayHideTimer invalidate];
     [fadeTimer invalidate];
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [session setDelegate:nil];
@@ -129,10 +128,14 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     // Files given at launch were opened already and take precedence over
-    // the radio mode of the last run.
-    if ([[session playlist] count] == 0
-        && [[NSUserDefaults standardUserDefaults] integerForKey:PlayerDefaultsMode] == PlayerModeRadio) {
-        [self enterRadioModeResuming:YES];
+    // the list and the radio mode of the last run.
+    if ([[session playlist] count] == 0) {
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        [session restoreState:[defaults dictionaryForKey:PlayerDefaultsPlaylist]];
+        [self playlistDidChange];
+        if ([defaults integerForKey:PlayerDefaultsMode] == PlayerModeRadio) {
+            [self enterRadioModeResuming:YES];
+        }
     }
     // Outlined before it shows, so it never appears as a rectangle first
     [self updateWindowShape];
@@ -161,6 +164,11 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     if (quittingAfterFade) {
         return NSTerminateNow;
     }
+    // Kept before the fade-out below stops the playback
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:[session stateToRemember] forKey:PlayerDefaultsPlaylist];
+    [defaults synchronize];
+
     BOOL radioPlaying = [[RadioManager sharedManager] isPlaying];
     if (([session state] != PlayerSessionPlaying && !radioPlaying)
         || [PreferencesController fadeDuration] <= 0) {
@@ -242,7 +250,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     // same fade-out as quitting, and must not free it before that
     [mainWindow setReleasedWhenClosed:NO];
     [mainWindow setContentMinSize:NSMakeSize(METRICS_WIN_MIN_WIDTH, kMinHeight)];
-    [mainWindow setAcceptsMouseMovedEvents:YES];
 
     contentView = [[[PlayerContentView alloc] initWithFrame:frame controller:self] autorelease];
     [mainWindow setContentView:contentView];
@@ -260,7 +267,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [videoRenderView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [videoView addSubview:videoRenderView];
 
-    overlayBar = [[[OverlayBarView alloc] initWithFrame:NSZeroRect] autorelease];
+    overlayBar = [[[PlayerOverlayBarView alloc] initWithFrame:NSZeroRect] autorelease];
     [overlayBar setHidden:YES];
     [contentView addSubview:overlayBar];
 
@@ -497,6 +504,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
     [self setViews:@[searchField, statusLabel, radioTextLabel, overlayBar] hidden:YES];
+    [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:NO];
     [self setViews:[self positionViews] hidden:NO];
     [self setViews:[self transportViews] hidden:NO];
@@ -555,23 +563,34 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 - (void)layoutFullscreen
 {
     NSRect bounds = [contentView bounds];
-    BOOL controlsShown = ![overlayBar isHidden];
+    // The controls stay: a bar coming and going would resize the picture
+    [overlayBar setHidden:NO];
+    [contentView setBlackBackground:YES];
 
-    [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:YES];
+    // Radio has no position to show; the bar names the station instead
+    BOOL radio = (playerMode == PlayerModeRadio);
+    [self setViews:@[searchField, radioTextLabel] hidden:YES];
+    [statusLabel setHidden:!radio];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self volumeViews] hidden:YES];
-    [self setViews:[self positionViews] hidden:!controlsShown];
-    [self setViews:[self transportViews] hidden:!controlsShown];
+    [self setViews:[self positionViews] hidden:radio];
+    [self setViews:[self transportViews] hidden:NO];
 
     // The picture ends above the bar, so frames never paint over controls
-    CGFloat barHeight = controlsShown ? kOverlayHeight : 0.0;
-    [self setPictureFrame:NSMakeRect(0, barHeight, NSWidth(bounds), NSHeight(bounds) - barHeight)];
+    // (and the carousel, drawn in a window of its own, never covers them)
+    [self setPictureFrame:NSMakeRect(0, kOverlayHeight, NSWidth(bounds),
+                                     NSHeight(bounds) - kOverlayHeight)];
 
     [overlayBar setFrame:NSMakeRect(0, 0, NSWidth(bounds), kOverlayHeight)];
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = NSWidth(bounds) - METRICS_CONTENT_SIDE_MARGIN;
     [self layoutTransportCenteredAt:NSMidX(bounds) y:8];
-    [self layoutPositionRowFrom:left to:right y:kOverlayHeight - kTimeRowHeight - 8];
+    if (radio) {
+        [statusLabel setFrame:NSMakeRect(left, kOverlayHeight - 17 - 8, right - left, 17)];
+        [self placeRadioSpinner];
+    } else {
+        [self layoutPositionRowFrom:left to:right y:kOverlayHeight - kTimeRowHeight - 8];
+    }
 }
 
 #pragma mark - Full screen
@@ -589,17 +608,19 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 {
     [currentTimeLabel setTextColor:color];
     [totalTimeLabel setTextColor:color];
+    [statusLabel setTextColor:color];
 }
 
 - (void)enterFullscreen
 {
-    if (isFullscreen || ![self showsVideo]) {
+    if (isFullscreen) {
         return;
     }
     isFullscreen = YES;
+    // Nothing to resize with in full screen
+    [mainWindow setShowsResizeIndicator:NO];
     PlayerSetWindowFullScreen(mainWindow, YES);
     [self setOverlayTextColor:[NSColor whiteColor]];
-    [self showOverlay];
     [self layoutSubviews];
     [self revalidateMenu];
 }
@@ -610,46 +631,12 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         return;
     }
     isFullscreen = NO;
-    [overlayHideTimer invalidate];
-    overlayHideTimer = nil;
+    [mainWindow setShowsResizeIndicator:YES];
     [overlayBar setHidden:YES];
     [self setOverlayTextColor:[NSColor controlTextColor]];
     PlayerSetWindowFullScreen(mainWindow, NO);
     [self layoutSubviews];
     [self revalidateMenu];
-}
-
-- (void)showOverlay
-{
-    if (!isFullscreen) {
-        return;
-    }
-    [overlayHideTimer invalidate];
-    overlayHideTimer = [NSTimer scheduledTimerWithTimeInterval:kOverlayHideDelay
-                                                        target:self
-                                                      selector:@selector(hideOverlay:)
-                                                      userInfo:nil
-                                                       repeats:NO];
-    if ([overlayBar isHidden]) {
-        [overlayBar setHidden:NO];
-        [self layoutSubviews];
-    }
-}
-
-- (void)hideOverlay:(NSTimer *)timer
-{
-    overlayHideTimer = nil;
-    // Keep the controls while there is nothing playing to look at
-    if (!isFullscreen || [session state] != PlayerSessionPlaying) {
-        return;
-    }
-    [overlayBar setHidden:YES];
-    [self layoutSubviews];
-}
-
-- (void)contentViewMouseMoved:(NSEvent *)event
-{
-    [self showOverlay];
 }
 
 #pragma mark - Keyboard and drops
@@ -663,7 +650,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     if ([event modifierFlags] & (NSCommandKeyMask | NSControlKeyMask | NSAlternateKeyMask)) {
         return NO;
     }
-    [self showOverlay];
 
     switch ([chars characterAtIndex:0]) {
     case ' ':
@@ -1095,7 +1081,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         [self showCoverArt];
     }
     [self updateControls];
-    [self showOverlay];
 }
 
 - (void)playerSessionDidChangeTrack:(PlayerSession *)aSession
@@ -1147,21 +1132,14 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     }
 }
 
-// Full screen is for pictures; it ends with the video
 - (void)showCoverArt
 {
     if (![videoView isHidden]) {
         [videoView setHidden:YES];
         [flowView setHidden:NO];
-        [self exitFullscreen];
         [self layoutSubviews];
         [self updateControls];
     }
-}
-
-- (BOOL)showsVideo
-{
-    return ![videoView isHidden];
 }
 
 #pragma mark - Showing state
@@ -1487,7 +1465,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     }
     if (action == @selector(toggleFullscreen:)) {
         [item setTitle:isFullscreen ? @"Exit Full Screen" : @"Enter Full Screen"];
-        return isFullscreen || [self showsVideo];
+        return YES;
     }
     return [self validateRadioMenuItem:item];
 }

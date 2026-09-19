@@ -53,7 +53,6 @@
         return;
     }
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [self exitFullscreen];
     [session stop];
     [self showCoverArt];
     playerMode = PlayerModeRadio;
@@ -124,6 +123,8 @@
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
+    [self setViews:@[overlayBar] hidden:YES];
+    [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self positionViews] hidden:YES];
     [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:NO];
