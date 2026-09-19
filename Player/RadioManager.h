@@ -50,6 +50,7 @@
     StreamPlayer *_player;
     NSArray *_stations;               // RadioStation objects
     NSMutableDictionary *_stationImages;  // key: stationId → NSImage
+    NSMutableDictionary *_placeholderImages;  // the same stand-in every time
     NSString *_currentStationName;
     NSString *_currentStreamURL;
 

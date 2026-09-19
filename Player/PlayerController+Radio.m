@@ -123,7 +123,7 @@
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
-    [self putControlsInPanel:NO];
+    [flowView setUncoveredRects:nil];
     [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self positionViews] hidden:YES];
@@ -261,12 +261,31 @@
 
 // Stations are tuned in only once the selection rests, so stepping through
 // them does not open a connection for each.
+// Only a handful of a long station list is ever looked at, so the icons
+// are fetched around the station being browsed instead of for the list.
+- (void)prepareRadioIconsAround:(NSUInteger)index
+{
+    RadioManager *radio = [RadioManager sharedManager];
+    NSUInteger count = [[radio stations] count];
+    if (count == 0) {
+        return;
+    }
+    NSUInteger first = index > 12 ? index - 12 : 0;
+    NSUInteger last = MIN(count, index + 13);
+    for (NSUInteger i = first; i < last; i++) {
+        [radio prefetchIconForStationAtIndex:i];
+    }
+    [flowView updateTexturesForIndices:
+        [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(first, last - first)]];
+}
+
 - (void)radioSelectStationAtIndex:(NSUInteger)index
 {
     NSArray *stations = [[RadioManager sharedManager] stations];
     if (index >= [stations count]) {
         return;
     }
+    [self prepareRadioIconsAround:index];
     RadioStation *station = [stations objectAtIndex:index];
     RadioManager *radio = [RadioManager sharedManager];
     if ([radio isPlaying] && [[radio currentStationName] isEqualToString:[station name]]) {
@@ -389,10 +408,7 @@
     }
     [flowView reloadData];
     if (count > 0) {
-        // The icons around the selected station first
-        NSUInteger first = selected > 12 ? selected - 12 : 0;
-        [flowView updateTexturesForIndices:
-            [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(first, MIN(24, count - first))]];
+        [self prepareRadioIconsAround:selected];
         suppressFlowSelection = YES;
         [flowView setSelectedIndex:selected];
         suppressFlowSelection = NO;

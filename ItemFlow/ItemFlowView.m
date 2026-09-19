@@ -25,7 +25,6 @@
 
 // Track indices we've logged with missing textures to avoid spamming logs
 static NSMutableIndexSet *gItemFlowMissingLogged = nil;
-static dispatch_once_t onceTokenMissingLogged;
 
 @interface ItemFlowView () {
     NSMutableArray *_textures; 
@@ -73,12 +72,13 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
     self = [super initWithFrame:frame pixelFormat:pf];
     if (self) {
         _textures = [NSMutableArray array];
+        _textureImages = [NSMutableArray array];
         _currentPosition = 0.0f;
         _targetPosition = 0.0f;
         _isSyncingScroll = NO;
-        dispatch_once(&onceTokenMissingLogged, ^{
+        if (gItemFlowMissingLogged == nil) {
             gItemFlowMissingLogged = [[NSMutableIndexSet alloc] init];
-        });
+        }
     }
     return self;
 
@@ -585,12 +585,14 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
         if (t != 0) glDeleteTextures(1, &t);
     }
     [_textures removeAllObjects];
+    [_textureImages removeAllObjects];
     
     if (dataSource) {
         NSUInteger count = [dataSource numberOfItemsInItemFlowView:self];
         NSDebugLLog(@"gwcomp", @"[ItemFlow] reloadData: count=%tu (fast path)", count);
         for (NSUInteger i = 0; i < count; i++) {
             [_textures addObject:@(0)];
+            [_textureImages addObject:[NSNull null]];
         }
     }
     
@@ -616,7 +618,10 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
     NSUInteger itemCount = _textures.count;
     if (itemCount == 0 && dataSource) {
         itemCount = [dataSource numberOfItemsInItemFlowView:self];
-        while (_textures.count < itemCount) [_textures addObject:@(0)];
+        while (_textures.count < itemCount) {
+            [_textures addObject:@(0)];
+            [_textureImages addObject:[NSNull null]];
+        }
     }
 
     __block int uploadsThisTick = 0;
@@ -638,11 +643,10 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
             return;
         }
 
-        // Check if we already have a texture here that is NOT the placeholder
-        GLuint currentTex = [_textures[idx] unsignedIntValue];
-        if (currentTex != 0) {
-            // We already have a real texture (presumably). 
-            // In a more complex app we'd check if it changed, but for now skip.
+        // The picture an item shows can change: a cover or a station's icon
+        // arrives after the item was first drawn with a stand-in.  Only the
+        // same picture again is skipped.
+        if (_textureImages[idx] == (id)img) {
             return;
         }
 
@@ -653,16 +657,21 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
 
         GLuint t = [self createTextureFromImage:img];
         if (t != 0) {
+            GLuint old = [_textures[idx] unsignedIntValue];
+            if (old != 0) {
+                glDeleteTextures(1, &old);
+            }
             _textures[idx] = @(t);
+            _textureImages[idx] = img;
             uploadsThisTick++;
             NSDebugLLog(@"gwcomp", @"[ItemFlow] updateTexturesForIndices: assigned texture=%u for index=%tu", (unsigned)t, idx);
         }
     }];
 
     if (pendingIndices.count > 0) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(100 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-            [self updateTexturesForIndices:pendingIndices];
-        });
+        [self performSelector:@selector(updateTexturesForIndices:)
+                   withObject:pendingIndices
+                   afterDelay:0.1];
     }
 
     [self setNeedsDisplay:YES];
@@ -730,6 +739,7 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
         // Append placeholder entries - existing textures are untouched
         for (NSUInteger i = oldCount; i < count; i++) {
             [_textures addObject:@(0)];
+            [_textureImages addObject:[NSNull null]];
         }
     } else {
         // Remove trailing entries, freeing their GL textures
@@ -738,6 +748,7 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
             if (t != 0) glDeleteTextures(1, &t);
         }
         [_textures removeObjectsInRange:NSMakeRange(count, oldCount - count)];
+        [_textureImages removeObjectsInRange:NSMakeRange(count, oldCount - count)];
     }
 
     [self updateScrollFrame];

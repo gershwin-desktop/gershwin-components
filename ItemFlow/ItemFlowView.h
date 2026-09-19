@@ -20,6 +20,7 @@
 
 @interface ItemFlowView : NSOpenGLView
 {
+    NSMutableArray *_textureImages;   // the picture each texture was made of
     NSArray *_uncoveredRects;
     unsigned long _pictureWindow;
 }

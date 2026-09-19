@@ -53,6 +53,7 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
         _fadeDuration = kDefaultFadeDuration;
         _stations = [[NSArray alloc] init];
         _stationImages = [[NSMutableDictionary alloc] init];
+        _placeholderImages = [[NSMutableDictionary alloc] init];
         _iconIndex = [[NSMutableDictionary alloc] init];
         _downloadingKeys = [[NSMutableSet alloc] init];
         _maxCacheEntries = kMaxCacheEntries;
@@ -90,6 +91,7 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
     [_fadingPlayers release];
     [_stations release];
     [_stationImages release];
+    [_placeholderImages release];
     [_iconIndex release];
     [_downloadingKeys release];
     [_iconCachePath release];
@@ -241,6 +243,7 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
     [_stations release];
     _stations = [[self limitStations:stations] retain];
     [_stationImages removeAllObjects];
+    [_placeholderImages removeAllObjects];
 
     // Notify delegate FIRST so the UI updates before any downloads
     if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
@@ -517,8 +520,15 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
     return [self textPlaceholderForStation:station];
 }
 
+// The same stand-in object every time, so whoever draws it can tell that
+// nothing changed until the station's own icon arrives.
 - (NSImage *)textPlaceholderForStation:(RadioStation *)station
 {
+    NSString *key = [station stationId] ?: [station name];
+    NSImage *cached = key ? [_placeholderImages objectForKey:key] : nil;
+    if (cached) {
+        return cached;
+    }
     NSString *name = [station name] ?: @"Radio Station";
     NSSize size = NSMakeSize(200, 200);
 
@@ -596,7 +606,11 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
     }
 
     [image unlockFocus];
-    return [image autorelease];
+    [image autorelease];
+    if (key) {
+        [_placeholderImages setObject:image forKey:key];
+    }
+    return image;
 }
 
 - (void)prefetchIconForStationAtIndex:(NSUInteger)index
@@ -648,7 +662,13 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
     }
 
     NSString *imageURL = [station imageURL];
-    if (!imageURL || [imageURL length] == 0) return;
+    if (!imageURL || [imageURL length] == 0) {
+        // Nothing to fetch; another station may still use the same key
+        @synchronized(_downloadingKeys) {
+            [_downloadingKeys removeObject:key];
+        }
+        return;
+    }
 
     [self downloadImageWithURL:imageURL key:key station:station attempt:1];
 }
