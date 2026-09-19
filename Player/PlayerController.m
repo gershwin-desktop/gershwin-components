@@ -65,6 +65,8 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         [[session playlist] setRepeat:[defaults boolForKey:PlayerDefaultsRepeat]];
         [[session playlist] setShuffle:[defaults boolForKey:PlayerDefaultsShuffle]];
 
+        [self applyFadePreference];
+
         coverImages = [[NSMutableDictionary alloc] init];
         streamTitles = [[NSMutableDictionary alloc] init];
         pendingFlowIndex = NSNotFound;
@@ -149,7 +151,8 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         return NSTerminateNow;
     }
     BOOL radioPlaying = [[RadioManager sharedManager] isPlaying];
-    if ([session state] != PlayerSessionPlaying && !radioPlaying) {
+    if (([session state] != PlayerSessionPlaying && !radioPlaying)
+        || [PreferencesController fadeDuration] <= 0) {
         return NSTerminateNow;
     }
 
@@ -168,7 +171,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 
 - (void)fadeOutTick:(NSTimer *)timer
 {
-    CGFloat t = MIN(1.0, -[fadeStartDate timeIntervalSinceNow] / 1.0);
+    CGFloat t = MIN(1.0, -[fadeStartDate timeIntervalSinceNow] / [PreferencesController fadeDuration]);
     // Smoothstep, so the fade starts and ends gently
     CGFloat remaining = 1.0 - t * t * (3.0 - 2.0 * t);
     [self applyVolume:fadeStartVolume * remaining];
@@ -929,7 +932,16 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     if (!preferencesController) {
         preferencesController = [[PreferencesController alloc] init];
     }
+    // The panel is modal: its settings are final once it returns
     [preferencesController showPreferencesWindow:mainWindow];
+    [self applyFadePreference];
+}
+
+- (void)applyFadePreference
+{
+    NSTimeInterval duration = [PreferencesController fadeDuration];
+    [session setFadeDuration:duration];
+    [[RadioManager sharedManager] setFadeDuration:duration];
 }
 
 #pragma mark - YTDLPBackendDelegate

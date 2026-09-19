@@ -389,6 +389,21 @@ int main(void)
     PASS(m->closes == closes + 1, "and stop at once");
   END_SET("streams fade in and out")
 
+  START_SET("fading switched off")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    PASS([s fadeDuration] > 0.5, "streams fade by default");
+    [s setFadeDuration: 0];
+    m->slow = YES;
+    [s openItems: @[@"http://radio.example/live"]];
+    PASS(m->gain == 1.0f, "a stream starts at full volume");
+    [m finishConnecting];
+    PASS(m->gain == 1.0f, "and stays there");
+    int closes = m->closes;
+    [s stop];
+    PASS(m->closes == closes + 1, "stop cuts it off at once");
+  END_SET("fading switched off")
+
   [arp release];
   return 0;
 }

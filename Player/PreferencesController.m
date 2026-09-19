@@ -13,10 +13,12 @@
 // ---------------------------------------------------------------------------
 NSString *const PrefKeyYTDLPFormat = @"YTDLPFormat";
 NSString *const PrefKeyYTDLPPath   = @"YTDLPPath";
+NSString *const PrefKeyFadeEnabled = @"PlayerFadeEnabled";
 
 // Default values
 static NSString *const kDefaultFormat = @"best/best";
 static NSString *const kDefaultPath   = @"yt-dlp";
+static const NSTimeInterval kFadeDuration = 1.0;
 
 // ---------------------------------------------------------------------------
 // Popup menu item tags → format strings
@@ -73,6 +75,14 @@ static FormatTag tagForFormatString(NSString *format)
     return fmt ? fmt : kDefaultFormat;
 }
 
++ (NSTimeInterval)fadeDuration
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL enabled = [defaults objectForKey:PrefKeyFadeEnabled] == nil
+        || [defaults boolForKey:PrefKeyFadeEnabled];
+    return enabled ? kFadeDuration : 0.0;
+}
+
 + (NSString *)ytdlpPath
 {
     NSString *p = [[NSUserDefaults standardUserDefaults] stringForKey:PrefKeyYTDLPPath];
@@ -95,6 +105,7 @@ static FormatTag tagForFormatString(NSString *format)
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [_panel release];
+    [_fadeCheckbox release];
     [super dealloc];
 }
 
@@ -116,8 +127,11 @@ static FormatTag tagForFormatString(NSString *format)
     CGFloat panelW = 420.0;
     CGFloat popUpW = panelW - 2 * margin - labelW - METRICS_SPACE_8;
 
-    // Row heights: format popup + gap + path field + gap + check row + bottom margin
-    CGFloat contentH = topMargin + btnH + gap + inputH + gap + btnH + bottomMargin;
+    // Row heights: fade checkbox + gap + format popup + gap + path field + gap
+    // + check row + bottom margin
+    CGFloat checkboxH = 18.0;
+    CGFloat contentH = topMargin + checkboxH + gap + btnH + gap + inputH + gap + btnH
+        + bottomMargin;
     NSRect panelRect = NSMakeRect(0, 0, panelW, contentH);
 
     _panel = [[NSPanel alloc] initWithContentRect:panelRect
@@ -137,7 +151,30 @@ static FormatTag tagForFormatString(NSString *format)
                                                object:_panel];
 
     NSView *content = [_panel contentView];
-    CGFloat y = contentH - topMargin - btnH;
+    CGFloat y = contentH - topMargin - checkboxH;
+
+    // ---- Fading ----
+    NSTextField *soundLabel = [[[NSTextField alloc] initWithFrame:
+        NSMakeRect(margin, y, labelW, checkboxH)] autorelease];
+    [soundLabel setStringValue:@"Sound:"];
+    [soundLabel setBezeled:NO];
+    [soundLabel setDrawsBackground:NO];
+    [soundLabel setEditable:NO];
+    [soundLabel setSelectable:NO];
+    [soundLabel setAlignment:NSRightTextAlignment];
+    [soundLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+    [content addSubview:soundLabel];
+
+    _fadeCheckbox = [[NSButton alloc] initWithFrame:
+        NSMakeRect(margin + labelW + METRICS_SPACE_8, y, popUpW, checkboxH)];
+    [_fadeCheckbox setButtonType:NSSwitchButton];
+    [_fadeCheckbox setTitle:@"Fade in and out, cross-fade radio stations"];
+    [_fadeCheckbox setState:[PreferencesController fadeDuration] > 0 ? NSOnState : NSOffState];
+    [_fadeCheckbox setTarget:self];
+    [_fadeCheckbox setAction:@selector(_fadeChanged:)];
+    [content addSubview:_fadeCheckbox];
+
+    y -= gap + btnH;
 
     // ---- Format quality ----
     NSTextField *fmtLabel = [[[NSTextField alloc] initWithFrame:
@@ -244,6 +281,13 @@ static FormatTag tagForFormatString(NSString *format)
     [_panel center];
     [_panel makeKeyAndOrderFront:self];
     [NSApp runModalForWindow:_panel];
+}
+
+- (void)_fadeChanged:(id)sender
+{
+    [[NSUserDefaults standardUserDefaults] setBool:([_fadeCheckbox state] == NSOnState)
+                                            forKey:PrefKeyFadeEnabled];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 - (void)_formatChanged:(id)sender

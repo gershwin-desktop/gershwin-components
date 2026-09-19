@@ -93,6 +93,24 @@ int main(void)
     PASS(![current isPlaying], "and then it is silent");
   END_SET("stopping fades out")
 
+  START_SET("fading switched off")
+    PASS([rm fadeDuration] > 0.5, "stations fade by default");
+    [rm setFadeDuration: 0];
+    [rm playURL: a];
+    spin(0.3);
+    PASS([rm isPlaying] && [[rm player] fadeGain] == 1.0f,
+         "a station starts at full volume");
+    StreamPlayer *old = [[[rm player] retain] autorelease];
+    [rm playURL: b];
+    spin(0.3);
+    PASS(![old isPlaying], "switching stops the old station at once");
+    PASS([rm isPlaying] && [[rm player] fadeGain] == 1.0f,
+         "and the new one plays at full volume");
+    StreamPlayer *current = [[[rm player] retain] autorelease];
+    [rm stop];
+    PASS(![current isPlaying], "stop cuts it off at once");
+  END_SET("fading switched off")
+
   [rm release];
   [[NSFileManager defaultManager] removeItemAtPath: a error: NULL];
   [[NSFileManager defaultManager] removeItemAtPath: b error: NULL];

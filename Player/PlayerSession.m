@@ -9,7 +9,7 @@
 // Previous restarts the track after this many seconds, like CD players do
 static const NSTimeInterval kRestartThreshold = 3.0;
 // Streams fade in and out like the radio; files start and stop at once
-static const NSTimeInterval kStreamFadeDuration = 1.0;
+static const NSTimeInterval kDefaultStreamFadeDuration = 1.0;
 
 static BOOL isStream(NSString *item)
 {
@@ -21,6 +21,7 @@ static BOOL isStream(NSString *item)
 @synthesize delegate = _delegate;
 @synthesize playlist = _playlist;
 @synthesize state = _state;
+@synthesize fadeDuration = _fadeDuration;
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media
 {
@@ -31,6 +32,7 @@ static BOOL isStream(NSString *item)
         _playlist = [[PlayerPlaylist alloc] init];
         _volume = 1.0f;
         _state = PlayerSessionStopped;
+        _fadeDuration = kDefaultStreamFadeDuration;
     }
     return self;
 }
@@ -141,12 +143,12 @@ static BOOL isStream(NSString *item)
     if (_state == PlayerSessionStopped) {
         return;
     }
-    if (isStream([_playlist currentItem]) && [_media isPlaying]) {
+    if (_fadeDuration > 0 && isStream([_playlist currentItem]) && [_media isPlaying]) {
         // Faded out, then closed; stopped as far as the user is concerned
         _opening = NO;
-        [_media fadeToGain:0.0f duration:kStreamFadeDuration];
+        [_media fadeToGain:0.0f duration:_fadeDuration];
         [self performSelector:@selector(closeFadedMedia) withObject:nil
-                   afterDelay:kStreamFadeDuration];
+                   afterDelay:_fadeDuration];
     } else {
         [self closeMedia];
     }
@@ -293,7 +295,8 @@ static BOOL isStream(NSString *item)
                                              selector:@selector(closeFadedMedia)
                                                object:nil];
     // A stream starts silent and fades in once it plays
-    [_media setFadeGain:isStream([_playlist itemAtIndex:index]) ? 0.0f : 1.0f];
+    BOOL fadeIn = _fadeDuration > 0 && isStream([_playlist itemAtIndex:index]);
+    [_media setFadeGain:fadeIn ? 0.0f : 1.0f];
     // Before -playURL:, which may report back before it returns
     _opening = YES;
     [self setState:PlayerSessionPlaying];
@@ -328,8 +331,8 @@ static BOOL isStream(NSString *item)
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
     _opening = NO;
-    if (isStream([_playlist currentItem])) {
-        [_media fadeToGain:1.0f duration:kStreamFadeDuration];
+    if (_fadeDuration > 0 && isStream([_playlist currentItem])) {
+        [_media fadeToGain:1.0f duration:_fadeDuration];
     }
     if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
         [_delegate playerSessionDidChangeState:self];

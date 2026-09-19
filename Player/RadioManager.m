@@ -21,9 +21,11 @@ static const int kMaxCacheEntries = 200;
 static const int kMaxDownloadRetries = 3;
 
 // Stations fade in and out, and cross-fade when switching
-static const NSTimeInterval kFadeDuration = 1.0;
+static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 @implementation RadioManager
+
+@synthesize fadeDuration = _fadeDuration;
 
 @synthesize delegate = _delegate;
 @synthesize volume = _volume;
@@ -48,6 +50,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
     self = [super init];
     if (self) {
         _fadingPlayers = [[NSMutableSet alloc] init];
+        _fadeDuration = kDefaultFadeDuration;
         _stations = [[NSArray alloc] init];
         _stationImages = [[NSMutableDictionary alloc] init];
         _iconIndex = [[NSMutableDictionary alloc] init];
@@ -121,13 +124,13 @@ static const NSTimeInterval kFadeDuration = 1.0;
         return;
     }
     [player setDelegate:nil];
-    if (![player isPlaying]) {
+    if (![player isPlaying] || _fadeDuration <= 0) {
         [player close];
         return;
     }
     [_fadingPlayers addObject:player];
-    [player fadeToGain:0.0f duration:kFadeDuration];
-    PlayerRunOnMainThreadAfter(kFadeDuration, ^{
+    [player fadeToGain:0.0f duration:_fadeDuration];
+    PlayerRunOnMainThreadAfter(_fadeDuration, ^{
         [player close];
         [self->_fadingPlayers removeObject:player];
     });
@@ -430,7 +433,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
     [_player setVolume:_volume];
     [_player setMuted:_muted];
     // Silent until it plays, then it fades in
-    [_player setFadeGain:0.0f];
+    [_player setFadeGain:_fadeDuration > 0 ? 0.0f : 1.0f];
     // Connecting takes seconds; StreamPlayer does it on its own thread and
     // reports back through the StreamPlayerDelegate methods
     [_player playURL:urlString];
@@ -448,7 +451,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
     _connecting = NO;
     // The cross-fade: the old station goes as the new one comes
     [self fadeOutOutgoing];
-    [_player fadeToGain:1.0f duration:kFadeDuration];
+    [_player fadeToGain:1.0f duration:_fadeDuration];
     // Find the station matching this stream URL
     RadioStation *currentStation = nil;
     for (RadioStation *s in _stations) {

@@ -49,6 +49,7 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
     BOOL _opening;            // the current item has not started yet
     BOOL _skipping;           // items that fail to open are skipped
     NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
+    NSTimeInterval _fadeDuration;
 }
 
 @property (nonatomic, assign) id<PlayerSessionDelegate> delegate;
@@ -56,6 +57,8 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 @property (nonatomic, readonly) PlayerSessionState state;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
+/// How long streams fade in and out; 0 starts and stops them at once.
+@property (nonatomic, assign) NSTimeInterval fadeDuration;
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media;
 

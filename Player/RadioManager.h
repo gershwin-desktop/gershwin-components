@@ -60,6 +60,7 @@
     NSOperationQueue *_iconQueue;
     NSMutableSet *_fadingPlayers;    // stations fading out after a switch
     StreamPlayer *_outgoing;         // audible old station while the new one connects
+    NSTimeInterval _fadeDuration;
     BOOL _connecting;
     NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
     int _maxCacheEntries;
@@ -73,6 +74,8 @@
 @property (nonatomic, readonly, copy) NSString *currentStreamURL;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
+/// How long stations fade in, out and into each other; 0 switches at once.
+@property (nonatomic, assign) NSTimeInterval fadeDuration;
 @property (nonatomic, readonly) NSArray *stations;
 /// The player of the current station, nil while nothing is tuned in
 @property (nonatomic, readonly) StreamPlayer *player;
