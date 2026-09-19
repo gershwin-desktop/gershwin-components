@@ -8,7 +8,7 @@
 #import "X11ShortcutManager.h"
 #import "BacklightBackend.h"
 #import "SoundBackendFactory.h"
-#import "WLANBackend.h"
+#import "BSDBackend.h"
 
 #import <X11/XF86keysym.h>
 
@@ -28,7 +28,7 @@ static const int kMediaKeyBrightnessSteps = 16;
     NSOperationQueue *_hardwareQueue;
     id<SoundBackend> _soundBackend;
     id<BacklightBackend> _backlightBackend;
-    WLANBackend *_wlanBackend;
+    id<NetworkBackend> _networkBackend;
 }
 
 - (instancetype)initWithShortcutManager:(X11ShortcutManager *)manager
@@ -42,6 +42,9 @@ static const int kMediaKeyBrightnessSteps = 16;
                the backends once they are pressed. */
             self->_soundBackend = SoundBackendCreateDefault();
             self->_backlightBackend = BacklightBackendCreateDefault();
+#ifndef __linux__
+            self->_networkBackend = [[BSDBackend alloc] init];
+#endif
         }];
 
         [manager registerXF86Key:XF86XK_AudioRaiseVolume target:self action:@selector(volumeUp)];
@@ -53,7 +56,6 @@ static const int kMediaKeyBrightnessSteps = 16;
 #ifndef __linux__
         /* On Linux the kernel's rfkill input handler already switches the
            radios on these keys; toggling here as well would undo it. */
-        _wlanBackend = [[WLANBackend alloc] init];
         [manager registerXF86Key:XF86XK_WLAN target:self action:@selector(toggleRadios)];
         [manager registerXF86Key:XF86XK_RFKill target:self action:@selector(toggleRadios)];
 #endif
@@ -167,8 +169,8 @@ static const int kMediaKeyBrightnessSteps = 16;
 
 - (void)toggleRadios
 {
-    WLANBackend *backend = _wlanBackend;
     [_hardwareQueue addOperationWithBlock:^{
+        id<NetworkBackend> backend = self->_networkBackend;
         if (![backend isAvailable]) {
             return;
         }
