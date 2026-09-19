@@ -125,6 +125,23 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
 @property (nonatomic) dispatch_queue_t menuScanQueue;
 @end
 
+/* What a rebuild of the menu bar shows: titles, separators, shortcuts and
+   submenus.  Enabled and check states are left out; they are applied to the
+   displayed menu in place. */
+static id _menuStructure(NSDictionary *menuData)
+{
+    NSMutableArray *structure = [NSMutableArray array];
+    for (NSDictionary *item in [menuData objectForKey:@"items"]) {
+        NSDictionary *submenu = [item objectForKey:@"submenu"];
+        [structure addObject:@[[item objectForKey:@"title"] ?: @"",
+                               [item objectForKey:@"isSeparator"] ?: @NO,
+                               [item objectForKey:@"keyEquivalent"] ?: @"",
+                               [item objectForKey:@"keyEquivalentModifierMask"] ?: @0,
+                               submenu ? _menuStructure(submenu) : (id)[NSNull null]]];
+    }
+    return structure;
+}
+
 @implementation GNUStepMenuImporter
 
 static GNUStepMenuImporter *sSharedImporter = nil;
@@ -970,10 +987,26 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     // NSLog(@"GNUStepMenuImporter: Successfully built menu with %ld top-level items", (long)[menu numberOfItems]);
     NSString *oldClient = [self.clientNamesByWindow objectForKey:windowId];
+    NSMenu *oldMenu = [self.menusByWindow objectForKey:windowId];
+    NSDictionary *oldData = [self.lastMenuDataByWindow objectForKey:windowId];
+    BOOL structureChanged = (oldData == nil
+        || ![_menuStructure(oldData) isEqual:_menuStructure(menuData)]);
     self.menusByWindow[windowId] = menu;
     self.clientNamesByWindow[windowId] = clientName;
     self.lastMenuDataByWindow[windowId] = [menuData copy];
     self.lastMenuUpdateTimeByWindow[windowId] = @(now);
+
+    /* findCachedMenuForWindow: files the menu under the top-level window's ID
+       as well; that copy must follow, or the menu bar keeps showing the
+       window's first menu (e.g. without the items an app adds later). */
+    if (oldMenu) {
+        for (NSNumber *key in [self.menusByWindow allKeys]) {
+            if ([self.menusByWindow objectForKey:key] == oldMenu) {
+                self.menusByWindow[key] = menu;
+                self.clientNamesByWindow[key] = clientName;
+            }
+        }
+    }
 
     /* If the client (app instance) changed for a window that is currently
        displayed, the visible menu still carries menu items bound to the OLD
@@ -985,6 +1018,20 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         && self.appMenuWidget
         && self.appMenuWidget.currentWindowId == windowValue) {
         [self.appMenuWidget loadMenu:menu forWindow:windowValue];
+    }
+
+    /* Shown in the menu bar (possibly through the top-level window's ID):
+       rebuild it when items were added, removed or renamed.  loadMenu:forWindow:
+       would keep the old menu while the top-level titles are unchanged, so
+       it is told to forget it first. */
+    AppMenuWidget *shownIn = self.appMenuWidget;
+    if (oldMenu && shownIn && shownIn.currentMenu == oldMenu) {
+        if (structureChanged) {
+            shownIn.currentMenu = nil;
+            [shownIn loadMenu:menu forWindow:shownIn.currentWindowId];
+        } else {
+            [self applyEnabledStatesFromData:menuData toMenu:shownIn.currentMenu depth:0];
+        }
     }
 
     // If this window is currently displayed, apply the fresh enabled/state values
