@@ -877,7 +877,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         [modifierStrings addObject:@"cmd"];
     }
     
-    // Convert key to the format expected by globalshortcutsd
+    // Convert key to the format used in the GlobalShortcuts defaults
     NSString *normalizedKey = [self normalizeKeyForGlobalShortcut:key];
     if (!normalizedKey) {
         return nil;
@@ -1101,7 +1101,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
                         if (event.type == KeyPress) {
                             XKeyEvent *keyEvent = &event.xkey;
                             
-                            // Filter out lock key masks like globalshortcutsd does
+                            // Filter out lock key masks so NumLock/CapsLock do not break matching
                             unsigned int filteredState = keyEvent->state;
                             filteredState &= ~(_numlock_mask | _capslock_mask | _scrolllock_mask);
                             
