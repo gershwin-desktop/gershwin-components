@@ -29,6 +29,10 @@
   int opens;
   BOOL slow;          /* playURL: stays connecting until -finishConnecting */
   BOOL connecting;
+  float gain;         /* fade gain and the last fade asked for */
+  float fadeTarget;
+  NSTimeInterval fadeDuration;
+  int closes;
 }
 - (void)finishTrack;
 - (void)finishConnecting;
@@ -41,6 +45,7 @@
   self = [super init];
   unopenable = [NSMutableSet new];
   length = 100;
+  gain = 1.0f;
   return self;
 }
 - (void)setDelegate:(id<StreamPlayerDelegate>)d { delegate = d; }
@@ -84,7 +89,10 @@
 - (void)play { if (openedURL) { playing = YES; paused = NO; } }
 - (void)pause { if (playing) paused = YES; }
 - (void)stop { playing = NO; paused = NO; }
-- (void)close { [self stop]; connecting = NO; DESTROY(openedURL); position = 0; }
+- (void)close { [self stop]; connecting = NO; DESTROY(openedURL); position = 0; closes++; }
+- (float)fadeGain { return gain; }
+- (void)setFadeGain:(float)g { gain = g; fadeTarget = g; fadeDuration = 0; }
+- (void)fadeToGain:(float)g duration:(NSTimeInterval)d { fadeTarget = g; fadeDuration = d; if (d == 0) gain = g; }
 - (void)seekToTime:(NSTimeInterval)t { position = t; }
 - (NSTimeInterval)currentTime { return position; }
 - (NSTimeInterval)duration { return openedURL ? length : 0; }
@@ -345,6 +353,41 @@ int main(void)
     PASS([w->failures count] == 1, "a broken track in a list is reported");
     PASS_EQUAL(m->openedURL, @"/music/2.mp3", "and the next track follows");
   END_SET("streams that take time to connect")
+
+  START_SET("streams fade in and out")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    m->slow = YES;
+    [s openItems: @[@"http://radio.example/live"]];
+    PASS(m->gain == 0.0f, "a stream starts silent");
+    [m finishConnecting];
+    PASS(m->fadeTarget == 1.0f && m->fadeDuration > 0.5,
+         "and fades in once it plays");
+
+    int closes = m->closes;
+    [s stop];
+    PASS([s state] == PlayerSessionStopped, "stop takes effect at once");
+    PASS(m->fadeTarget == 0.0f && m->fadeDuration > 0.5, "the stream fades out");
+    PASS(m->closes == closes, "and is not cut off");
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(m->closes == closes + 1, "it is closed once faded out");
+
+    [s openItems: @[@"http://radio.example/live"]];
+    [m finishConnecting];
+    [s stop];
+    [s openItems: @[@"http://radio.example/other"]];
+    [m finishConnecting];
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS([s state] == PlayerSessionPlaying && m->openedURL != nil,
+         "playing again during the fade is not cut off by the pending close");
+
+    m->slow = NO;
+    [s openItems: tracks()];
+    PASS(m->gain == 1.0f, "local files play at full volume from the start");
+    closes = m->closes;
+    [s stop];
+    PASS(m->closes == closes + 1, "and stop at once");
+  END_SET("streams fade in and out")
 
   [arp release];
   return 0;

@@ -59,6 +59,7 @@
     NSMutableSet *_downloadingKeys;
     NSOperationQueue *_iconQueue;
     NSMutableSet *_fadingPlayers;    // stations fading out after a switch
+    StreamPlayer *_outgoing;         // audible old station while the new one connects
     BOOL _connecting;
     NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
     int _maxCacheEntries;

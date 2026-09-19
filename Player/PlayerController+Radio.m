@@ -246,6 +246,14 @@
     RadioStation *station = [stations objectAtIndex:index];
     RadioManager *radio = [RadioManager sharedManager];
     if ([radio isPlaying] && [[radio currentStationName] isEqualToString:[station name]]) {
+        // Back to the station that plays: forget a choice not tuned in yet
+        [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                 selector:@selector(playPendingStation)
+                                                   object:nil];
+        [pendingRadioStation release];
+        pendingRadioStation = nil;
+        [self setRadioStatus:[NSString stringWithFormat:@"Playing: %@", [station name]]];
+        [self updateControls];
         return;
     }
     [pendingRadioStation release];

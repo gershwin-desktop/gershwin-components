@@ -81,6 +81,8 @@ static const NSTimeInterval kFadeDuration = 1.0;
     [_player setDelegate:nil];
     [_player close];
     [_player release];
+    [_outgoing close];
+    [_outgoing release];
     [_fadingPlayers makeObjectsPerformSelector:@selector(close)];
     [_fadingPlayers release];
     [_stations release];
@@ -112,19 +114,15 @@ static const NSTimeInterval kFadeDuration = 1.0;
     return [[[StreamPlayer alloc] init] autorelease];
 }
 
-// The playing station fades out and is closed afterwards, while whatever
-// comes next starts right away: stations cross-fade instead of cutting.
-- (void)retirePlayer
+// Fades the player out and closes it afterwards, without waiting for it.
+- (void)fadeOutAndClose:(StreamPlayer *)player
 {
-    if (_player == nil) {
+    if (player == nil) {
         return;
     }
-    StreamPlayer *player = _player;
-    _player = nil;
     [player setDelegate:nil];
     if (![player isPlaying]) {
         [player close];
-        [player release];
         return;
     }
     [_fadingPlayers addObject:player];
@@ -133,7 +131,41 @@ static const NSTimeInterval kFadeDuration = 1.0;
         [player close];
         [self->_fadingPlayers removeObject:player];
     });
-    [player release];
+}
+
+// A new station was chosen.  The station that is audible goes on playing
+// until the new one plays, and the two cross-fade then; one that is still
+// connecting is simply given up.
+- (void)setAsidePlayer
+{
+    if (_player == nil) {
+        return;
+    }
+    StreamPlayer *player = [_player autorelease];
+    _player = nil;
+    [player setDelegate:nil];
+    if (![player isPlaying]) {
+        [player close];
+        return;
+    }
+    [self fadeOutOutgoing];
+    _outgoing = [player retain];
+}
+
+- (void)fadeOutOutgoing
+{
+    [self fadeOutAndClose:_outgoing];
+    [_outgoing release];
+    _outgoing = nil;
+}
+
+// Stop: whatever is audible fades out
+- (void)retirePlayer
+{
+    StreamPlayer *player = [_player autorelease];
+    _player = nil;
+    [self fadeOutAndClose:player];
+    [self fadeOutOutgoing];
 }
 
 - (void)setVolume:(float)volume
@@ -243,7 +275,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
     if (!urlString || [urlString length] == 0) return;
 
     // The station playing fades out while the new one connects
-    [self retirePlayer];
+    [self setAsidePlayer];
     _connecting = YES;
     NSUInteger attempt = ++_tuneAttempt;
     [_currentStationName release];
@@ -269,6 +301,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
                 [self openAndPlayURL:resolved];
             } else {
                 self->_connecting = NO;
+                [self fadeOutOutgoing];
                 if (self->_delegate != nil &&
                     [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
                     [self->_delegate radioManager:self didFailWithError:@"Failed to resolve stream URL"];
@@ -284,7 +317,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
 {
     if (!urlString || [urlString length] == 0) return;
 
-    [self retirePlayer];
+    [self setAsidePlayer];
     _connecting = YES;
     _tuneAttempt++;
     [_currentStationName release];
@@ -391,7 +424,7 @@ static const NSTimeInterval kFadeDuration = 1.0;
 
 - (void)openAndPlayURL:(NSString *)urlString
 {
-    [self retirePlayer];
+    [self setAsidePlayer];
     _player = [[self makePlayer] retain];
     [_player setDelegate:self];
     [_player setVolume:_volume];
@@ -413,6 +446,8 @@ static const NSTimeInterval kFadeDuration = 1.0;
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
     _connecting = NO;
+    // The cross-fade: the old station goes as the new one comes
+    [self fadeOutOutgoing];
     [_player fadeToGain:1.0f duration:kFadeDuration];
     // Find the station matching this stream URL
     RadioStation *currentStation = nil;
@@ -447,6 +482,8 @@ static const NSTimeInterval kFadeDuration = 1.0;
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
     _connecting = NO;
+    // The station switched away from goes, even though nothing replaces it
+    [self fadeOutOutgoing];
     if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
         [_delegate radioManager:self didFailWithError:[error localizedDescription]];
     }

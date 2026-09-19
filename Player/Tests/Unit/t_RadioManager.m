@@ -50,17 +50,37 @@ int main(void)
 
   START_SET("switching stations crossfades")
     StreamPlayer *old = [[[rm player] retain] autorelease];
-    [rm playURL: b];
+    /* An address that never answers keeps the new station connecting */
+    [rm playURL: @"http://10.255.255.1:8000/stream"];
     PASS([rm player] != old, "the new station has a player of its own");
+    spin(0.5);
+    PASS([old isPlaying] && [old fadeGain] == 1.0f,
+         "the old station plays on at full volume while the new one connects");
+
+    [rm playURL: b];
     spin(0.3);
-    PASS([old isPlaying], "the old station goes on playing for a moment");
-    PASS([old fadeGain] < 1.0f, "while it fades out (%f)", [old fadeGain]);
-    PASS([rm isPlaying], "and the new one already plays");
+    PASS([rm isPlaying], "the new station plays");
+    PASS([old isPlaying] && [old fadeGain] < 1.0f && [old fadeGain] > 0.0f,
+         "and only now the old one fades out (%f)", [old fadeGain]);
+    PASS([[rm player] fadeGain] > 0.0f && [[rm player] fadeGain] < 1.0f,
+         "while the new one fades in (%f)", [[rm player] fadeGain]);
     spin(1.3);
     PASS(![old isPlaying], "the old station stops once it has faded out");
     PASS([rm isPlaying] && [[rm player] fadeGain] == 1.0f,
          "the new station plays at full volume");
   END_SET("switching stations crossfades")
+
+  START_SET("a station that fails")
+    StreamPlayer *old = [[[rm player] retain] autorelease];
+    [rm playURL: @"/nonexistent/station.mp3"];
+    spin(0.3);
+    PASS(![rm isPlaying], "the station that cannot be played does not play");
+    PASS([old fadeGain] < 1.0f, "the old station fades out, as it was switched away from");
+    spin(1.3);
+    PASS(![old isPlaying], "and stops");
+    [rm playURL: a];
+    spin(1.5);
+  END_SET("a station that fails")
 
   START_SET("stopping fades out")
     StreamPlayer *current = [[[rm player] retain] autorelease];

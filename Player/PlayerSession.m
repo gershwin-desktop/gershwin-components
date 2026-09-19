@@ -8,6 +8,13 @@
 
 // Previous restarts the track after this many seconds, like CD players do
 static const NSTimeInterval kRestartThreshold = 3.0;
+// Streams fade in and out like the radio; files start and stop at once
+static const NSTimeInterval kStreamFadeDuration = 1.0;
+
+static BOOL isStream(NSString *item)
+{
+    return [item rangeOfString:@"://"].location != NSNotFound && ![item hasPrefix:@"file://"];
+}
 
 @implementation PlayerSession
 
@@ -30,6 +37,7 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 
 - (void)dealloc
 {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [_media setDelegate:nil];
     [_media close];
     [_media release];
@@ -133,8 +141,21 @@ static const NSTimeInterval kRestartThreshold = 3.0;
     if (_state == PlayerSessionStopped) {
         return;
     }
-    [self closeMedia];
+    if (isStream([_playlist currentItem]) && [_media isPlaying]) {
+        // Faded out, then closed; stopped as far as the user is concerned
+        _opening = NO;
+        [_media fadeToGain:0.0f duration:kStreamFadeDuration];
+        [self performSelector:@selector(closeFadedMedia) withObject:nil
+                   afterDelay:kStreamFadeDuration];
+    } else {
+        [self closeMedia];
+    }
     [self setState:PlayerSessionStopped];
+}
+
+- (void)closeFadedMedia
+{
+    [_media close];
 }
 
 - (void)next
@@ -238,6 +259,10 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 
 - (void)closeMedia
 {
+    // Whatever plays next must not be closed by a fade-out still pending
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(closeFadedMedia)
+                                               object:nil];
     _opening = NO;
     [_media close];
 }
@@ -264,6 +289,11 @@ static const NSTimeInterval kRestartThreshold = 3.0;
     [self notifyTrackChange];
     [_media setVolume:_volume];
     [_media setMuted:_muted];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(closeFadedMedia)
+                                               object:nil];
+    // A stream starts silent and fades in once it plays
+    [_media setFadeGain:isStream([_playlist itemAtIndex:index]) ? 0.0f : 1.0f];
     // Before -playURL:, which may report back before it returns
     _opening = YES;
     [self setState:PlayerSessionPlaying];
@@ -298,6 +328,9 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
     _opening = NO;
+    if (isStream([_playlist currentItem])) {
+        [_media fadeToGain:1.0f duration:kStreamFadeDuration];
+    }
     if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
         [_delegate playerSessionDidChangeState:self];
     }
@@ -305,14 +338,14 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
+    if (_state == PlayerSessionStopped) {
+        return;   // e.g. a stream fading out after Stop
+    }
     NSString *item = [_playlist currentItem];
     BOOL wasOpening = _opening;
     _opening = NO;
     if (item && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
         [_delegate playerSession:self didFailToOpenItem:item error:error];
-    }
-    if (_state == PlayerSessionStopped) {
-        return;
     }
     if (!wasOpening) {
         // It broke off while playing: go on as if it had ended
