@@ -189,6 +189,7 @@ int main(void)
     SessionWatcher *w = [[SessionWatcher new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
     [s setDelegate: w];
+    [s setFadeDuration: 0];
     [s openItems: tracks()];
     int changes = w->stateChanges;
     m->position = 42;
@@ -383,11 +384,60 @@ int main(void)
 
     m->slow = NO;
     [s openItems: tracks()];
-    PASS(m->gain == 1.0f, "local files play at full volume from the start");
+    PASS(m->gain == 1.0f && m->fadeDuration == 0,
+         "local files start at full volume, without a ramp");
+  END_SET("streams fade in and out")
+
+  START_SET("pause, stop and play fade")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s openItems: tracks()];
+    m->position = 42;
+    [s togglePlayPause];
+    PASS([s state] == PlayerSessionPaused, "pause takes effect at once");
+    PASS(m->fadeTarget == 0.0f && m->fadeDuration > 0.5, "the track fades out");
+    PASS(!m->paused, "and is not cut off");
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(m->paused, "it pauses once faded out");
+
+    [s togglePlayPause];
+    PASS([s state] == PlayerSessionPlaying && !m->paused, "play resumes");
+    PASS(m->fadeTarget == 1.0f && m->fadeDuration > 0.5, "fading in");
+
+    [s togglePlayPause];
+    [s togglePlayPause];
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(!m->paused && m->fadeTarget == 1.0f,
+         "resuming during the fade-out is not paused by it later");
+
+    int closes = m->closes;
+    [s stop];
+    PASS([s state] == PlayerSessionStopped, "stop takes effect at once");
+    PASS(m->fadeTarget == 0.0f && m->fadeDuration > 0.5, "the track fades out");
+    PASS(m->closes == closes, "and is not cut off");
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(m->closes == closes + 1, "it is closed once faded out");
+
+    [s togglePlayPause];
+    PASS(m->gain == 1.0f && m->fadeDuration == 0,
+         "play after stop starts the track without a ramp");
+
+    m->position = 0;
+    [s togglePlayPause];
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    [s togglePlayPause];
+    PASS(m->gain == 1.0f && m->fadeDuration == 0,
+         "resuming at the very start of a track has no ramp either");
+
+    [s setFadeDuration: 0];
+    [s togglePlayPause];
+    PASS(m->paused, "with fading off pause is immediate");
+    [s togglePlayPause];
+    PASS(m->gain == 1.0f, "and so is resuming");
     closes = m->closes;
     [s stop];
-    PASS(m->closes == closes + 1, "and stop at once");
-  END_SET("streams fade in and out")
+    PASS(m->closes == closes + 1, "and stop");
+  END_SET("pause, stop and play fade")
 
   START_SET("tracks cross-fade")
     NSMutableArray *made = [NSMutableArray array];
@@ -408,8 +458,8 @@ int main(void)
     PASS(first->fadeTarget == 0.0f && first->fadeDuration > 0.5,
          "the old track fades out");
     PASS(first->openedURL != nil, "without being cut off");
-    PASS(second->fadeTarget == 1.0f && second->fadeDuration > 0.5,
-         "while the new one fades in");
+    PASS(second->gain == 1.0f && second->fadeDuration == 0,
+         "while the new one starts at full volume, as every track start does");
     [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
     PASS(first->openedURL == nil, "the old track is closed once faded out");
 

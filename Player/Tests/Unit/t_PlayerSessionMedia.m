@@ -29,6 +29,8 @@ int main(void)
     StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
     [sp setUsesAudioDevice: NO];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: sp] autorelease];
+    /* Fades are timed in t_PlayerSession; here they would blur the timing */
+    [s setFadeDuration: 0];
     [s openItems: files];
     spin(0.3);
     PASS([s state] == PlayerSessionPlaying, "the first file plays");
