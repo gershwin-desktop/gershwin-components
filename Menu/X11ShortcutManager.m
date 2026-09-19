@@ -21,6 +21,10 @@
 #import <errno.h>
 #import <string.h>
 
+/* Marks the value of a grabbed XF86 hardware key in _grabbedKeys, so it can
+   be told apart from shortcuts that belong to an application menu. */
+static NSString * const kXF86GrabPrefix = @"xf86_";
+
 // Global variable to track X11 errors during key grabbing
 static BOOL x11_grab_error_occurred = NO;
 
@@ -307,6 +311,13 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     [_menuItemToActionNameMap removeAllObjects];
 }
 
+/* Menu's own shortcuts and the hardware keys belong to the desktop, not to
+ * the application in front, so an application switch must not drop them. */
+- (BOOL)isPersistentGrab:(NSString *)menuItemKey
+{
+    return [menuItemKey hasPrefix:@"direct_"] || [menuItemKey hasPrefix:kXF86GrabPrefix];
+}
+
 - (void)unregisterNonDirectShortcuts
 {
     if ([_grabbedKeys count] == 0) {
@@ -320,7 +331,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         NSMutableArray *toRemove = [NSMutableArray array];
         for (NSString *key in _grabbedKeys) {
             NSString *menuItemKey = [_grabbedKeys objectForKey:key];
-            if (![menuItemKey hasPrefix:@"direct_"]) {
+            if (![self isPersistentGrab:menuItemKey]) {
                 [toRemove addObject:key];
             }
         }
@@ -336,8 +347,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
 
     for (NSString *key in [_grabbedKeys allKeys]) {
         NSString *menuItemKey = [_grabbedKeys objectForKey:key];
-        if ([menuItemKey hasPrefix:@"direct_"]) {
-            // keep direct shortcuts
+        if ([self isPersistentGrab:menuItemKey]) {
             continue;
         }
 
@@ -498,7 +508,8 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
 
         // Store in _grabbedKeys so suspend/resumeKeyGrabs can re-grab them
         NSString *keycodeModifierKey = [NSString stringWithFormat:@"%d_%u", keycode, AnyModifier];
-        [_grabbedKeys setObject:[ksNum stringValue] forKey:keycodeModifierKey];
+        [_grabbedKeys setObject:[kXF86GrabPrefix stringByAppendingString:[ksNum stringValue]]
+                         forKey:keycodeModifierKey];
 
         NSLog(@"X11ShortcutManager: Registered XF86 key 0x%lx with keycode %d", (unsigned long)keysym, keycode);
     } else {

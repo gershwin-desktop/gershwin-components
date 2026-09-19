@@ -264,7 +264,9 @@ static int runPrivilegedCommand(NSString *path, NSArray *args)
 {
     NSString *iface = [self bsdWLANInterface];
     if (!iface) return;
-    runCommand(_ifconfig, @[iface, enabled ? @"up" : @"down"]);
+    /* Bringing an interface up or down needs root, as nmcli's radio
+       switch does on Linux. */
+    runPrivilegedCommand(_ifconfig, @[iface, enabled ? @"up" : @"down"]);
 }
 
 - (nullable NSString *)bsdConnectedSSID

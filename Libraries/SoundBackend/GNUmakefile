@@ -8,7 +8,8 @@ UNAME_S := $(shell uname -s)
 libSoundBackend_OBJC_FILES = \
 	../../Sound/SoundModels.m \
 	../../Sound/WavScale.m \
-	../../Sound/ALSABackend.m
+	../../Sound/ALSABackend.m \
+	../../Sound/SoundBackendFactory.m
 ifneq ($(UNAME_S),OpenBSD)
 libSoundBackend_OBJC_FILES += ../../Sound/OSSBackend.m
 endif
@@ -17,7 +18,8 @@ libSoundBackend_HEADER_FILES = \
 	../../Sound/SoundBackend.h \
 	../../Sound/WavScale.h \
 	../../Sound/ALSABackend.h \
-	../../Sound/OSSBackend.h
+	../../Sound/OSSBackend.h \
+	../../Sound/SoundBackendFactory.h
 
 libSoundBackend_INSTALL_HEADERS_DIR = SoundBackend
 libSoundBackend_FRAMEWORKS_DEPEND_UPON = AppKit Foundation

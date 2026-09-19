@@ -52,8 +52,11 @@ Menu_OBJC_FILES = \
 	WindowMonitor.m \
 	AppMenuImporter.m \
 	WindowSwitchContext.m \
+	BacklightBackend.m \
 	SysfsBacklightBackend.m \
-	EvdevBrightnessKeySource.m \
+	FreeBSDBacklightBackend.m \
+	WsconsBacklightBackend.m \
+	MediaKeyController.m \
 	TintedMenuItemCell.m
 
 # Header files
@@ -96,9 +99,10 @@ Menu_HEADER_FILES = \
 	AppMenuImporter.h \
 	WindowSwitchContext.h \
 	BacklightBackend.h \
-	BrightnessKeySource.h \
 	SysfsBacklightBackend.h \
-	EvdevBrightnessKeySource.h \
+	FreeBSDBacklightBackend.h \
+	WsconsBacklightBackend.h \
+	MediaKeyController.h \
 	SoundVolume.h \
 	TintedMenuItemCell.h
 
