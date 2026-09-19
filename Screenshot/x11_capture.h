@@ -18,6 +18,9 @@ typedef struct {
 typedef enum {
     CaptureStatusOK = 0,
     CaptureStatusCancelled,
+    /* Space was pressed during an area selection before a drag started;
+     * the user wants to pick a window on the same snapshot instead. */
+    CaptureStatusWindowRequested,
     CaptureStatusNoDisplay,
     CaptureStatusReadFailed
 } CaptureStatus;
@@ -47,7 +50,9 @@ void x11_snapshot_free(CaptureSnapshot *snapshot);
 
 /* Interactive selection on the snapshot shown full screen.  Both block
  * until the user clicks/drags (left button) or cancels (Escape or right
- * button). */
+ * button).  The area selection also returns when Space is pressed before
+ * dragging (CaptureStatusWindowRequested).  The snapshot stays on screen
+ * between selections until it is freed. */
 CaptureStatus x11_select_window(CaptureSnapshot *snapshot, int include_frame,
                                 WindowSelection *selection);
 CaptureStatus x11_select_area(CaptureSnapshot *snapshot, CaptureRect *rect);

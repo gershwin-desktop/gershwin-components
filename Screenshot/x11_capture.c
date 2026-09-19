@@ -135,10 +135,10 @@ static void wait_for_event(XEvent *event)
     XNextEvent(disp, event);
 }
 
-static int is_escape(XEvent *event)
+static int is_key(XEvent *event, KeySym keysym)
 {
     return event->type == KeyPress
-        && XLookupKeysym(&event->xkey, 0) == XK_Escape;
+        && XLookupKeysym(&event->xkey, 0) == keysym;
 }
 
 /* Window lookup */
@@ -229,6 +229,7 @@ static int get_root_geometry(Window window, CaptureRect *rect)
 
 struct CaptureSnapshot {
     XImage *image;
+    Window overlay;
 };
 
 CaptureStatus x11_snapshot_take(CaptureSnapshot **snapshot)
@@ -260,6 +261,7 @@ CaptureStatus x11_snapshot_take(CaptureSnapshot **snapshot)
         return CaptureStatusReadFailed;
     }
     (*snapshot)->image = image;
+    (*snapshot)->overlay = None;
     return CaptureStatusOK;
 }
 
@@ -267,6 +269,10 @@ void x11_snapshot_free(CaptureSnapshot *snapshot)
 {
     if (!snapshot)
         return;
+    if (snapshot->overlay != None) {
+        XDestroyWindow(disp, snapshot->overlay);
+        XSync(disp, False);
+    }
     XDestroyImage(snapshot->image);
     free(snapshot);
 }
@@ -276,6 +282,11 @@ void x11_snapshot_free(CaptureSnapshot *snapshot)
  * pointer stay visible and selectable. */
 static Window map_frozen_overlay(CaptureSnapshot *snapshot)
 {
+    /* Reused when one selection hands over to another, so the live screen
+     * never shows through in between. */
+    if (snapshot->overlay != None)
+        return snapshot->overlay;
+
     XImage *image = snapshot->image;
     Pixmap pixmap = XCreatePixmap(disp, root, image->width, image->height,
                                   DefaultDepth(disp, screen_number));
@@ -297,10 +308,83 @@ static Window map_frozen_overlay(CaptureSnapshot *snapshot)
     XFreePixmap(disp, pixmap);
     XMapRaised(disp, overlay);
     XSync(disp, False);
+    snapshot->overlay = overlay;
     return overlay;
 }
 
 /* Interactive selection */
+
+/* Window picking shows a camera instead of the crosshair, so the user sees
+ * that Space switched the mode; the cursor font has no camera.  '#' is
+ * drawn black, '.' white, and a white edge is added around the outline so
+ * the camera stays visible on dark content. */
+static const char *const camera_rows[] = {
+    "      ######       ",
+    "      #....#       ",
+    "###################",
+    "#.................#",
+    "#......#####......#",
+    "#.....#.....#.....#",
+    "#....#.......#....#",
+    "#....#.......#....#",
+    "#....#.......#....#",
+    "#.....#.....#.....#",
+    "#......#####......#",
+    "#.................#",
+    "###################",
+};
+#define CAMERA_WIDTH 19
+#define CAMERA_HEIGHT ((int)(sizeof(camera_rows) / sizeof(camera_rows[0])))
+/* One pixel of white edge on every side. */
+#define CAMERA_CURSOR_WIDTH (CAMERA_WIDTH + 2)
+#define CAMERA_CURSOR_HEIGHT (CAMERA_HEIGHT + 2)
+#define CAMERA_CURSOR_STRIDE ((CAMERA_CURSOR_WIDTH + 7) / 8)
+
+static int camera_pixel_set(int x, int y)
+{
+    return x >= 0 && x < CAMERA_WIDTH && y >= 0 && y < CAMERA_HEIGHT
+        && camera_rows[y][x] != ' ';
+}
+
+static Cursor create_camera_cursor(void)
+{
+    char source[CAMERA_CURSOR_STRIDE * CAMERA_CURSOR_HEIGHT];
+    char mask[CAMERA_CURSOR_STRIDE * CAMERA_CURSOR_HEIGHT];
+    memset(source, 0, sizeof(source));
+    memset(mask, 0, sizeof(mask));
+
+    for (int y = 0; y < CAMERA_CURSOR_HEIGHT; y++) {
+        for (int x = 0; x < CAMERA_CURSOR_WIDTH; x++) {
+            /* Bitmap data is least significant bit first. */
+            int byte = y * CAMERA_CURSOR_STRIDE + x / 8;
+            char bit = (char)(1 << (x % 8));
+            int cx = x - 1, cy = y - 1;
+            if (camera_pixel_set(cx, cy) && camera_rows[cy][cx] == '#')
+                source[byte] |= bit;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                    if (camera_pixel_set(cx + dx, cy + dy))
+                        mask[byte] |= bit;
+        }
+    }
+
+    Pixmap source_pixmap = XCreateBitmapFromData(disp, root, source,
+                                                 CAMERA_CURSOR_WIDTH,
+                                                 CAMERA_CURSOR_HEIGHT);
+    Pixmap mask_pixmap = XCreateBitmapFromData(disp, root, mask,
+                                               CAMERA_CURSOR_WIDTH,
+                                               CAMERA_CURSOR_HEIGHT);
+    XColor black = { .red = 0, .green = 0, .blue = 0 };
+    XColor white = { .red = 0xffff, .green = 0xffff, .blue = 0xffff };
+    Cursor cursor = XCreatePixmapCursor(disp, source_pixmap, mask_pixmap,
+                                        &black, &white,
+                                        CAMERA_CURSOR_WIDTH / 2,
+                                        CAMERA_CURSOR_HEIGHT / 2);
+    XFreePixmap(disp, source_pixmap);
+    XFreePixmap(disp, mask_pixmap);
+    return cursor;
+}
+
 
 /* The topmost visible window under the point, ignoring the overlay that
  * now covers everything and would otherwise always be hit. */
@@ -339,7 +423,7 @@ CaptureStatus x11_select_window(CaptureSnapshot *snapshot, int include_frame,
                                 WindowSelection *selection)
 {
     Window overlay = map_frozen_overlay(snapshot);
-    Cursor cursor = XCreateFontCursor(disp, XC_crosshair);
+    Cursor cursor = create_camera_cursor();
     grab_input(ButtonPressMask | ButtonReleaseMask, cursor);
 
     Window toplevel = None;
@@ -352,7 +436,7 @@ CaptureStatus x11_select_window(CaptureSnapshot *snapshot, int include_frame,
 
     for (;;) {
         wait_for_event(&event);
-        if (is_escape(&event)) {
+        if (is_key(&event, XK_Escape)) {
             cancelled = 1;
             break;
         }
@@ -374,7 +458,6 @@ CaptureStatus x11_select_window(CaptureSnapshot *snapshot, int include_frame,
         }
     }
 
-    XDestroyWindow(disp, overlay);
     ungrab_input();
     XFreeCursor(disp, cursor);
     if (cancelled)
@@ -453,12 +536,19 @@ CaptureStatus x11_select_area(CaptureSnapshot *snapshot, CaptureRect *rect)
     int end_x = start_x, end_y = start_y;
     int marquee_x = 0, marquee_y = 0, marquee_w = 0, marquee_h = 0;
     int cancelled = 0;
+    int window_requested = 0;
     XEvent event;
 
     for (;;) {
         wait_for_event(&event);
-        if (is_escape(&event)) {
+        if (is_key(&event, XK_Escape)) {
             cancelled = 1;
+            break;
+        }
+        /* Once a drag has started, Space is left alone so it can later
+         * move the selection instead. */
+        if (is_key(&event, XK_space) && pressed_button == 0) {
+            window_requested = 1;
             break;
         }
         if (event.type == Expose && event.xexpose.count == 0) {
@@ -498,9 +588,10 @@ CaptureStatus x11_select_area(CaptureSnapshot *snapshot, CaptureRect *rect)
     }
 
     XFreeGC(disp, gc);
-    XDestroyWindow(disp, overlay);
     ungrab_input();
     XFreeCursor(disp, cursor);
+    if (window_requested)
+        return CaptureStatusWindowRequested;
 
     rect->x = start_x < end_x ? start_x : end_x;
     rect->y = start_y < end_y ? start_y : end_y;

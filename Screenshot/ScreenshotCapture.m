@@ -71,35 +71,31 @@ static NSString * const kIncludeWindowShadowKey = @"ScreenshotIncludeWindowShado
     unsigned char *pixels = NULL;
     int width = 0, height = 0;
 
-    switch (mode) {
-    case ScreenshotModeWindow: {
-        WindowSelection selection;
-        *status = x11_select_window(snapshot, includeFrame, &selection);
-        if (*status != CaptureStatusOK)
-            break;
-        // Match the corners the window manager draws for the current theme
-        id theme = [GSTheme theme];
-        float topRadius = 0, bottomRadius = 0;
-        if ([theme respondsToSelector:@selector(titlebarCornerRadius)])
-            topRadius = [theme titlebarCornerRadius];
-        if ([theme respondsToSelector:@selector(windowBottomCornerRadius)])
-            bottomRadius = [theme windowBottomCornerRadius];
-        pixels = x11_capture_window(snapshot, &selection, includeShadow,
-                                    topRadius, bottomRadius, &width, &height);
-        break;
-    }
-    case ScreenshotModeArea: {
+    if (mode == ScreenshotModeArea) {
         CaptureRect rect;
         *status = x11_select_area(snapshot, &rect);
-        if (*status != CaptureStatusOK)
-            break;
-        pixels = x11_capture_area(snapshot, rect, &width, &height);
-        break;
+        if (*status == CaptureStatusOK)
+            pixels = x11_capture_area(snapshot, rect, &width, &height);
+        else if (*status == CaptureStatusWindowRequested)
+            mode = ScreenshotModeWindow;
     }
-    case ScreenshotModeScreen:
+    if (mode == ScreenshotModeWindow) {
+        WindowSelection selection;
+        *status = x11_select_window(snapshot, includeFrame, &selection);
+        if (*status == CaptureStatusOK) {
+            // Match the corners the window manager draws for the current theme
+            id theme = [GSTheme theme];
+            float topRadius = 0, bottomRadius = 0;
+            if ([theme respondsToSelector:@selector(titlebarCornerRadius)])
+                topRadius = [theme titlebarCornerRadius];
+            if ([theme respondsToSelector:@selector(windowBottomCornerRadius)])
+                bottomRadius = [theme windowBottomCornerRadius];
+            pixels = x11_capture_window(snapshot, &selection, includeShadow,
+                                        topRadius, bottomRadius, &width, &height);
+        }
+    }
+    if (mode == ScreenshotModeScreen)
         pixels = x11_capture_screen(snapshot, &width, &height);
-        break;
-    }
     x11_snapshot_free(snapshot);
 
     if (*status != CaptureStatusOK)
@@ -136,6 +132,7 @@ static NSString * const kIncludeWindowShadowKey = @"ScreenshotIncludeWindowShado
         return NSLocalizedString(@"The screen contents could not be read.", @"");
     case CaptureStatusOK:
     case CaptureStatusCancelled:
+    case CaptureStatusWindowRequested:
         break;
     }
     return nil;
