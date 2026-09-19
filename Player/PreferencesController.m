@@ -5,6 +5,7 @@
  */
 
 #import "PreferencesController.h"
+#import "PlayerAsync.h"
 #import "AppearanceMetrics.h"
 
 // ---------------------------------------------------------------------------
@@ -273,7 +274,7 @@ static FormatTag tagForFormatString(NSString *format)
     [_statusLabel setStringValue:@"Checking…"];
     [_statusLabel setTextColor:[NSColor grayColor]];
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    PlayerRunInBackground(^{
         BOOL available = NO;
         @try {
             NSTask *task = [[[NSTask alloc] init] autorelease];
@@ -289,7 +290,7 @@ static FormatTag tagForFormatString(NSString *format)
             available = NO;
         }
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+        PlayerRunOnMainThread(^{
             [_checkButton setEnabled:YES];
             if (available) {
                 [_statusLabel setStringValue:@"✓ Available"];

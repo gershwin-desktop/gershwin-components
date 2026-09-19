@@ -1,0 +1,131 @@
+/*
+ * Copyright (c) 2026 Simon Peter
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+/* t_StreamPlayer.m - the FFmpeg player that plays local files: timing,
+ * pause, seeking and the end-of-track callback.  Plays without the sound
+ * device, so it is silent and works headless. */
+
+#import <Foundation/Foundation.h>
+#import "Testing.h"
+#import "StreamPlayer.h"
+#import "TestMedia.h"
+
+@interface StopRecorder : NSObject <StreamPlayerDelegate>
+{
+@public
+  int stops;
+  BOOL onMainThread;
+}
+@end
+
+@implementation StopRecorder
+- (void)streamPlayerDidStop:(StreamPlayer *)player
+{
+  stops++;
+  onMainThread = [NSThread isMainThread];
+}
+@end
+
+static void spin(NSTimeInterval seconds)
+{
+  [[NSRunLoop currentRunLoop] runUntilDate:
+    [NSDate dateWithTimeIntervalSinceNow: seconds]];
+}
+
+int main(void)
+{
+  NSAutoreleasePool *arp = [NSAutoreleasePool new];
+  NSString *wav = TestMediaWriteSilentWAV(@"sp", 2.0);
+  NSString *shortWav = TestMediaWriteSilentWAV(@"spshort", 0.6);
+
+  START_SET("opening")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    PASS(sp != [StreamPlayer sharedPlayer],
+         "local playback can have a player of its own, apart from the radio");
+    NSError *err = nil;
+    PASS(![sp openURL: @"/nonexistent/file.mp3" error: &err] && err != nil,
+         "a missing file fails with an error");
+    PASS([sp openURL: wav error: &err], "a WAV file opens");
+    PASS(fabs([sp duration] - 2.0) < 0.05, "its duration is known (%f)", [sp duration]);
+    PASS(![sp hasVideo], "it has no video");
+    [sp close];
+  END_SET("opening")
+
+  START_SET("playing without the sound device keeps real time")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp openURL: wav error: NULL];
+    [sp play];
+    spin(0.5);
+    NSTimeInterval t = [sp currentTime];
+    PASS(t > 0.25 && t < 0.8, "after half a second about half a second played (%f)", t);
+    PASS([sp isPlaying], "still playing");
+
+    [sp pause];
+    spin(0.1);
+    NSTimeInterval paused = [sp currentTime];
+    spin(0.4);
+    PASS(fabs([sp currentTime] - paused) < 0.05, "time stands still while paused");
+
+    [sp seekToTime: 1.5];
+    spin(0.2);
+    PASS(fabs([sp currentTime] - 1.5) < 0.1,
+         "seeking while paused moves the position (%f)", [sp currentTime]);
+
+    [sp play];
+    spin(0.25);
+    t = [sp currentTime];
+    PASS(t > 1.55 && t < 2.0, "playing resumes from the new position (%f)", t);
+
+    [sp seekToTime: 0.2];
+    spin(0.2);
+    t = [sp currentTime];
+    PASS(t > 0.15 && t < 0.7, "seeking back while playing works (%f)", t);
+    [sp close];
+  END_SET("playing without the sound device keeps real time")
+
+  START_SET("seeking before playing")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp openURL: wav error: NULL];
+    [sp seekToTime: 1.0];
+    PASS(fabs([sp currentTime] - 1.0) < 0.1, "position is where it was sought to");
+    [sp play];
+    spin(0.3);
+    PASS([sp currentTime] > 1.1, "playback starts there (%f)", [sp currentTime]);
+    [sp close];
+  END_SET("seeking before playing")
+
+  START_SET("end of track")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    StopRecorder *rec = [[StopRecorder new] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp setDelegate: rec];
+    [sp openURL: shortWav error: NULL];
+    [sp play];
+    spin(0.3);
+    PASS(rec->stops == 0, "the track does not end early");
+    spin(0.8);
+    PASS(rec->stops == 1, "the delegate hears once that the track ended");
+    PASS(rec->onMainThread, "on the main thread");
+    PASS(![sp isPlaying], "the player is no longer playing");
+
+    rec->stops = 0;
+    [sp openURL: shortWav error: NULL];
+    [sp play];
+    spin(0.1);
+    [sp stop];
+    spin(0.8);
+    PASS(rec->stops == 0, "stopping by hand is not reported as the track ending");
+    [sp setDelegate: nil];
+    [sp close];
+  END_SET("end of track")
+
+  [[NSFileManager defaultManager] removeItemAtPath: wav error: NULL];
+  [[NSFileManager defaultManager] removeItemAtPath: shortWav error: NULL];
+  [arp release];
+  return 0;
+}

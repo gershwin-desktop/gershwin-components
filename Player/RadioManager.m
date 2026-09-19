@@ -5,6 +5,7 @@
  */
 
 #import "RadioManager.h"
+#import "PlayerAsync.h"
 #import "RadioStation.h"
 #import "RadioBrowser.h"
 
@@ -31,10 +32,11 @@ static const int kMaxDownloadRetries = 3;
 + (instancetype)sharedManager
 {
     static RadioManager *shared = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        shared = [[self alloc] init];
-    });
+    @synchronized(self) {
+        if (shared == nil) {
+            shared = [[self alloc] init];
+        }
+    }
     return shared;
 }
 
@@ -49,8 +51,9 @@ static const int kMaxDownloadRetries = 3;
         _iconIndex = [[NSMutableDictionary alloc] init];
         _downloadingKeys = [[NSMutableSet alloc] init];
         _maxCacheEntries = kMaxCacheEntries;
-        _iconQueue = dispatch_queue_create("com.gershwin.player.radioIcon", DISPATCH_QUEUE_SERIAL);
-        _iconSemaphore = dispatch_semaphore_create(3);
+        // At most three icon downloads at a time
+        _iconQueue = [[NSOperationQueue alloc] init];
+        [_iconQueue setMaxConcurrentOperationCount:3];
         _volume = 1.0f;
         _muted = NO;
 
@@ -82,8 +85,8 @@ static const int kMaxDownloadRetries = 3;
     [_iconCachePath release];
     [_currentStationName release];
     [_currentStreamURL release];
-    dispatch_release(_iconQueue);
-    dispatch_release(_iconSemaphore);
+    [_iconQueue cancelAllOperations];
+    [_iconQueue release];
     [super dealloc];
 }
 
@@ -273,7 +276,7 @@ static const int kMaxDownloadRetries = 3;
         return;
     }
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    PlayerRunInBackground(^{
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
         [req setHTTPMethod:@"GET"];
         [req setTimeoutInterval:15.0];
@@ -285,7 +288,7 @@ static const int kMaxDownloadRetries = 3;
                                                          error:&error];
 
         if (error || !data || [data length] == 0) {
-            dispatch_async(dispatch_get_main_queue(), ^{
+            PlayerRunOnMainThread(^{
                 if (completion) completion(nil);
             });
             return;
@@ -300,15 +303,17 @@ static const int kMaxDownloadRetries = 3;
                                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
                 if ([trim hasPrefix:@"#"]) return;
                 if ([trim hasPrefix:@"http://"] || [trim hasPrefix:@"https://"]) {
-                    found = trim;
+                    // Owned: the line is gone with the enumeration's pool
+                    found = [trim copy];
                     *stop = YES;
                 }
             }];
             [text release];
 
             if (found) {
-                dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerRunOnMainThread(^{
                     if (completion) completion(found);
+                    [found release];
                 });
                 return;
             }
@@ -318,14 +323,14 @@ static const int kMaxDownloadRetries = 3;
         if (response && [response URL]) {
             NSString *finalURL = [[response URL] absoluteString];
             if (![finalURL isEqualToString:tuneURL]) {
-                dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerRunOnMainThread(^{
                     if (completion) completion(finalURL);
                 });
                 return;
             }
         }
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+        PlayerRunOnMainThread(^{
             if (completion) completion(nil);
         });
     });
@@ -376,7 +381,7 @@ static const int kMaxDownloadRetries = 3;
 - (void)streamPlayerDidStop:(StreamPlayer *)player
 {
     // Only notify delegate if we aren't already playing a new stream
-    // The async dispatch_async in StreamPlayer's stop means this callback
+    // StreamPlayer delivers this asynchronously on the main thread, so this callback
     // can arrive after a new stream has already started playing
     if (![_player isPlaying]) {
         if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
@@ -531,14 +536,16 @@ static const int kMaxDownloadRetries = 3;
                 [_stationImages setObject:image forKey:key];
                 [image release];
 
-                // Update last access
-                NSMutableDictionary *entry = [[_iconIndex objectForKey:key] mutableCopy];
-                if (!entry) entry = [[NSMutableDictionary alloc] init];
-                [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
-                          forKey:@"lastAccess"];
-                [_iconIndex setObject:entry forKey:key];
-                [entry release];
-                [self saveIconIndex];
+                // Update last access; downloads update the index concurrently
+                @synchronized(self) {
+                    NSMutableDictionary *entry = [[_iconIndex objectForKey:key] mutableCopy];
+                    if (!entry) entry = [[NSMutableDictionary alloc] init];
+                    [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
+                              forKey:@"lastAccess"];
+                    [_iconIndex setObject:entry forKey:key];
+                    [entry release];
+                    [self saveIconIndex];
+                }
 
                 // Notify delegate
                 if (_delegate != nil &&
@@ -579,10 +586,7 @@ static const int kMaxDownloadRetries = 3;
         return;
     }
 
-    // Dispatch work to background FIRST, then wait on semaphore
-    // (never block the main thread on the semaphore)
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-        dispatch_semaphore_wait(self->_iconSemaphore, DISPATCH_TIME_FOREVER);
+    [_iconQueue addOperationWithBlock:^{
         @autoreleasepool {
             // Build candidate URLs - try the original first, then fallback
             NSMutableArray *candidates = [NSMutableArray array];
@@ -658,25 +662,27 @@ static const int kMaxDownloadRetries = 3;
                 NSLog(@"[RadioManager] Icon downloaded OK size=%tu for %@",
                       [data length], [url absoluteString]);
 
-                // Save valid image to disk cache
-                NSString *cachePath = [self cachePathForKey:key];
-                if (cachePath) {
-                    NSString *fname = [cachePath lastPathComponent];
-                    [data writeToFile:cachePath options:NSDataWritingAtomic error:NULL];
+                // Save valid image to disk cache; downloads run concurrently
+                @synchronized(self) {
+                    NSString *cachePath = [self cachePathForKey:key];
+                    if (cachePath) {
+                        NSString *fname = [cachePath lastPathComponent];
+                        [data writeToFile:cachePath options:NSDataWritingAtomic error:NULL];
 
-                    // Update index
-                    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-                    [entry setObject:fname forKey:@"filename"];
-                    [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
-                              forKey:@"lastAccess"];
-                    [entry setObject:@([data length]) forKey:@"size"];
-                    [_iconIndex setObject:entry forKey:key];
-                    [self saveIconIndex];
-                    [self pruneCacheIfNeeded];
+                        // Update index
+                        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+                        [entry setObject:fname forKey:@"filename"];
+                        [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
+                                  forKey:@"lastAccess"];
+                        [entry setObject:@([data length]) forKey:@"size"];
+                        [_iconIndex setObject:entry forKey:key];
+                        [self saveIconIndex];
+                        [self pruneCacheIfNeeded];
+                    }
                 }
 
                 // Decode image on main thread
-                dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerRunOnMainThread(^{
                     NSImage *image = [[NSImage alloc] initWithData:data];
                     if (image) {
                         [_stationImages setObject:image forKey:key];
@@ -702,8 +708,7 @@ static const int kMaxDownloadRetries = 3;
 
             if (!success && attempt < kMaxDownloadRetries) {
                 double delay = pow(2.0, attempt);
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
-                               dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+                PlayerRunOnMainThreadAfter(delay, ^{
                     [self downloadImageWithURL:urlStr key:key station:station attempt:attempt + 1];
                 });
             } else if (!success) {
@@ -712,9 +717,8 @@ static const int kMaxDownloadRetries = 3;
                 }
             }
 
-            dispatch_semaphore_signal(self->_iconSemaphore);
         }
-    });
+    }];
 }
 
 - (NSString *)cachePathForKey:(NSString *)key
@@ -731,8 +735,10 @@ static const int kMaxDownloadRetries = 3;
     NSString *fname = [NSString stringWithFormat:@"%016llx.img", hash];
 
     // Check if index has a different filename
-    NSDictionary *entry = [_iconIndex objectForKey:key];
-    NSString *idxFname = [entry objectForKey:@"filename"];
+    NSString *idxFname;
+    @synchronized(self) {
+        idxFname = [[[[_iconIndex objectForKey:key] objectForKey:@"filename"] retain] autorelease];
+    }
     if (idxFname && [idxFname length] > 0) {
         return [_iconCachePath stringByAppendingPathComponent:idxFname];
     }

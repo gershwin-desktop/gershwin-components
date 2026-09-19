@@ -34,6 +34,12 @@ Player_LANGUAGES = English
 #
 Player_HEADER_FILES = \
 	PlayerController.h \
+	PlayerController+Private.h \
+	PlayerSession.h \
+	PlayerPlaylist.h \
+	PlayerMenu.h \
+	PlayerViews.h \
+	PlayerAsync.h \
 	RadioStation.h \
 	RadioBrowser.h \
 	StreamPlayer.h \
@@ -43,6 +49,12 @@ Player_HEADER_FILES = \
 
 Player_OBJC_FILES = \
 	PlayerController.m \
+	PlayerController+Radio.m \
+	PlayerSession.m \
+	PlayerPlaylist.m \
+	PlayerMenu.m \
+	PlayerViews.m \
+	PlayerAsync.m \
 	RadioStation.m \
 	RadioBrowser.m \
 	StreamPlayer.m \
@@ -70,7 +82,7 @@ ITEMFLOW_LIB := $(ITEMFLOW_SRC)/ItemFlow.framework/Versions/Current
 ADDITIONAL_INCLUDE_DIRS += -I$(ITEMFLOW_SRC)
 ADDITIONAL_LDFLAGS += -L$(ITEMFLOW_LIB)
 ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
-# ItemFlow uses libdispatch internally; on FreeBSD the strict linker needs it explicitly.
+# ItemFlow itself still uses libdispatch; on FreeBSD the strict linker needs it explicitly.
 ADDITIONAL_GUI_LIBS += -ldispatch
 
 #
@@ -79,6 +91,12 @@ ADDITIONAL_GUI_LIBS += -ldispatch
 ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)
 ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libavformat libavcodec libavutil libswresample libswscale)
 ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs ao)
+
+#
+# Xlib, to ask the window manager for full screen (_NET_WM_STATE)
+#
+ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags x11)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs x11)
 
 -include GNUmakefile.preamble
 

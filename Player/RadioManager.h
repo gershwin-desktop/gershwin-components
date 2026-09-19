@@ -57,8 +57,7 @@
     NSMutableDictionary *_iconIndex;  // key: stationId → {filename, lastAccess, timestamp}
     NSString *_iconCachePath;
     NSMutableSet *_downloadingKeys;
-    dispatch_queue_t _iconQueue;
-    dispatch_semaphore_t _iconSemaphore;
+    NSOperationQueue *_iconQueue;
     int _maxCacheEntries;
 }
 
