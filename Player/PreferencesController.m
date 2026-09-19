@@ -168,7 +168,7 @@ static FormatTag tagForFormatString(NSString *format)
     _fadeCheckbox = [[NSButton alloc] initWithFrame:
         NSMakeRect(margin + labelW + METRICS_SPACE_8, y, popUpW, checkboxH)];
     [_fadeCheckbox setButtonType:NSSwitchButton];
-    [_fadeCheckbox setTitle:@"Fade in and out, cross-fade radio stations"];
+    [_fadeCheckbox setTitle:@"Fade in and out, cross-fade"];
     [_fadeCheckbox setState:[PreferencesController fadeDuration] > 0 ? NSOnState : NSOffState];
     [_fadeCheckbox setTarget:self];
     [_fadeCheckbox setAction:@selector(_fadeChanged:)];

@@ -11,9 +11,11 @@ ADDITIONAL_INCLUDE_DIRS += -I../..
 ADDITIONAL_OBJCFLAGS += -Wno-deprecated
 
 t_PlayerPlaylist_OBJC_FILES = t_PlayerPlaylist.m
-t_PlayerSession_OBJC_FILES = t_PlayerSession.m ../../PlayerPlaylist.m
+t_PlayerSession_OBJC_FILES = t_PlayerSession.m ../../PlayerPlaylist.m \
+	../../PlayerAsync.m
 t_PlayerSessionMedia_OBJC_FILES = t_PlayerSessionMedia.m TestMedia.m \
-	../../PlayerSession.m ../../PlayerPlaylist.m ../../StreamPlayer.m
+	../../PlayerSession.m ../../PlayerPlaylist.m ../../StreamPlayer.m \
+	../../PlayerAsync.m
 t_PlayerMenu_OBJC_FILES = t_PlayerMenu.m ../../PlayerMenu.m
 t_PlayerMenu_TOOL_LIBS += -lgnustep-gui
 t_PlayerViews_OBJC_FILES = t_PlayerViews.m ../../PlayerViews.m

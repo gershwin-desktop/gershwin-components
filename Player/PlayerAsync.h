@@ -15,6 +15,10 @@
 
 typedef void (^PlayerBlock)(void);
 
+/// The run loop modes of the main thread in which playback must go on:
+/// also while a modal panel is up or the mouse is tracking.
+NSArray *PlayerRunLoopModes(void);
+
 /// Runs the block on a new thread of its own.
 void PlayerRunInBackground(PlayerBlock block);
 

@@ -389,6 +389,52 @@ int main(void)
     PASS(m->closes == closes + 1, "and stop at once");
   END_SET("streams fade in and out")
 
+  START_SET("tracks cross-fade")
+    NSMutableArray *made = [NSMutableArray array];
+    FakeMedia *first = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: first] autorelease];
+    [s setMediaFactory: ^id<MediaPlayback>(void) {
+      FakeMedia *m = [[FakeMedia new] autorelease];
+      [made addObject: m];
+      return m;
+    }];
+    [s openItems: tracks()];
+    PASS(first->gain == 1.0f, "the first track starts at full volume");
+
+    [s next];
+    PASS([made count] == 1, "the next track gets a player of its own");
+    FakeMedia *second = [made lastObject];
+    PASS_EQUAL(second->openedURL, @"/music/2.mp3", "and plays the next track");
+    PASS(first->fadeTarget == 0.0f && first->fadeDuration > 0.5,
+         "the old track fades out");
+    PASS(first->openedURL != nil, "without being cut off");
+    PASS(second->fadeTarget == 1.0f && second->fadeDuration > 0.5,
+         "while the new one fades in");
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(first->openedURL == nil, "the old track is closed once faded out");
+
+    /* Near its end a track hands over to the next one early */
+    second->position = second->length - 0.5;
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 0.5]];
+    PASS([made count] == 2, "the next track starts before the old one ends");
+    FakeMedia *third = [made lastObject];
+    PASS_EQUAL(third->openedURL, @"/music/3.mp3", "it is the next track");
+    PASS(second->fadeTarget == 0.0f, "the ending track fades out");
+    PASS([[s playlist] currentIndex] == 2, "the playlist moves on");
+
+    /* Paused: nothing is audible to fade */
+    [s togglePlayPause];
+    [s previous];
+    PASS([made count] == 2, "from pause the track changes without a second player");
+
+    [s stop];
+    [s setFadeDuration: 0];
+    [s openItems: tracks()];
+    NSUInteger count = [made count];
+    [s next];
+    PASS([made count] == count, "with fading off tracks change at once");
+  END_SET("tracks cross-fade")
+
   START_SET("fading switched off")
     FakeMedia *m = [[FakeMedia new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];

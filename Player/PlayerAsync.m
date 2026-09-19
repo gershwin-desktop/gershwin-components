@@ -46,7 +46,7 @@
 
 @end
 
-static NSArray *mainThreadModes(void)
+NSArray *PlayerRunLoopModes(void)
 {
     return @[NSDefaultRunLoopMode, @"NSModalPanelRunLoopMode", @"NSEventTrackingRunLoopMode"];
 }
@@ -63,7 +63,7 @@ void PlayerRunOnMainThread(PlayerBlock block)
     [runner performSelectorOnMainThread:@selector(run)
                              withObject:nil
                           waitUntilDone:NO
-                                  modes:mainThreadModes()];
+                                  modes:PlayerRunLoopModes()];
 }
 
 void PlayerRunOnMainThreadAfter(NSTimeInterval delay, PlayerBlock block)
@@ -73,5 +73,5 @@ void PlayerRunOnMainThreadAfter(NSTimeInterval delay, PlayerBlock block)
     [runner performSelectorOnMainThread:@selector(runAfter:)
                              withObject:[NSNumber numberWithDouble:delay]
                           waitUntilDone:NO
-                                  modes:mainThreadModes()];
+                                  modes:PlayerRunLoopModes()];
 }

@@ -5,11 +5,15 @@
  */
 
 #import "PlayerSession.h"
+#import "PlayerAsync.h"
 
 // Previous restarts the track after this many seconds, like CD players do
 static const NSTimeInterval kRestartThreshold = 3.0;
 // Streams fade in and out like the radio; files start and stop at once
 static const NSTimeInterval kDefaultStreamFadeDuration = 1.0;
+// How often a playing track is checked for being close enough to its end
+// to cross-fade into the next one
+static const NSTimeInterval kEndWatchInterval = 0.25;
 
 static BOOL isStream(NSString *item)
 {
@@ -22,6 +26,7 @@ static BOOL isStream(NSString *item)
 @synthesize playlist = _playlist;
 @synthesize state = _state;
 @synthesize fadeDuration = _fadeDuration;
+@synthesize mediaFactory = _mediaFactory;
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media
 {
@@ -33,6 +38,7 @@ static BOOL isStream(NSString *item)
         _volume = 1.0f;
         _state = PlayerSessionStopped;
         _fadeDuration = kDefaultStreamFadeDuration;
+        _fadingMedia = [[NSMutableArray alloc] init];
     }
     return self;
 }
@@ -40,6 +46,12 @@ static BOOL isStream(NSString *item)
 - (void)dealloc
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
+    [_endWatch invalidate];
+    for (id<MediaPlayback> media in _fadingMedia) {
+        [media close];
+    }
+    [_fadingMedia release];
+    [_mediaFactory release];
     [_media setDelegate:nil];
     [_media close];
     [_media release];
@@ -148,7 +160,7 @@ static BOOL isStream(NSString *item)
         _opening = NO;
         [_media fadeToGain:0.0f duration:_fadeDuration];
         [self performSelector:@selector(closeFadedMedia) withObject:nil
-                   afterDelay:_fadeDuration];
+                   afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
     } else {
         [self closeMedia];
     }
@@ -254,8 +266,43 @@ static BOOL isStream(NSString *item)
         return;
     }
     _state = state;
+    [self watchTrackEnd:state == PlayerSessionPlaying];
     if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
         [_delegate playerSessionDidChangeState:self];
+    }
+}
+
+// The timer retains the session, so it runs only while something plays
+- (void)watchTrackEnd:(BOOL)watch
+{
+    if (!watch) {
+        [_endWatch invalidate];
+        _endWatch = nil;
+        return;
+    }
+    if (_endWatch) {
+        return;
+    }
+    _endWatch = [NSTimer timerWithTimeInterval:kEndWatchInterval target:self
+                                      selector:@selector(checkTrackEnd:)
+                                      userInfo:nil repeats:YES];
+    for (NSString *mode in PlayerRunLoopModes()) {
+        [[NSRunLoop currentRunLoop] addTimer:_endWatch forMode:mode];
+    }
+}
+
+// Starts the next track while the current one is still fading out, so the
+// two overlap instead of leaving a gap
+- (void)checkTrackEnd:(NSTimer *)timer
+{
+    NSTimeInterval duration = [_media duration];
+    if (_fadeDuration <= 0 || !_mediaFactory || _opening || duration <= 0
+        || duration - [_media currentTime] > _fadeDuration) {
+        return;
+    }
+    NSUInteger index = [_playlist indexAfterCurrent];
+    if (index != NSNotFound && [_media isPlaying]) {
+        [self playFromIndex:index skippingBroken:YES];
     }
 }
 
@@ -280,6 +327,7 @@ static BOOL isStream(NSString *item)
     }
     _skipping = skipping;
     _attemptsLeft = [_playlist count];
+    _fadeIn = [self crossFadeOut];
     [self startItemAtIndex:index];
     return YES;
 }
@@ -294,13 +342,42 @@ static BOOL isStream(NSString *item)
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(closeFadedMedia)
                                                object:nil];
-    // A stream starts silent and fades in once it plays
-    BOOL fadeIn = _fadeDuration > 0 && isStream([_playlist itemAtIndex:index]);
-    [_media setFadeGain:fadeIn ? 0.0f : 1.0f];
+    // A stream, or a track cross-fading with the previous one, starts
+    // silent and fades in once it plays
+    _fadeIn = _fadeDuration > 0 && (_fadeIn || isStream([_playlist itemAtIndex:index]));
+    [_media setFadeGain:_fadeIn ? 0.0f : 1.0f];
     // Before -playURL:, which may report back before it returns
     _opening = YES;
     [self setState:PlayerSessionPlaying];
     [_media playURL:[_playlist itemAtIndex:index]];
+}
+
+// Lets the audible track fade out in a player of its own, so the next one
+// can fade in over it.  Returns NO when there is nothing to cross-fade.
+- (BOOL)crossFadeOut
+{
+    if (_fadeDuration <= 0 || !_mediaFactory || _state != PlayerSessionPlaying
+        || _opening || ![_media isPlaying]) {
+        return NO;
+    }
+    id<MediaPlayback> outgoing = _media;
+    // Its end must not advance the playlist a second time
+    [outgoing setDelegate:nil];
+    [outgoing fadeToGain:0.0f duration:_fadeDuration];
+    [_fadingMedia addObject:outgoing];
+    [self performSelector:@selector(closeFadedOut:) withObject:outgoing
+               afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
+
+    _media = [_mediaFactory() retain];
+    [_media setDelegate:self];
+    [outgoing release];
+    return YES;
+}
+
+- (void)closeFadedOut:(id<MediaPlayback>)media
+{
+    [media close];
+    [_fadingMedia removeObjectIdenticalTo:media];
 }
 
 - (void)notifyTrackChange
@@ -331,7 +408,7 @@ static BOOL isStream(NSString *item)
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
     _opening = NO;
-    if (_fadeDuration > 0 && isStream([_playlist currentItem])) {
+    if (_fadeIn) {
         [_media fadeToGain:1.0f duration:_fadeDuration];
     }
     if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {

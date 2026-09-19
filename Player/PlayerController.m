@@ -60,6 +60,9 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         StreamPlayer *media = [[[StreamPlayer alloc] init] autorelease];
         session = [[PlayerSession alloc] initWithMedia:media];
         [session setDelegate:self];
+        [session setMediaFactory:^id<MediaPlayback>(void) {
+            return [[[StreamPlayer alloc] init] autorelease];
+        }];
         [session setVolume:[defaults floatForKey:PlayerDefaultsVolume]];
         [session setMuted:[defaults boolForKey:PlayerDefaultsMuted]];
         [[session playlist] setRepeat:[defaults boolForKey:PlayerDefaultsRepeat]];

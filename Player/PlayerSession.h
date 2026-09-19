@@ -11,6 +11,8 @@
 #import "StreamPlayer.h"
 #import "PlayerPlaylist.h"
 
+typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
+
 typedef NS_ENUM(NSInteger, PlayerSessionState) {
     PlayerSessionStopped,
     PlayerSessionPlaying,
@@ -50,6 +52,10 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
     BOOL _skipping;           // items that fail to open are skipped
     NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
     NSTimeInterval _fadeDuration;
+    BOOL _fadeIn;             // the current item starts silent and fades in
+    PlayerMediaFactory _mediaFactory;
+    NSMutableArray *_fadingMedia; // tracks fading out under the current one
+    NSTimer *_endWatch;       // hands over to the next track before the end
 }
 
 @property (nonatomic, assign) id<PlayerSessionDelegate> delegate;
@@ -57,8 +63,12 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 @property (nonatomic, readonly) PlayerSessionState state;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
-/// How long streams fade in and out; 0 starts and stops them at once.
+/// How long streams fade in and out and tracks cross-fade; 0 starts,
+/// stops and changes them at once.
 @property (nonatomic, assign) NSTimeInterval fadeDuration;
+/// Makes the players for cross-fades: the next track plays in a new one
+/// while the old one fades out.  Without it tracks change at once.
+@property (nonatomic, copy) PlayerMediaFactory mediaFactory;
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media;
 
