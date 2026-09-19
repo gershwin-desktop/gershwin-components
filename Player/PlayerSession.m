@@ -41,6 +41,7 @@ static BOOL isStream(NSString *item)
         _state = PlayerSessionStopped;
         _fadeDuration = kDefaultStreamFadeDuration;
         _fadingMedia = [[NSMutableArray alloc] init];
+        _resumeIndex = NSNotFound;
     }
     return self;
 }
@@ -120,6 +121,61 @@ static BOOL isStream(NSString *item)
         return YES;
     }
     return [self playFromIndex:index skippingBroken:NO];
+}
+
+#pragma mark - Remembering
+
+static NSString *const kStatePlaying = @"playing";
+static NSString *const kStatePaused = @"paused";
+static NSString *const kStateStopped = @"stopped";
+
+- (NSDictionary *)stateToRemember
+{
+    NSUInteger index = [_playlist currentIndex];
+    NSString *state = (_state == PlayerSessionPlaying) ? kStatePlaying
+                    : (_state == PlayerSessionPaused) ? kStatePaused : kStateStopped;
+    return @{@"items": [[[_playlist items] copy] autorelease],
+             @"currentIndex": @(index == NSNotFound ? -1 : (NSInteger)index),
+             @"position": @([self currentTime]),
+             @"state": state};
+}
+
+- (void)restoreState:(NSDictionary *)state
+{
+    NSArray *items = [state isKindOfClass:[NSDictionary class]] ? [state objectForKey:@"items"] : nil;
+    if (![items isKindOfClass:[NSArray class]]) {
+        return;
+    }
+    for (id item in items) {
+        if (![item isKindOfClass:[NSString class]]) {
+            return;
+        }
+    }
+    id indexValue = [state objectForKey:@"currentIndex"];
+    id positionValue = [state objectForKey:@"position"];
+    NSInteger index = [indexValue respondsToSelector:@selector(integerValue)] ? [indexValue integerValue] : -1;
+    NSTimeInterval position = [positionValue respondsToSelector:@selector(doubleValue)]
+        ? [positionValue doubleValue] : 0.0;
+    NSString *playState = [state objectForKey:@"state"];
+
+    [self closeMedia];
+    [self setState:PlayerSessionStopped];
+    [_playlist removeAllItems];
+    [self appendItems:items];
+    if (index < 0 || (NSUInteger)index >= [_playlist count]) {
+        return;
+    }
+    [_playlist setCurrentIndex:(NSUInteger)index];
+    [self notifyTrackChange];
+
+    BOOL playing = [kStatePlaying isEqual:playState];
+    if ((playing || [kStatePaused isEqual:playState]) && position > 0) {
+        _resumeIndex = (NSUInteger)index;
+        _resumePosition = position;
+    }
+    if (playing) {
+        [self playFromIndex:(NSUInteger)index skippingBroken:YES];
+    }
 }
 
 #pragma mark - Transport
@@ -368,6 +424,10 @@ static BOOL isStream(NSString *item)
 - (void)startItemAtIndex:(NSUInteger)index
 {
     _attemptsLeft--;
+    if (index != _resumeIndex) {
+        // Only the restored track continues where it was, and only once
+        _resumeIndex = NSNotFound;
+    }
     [_playlist setCurrentIndex:index];
     [self notifyTrackChange];
     [_media setVolume:_volume];
@@ -441,6 +501,10 @@ static BOOL isStream(NSString *item)
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
     _opening = NO;
+    if (_resumeIndex != NSNotFound && _resumeIndex == [_playlist currentIndex]) {
+        [_media seekToTime:_resumePosition];
+        _resumeIndex = NSNotFound;
+    }
     if (_fadeDuration > 0 && isStream([_playlist currentItem])) {
         [_media fadeToGain:1.0f duration:_fadeDuration];
     }

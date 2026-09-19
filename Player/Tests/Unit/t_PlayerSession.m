@@ -485,6 +485,63 @@ int main(void)
     PASS([made count] == count, "with fading off tracks change at once");
   END_SET("tracks cross-fade")
 
+  START_SET("the list is remembered")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s setFadeDuration: 0];
+    [s openItems: tracks()];
+    [s next];
+    m->position = 42;
+    NSDictionary *playing = [s stateToRemember];
+    PASS([NSPropertyListSerialization dataWithPropertyList: playing
+                                                    format: NSPropertyListXMLFormat_v1_0
+                                                   options: 0
+                                                     error: NULL] != nil,
+         "the state can be kept in the defaults");
+
+    FakeMedia *m2 = [[FakeMedia new] autorelease];
+    PlayerSession *s2 = [[[PlayerSession alloc] initWithMedia: m2] autorelease];
+    [s2 setFadeDuration: 0];
+    [s2 restoreState: playing];
+    PASS([[[s2 playlist] items] isEqual: tracks()], "the list comes back");
+    PASS([[s2 playlist] currentIndex] == 1, "with the same track current");
+    PASS([s2 state] == PlayerSessionPlaying && [m2->openedURL isEqual: @"/music/2.mp3"],
+         "playing again, as it played when it was kept");
+    PASS(m2->position == 42, "from where it was");
+
+    [s togglePlayPause];
+    NSDictionary *paused = [s stateToRemember];
+    FakeMedia *m3 = [[FakeMedia new] autorelease];
+    PlayerSession *s3 = [[[PlayerSession alloc] initWithMedia: m3] autorelease];
+    [s3 setFadeDuration: 0];
+    [s3 restoreState: paused];
+    PASS([s3 state] == PlayerSessionStopped && m3->opens == 0,
+         "a paused track comes back without playing");
+    PASS([[s3 playlist] currentIndex] == 1, "but chosen");
+    [s3 togglePlayPause];
+    PASS([m3->openedURL isEqual: @"/music/2.mp3"] && m3->position == 42,
+         "and Play continues where it was paused");
+    [s3 next];
+    [s3 previous];
+    PASS([m3->openedURL isEqual: @"/music/2.mp3"] && m3->position == 0,
+         "going back to it later starts it at its beginning, like any track");
+
+    [s stop];
+    FakeMedia *m4 = [[FakeMedia new] autorelease];
+    PlayerSession *s4 = [[[PlayerSession alloc] initWithMedia: m4] autorelease];
+    [s4 restoreState: [s stateToRemember]];
+    [s4 togglePlayPause];
+    PASS([m4->openedURL isEqual: @"/music/2.mp3"] && m4->position == 0,
+         "a stopped track plays from its beginning");
+
+    FakeMedia *m5 = [[FakeMedia new] autorelease];
+    PlayerSession *s5 = [[[PlayerSession alloc] initWithMedia: m5] autorelease];
+    [s5 restoreState: nil];
+    [s5 restoreState: @{@"items": @"not a list"}];
+    PASS([[s5 playlist] count] == 0 && [s5 state] == PlayerSessionStopped,
+         "nothing or something unreadable leaves the list empty");
+  END_SET("the list is remembered")
+
   START_SET("fading switched off")
     FakeMedia *m = [[FakeMedia new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];

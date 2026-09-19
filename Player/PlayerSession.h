@@ -53,6 +53,8 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
     NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
     NSTimeInterval _fadeDuration;
     BOOL _pausePending;       // pausing once the fade-out is done
+    NSUInteger _resumeIndex;  // a restored track continues at _resumePosition
+    NSTimeInterval _resumePosition;
     PlayerMediaFactory _mediaFactory;
     NSMutableArray *_fadingMedia; // tracks fading out under the current one
     NSTimer *_endWatch;       // hands over to the next track before the end
@@ -80,6 +82,14 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 /// Plays the given playlist item unless it is already the one playing.
 /// Returns NO if there is no such item.
 - (BOOL)playItemAtIndex:(NSUInteger)index;
+
+/// The list, its current track, where in it and whether it plays, to
+/// continue there later (a property list).
+- (NSDictionary *)stateToRemember;
+/// Brings back a list kept with -stateToRemember: playing again if it
+/// played, otherwise stopped with its track chosen; a paused track
+/// continues where it was when played.  Anything unreadable is ignored.
+- (void)restoreState:(NSDictionary *)state;
 
 - (void)togglePlayPause;
 - (void)stop;

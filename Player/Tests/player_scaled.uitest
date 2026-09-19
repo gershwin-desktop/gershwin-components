@@ -8,8 +8,9 @@
 # Run with: run_uitest Player/Tests/player_scaled.uitest
 # Self-healing start: a run that stopped half way leaves Player open
 shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
-# Player reopens in Internet radio mode if it was quit in it
+# Player reopens in Internet radio mode, or with its last list, as it was quit
 shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Scaled Tone' /tmp/player-uitest-${home}/tone.mp3"
 shell "openapp Player -GSScaleFactor 1.1 >/dev/null 2>&1 &"
 wait 2s
