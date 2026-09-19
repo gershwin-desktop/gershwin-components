@@ -162,7 +162,63 @@ static int interruptCallback(void *opaque)
     [self close];
     _generation++;
     _shouldStop = NO;
+    return [self openStream:urlString error:error];
+}
 
+- (void)playURL:(NSString *)urlString
+{
+    [self close];
+    _generation++;
+    _shouldStop = NO;
+    _connecting = YES;
+    [self setCurrentURL:urlString];
+
+    // Connecting to a network stream can take seconds; the playback thread
+    // does it, so the caller's run loop keeps going.
+    _playbackThread = [[NSThread alloc] initWithTarget:self
+                                              selector:@selector(openAndPlay:)
+                                                object:@[urlString, @(_generation)]];
+    [_playbackThread start];
+}
+
+- (BOOL)isConnecting
+{
+    return _connecting;
+}
+
+- (void)openAndPlay:(NSArray *)args
+{
+    @autoreleasepool {
+        NSString *urlString = [args objectAtIndex:0];
+        NSUInteger generation = [[args objectAtIndex:1] unsignedIntegerValue];
+        NSError *error = nil;
+        BOOL opened = [self openStream:urlString error:&error];
+
+        if (_shouldStop || generation != _generation) {
+            // Abandoned: -close frees whatever was opened
+            _connecting = NO;
+            return;
+        }
+        if (!opened) {
+            _connecting = NO;
+            [self postToMain:@selector(mainDidFail:)
+                      object:error ?: streamError(-1, @"Cannot open the stream")
+                  generation:generation];
+            return;
+        }
+
+        _decodeErrorCount = 0;
+        _clockOrigin = monotonicSeconds() - _position;
+        _isPlaying = YES;
+        _connecting = NO;
+        [self postToMain:@selector(mainDidStart:) object:nil generation:generation];
+        [self playbackLoop];
+    }
+}
+
+// Opens the stream and its decoders; the caller has closed the previous one.
+- (BOOL)openStream:(NSString *)urlString error:(NSError **)error
+{
     const char *url = [urlString UTF8String];
     AVFormatContext *fmtCtx = avformat_alloc_context();
     if (!fmtCtx) {
@@ -378,6 +434,11 @@ static int interruptCallback(void *opaque)
                                                 object:nil];
     [_playbackThread start];
 
+    [self notifyStart];
+}
+
+- (void)notifyStart
+{
     if ([_delegate respondsToSelector:@selector(streamPlayerDidStartPlaying:)]) {
         [_delegate streamPlayerDidStartPlaying:self];
     }
@@ -445,6 +506,7 @@ static int interruptCallback(void *opaque)
     [_playbackThread release];
     _playbackThread = nil;
     _isPlaying = NO;
+    _connecting = NO;
 }
 
 - (void)close
@@ -860,6 +922,13 @@ static int interruptCallback(void *opaque)
     if ([self isCurrentMessage:message]
         && [_delegate respondsToSelector:@selector(streamPlayerDidStop:)]) {
         [_delegate streamPlayerDidStop:self];
+    }
+}
+
+- (void)mainDidStart:(NSArray *)message
+{
+    if ([self isCurrentMessage:message]) {
+        [self notifyStart];
     }
 }
 

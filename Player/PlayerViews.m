@@ -182,6 +182,19 @@ void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen)
 
 @end
 
+NSTextField *PlayerMakeLabel(NSFont *font)
+{
+    NSTextField *label = [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setFont:font];
+    [[label cell] setWraps:NO];
+    [[label cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
+    return label;
+}
+
 @implementation OverlayBarView
 
 - (void)drawRect:(NSRect)rect

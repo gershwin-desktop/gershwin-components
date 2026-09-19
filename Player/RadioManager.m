@@ -203,6 +203,10 @@ static const int kMaxDownloadRetries = 3;
     if (!urlString) urlString = [station tuneURL];
     if (!urlString || [urlString length] == 0) return;
 
+    // Anything still being tuned in is abandoned for this station
+    [_player close];
+    _connecting = YES;
+    NSUInteger attempt = ++_tuneAttempt;
     [_currentStationName release];
     _currentStationName = [[station name] copy];
     [_currentStreamURL release];
@@ -216,12 +220,16 @@ static const int kMaxDownloadRetries = 3;
     if ([urlString rangeOfString:@"Tune.ashx" options:NSCaseInsensitiveSearch].location != NSNotFound ||
         [urlString hasSuffix:@".m3u"] || [urlString hasSuffix:@".m3u8"]) {
         [self resolveStreamURL:urlString completion:^(NSString *resolved) {
+            if (attempt != self->_tuneAttempt) {
+                return;   // another station was chosen, or the radio stopped
+            }
             if (resolved) {
                 [self->_currentStreamURL release];
                 self->_currentStreamURL = [resolved copy];
                 [station setStreamURL:resolved];
                 [self openAndPlayURL:resolved];
             } else {
+                self->_connecting = NO;
                 if (self->_delegate != nil &&
                     [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
                     [self->_delegate radioManager:self didFailWithError:@"Failed to resolve stream URL"];
@@ -237,6 +245,8 @@ static const int kMaxDownloadRetries = 3;
 {
     if (!urlString || [urlString length] == 0) return;
 
+    _connecting = YES;
+    _tuneAttempt++;
     [_currentStationName release];
     _currentStationName = [[urlString lastPathComponent] copy];
     [_currentStreamURL release];
@@ -251,6 +261,8 @@ static const int kMaxDownloadRetries = 3;
 
 - (void)stop
 {
+    _connecting = NO;
+    _tuneAttempt++;
     [_player stop];
     [_player close];
     [_currentStationName release];
@@ -340,26 +352,21 @@ static const int kMaxDownloadRetries = 3;
 
 - (void)openAndPlayURL:(NSString *)urlString
 {
-    NSError *error = nil;
-    BOOL success = [_player openURL:urlString error:&error];
-
-    if (success) {
-        [_player play];
-    } else {
-        NSString *errMsg = error ? [error localizedDescription] : @"Failed to open stream";
-        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
-            [_delegate radioManager:self didFailWithError:errMsg];
-        }
-        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-            [_delegate radioManagerDidUpdateStatus:self status:@"Error"];
-        }
-    }
+    // Connecting takes seconds; StreamPlayer does it on its own thread and
+    // reports back through the StreamPlayerDelegate methods
+    [_player playURL:urlString];
 }
 
 #pragma mark - StreamPlayerDelegate
 
+- (BOOL)isConnecting
+{
+    return _connecting;
+}
+
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
+    _connecting = NO;
     // Find the station matching this stream URL
     RadioStation *currentStation = nil;
     for (RadioStation *s in _stations) {
@@ -392,6 +399,7 @@ static const int kMaxDownloadRetries = 3;
 
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
+    _connecting = NO;
     if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
         [_delegate radioManager:self didFailWithError:[error localizedDescription]];
     }

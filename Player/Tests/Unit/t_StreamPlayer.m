@@ -17,7 +17,10 @@
 {
 @public
   int stops;
+  int starts;
+  int failures;
   BOOL onMainThread;
+  BOOL startOnMainThread;
 }
 @end
 
@@ -26,6 +29,15 @@
 {
   stops++;
   onMainThread = [NSThread isMainThread];
+}
+- (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
+{
+  starts++;
+  startOnMainThread = [NSThread isMainThread];
+}
+- (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
+{
+  failures++;
 }
 @end
 
@@ -123,6 +135,53 @@ int main(void)
     [sp setDelegate: nil];
     [sp close];
   END_SET("end of track")
+
+  START_SET("opening in the background")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    StopRecorder *rec = [[StopRecorder new] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp setDelegate: rec];
+    [sp playURL: wav];
+    PASS(rec->starts == 0, "playURL: returns before the stream is open");
+    spin(0.5);
+    PASS(rec->starts == 1 && rec->startOnMainThread,
+         "the delegate hears on the main thread when playback starts");
+    PASS([sp isPlaying] && [sp currentTime] > 0.1, "and it plays (%f)", [sp currentTime]);
+    PASS(fabs([sp duration] - 2.0) < 0.05, "the duration is known once open");
+    [sp close];
+
+    rec->starts = 0;
+    [sp playURL: @"/nonexistent/stream.mp3"];
+    spin(0.5);
+    PASS(rec->failures == 1 && rec->starts == 0, "a stream that cannot be opened is reported");
+    PASS(![sp isPlaying], "and does not play");
+
+    /* An address that never answers: connecting would hang for seconds */
+    rec->failures = 0;
+    NSDate *before = [NSDate date];
+    [sp playURL: @"http://10.255.255.1:8000/stream"];
+    NSTimeInterval callTime = -[before timeIntervalSinceNow];
+    PASS(callTime < 0.1, "connecting does not block the caller (%f s)", callTime);
+    PASS([sp isConnecting], "the player says it is connecting");
+    spin(0.3);
+    before = [NSDate date];
+    [sp close];
+    NSTimeInterval closeTime = -[before timeIntervalSinceNow];
+    PASS(closeTime < 1.0, "closing gives up the connection attempt at once (%f s)", closeTime);
+    PASS(![sp isConnecting], "and the player is no longer connecting");
+    spin(0.3);
+    PASS(rec->starts == 0 && rec->failures == 0,
+         "an abandoned attempt reports nothing");
+
+    [sp playURL: @"http://10.255.255.1:8000/stream"];
+    spin(0.2);
+    [sp playURL: shortWav];
+    spin(0.4);
+    PASS(rec->starts == 1 && rec->failures == 0,
+         "a new stream replaces one that is still connecting");
+    [sp setDelegate: nil];
+    [sp close];
+  END_SET("opening in the background")
 
   [[NSFileManager defaultManager] removeItemAtPath: wav error: NULL];
   [[NSFileManager defaultManager] removeItemAtPath: shortWav error: NULL];

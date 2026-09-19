@@ -58,11 +58,15 @@
     NSString *_iconCachePath;
     NSMutableSet *_downloadingKeys;
     NSOperationQueue *_iconQueue;
+    BOOL _connecting;
+    NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
     int _maxCacheEntries;
 }
 
 @property (nonatomic, assign) id<RadioManagerDelegate> delegate;
 @property (nonatomic, readonly) BOOL isPlaying;
+/// YES from choosing a station until it plays or fails
+@property (nonatomic, readonly) BOOL isConnecting;
 @property (nonatomic, readonly, copy) NSString *currentStationName;
 @property (nonatomic, readonly, copy) NSString *currentStreamURL;
 @property (nonatomic, assign) float volume;

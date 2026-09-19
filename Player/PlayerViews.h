@@ -45,6 +45,10 @@
 @interface OverlayBarView : NSView
 @end
 
+/// A one-line label that shortens text too long for it in the middle, so
+/// the start and the end of a title stay readable.
+NSTextField *PlayerMakeLabel(NSFont *font);
+
 /// Asks the window manager to show the window full screen (above the menu
 /// bar and the Dock, without titlebar) or to bring it back; the window
 /// manager restores the previous frame itself.

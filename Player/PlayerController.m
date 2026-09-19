@@ -188,13 +188,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 
 - (NSTextField *)labelWithFont:(NSFont *)font
 {
-    NSTextField *label = [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease];
-    [label setEditable:NO];
-    [label setSelectable:NO];
-    [label setBezeled:NO];
-    [label setDrawsBackground:NO];
-    [label setFont:font];
-    [[label cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    NSTextField *label = PlayerMakeLabel(font);
     [contentView addSubview:label];
     return label;
 }
@@ -253,7 +247,10 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [overlayBar setHidden:YES];
     [contentView addSubview:overlayBar];
 
-    progressIndicator = [[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 32, 32)] autorelease];
+    // Small, beside text: over the covers the carousel's GL subwindow would
+    // hide it
+    progressIndicator = [[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 16, 16)] autorelease];
+    [progressIndicator setControlSize:NSSmallControlSize];
     [progressIndicator setStyle:NSProgressIndicatorSpinningStyle];
     [progressIndicator setDisplayedWhenStopped:NO];
     [contentView addSubview:progressIndicator];
@@ -524,7 +521,8 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     y += kInfoLineHeight + 2;
     [artistLabel setFrame:NSMakeRect(left, y, infoWidth, kInfoLineHeight)];
     y += kInfoLineHeight + 2;
-    [titleLabel setFrame:NSMakeRect(left, y, infoWidth, kTitleHeight)];
+    [titleLabel setFrame:NSMakeRect(left, y, infoWidth - 16 - METRICS_SPACE_8, kTitleHeight)];
+    [progressIndicator setFrameOrigin:NSMakePoint(right - 16, y)];
     y += kTitleHeight + METRICS_SPACE_12;
 
     NSRect cover = NSMakeRect(0, y, W, NSHeight(bounds) - y);
@@ -551,14 +549,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [flowView setNeedsDisplay:YES];
     [videoView setFrame:frame];
     [videoRenderView setFrame:[videoView bounds]];
-    [self centerSpinnerIn:frame];
-}
-
-- (void)centerSpinnerIn:(NSRect)area
-{
-    NSSize size = [progressIndicator frame].size;
-    [progressIndicator setFrameOrigin:NSMakePoint(floor(NSMidX(area) - size.width / 2.0),
-                                                  floor(NSMidY(area) - size.height / 2.0))];
 }
 
 - (void)layoutFullscreen

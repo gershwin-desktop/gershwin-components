@@ -92,6 +92,7 @@
     BOOL _isPlaying;
     int _decodeErrorCount;
     volatile BOOL _paused;
+    volatile BOOL _connecting;
     NSCondition *_pauseCondition;
 
     // Position.  The media clock is the playback position in seconds; it
@@ -157,6 +158,13 @@
 
 /// Open a stream URL (http, https, rtsp, file path, etc.)
 - (BOOL)openURL:(NSString *)urlString error:(NSError **)error;
+/// Opens the stream on the playback thread and plays it; returns at once.
+/// The delegate hears -streamPlayerDidStartPlaying: or
+/// -streamPlayer:didFailWithError: when the stream is open or cannot be.
+/// -close (or another stream) abandons the attempt without either message.
+- (void)playURL:(NSString *)urlString;
+/// YES between -playURL: and the stream being open (or failing).
+- (BOOL)isConnecting;
 /// Start playback, or resume after -pause.
 - (void)play;
 - (void)pause;

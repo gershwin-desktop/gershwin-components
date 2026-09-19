@@ -21,7 +21,6 @@ extern NSString *const PlayerDefaultsMode;
 - (NSArray *)transportViews;
 - (NSArray *)bottomRowViews;
 - (void)layoutTransportCenteredAt:(CGFloat)midX y:(CGFloat)y;
-- (void)centerSpinnerIn:(NSRect)area;
 - (void)setPictureFrame:(NSRect)frame;
 - (void)exitFullscreen;
 - (void)showCoverArt;

@@ -4,7 +4,7 @@
 #
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_PlayerPlaylist t_StreamPlayer t_PlayerSession t_PlayerSessionMedia t_PlayerMenu
+TEST_TOOL_NAME = t_PlayerPlaylist t_StreamPlayer t_PlayerSession t_PlayerSessionMedia t_PlayerMenu t_PlayerViews
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 ADDITIONAL_INCLUDE_DIRS += -I../..
@@ -16,6 +16,8 @@ t_PlayerSessionMedia_OBJC_FILES = t_PlayerSessionMedia.m TestMedia.m \
 	../../PlayerSession.m ../../PlayerPlaylist.m ../../StreamPlayer.m
 t_PlayerMenu_OBJC_FILES = t_PlayerMenu.m ../../PlayerMenu.m
 t_PlayerMenu_TOOL_LIBS += -lgnustep-gui
+t_PlayerViews_OBJC_FILES = t_PlayerViews.m ../../PlayerViews.m
+t_PlayerViews_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs x11)
 t_StreamPlayer_OBJC_FILES = t_StreamPlayer.m TestMedia.m ../../StreamPlayer.m
 
 # StreamPlayer decodes with FFmpeg and plays through libao

@@ -28,7 +28,6 @@
 
     radioTextLabel = [self labelWithFont:METRICS_FONT_SYSTEM_REGULAR_11];
     [radioTextLabel setAlignment:NSCenterTextAlignment];
-    [[radioTextLabel cell] setLineBreakMode:NSLineBreakByWordWrapping];
     [radioTextLabel setHidden:YES];
 }
 
@@ -59,7 +58,7 @@
     [radio setVolume:[self volume]];
     [radio setMuted:[session muted]];
 
-    [statusLabel setStringValue:@"Loading stations..."];
+    [self setRadioStatus:@"Loading stations..."];
     [radioTextLabel setStringValue:@""];
     [flowView reloadData];
     if ([[radio stations] count] == 0) {
@@ -84,6 +83,7 @@
     [pendingRadioStation release];
     pendingRadioStation = nil;
     [[RadioManager sharedManager] stop];
+    [progressIndicator stopAnimation:self];
     playerMode = PlayerModeLocal;
     [[NSUserDefaults standardUserDefaults] setInteger:PlayerModeLocal forKey:PlayerDefaultsMode];
 
@@ -126,9 +126,10 @@
     [self layoutTransportCenteredAt:NSMidX(bounds) y:y];
     y += 24 + METRICS_SPACE_12;
 
-    [radioTextLabel setFrame:NSMakeRect(left, y, right - left, 30)];
-    y += 30 + 2;
+    [radioTextLabel setFrame:NSMakeRect(left, y, right - left, 15)];
+    y += 15 + 4;
     [statusLabel setFrame:NSMakeRect(left, y, right - left, 17)];
+    [self placeRadioSpinner];
     y += 17 + METRICS_SPACE_12;
 
     CGFloat searchY = H - METRICS_CONTENT_TOP_MARGIN - METRICS_TEXT_INPUT_FIELD_HEIGHT;
@@ -139,17 +140,47 @@
 
 #pragma mark - Controls
 
+// A station is being tuned in from the moment it is chosen until it plays
+// or fails, including the short wait while the choice may still change.
+- (BOOL)radioTuning
+{
+    return pendingRadioStation != nil || [[RadioManager sharedManager] isConnecting];
+}
+
+- (void)setRadioStatus:(NSString *)status
+{
+    [statusLabel setStringValue:status];
+    [self placeRadioSpinner];
+}
+
+// The spinner sits just before the centered status text
+- (void)placeRadioSpinner
+{
+    NSRect frame = [statusLabel frame];
+    CGFloat textWidth = MIN(NSWidth(frame), [[statusLabel cell] cellSize].width);
+    CGFloat x = floor(NSMidX(frame) - textWidth / 2.0) - METRICS_SPACE_8 - 16;
+    [progressIndicator setFrameOrigin:NSMakePoint(MAX(NSMinX(frame), x),
+                                                  floor(NSMidY(frame) - 8))];
+}
+
 - (void)updateRadioControls
 {
     RadioManager *radio = [RadioManager sharedManager];
     NSUInteger count = [[radio stations] count];
-    BOOL playing = [radio isPlaying];
+    BOOL tuning = [self radioTuning];
+    // While tuning in, the button stops the attempt like pausing a stream
+    BOOL active = [radio isPlaying] || tuning;
 
-    [playButton setImage:playing ? pauseImage : playImage];
-    [playButton setTitle:playing ? @"Pause" : @"Play"];
+    if (tuning) {
+        [progressIndicator startAnimation:self];
+    } else {
+        [progressIndicator stopAnimation:self];
+    }
+    [playButton setImage:active ? pauseImage : playImage];
+    [playButton setTitle:active ? @"Pause" : @"Play"];
     [playButton setToolTip:[playButton title]];
     [playButton setEnabled:count > 0];
-    [stopButton setEnabled:playing];
+    [stopButton setEnabled:active];
     [previousButton setEnabled:count > 1];
     [nextButton setEnabled:count > 1];
     [self revalidateMenu];
@@ -158,9 +189,9 @@
 - (void)radioPlayPause
 {
     RadioManager *radio = [RadioManager sharedManager];
-    if ([radio isPlaying]) {
+    if ([radio isPlaying] || [self radioTuning]) {
         // A live stream cannot resume where it paused; pausing stops it
-        [radio stop];
+        [self radioStop];
     } else {
         [self radioSelectStationAtIndex:[flowView selectedIndex]];
     }
@@ -168,7 +199,13 @@
 
 - (void)radioStop
 {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(playPendingStation)
+                                               object:nil];
+    [pendingRadioStation release];
+    pendingRadioStation = nil;
     [[RadioManager sharedManager] stop];
+    [self updateControls];
 }
 
 - (void)radioStepBy:(NSInteger)delta
@@ -213,12 +250,13 @@
     }
     [pendingRadioStation release];
     pendingRadioStation = [station retain];
-    [statusLabel setStringValue:[NSString stringWithFormat:@"Tuning in %@...", [station name]]];
+    [self setRadioStatus:[NSString stringWithFormat:@"Tuning in %@...", [station name]]];
     [radioTextLabel setStringValue:@""];
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(playPendingStation)
                                                object:nil];
     [self performSelector:@selector(playPendingStation) withObject:nil afterDelay:0.3];
+    [self updateControls];
 }
 
 - (void)playPendingStation
@@ -228,13 +266,14 @@
     if (station && playerMode == PlayerModeRadio) {
         [[RadioManager sharedManager] playStation:station];
     }
+    [self updateControls];
 }
 
 - (void)radioSearch:(id)sender
 {
     NSString *query = [[sender stringValue] stringByTrimmingCharactersInSet:
         [NSCharacterSet whitespaceCharacterSet]];
-    [statusLabel setStringValue:@"Searching..."];
+    [self setRadioStatus:@"Searching..."];
     if ([query length] == 0) {
         [[RadioManager sharedManager] loadLocalStations];
     } else {
@@ -312,7 +351,7 @@
         suppressFlowSelection = NO;
     }
     if (![manager isPlaying]) {
-        [statusLabel setStringValue:count > 0
+        [self setRadioStatus:count > 0
             ? [NSString stringWithFormat:@"%lu stations", (unsigned long)count]
             : @"No stations found"];
     }
@@ -323,7 +362,7 @@
 - (void)radioManagerDidStartPlaying:(RadioManager *)manager station:(RadioStation *)station
 {
     [radioTextLabel setStringValue:@""];
-    [statusLabel setStringValue:station ? [station name] : @"Playing"];
+    [self setRadioStatus:station ? [station name] : @"Playing"];
     NSUInteger index = [[manager stations] indexOfObject:station];
     if (index != NSNotFound && index != [flowView selectedIndex]) {
         suppressFlowSelection = YES;
@@ -338,22 +377,23 @@
 {
     [radioTextLabel setStringValue:@""];
     NSString *name = [manager currentStationName];
-    [statusLabel setStringValue:name ? [NSString stringWithFormat:@"%@ - Stopped", name]
+    [self setRadioStatus:name ? [NSString stringWithFormat:@"%@ - Stopped", name]
                                      : @"Stopped"];
     [self updateControls];
 }
 
 - (void)radioManager:(RadioManager *)manager didFailWithError:(NSString *)errorMessage
 {
-    [statusLabel setStringValue:[NSString stringWithFormat:@"Cannot play: %@", errorMessage]];
+    [self setRadioStatus:[NSString stringWithFormat:@"Cannot play: %@", errorMessage]];
     [self updateControls];
 }
 
 - (void)radioManagerDidUpdateStatus:(RadioManager *)manager status:(NSString *)status
 {
     if ([status length] > 0) {
-        [statusLabel setStringValue:status];
+        [self setRadioStatus:status];
     }
+    [self updateControls];
 }
 
 - (void)radioManager:(RadioManager *)manager didUpdateRadioText:(NSString *)radioText
