@@ -230,7 +230,11 @@ static dispatch_once_t onceTokenMissingLogged;
     }
     GLsizei w = (GLsizei)bounds.size.width;
     GLsizei h = (GLsizei)bounds.size.height;
-    glViewport(0, 0, (GLsizei)[self bounds].size.width, (GLsizei)[self bounds].size.height);
+    // The GL surface is in device pixels, which differ from points when
+    // the window is scaled (GSScaleFactor); window base coordinates are
+    // device pixels.
+    NSSize pixels = [self convertRect:[self bounds] toView:nil].size;
+    glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
     
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
