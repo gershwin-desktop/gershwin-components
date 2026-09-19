@@ -22,6 +22,26 @@ static const int kMaximumDelay = 60;
  * covered; capturing earlier would include our own window. */
 static const NSTimeInterval kWindowHideSettleDelay = 0.3;
 
+/* GNUstep's NSWindow does not turn Escape into cancelOperation:, and the
+ * delay field's editor would swallow the key anyway, so the window looks
+ * at it before anything else does. */
+@interface ScreenshotMainWindow : NSWindow
+@end
+
+@implementation ScreenshotMainWindow
+
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSKeyDown
+        && [[event charactersIgnoringModifiers] isEqualToString:@"\033"]) {
+        [self performClose:self];
+        return;
+    }
+    [super sendEvent:event];
+}
+
+@end
+
 @implementation ScreenshotController
 
 - (void)dealloc
@@ -150,10 +170,10 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat contentWidth = width - 2 * METRICS_CONTENT_SIDE_MARGIN;
 
-    mainWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
-                                             styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
-                                               backing:NSBackingStoreBuffered
-                                                 defer:NO];
+    mainWindow = [[ScreenshotMainWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
+                                                         styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
+                                                           backing:NSBackingStoreBuffered
+                                                             defer:NO];
     [mainWindow setTitle:@"Screenshot"];
     [mainWindow setDelegate:self];
     [mainWindow setReleasedWhenClosed:NO];
