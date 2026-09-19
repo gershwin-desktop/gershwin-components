@@ -45,6 +45,18 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     [super sendEvent:event];
 }
 
+/* Menu has no File menu whose Close item would provide Command-W. */
+- (BOOL)performKeyEquivalent:(NSEvent *)event
+{
+    NSUInteger modifiers = [event modifierFlags] & NSDeviceIndependentModifierFlagsMask;
+    if ((modifiers & (NSCommandKeyMask | NSShiftKeyMask | NSControlKeyMask)) == NSCommandKeyMask
+        && [[event charactersIgnoringModifiers] isEqualToString:@"w"]) {
+        [self performClose:nil];
+        return YES;
+    }
+    return [super performKeyEquivalent:event];
+}
+
 @end
 
 /* A plain text cell draws the name at the top of the row; it has to sit on
