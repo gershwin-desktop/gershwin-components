@@ -29,7 +29,6 @@ extern NSString * const WindowMonitorRootPropertyChangedNotification;
 @interface WindowMonitor : NSObject
 
 @property (nonatomic, weak) id<WindowMonitorDelegate> delegate;
-@property (nonatomic, assign, readonly) Display *display;
 @property (nonatomic, assign, readonly) Window rootWindow;
 @property (nonatomic, assign, readonly) unsigned long currentActiveWindow;
 
@@ -45,11 +44,6 @@ extern NSString * const WindowMonitorRootPropertyChangedNotification;
  * Stop monitoring and clean up resources.
  */
 - (void)stopMonitoring;
-
-/**
- * Check if a window is a GNUstep window.
- */
-- (BOOL)isGNUstepWindow:(unsigned long)windowId;
 
 /**
  * Get the current active window immediately.

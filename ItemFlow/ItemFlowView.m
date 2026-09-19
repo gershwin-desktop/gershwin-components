@@ -8,7 +8,9 @@
 #import <AppKit/NSOpenGL.h>
 #import <AppKit/NSScrollView.h>
 #import <AppKit/NSClipView.h>
+#import <GNUstepGUI/GSDisplayServer.h>
 #import <GL/gl.h>
+#import <X11/Xlib.h>
 #import <math.h>
 
 // Configuration Constants
@@ -35,6 +37,21 @@ static dispatch_once_t onceTokenMissingLogged;
 }
 - (void)updateScrollFrame;
 @end
+
+static NSSet *ItemFlowChildWindows(Display *display, Window parent)
+{
+    Window root, parentOfParent, *children = NULL;
+    unsigned int count = 0;
+    NSMutableSet *result = [NSMutableSet set];
+
+    if (XQueryTree(display, parent, &root, &parentOfParent, &children, &count)) {
+        for (unsigned int i = 0; i < count; i++) {
+            [result addObject:@(children[i])];
+        }
+        XFree(children);
+    }
+    return result;
+}
 
 @implementation ItemFlowView
 
@@ -65,6 +82,34 @@ static dispatch_once_t onceTokenMissingLogged;
     return self;
 
 // In drawItemAtIndex we'll detect missing textures and log them once per index.
+}
+
+// The backend draws the view in an X subwindow that it creates with a black
+// background, so the X server paints it black on every resize before we can
+// draw again, and a live window resize flickers black. The backend gives no
+// handle to that subwindow, so attach the context here, where the subwindow
+// is the one child window that appears meanwhile.
+- (NSOpenGLContext *)openGLContext {
+    NSWindow *window = [self window];
+    if (window == nil || (glcontext != nil && [glcontext view] == self)) {
+        return [super openGLContext];
+    }
+
+    Display *display = (Display *)[GSServerForWindow(window) serverDevice];
+    Window parent = (Window)(uintptr_t)[window windowRef];
+    NSSet *before = ItemFlowChildWindows(display, parent);
+
+    NSOpenGLContext *context = [super openGLContext];
+    if ([context view] != self) {
+        [context setView:self];
+    }
+
+    NSMutableSet *added = [ItemFlowChildWindows(display, parent) mutableCopy];
+    [added minusSet:before];
+    NSAssert1([added count] == 1, @"Expected one new GL subwindow, found %lu",
+              (unsigned long)[added count]);
+    XSetWindowBackgroundPixmap(display, (Window)[[added anyObject] unsignedLongValue], None);
+    return context;
 }
 
 - (void)viewDidMoveToSuperview {
@@ -230,7 +275,11 @@ static dispatch_once_t onceTokenMissingLogged;
     }
     GLsizei w = (GLsizei)bounds.size.width;
     GLsizei h = (GLsizei)bounds.size.height;
-    glViewport(0, 0, (GLsizei)[self bounds].size.width, (GLsizei)[self bounds].size.height);
+    // The GL surface is in device pixels, which differ from points when
+    // the window is scaled (GSScaleFactor); window base coordinates are
+    // device pixels.
+    NSSize pixels = [self convertRect:[self bounds] toView:nil].size;
+    glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
     
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();

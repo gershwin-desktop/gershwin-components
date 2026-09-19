@@ -12,6 +12,7 @@
 /// UserDefaults keys
 extern NSString *const PrefKeyYTDLPFormat;
 extern NSString *const PrefKeyYTDLPPath;
+extern NSString *const PrefKeyFadeEnabled;
 
 /**
  * PreferencesController
@@ -31,6 +32,7 @@ extern NSString *const PrefKeyYTDLPPath;
     NSTextField *_pathField;
     NSTextField *_statusLabel;
     NSButton *_checkButton;
+    NSButton *_fadeCheckbox;
 }
 
 /// Show the preferences window (modal on the given window).
@@ -41,6 +43,10 @@ extern NSString *const PrefKeyYTDLPPath;
 
 /// @return The path to the yt-dlp binary from UserDefaults.
 + (NSString *)ytdlpPath;
+
+/// How long sound fades in and out and stations cross-fade: 0 when the user
+/// switched fading off (on by default).
++ (NSTimeInterval)fadeDuration;
 
 /// Open the preferences panel programmatically (IBAction for menu item).
 - (IBAction)openPreferences:(id)sender;

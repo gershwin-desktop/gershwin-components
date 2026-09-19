@@ -937,6 +937,9 @@ static ProcessesController *sharedController = nil;
                                                 styleMask:(NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask)
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
+    /* Owned by ARC through this reference; if it were also released on
+     * close, -close would release it a second time. */
+    [_mainWindow setReleasedWhenClosed:NO];
     [_mainWindow setTitle:@"Processes"];
     [_mainWindow setDelegate:self];
     

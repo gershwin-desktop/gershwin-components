@@ -1,0 +1,35 @@
+#!/usr/bin/env run_uitest
+# Player must open its window and play at a scale factor other than 1, where
+# the X11 backend cannot attach the OpenGL cover carousel.
+#
+# Leaves the computer as it was found: the fixture is removed and the app is
+# quit at the end.
+#
+# Run with: run_uitest Player/Tests/player_scaled.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
+# Player reopens in Internet radio mode if it was quit in it
+shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Scaled Tone' /tmp/player-uitest-${home}/tone.mp3"
+shell "openapp Player -GSScaleFactor 1.1 >/dev/null 2>&1 &"
+wait 2s
+activate application "Player"
+wait until window "Player" timeout 15s
+assert text contains "No file loaded"
+
+select menu "File/Open URL..."
+wait until textfield "https://" timeout 5s
+click textfield "https://"
+type "/tmp/player-uitest-${home}/tone.mp3"
+press key "Return"
+wait until window "Player - Scaled Tone" timeout 10s
+wait until button "Pause" timeout 5s
+
+activate application "Player"
+wait until menu bar "Player" timeout 10s
+press "Alt+Q"
+wait until not exists window "Player - Scaled Tone" timeout 5s
+# Sound fades out for a second before the app goes
+wait until not exists application "Player" timeout 5s
+shell "rm -rf /tmp/player-uitest-${home}"
+log "Player works at a scale factor of 1.1"

@@ -237,9 +237,19 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
         [self.searchPanel orderFront:nil];
     }
     if ([self.searchPanel isVisible]) {
-        [self.searchPanel makeKeyWindow];
-        [self.searchPanel makeFirstResponder:self.searchField];
-        [self.searchField selectText:nil];
+        /* Once the field is being edited it has the keyboard.  Taking it again
+           would select what the user typed since the box opened, and the next
+           key would replace it: a quick typist lost the first letters. */
+        NSText *editor = [self.searchPanel fieldEditor:NO forObject:self.searchField];
+        BOOL editing = [self.searchPanel isKeyWindow]
+            && editor != nil
+            && [self.searchPanel firstResponder] == editor;
+
+        if (!editing) {
+            [self.searchPanel makeKeyWindow];
+            [self.searchPanel makeFirstResponder:self.searchField];
+            [self.searchField selectText:nil];
+        }
     }
 }
 

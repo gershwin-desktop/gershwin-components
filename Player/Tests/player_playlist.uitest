@@ -1,0 +1,63 @@
+#!/usr/bin/env run_uitest
+# Player plays the files it is opened with one after the other: the
+# transport buttons, the Space key and the end of each track move through
+# the list, and after the last track it stops, ready to play the first.
+#
+# Leaves the computer as it was found: the fixture is removed, Repeat is
+# switched back off and the app is quit at the end.
+#
+# Run with: run_uitest Player/Tests/player_playlist.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
+# Player reopens in Internet radio mode if it was quit in it
+shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track One' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/One.mp3"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Two' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Two.mp3"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Three' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Three.mp3"
+shell "openapp Player /tmp/player-uitest-${home}/One.mp3 /tmp/player-uitest-${home}/Two.mp3 /tmp/player-uitest-${home}/Three.mp3 >/dev/null 2>&1 &"
+wait 2s
+activate application "Player"
+wait until window "Player - Track One" timeout 15s
+assert text contains "Uitest Band"
+assert text contains "Uitest Album"
+assert text contains "1 of 3"
+wait until button "Pause" timeout 5s
+# Full screen is for video
+assert menu item "View/Enter Full Screen" disabled
+
+click button "Next" and wait until window "Player - Track Two" timeout 5s
+assert text contains "2 of 3"
+click button "Pause" and wait until button "Play" timeout 5s
+click button "Stop" and wait until textfield "0:00" timeout 5s
+assert menu item "Playback/Stop" disabled
+assert window "Player - Track Two"
+
+# Space plays again, whatever was clicked last
+press key "space"
+wait until button "Pause" timeout 5s
+# The track ends and the next one follows by itself
+wait until window "Player - Track Three" timeout 10s
+# After the last track playback stops at the first one
+wait until window "Player - Track One" timeout 10s
+wait until button "Play" timeout 5s
+assert menu item "Playback/Stop" disabled
+
+# Cmd+Right is Next Track, from the keyboard too
+press key "Cmd+Right"
+wait until window "Player - Track Two" timeout 5s
+wait until button "Pause" timeout 5s
+
+select menu "Playback/Repeat"
+assert menu item "Playback/Repeat" checked
+select menu "Playback/Repeat"
+assert menu item "Playback/Repeat" not checked
+
+activate application "Player"
+wait until menu bar "Player" timeout 10s
+press "Alt+Q"
+wait until not exists window "Player - Track Two" timeout 5s
+# Sound fades out for a second before the app goes
+wait until not exists application "Player" timeout 5s
+shell "rm -rf /tmp/player-uitest-${home}"
+log "Player plays a list of files through and stops at its end"

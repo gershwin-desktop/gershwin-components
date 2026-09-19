@@ -2,7 +2,7 @@
 
 Screenshot.app is a production-ready GNUstep application for taking screenshots. It allows you to:
 - Click on a window to capture that window
-- Select an area with the mouse to capture that region
+- Select an area with the mouse to capture that region (press Space to pick a window instead)
 - Capture the full screen
 
 The application provides both a GUI interface and command-line operation.
@@ -21,7 +21,7 @@ Screenshot.app/Screenshot [options] [output-file]
 
 Options:
 - `-h, --help`           Show help message
-- `-a, --area`           Select an area to screenshot (interactive - click and drag)
+- `-a, --area`           Select an area to screenshot (interactive - click and drag; Space switches to picking a window)
 - `-w, --window`         Select a window to screenshot (interactive - click on a window)
 - `-s, --screen`         Capture the whole screen where the cursor is
 - `-d, --delay SEC`      Wait SEC seconds before taking the screenshot

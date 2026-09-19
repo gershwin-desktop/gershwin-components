@@ -59,6 +59,9 @@ to the SYSTEM domain unless noted.
   `TEST_TOOL_NAME` + `test-tool.make`; `ICNSImageRep/test/` has `test_icns.m`;
   `Menu/` has `test.sh` / `test-menu-integration.sh`; `Assistants/BackupAssistant/`
   has shell+ObjC test tools. Inspect the component's `GNUmakefile` for the exact tool.
+- `Player/Tests/Unit/`: ObjectTesting tools for the playlist, playback session,
+  FFmpeg player and menu (`gmake`, then run `./obj/t_*`; `t_PlayerMenu` needs a
+  `DISPLAY`). `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.
 - For GNUstep unit/red-green tests, follow the global `gnustep-red-green-tdd`
   skill (PASS macro set + wiring).
 - To drive/inspect a running GUI, use the driveui skill / `drive_ui`.

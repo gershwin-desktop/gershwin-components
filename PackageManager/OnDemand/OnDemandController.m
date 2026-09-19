@@ -733,6 +733,9 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
                                         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
                                           backing:NSBackingStoreBuffered
                                             defer:NO];
+  /* Owned by ARC through this reference; if it were also released on
+   * close, -close would release it a second time. */
+  [_window setReleasedWhenClosed:NO];
 
   CGFloat y = kBottomMargin;
 
