@@ -192,36 +192,11 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
         [_delegate radioManagerDidUpdateStatus:self status:@"Loading stations..."];
     }
 
+    NSUInteger request = ++_listRequest;
     [[RadioBrowser sharedBrowser] localStationsWithCompletion:
      ^(NSArray *stations, NSError *error) {
-        if (stations) {
-            [self->_stations release];
-            self->_stations = [[self limitStations:stations] retain];
-            [self->_stationImages removeAllObjects];
-
-            // Notify delegate FIRST so the UI updates before any downloads
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
-                [self->_delegate radioManagerDidUpdateStations:self];
-            }
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-                [self->_delegate radioManagerDidUpdateStatus:self status:
-                    [NSString stringWithFormat:@"%tu stations loaded", [self->_stations count]]];
-            }
-
-            // Start prefetching icons for the first few stations
-            NSUInteger prefetchCount = MIN(8, [self->_stations count]);
-            for (NSUInteger i = 0; i < prefetchCount; i++) {
-                [self prefetchIconForStationAtIndex:i];
-            }
-        } else {
-            NSString *errMsg = error ? [error localizedDescription] : @"Unknown error";
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
-                [self->_delegate radioManager:self didFailWithError:errMsg];
-            }
-        }
+        [self showStations:stations ofRequest:request error:error
+                    status:@"%tu stations loaded" failure:@"Unknown error"];
     }];
 }
 
@@ -236,37 +211,51 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
         [_delegate radioManagerDidUpdateStatus:self status:[NSString stringWithFormat:@"Searching: %@", query]];
     }
 
+    NSUInteger request = ++_listRequest;
     [[RadioBrowser sharedBrowser] searchStations:query
                                       completion:^(NSArray *stations, NSError *error) {
-        if (stations) {
-            [self->_stations release];
-            self->_stations = [[self limitStations:stations] retain];
-            [self->_stationImages removeAllObjects];
-
-            // Notify delegate FIRST so the UI updates before any downloads
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
-                [self->_delegate radioManagerDidUpdateStations:self];
-            }
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-                [self->_delegate radioManagerDidUpdateStatus:self status:
-                    [NSString stringWithFormat:@"Found %tu stations", [self->_stations count]]];
-            }
-
-            // Start prefetching icons for the first few stations
-            NSUInteger prefetchCount = MIN(8, [self->_stations count]);
-            for (NSUInteger i = 0; i < prefetchCount; i++) {
-                [self prefetchIconForStationAtIndex:i];
-            }
-        } else {
-            NSString *errMsg = error ? [error localizedDescription] : @"Search failed";
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
-                [self->_delegate radioManager:self didFailWithError:errMsg];
-            }
-        }
+        [self showStations:stations ofRequest:request error:error
+                    status:@"Found %tu stations" failure:@"Search failed"];
     }];
+}
+
+// Only the list asked for last is shown: a slow answer to an earlier
+// request (the local stations loading while the user already searched)
+// must not replace it.
+- (void)showStations:(NSArray *)stations
+           ofRequest:(NSUInteger)request
+               error:(NSError *)error
+              status:(NSString *)statusFormat
+             failure:(NSString *)failure
+{
+    if (request != _listRequest) {
+        return;
+    }
+    if (!stations) {
+        NSString *errMsg = error ? [error localizedDescription] : failure;
+        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
+            [_delegate radioManager:self didFailWithError:errMsg];
+        }
+        return;
+    }
+    [_stations release];
+    _stations = [[self limitStations:stations] retain];
+    [_stationImages removeAllObjects];
+
+    // Notify delegate FIRST so the UI updates before any downloads
+    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
+        [_delegate radioManagerDidUpdateStations:self];
+    }
+    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
+        [_delegate radioManagerDidUpdateStatus:self status:
+            [NSString stringWithFormat:statusFormat, [_stations count]]];
+    }
+
+    // Start prefetching icons for the first few stations
+    NSUInteger prefetchCount = MIN(8, [_stations count]);
+    for (NSUInteger i = 0; i < prefetchCount; i++) {
+        [self prefetchIconForStationAtIndex:i];
+    }
 }
 
 - (void)playStation:(RadioStation *)station

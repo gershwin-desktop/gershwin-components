@@ -63,6 +63,7 @@
     NSTimeInterval _fadeDuration;
     BOOL _connecting;
     NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
+    NSUInteger _listRequest;     // bumped by every station list asked for
     int _maxCacheEntries;
 }
 

@@ -41,6 +41,13 @@
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict;
 
+/// The station as a property list, to be kept in the defaults.
+- (NSDictionary *)propertyList;
+/// A station kept with -propertyList; nil if there is nothing to tune in.
++ (instancetype)stationWithPropertyList:(NSDictionary *)plist;
+/// Same directory entry, or the same stream when there is no id.
+- (BOOL)isSameStationAs:(RadioStation *)other;
+
 @end
 
 #endif /* RadioStation_h */

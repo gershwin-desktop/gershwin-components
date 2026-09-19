@@ -12,6 +12,7 @@
 #import "Testing.h"
 #import "RadioManager.h"
 #import "TestMedia.h"
+#import "RadioStation.h"
 
 @interface SilentRadioManager : RadioManager
 @end
@@ -114,6 +115,32 @@ int main(void)
   [rm release];
   [[NSFileManager defaultManager] removeItemAtPath: a error: NULL];
   [[NSFileManager defaultManager] removeItemAtPath: b error: NULL];
+  START_SET("a station is remembered")
+    RadioStation *station = [[[RadioStation alloc] initWithDictionary:
+      @{@"text": @"Jazz FM", @"subtext": @"Jazz", @"image": @"http://x/logo.png",
+        @"URL": @"http://tune/jazz", @"guide_id": @"s123"}] autorelease];
+    [station setStreamURL: @"http://stream/jazz.mp3"];
+    NSData *xml = [NSPropertyListSerialization dataWithPropertyList: [station propertyList]
+                                                             format: NSPropertyListXMLFormat_v1_0
+                                                            options: 0
+                                                              error: NULL];
+    NSDictionary *saved = xml ? [NSPropertyListSerialization propertyListWithData: xml
+                                                                          options: 0
+                                                                           format: NULL
+                                                                            error: NULL] : nil;
+    PASS(saved != nil, "it can be kept in the defaults");
+    RadioStation *back = [RadioStation stationWithPropertyList: saved];
+    PASS_EQUAL([back name], @"Jazz FM", "its name comes back");
+    PASS_EQUAL([back stationId], @"s123", "and its id");
+    PASS_EQUAL([back tuneURL], @"http://tune/jazz", "and where to tune it in");
+    PASS_EQUAL([back streamURL], @"http://stream/jazz.mp3", "and its stream");
+    PASS_EQUAL([back imageURL], @"http://x/logo.png", "and its logo");
+    PASS([back isSameStationAs: station], "it is the same station");
+    PASS([RadioStation stationWithPropertyList: @{@"name": @"Nowhere"}] == nil,
+         "a station without anything to tune in is not brought back");
+    PASS([RadioStation stationWithPropertyList: nil] == nil, "nor is nothing");
+  END_SET("a station is remembered")
+
   [arp release];
   return 0;
 }

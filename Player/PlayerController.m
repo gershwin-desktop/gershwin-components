@@ -15,6 +15,9 @@ NSString *const PlayerDefaultsMuted = @"PlayerMuted";
 NSString *const PlayerDefaultsRepeat = @"PlayerRepeatEnabled";
 NSString *const PlayerDefaultsShuffle = @"PlayerShuffleEnabled";
 NSString *const PlayerDefaultsMode = @"PlayerMode";
+NSString *const PlayerDefaultsRadioSearch = @"PlayerRadioSearch";
+NSString *const PlayerDefaultsRadioStation = @"PlayerRadioStation";
+NSString *const PlayerDefaultsRadioPlaying = @"PlayerRadioPlaying";
 
 // Content size the window opens with
 static const CGFloat kDefaultWidth = 520.0;
@@ -96,6 +99,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [playImage release];
     [pauseImage release];
     [pendingRadioStation release];
+    [restoredRadioStation release];
     [ytdlpBackend setDelegate:nil];
     [ytdlpBackend release];
     [preferencesController release];
@@ -128,9 +132,9 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     // the radio mode of the last run.
     if ([[session playlist] count] == 0
         && [[NSUserDefaults standardUserDefaults] integerForKey:PlayerDefaultsMode] == PlayerModeRadio) {
-        [self enterRadioMode];
+        [self enterRadioModeResuming:YES];
     }
-    // Shaped before it shows, so the theme places its grip above the curve
+    // Outlined before it shows, so it never appears as a rectangle first
     [self updateWindowShape];
     [mainWindow makeKeyAndOrderFront:self];
     [mainWindow makeFirstResponder:contentView];

@@ -84,6 +84,10 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     NSTextField *statusLabel;
     NSTextField *radioTextLabel;
     RadioStation *pendingRadioStation;
+    // The station of the last run, selected (and played, if it played at
+    // quit) once the stations are there
+    RadioStation *restoredRadioStation;
+    BOOL resumeRadioPlayback;
 
     // Streaming sites
     YTDLPBackend *ytdlpBackend;
@@ -124,6 +128,9 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (IBAction)toggleRadioMode:(id)sender;
 - (void)createRadioViews;
 - (void)enterRadioMode;
+/// Radio mode as it was left: the last search and station, playing again
+/// when `resume` and it played when the app quit.
+- (void)enterRadioModeResuming:(BOOL)resume;
 - (void)exitRadioMode;
 - (void)layoutRadioMode;
 - (void)updateRadioControls;

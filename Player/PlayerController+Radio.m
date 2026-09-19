@@ -44,9 +44,15 @@
 
 - (void)enterRadioMode
 {
+    [self enterRadioModeResuming:NO];
+}
+
+- (void)enterRadioModeResuming:(BOOL)resume
+{
     if (playerMode == PlayerModeRadio) {
         return;
     }
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [self exitFullscreen];
     [session stop];
     [self showCoverArt];
@@ -58,11 +64,24 @@
     [radio setVolume:[self volume]];
     [radio setMuted:[session muted]];
 
+    // Back where it was left: the same search, the same station
+    NSString *query = [defaults stringForKey:PlayerDefaultsRadioSearch] ?: @"";
+    [searchField setStringValue:query];
+    [restoredRadioStation release];
+    restoredRadioStation = [[RadioStation stationWithPropertyList:
+        [defaults dictionaryForKey:PlayerDefaultsRadioStation]] retain];
+    resumeRadioPlayback = resume && restoredRadioStation != nil
+        && [defaults boolForKey:PlayerDefaultsRadioPlaying];
+
     [self setRadioStatus:@"Loading stations..."];
     [radioTextLabel setStringValue:@""];
     [flowView reloadData];
     if ([[radio stations] count] == 0) {
-        [radio loadLocalStations];
+        if ([query length] > 0) {
+            [radio searchStations:query];
+        } else {
+            [radio loadLocalStations];
+        }
     } else {
         [self radioManagerDidUpdateStations:radio];
     }
@@ -86,6 +105,7 @@
     [progressIndicator stopAnimation:self];
     playerMode = PlayerModeLocal;
     [[NSUserDefaults standardUserDefaults] setInteger:PlayerModeLocal forKey:PlayerDefaultsMode];
+    [self rememberRadioPlaying:NO];
 
     [self layoutSubviews];
     [self playlistDidChange];
@@ -198,7 +218,17 @@
     [pendingRadioStation release];
     pendingRadioStation = nil;
     [[RadioManager sharedManager] stop];
+    // Stopped by the user; quitting stops the sound too, but the radio is
+    // to play again at the next start then
+    [self rememberRadioPlaying:NO];
     [self updateControls];
+}
+
+- (void)rememberRadioPlaying:(BOOL)playing
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:playing forKey:PlayerDefaultsRadioPlaying];
+    [defaults synchronize];
 }
 
 - (void)radioStepBy:(NSInteger)delta
@@ -275,6 +305,9 @@
     NSString *query = [[sender stringValue] stringByTrimmingCharactersInSet:
         [NSCharacterSet whitespaceCharacterSet]];
     [self setRadioStatus:@"Searching..."];
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:query forKey:PlayerDefaultsRadioSearch];
+    [defaults synchronize];
     if ([query length] == 0) {
         [[RadioManager sharedManager] loadLocalStations];
     } else {
@@ -342,15 +375,34 @@
     if (playerMode != PlayerModeRadio) {
         return;
     }
-    NSUInteger count = [[manager stations] count];
+    NSArray *stations = [manager stations];
+    NSUInteger count = [stations count];
+    NSUInteger selected = 0;
+    RadioStation *restored = nil;
+    for (NSUInteger i = 0; i < count && restoredRadioStation; i++) {
+        if ([[stations objectAtIndex:i] isSameStationAs:restoredRadioStation]) {
+            selected = i;
+            restored = [stations objectAtIndex:i];
+            break;
+        }
+    }
     [flowView reloadData];
     if (count > 0) {
+        // The icons around the selected station first
+        NSUInteger first = selected > 12 ? selected - 12 : 0;
         [flowView updateTexturesForIndices:
-            [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, MIN(24, count))]];
+            [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(first, MIN(24, count - first))]];
         suppressFlowSelection = YES;
-        [flowView setSelectedIndex:0];
+        [flowView setSelectedIndex:selected];
         suppressFlowSelection = NO;
     }
+    // It plays again even when the search no longer finds it
+    if (resumeRadioPlayback && ![manager isPlaying] && ![self radioTuning]) {
+        [manager playStation:restored ?: restoredRadioStation];
+    }
+    resumeRadioPlayback = NO;
+    [restoredRadioStation release];
+    restoredRadioStation = nil;
     if (![manager isPlaying]) {
         [self setRadioStatus:count > 0
             ? [NSString stringWithFormat:@"%lu stations", (unsigned long)count]
@@ -362,6 +414,11 @@
 
 - (void)radioManagerDidStartPlaying:(RadioManager *)manager station:(RadioStation *)station
 {
+    if (station) {
+        [[NSUserDefaults standardUserDefaults] setObject:[station propertyList]
+                                                  forKey:PlayerDefaultsRadioStation];
+    }
+    [self rememberRadioPlaying:YES];
     [radioTextLabel setStringValue:@""];
     [self setRadioStatus:station ? [station name] : @"Playing"];
     NSUInteger index = [[manager stations] indexOfObject:station];

@@ -10,9 +10,13 @@
 #import "PlayerController.h"
 
 extern NSString *const PlayerDefaultsMode;
+extern NSString *const PlayerDefaultsRadioSearch;
+extern NSString *const PlayerDefaultsRadioStation;
+extern NSString *const PlayerDefaultsRadioPlaying;
 
 /// Shared between PlayerController.m and its Radio category
 @interface PlayerController (Private)
+- (void)rememberRadioPlaying:(BOOL)playing;
 - (NSTextField *)labelWithFont:(NSFont *)font;
 - (void)layoutSubviews;
 - (void)updateWindowShape;
