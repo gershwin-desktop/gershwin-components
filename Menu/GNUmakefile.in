@@ -213,6 +213,20 @@ after-Menu-all::
 	@cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth Resources/ 2>/dev/null || true
 	@echo "Done building bundles."
 
+# Directory/Bundle of each menu extra that Menu installs.
+MENU_EXTRA_BUNDLES = ClockExtra/Clock BatteryExtra/Battery CPUExtra/CPU RAMExtra/RAM \
+	WLANExtra/WLAN SoundExtra/Sound BrightnessExtra/Brightness BuildMonitorExtra/BuildMonitor
+
+# A running Menu has the installed binaries of itself and of every extra
+# mapped, and cp rewrites an existing file in place, which crashed Menu on
+# every install.  The new copy is therefore built under another name and
+# renamed into place: the old files live on unchanged until Menu restarts,
+# and the bundle path is missing only between two renames, far shorter than
+# the extras rescan interval.
+replace_installed_bundle = rm -rf "$(2).new" "$(2).old" && cp -R "$(1)" "$(2).new" && \
+	{ if [ -e "$(2)" ]; then mv "$(2)" "$(2).old"; fi; } && \
+	mv "$(2).new" "$(2)" && rm -rf "$(2).old"
+
 # Custom install target that completely overrides built-in behavior
 .PHONY: custom-install custom-uninstall
 
@@ -228,43 +242,15 @@ custom-install: $(APP_NAME).app
 		cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth $(APP_NAME).app/Resources/; \
 	fi
 	@echo "Menu extra bundles built successfully"
-	@if [ -n "$(DESTDIR)" ]; then \
-		echo "Installing $(APP_NAME) to $(DESTDIR)$(INSTALL_APPS_DIR)"; \
-		rm -rf $(DESTDIR)/System/Applications/$(APP_NAME).app || true; \
-		rm -rf $(DESTDIR)/System/CoreServices/Applications/$(APP_NAME).app || true; \
-		rm -rf $(DESTDIR)/System/Library/CoreServices/Applications/$(APP_NAME).app || true; \
-		mkdir -p $(DESTDIR)$(INSTALL_APPS_DIR); \
-		cp -R $(APP_NAME).app $(DESTDIR)$(INSTALL_APPS_DIR)/; \
-		mkdir -p $(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources; \
-		cp Menu.png $(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources/; \
-		echo "Installing menu extra bundles..."; \
-		mkdir -p $(DESTDIR)/System/Library/MenuExtras; \
-		cp -R MenuExtras/ClockExtra/Clock.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/BatteryExtra/Battery.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/CPUExtra/CPU.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/RAMExtra/RAM.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/WLANExtra/WLAN.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/SoundExtra/Sound.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/BrightnessExtra/Brightness.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/BuildMonitorExtra/BuildMonitor.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-	else \
-		echo "Installing $(APP_NAME) to $(INSTALL_APPS_DIR)"; \
-		rm -rf /System/Applications/$(APP_NAME).app || true; \
-		mkdir -p $(INSTALL_APPS_DIR); \
-		cp -R $(APP_NAME).app $(INSTALL_APPS_DIR)/; \
-		mkdir -p $(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources; \
-		cp Menu.png $(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources/; \
-		echo "Installing menu extra bundles..."; \
-			mkdir -p /System/Library/MenuExtras; \
-			cp -R MenuExtras/ClockExtra/Clock.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/BatteryExtra/Battery.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/CPUExtra/CPU.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/RAMExtra/RAM.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/WLANExtra/WLAN.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/SoundExtra/Sound.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/BrightnessExtra/Brightness.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/BuildMonitorExtra/BuildMonitor.gsmenuextra /System/Library/MenuExtras/ || true; \
-	fi
+	@echo "Installing $(APP_NAME) to $(DESTDIR)$(INSTALL_APPS_DIR)"
+	@rm -rf $(DESTDIR)/System/Applications/$(APP_NAME).app $(DESTDIR)/System/CoreServices/Applications/$(APP_NAME).app
+	@mkdir -p $(APP_NAME).app/Resources $(DESTDIR)$(INSTALL_APPS_DIR) $(DESTDIR)/System/Library/MenuExtras
+	@cp Menu.png $(APP_NAME).app/Resources/
+	@$(call replace_installed_bundle,$(APP_NAME).app,$(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app)
+	@echo "Installing menu extra bundles..."
+	@for d in $(MENU_EXTRA_BUNDLES); do \
+		$(call replace_installed_bundle,MenuExtras/$$d.gsmenuextra,$(DESTDIR)/System/Library/MenuExtras/$$(basename $$d).gsmenuextra) || exit 1; \
+	done
 # Override uninstall target to properly support DESTDIR and PREFIX
 uninstall:: custom-uninstall
 
