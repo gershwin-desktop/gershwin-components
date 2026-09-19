@@ -124,6 +124,30 @@ static NSSet *ItemFlowChildWindows(Display *display, Window parent)
     }
 }
 
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center removeObserver:self name:NSWindowDidDeminiaturizeNotification object:nil];
+    [center removeObserver:self name:NSApplicationDidUnhideNotification object:nil];
+    if ([self window]) {
+        [center addObserver:self
+                   selector:@selector(windowShownAgain:)
+                       name:NSWindowDidDeminiaturizeNotification
+                     object:[self window]];
+        [center addObserver:self
+                   selector:@selector(windowShownAgain:)
+                       name:NSApplicationDidUnhideNotification
+                     object:NSApp];
+    }
+}
+
+// The picture lives in an X subwindow of its own, which the window's backing
+// store does not hold: a window shown again after being minimized or hidden
+// gets its own content back, the carousel has to draw itself anew.
+- (void)windowShownAgain:(NSNotification *)notification {
+    [self setNeedsDisplay:YES];
+}
+
 - (void)boundDidChange:(NSNotification *)notification {
     if (_isSyncingScroll) return;
 
