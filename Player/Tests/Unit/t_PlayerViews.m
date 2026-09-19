@@ -29,6 +29,27 @@ int main(void)
          "a plain NSTextField, so tools see a text field");
   END_SET("labels")
 
+  START_SET("window with a curved bottom")
+    /* _WM_SHAPE_PATH: version, then commands; a point is four 16.16
+     * numbers: fraction of the width, pixels, fraction of the height, pixels */
+    NSData *path = PlayerBottomCurveShapePath(8);
+    const int32_t *v = [path bytes];
+    PASS([path length] == 30 * sizeof(int32_t), "one outline, 30 values");
+    PASS(v[0] == 1, "in the first version of the format");
+    PASS(v[1] == 0 && v[2] == 0 && v[3] == 0 && v[4] == 0 && v[5] == 0,
+         "starting at the top left corner");
+    PASS(v[6] == 1 && v[7] == 65536 && v[9] == 0,
+         "along the top to the top right corner");
+    PASS(v[11] == 1 && v[12] == 65536 && v[14] == 65536 && v[15] == -8 * 65536,
+         "down the right side to 8 pixels above the bottom");
+    PASS(v[16] == 2, "then a curve");
+    PASS(v[19] == 65536 && v[20] == (int32_t)lround(8 * 65536 / 3.0),
+         "bulging down past the bottom, so it touches the bottom in the middle");
+    PASS(v[25] == 0 && v[26] == 0 && v[27] == 65536 && v[28] == -8 * 65536,
+         "to 8 pixels above the bottom on the left side");
+    PASS(v[29] == 3, "and closed");
+  END_SET("window with a curved bottom")
+
   [arp release];
   return 0;
 }

@@ -54,4 +54,21 @@ NSTextField *PlayerMakeLabel(NSFont *font);
 /// manager restores the previous frame itself.
 void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen);
 
+/// _WM_SHAPE_PATH value (32-bit integers) for a window whose bottom edge
+/// curves down towards the middle, `depth` pixels higher at the sides.
+NSData *PlayerBottomCurveShapePath(CGFloat depth);
+
+/// The player window: its bottom edge curves down towards the middle, drawn
+/// by the window manager when it supports window outlines (_WM_SHAPE_PATH).
+@interface PlayerWindow : NSWindow
+{
+    CGFloat _bottomCurveDepth;
+}
+/// How much higher the bottom edge is at the sides than in the middle, in
+/// points; 0 makes the window a plain rectangle.
+- (void)setBottomCurveDepth:(CGFloat)depth;
+/// Where the theme's resize grip goes: above the edge at the right side.
+- (CGFloat)resizeIndicatorBottomInset;
+@end
+
 #endif /* PlayerViews_h */

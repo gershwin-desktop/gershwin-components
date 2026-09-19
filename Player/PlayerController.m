@@ -33,6 +33,8 @@ static const CGFloat kVolumeSliderWidth = 120.0;
 static const CGFloat kMuteWidth = 56.0;
 static const CGFloat kIconButtonWidth = 32.0;
 static const CGFloat kOverlayHeight = 64.0;
+// How much higher the bottom edge is at the sides than in the middle
+static const CGFloat kBottomCurveDepth = 8.0;
 
 // Arrow keys move this far through a track
 static const NSTimeInterval kSkipSeconds = 5.0;
@@ -128,6 +130,8 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         && [[NSUserDefaults standardUserDefaults] integerForKey:PlayerDefaultsMode] == PlayerModeRadio) {
         [self enterRadioMode];
     }
+    // Shaped before it shows, so the theme places its grip above the curve
+    [self updateWindowShape];
     [mainWindow makeKeyAndOrderFront:self];
     [mainWindow makeFirstResponder:contentView];
 }
@@ -220,13 +224,13 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 - (void)createWindow
 {
     NSRect frame = NSMakeRect(0, 0, kDefaultWidth, kDefaultHeight);
-    mainWindow = [[NSWindow alloc] initWithContentRect:frame
-                                             styleMask:NSTitledWindowMask
-                                                     | NSClosableWindowMask
-                                                     | NSMiniaturizableWindowMask
-                                                     | NSResizableWindowMask
-                                               backing:NSBackingStoreBuffered
-                                                 defer:NO];
+    mainWindow = [[PlayerWindow alloc] initWithContentRect:frame
+                                                 styleMask:NSTitledWindowMask
+                                                         | NSClosableWindowMask
+                                                         | NSMiniaturizableWindowMask
+                                                         | NSResizableWindowMask
+                                                   backing:NSBackingStoreBuffered
+                                                     defer:NO];
     [mainWindow setTitle:@"Player"];
     [mainWindow setDelegate:self];
     [mainWindow setContentMinSize:NSMakeSize(METRICS_WIN_MIN_WIDTH, kMinHeight)];
@@ -421,6 +425,14 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 - (void)windowDidResize:(NSNotification *)notification
 {
     [self layoutSubviews];
+    [self updateWindowShape];
+}
+
+// The bottom edge curves gently, like the case of a device; in full screen
+// the picture fills the screen to its corners
+- (void)updateWindowShape
+{
+    [mainWindow setBottomCurveDepth:isFullscreen ? 0 : kBottomCurveDepth];
 }
 
 - (void)layoutSubviews

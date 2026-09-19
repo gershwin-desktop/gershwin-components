@@ -31,7 +31,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     ItemFlowViewDelegate, RadioManagerDelegate, YTDLPBackendDelegate,
     PlayerSessionDelegate, PlayerContentViewController>
 {
-    NSWindow *mainWindow;
+    PlayerWindow *mainWindow;
     PlayerContentView *contentView;
 
     // Cover art carousel and video

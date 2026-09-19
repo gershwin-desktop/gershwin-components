@@ -15,6 +15,7 @@ extern NSString *const PlayerDefaultsMode;
 @interface PlayerController (Private)
 - (NSTextField *)labelWithFont:(NSFont *)font;
 - (void)layoutSubviews;
+- (void)updateWindowShape;
 - (void)setViews:(NSArray *)views hidden:(BOOL)hidden;
 - (NSArray *)trackInfoViews;
 - (NSArray *)positionViews;

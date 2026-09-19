@@ -7,19 +7,49 @@
 #import "PlayerViews.h"
 #import <GNUstepGUI/GSDisplayServer.h>
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
 
 // EWMH _NET_WM_STATE actions
 enum { NetWMStateRemove = 0, NetWMStateAdd = 1 };
 
-void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen)
+static void PlayerXWindowOf(NSWindow *window, Display **display, Window *xid)
 {
     GSDisplayServer *server = GSServerForWindow(window);
-    Display *display = (Display *)[server serverDevice];
-    Window xid = (Window)(uintptr_t)[server windowDevice:[window windowNumber]];
-    if (!display || !xid) {
+    *display = (Display *)[server serverDevice];
+    *xid = (Window)(uintptr_t)[server windowDevice:[window windowNumber]];
+    if (!*display || !*xid) {
         [NSException raise:NSInternalInconsistencyException
-                    format:@"no X11 window for full screen"];
+                    format:@"no X11 window for %@", window];
     }
+}
+
+// Whether the window manager lists the atom in _NET_SUPPORTED
+static BOOL windowManagerSupports(Display *display, Atom atom)
+{
+    Atom supported = XInternAtom(display, "_NET_SUPPORTED", False);
+    Atom type = None;
+    int format = 0;
+    unsigned long count = 0, remaining = 0;
+    unsigned char *data = NULL;
+    BOOL found = NO;
+
+    if (XGetWindowProperty(display, DefaultRootWindow(display), supported, 0, 65536,
+                           False, XA_ATOM, &type, &format, &count, &remaining,
+                           &data) == Success && data) {
+        const Atom *atoms = (const Atom *)data;
+        for (unsigned long i = 0; i < count && !found; i++) {
+            found = (atoms[i] == atom);
+        }
+        XFree(data);
+    }
+    return found;
+}
+
+void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen)
+{
+    Display *display = NULL;
+    Window xid = 0;
+    PlayerXWindowOf(window, &display, &xid);
 
     XEvent event;
     memset(&event, 0, sizeof(event));
@@ -35,6 +65,76 @@ void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen)
                SubstructureRedirectMask | SubstructureNotifyMask, &event);
     XFlush(display);
 }
+
+static int32_t fixed(double v)
+{
+    return (int32_t)lround(v * 65536.0);
+}
+
+NSData *PlayerBottomCurveShapePath(CGFloat depth)
+{
+    // Points: fraction of the width, pixels, fraction of the height, pixels.
+    // The curve is a parabola (a cubic with its control points a third in
+    // from each end), deepest in the middle, where it touches the bottom.
+    int32_t v[] = {
+        1,
+        0, 0, 0, 0, 0,
+        1, fixed(1), 0, 0, 0,
+        1, fixed(1), 0, fixed(1), fixed(-depth),
+        2, fixed(2.0 / 3), 0, fixed(1), fixed(depth / 3),
+           fixed(1.0 / 3), 0, fixed(1), fixed(depth / 3),
+           0, 0, fixed(1), fixed(-depth),
+        3
+    };
+    return [NSData dataWithBytes:v length:sizeof(v)];
+}
+
+@implementation PlayerWindow
+
+- (void)setBottomCurveDepth:(CGFloat)depth
+{
+    Display *display = NULL;
+    Window xid = 0;
+    PlayerXWindowOf(self, &display, &xid);
+    Atom pathAtom = XInternAtom(display, "_WM_SHAPE_PATH", False);
+
+    // Another window manager would not draw the outline: the window stays a
+    // rectangle, with the grip in its corner
+    if (depth > 0 && !windowManagerSupports(display, pathAtom)) {
+        depth = 0;
+    }
+    if (depth == _bottomCurveDepth) {
+        return;
+    }
+    _bottomCurveDepth = depth;
+
+    if (depth > 0) {
+        // The outline is in device pixels
+        NSRect points = [[self contentView] bounds];
+        NSRect pixels = [[self contentView] convertRect:points toView:nil];
+        CGFloat scale = NSWidth(points) > 0 ? NSWidth(pixels) / NSWidth(points) : 1.0;
+        NSData *path = PlayerBottomCurveShapePath(round(depth * scale));
+        NSUInteger count = [path length] / sizeof(int32_t);
+        const int32_t *values = [path bytes];
+        // Xlib takes 32-bit property items as longs
+        long items[count];
+        for (NSUInteger i = 0; i < count; i++) {
+            items[i] = values[i];
+        }
+        XChangeProperty(display, xid, pathAtom, XA_INTEGER, 32, PropModeReplace,
+                        (unsigned char *)items, (int)count);
+    } else {
+        XDeleteProperty(display, xid, pathAtom);
+    }
+    XFlush(display);
+}
+
+- (CGFloat)resizeIndicatorBottomInset
+{
+    return _bottomCurveDepth;
+}
+
+@end
 
 @implementation PlayerContentView
 
