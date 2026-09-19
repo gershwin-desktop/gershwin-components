@@ -12,6 +12,7 @@
 #import "Testing.h"
 #import "StreamPlayer.h"
 #import "TestMedia.h"
+#include <unistd.h>
 
 @interface StopRecorder : NSObject <StreamPlayerDelegate>
 {
@@ -55,8 +56,6 @@ int main(void)
 
   START_SET("opening")
     StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
-    PASS(sp != [StreamPlayer sharedPlayer],
-         "local playback can have a player of its own, apart from the radio");
     NSError *err = nil;
     PASS(![sp openURL: @"/nonexistent/file.mp3" error: &err] && err != nil,
          "a missing file fails with an error");
@@ -173,6 +172,21 @@ int main(void)
     PASS(rec->starts == 0 && rec->failures == 0,
          "an abandoned attempt reports nothing");
 
+    /* Opens, but holds nothing to play: a subtitle file */
+    NSString *srt = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat: @"player-sub-%d.srt", (int)getpid()]];
+    [@"1\n00:00:01,000 --> 00:00:02,000\nHello\n\n" writeToFile: srt atomically: YES
+      encoding: NSUTF8StringEncoding error: NULL];
+    rec->failures = 0;
+    [sp playURL: srt];
+    spin(0.5);
+    PASS(rec->failures == 1, "a file without audio or video is reported");
+    before = [NSDate date];
+    [sp close];
+    PASS(-[before timeIntervalSinceNow] < 0.5, "and the player can still be closed");
+    [[NSFileManager defaultManager] removeItemAtPath: srt error: NULL];
+
+    rec->failures = 0;
     [sp playURL: @"http://10.255.255.1:8000/stream"];
     spin(0.2);
     [sp playURL: shortWav];
@@ -182,6 +196,23 @@ int main(void)
     [sp setDelegate: nil];
     [sp close];
   END_SET("opening in the background")
+
+  START_SET("fading")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    PASS([sp fadeGain] == 1.0f, "a new player is not faded");
+    [sp setFadeGain: 0.0f];
+    PASS([sp fadeGain] == 0.0f, "the gain can be set at once");
+    [sp fadeToGain: 1.0f duration: 0.4];
+    spin(0.2);
+    float mid = [sp fadeGain];
+    PASS(mid > 0.25f && mid < 0.75f, "half way through a fade the gain is in between (%f)", mid);
+    spin(0.3);
+    PASS([sp fadeGain] == 1.0f, "a fade ends at its target");
+    [sp fadeToGain: 0.0f duration: 0.0];
+    PASS([sp fadeGain] == 0.0f, "a fade without duration is immediate");
+    [sp setVolume: 0.7f];
+    PASS(fabsf([sp volume] - 0.7f) < 0.001f, "fading leaves the volume alone");
+  END_SET("fading")
 
   [[NSFileManager defaultManager] removeItemAtPath: wav error: NULL];
   [[NSFileManager defaultManager] removeItemAtPath: shortWav error: NULL];

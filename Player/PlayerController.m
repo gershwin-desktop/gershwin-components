@@ -8,7 +8,7 @@
 #import "PlayerController+Private.h"
 #import "PlayerMenu.h"
 #import "AppearanceMetrics.h"
-#import <AVFoundation/AVFoundation.h>
+#import "PlayerMediaInfo.h"
 
 NSString *const PlayerDefaultsVolume = @"PlayerVolume";
 NSString *const PlayerDefaultsMuted = @"PlayerMuted";
@@ -1206,6 +1206,12 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [previousButton setEnabled:[session canGoPrevious]];
     [nextButton setEnabled:[session canGoNext]];
     [fullscreenButton setEnabled:[self showsVideo]];
+    // Streams take a moment to connect, and web pages to be looked up
+    if ([session isConnecting] || [ytdlpBackend isRunning]) {
+        [progressIndicator startAnimation:self];
+    } else {
+        [progressIndicator stopAnimation:self];
+    }
     [self updatePosition];
     [self revalidateMenu];
 }
@@ -1232,24 +1238,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     return [[item lastPathComponent] stringByDeletingPathExtension];
 }
 
-- (NSDictionary *)metadataForItem:(NSString *)item
-{
-    NSMutableDictionary *info = [NSMutableDictionary dictionary];
-    if ([item rangeOfString:@"://"].location != NSNotFound) {
-        return info;
-    }
-    AVURLAsset *asset = [[[AVURLAsset alloc] initWithURL:[NSURL fileURLWithPath:item]
-                                                  options:nil] autorelease];
-    for (AVMetadataItem *entry in [asset commonMetadata]) {
-        id key = [entry key];
-        NSString *value = [entry stringValue];
-        if ([key isKindOfClass:[NSString class]] && [value length] > 0) {
-            [info setObject:value forKey:key];
-        }
-    }
-    return info;
-}
-
 - (void)updateTrackInfo
 {
     NSString *item = [[session playlist] currentItem];
@@ -1262,11 +1250,10 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         return;
     }
 
-    NSDictionary *meta = [self metadataForItem:item];
-    NSString *title = [meta objectForKey:AVMetadataCommonKeyTitle] ?: [self displayNameForItem:item];
-    [titleLabel setStringValue:title];
-    [artistLabel setStringValue:[meta objectForKey:AVMetadataCommonKeyArtist] ?: @""];
-    [albumLabel setStringValue:[meta objectForKey:AVMetadataCommonKeyAlbumName] ?: @""];
+    PlayerMediaInfo *info = [PlayerMediaInfo infoForItem:item];
+    [titleLabel setStringValue:[info title] ?: [self displayNameForItem:item]];
+    [artistLabel setStringValue:[info artist] ?: @""];
+    [albumLabel setStringValue:[info album] ?: @""];
 
     NSMutableArray *details = [NSMutableArray array];
     PlayerPlaylist *playlist = [session playlist];
@@ -1277,10 +1264,11 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     if ([item rangeOfString:@"://"].location != NSNotFound) {
         [details addObject:@"Stream"];
     }
-    for (NSString *key in @[AVMetadataCommonKeyGenre, AVMetadataCommonKeyComposer]) {
-        if ([meta objectForKey:key]) {
-            [details addObject:[meta objectForKey:key]];
-        }
+    if ([info genre]) {
+        [details addObject:[info genre]];
+    }
+    if ([info composer]) {
+        [details addObject:[info composer]];
     }
     [detailsLabel setStringValue:[details componentsJoinedByString:@"  -  "]];
     [self updateWindowTitle];
@@ -1337,7 +1325,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     @autoreleasepool {
         NSMutableDictionary *found = [NSMutableDictionary dictionary];
         for (NSString *item in items) {
-            NSData *data = [self artworkDataForItem:item];
+            NSData *data = [[PlayerMediaInfo infoForItem:item] artwork];
             if (data) {
                 [found setObject:data forKey:item];
             }
@@ -1346,22 +1334,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
                                withObject:@[items, found]
                             waitUntilDone:NO];
     }
-}
-
-- (NSData *)artworkDataForItem:(NSString *)item
-{
-    if ([item rangeOfString:@"://"].location != NSNotFound) {
-        return nil;
-    }
-    AVURLAsset *asset = [[[AVURLAsset alloc] initWithURL:[NSURL fileURLWithPath:item]
-                                                  options:nil] autorelease];
-    for (AVMetadataItem *entry in [asset commonMetadata]) {
-        if ([[entry key] isEqual:AVMetadataCommonKeyArtwork]
-            && [[entry value] isKindOfClass:[NSData class]]) {
-            return (NSData *)[entry value];
-        }
-    }
-    return nil;
 }
 
 - (void)coverArtRead:(NSArray *)result
@@ -1382,8 +1354,7 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 {
     NSSize size = NSMakeSize(256, 256);
     NSImage *image = [[[NSImage alloc] initWithSize:size] autorelease];
-    NSString *title = [[self metadataForItem:item] objectForKey:AVMetadataCommonKeyTitle]
-        ?: [self displayNameForItem:item];
+    NSString *title = [[PlayerMediaInfo infoForItem:item] title] ?: [self displayNameForItem:item];
 
     [image lockFocus];
     NSGradient *gradient = [[[NSGradient alloc]

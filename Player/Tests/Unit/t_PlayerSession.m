@@ -27,8 +27,12 @@
   float volume;
   BOOL muted;
   int opens;
+  BOOL slow;          /* playURL: stays connecting until -finishConnecting */
+  BOOL connecting;
 }
 - (void)finishTrack;
+- (void)finishConnecting;
+- (void)failWhilePlaying;
 @end
 
 @implementation FakeMedia
@@ -41,23 +45,46 @@
 }
 - (void)setDelegate:(id<StreamPlayerDelegate>)d { delegate = d; }
 - (id<StreamPlayerDelegate>)delegate { return delegate; }
-- (BOOL)openURL:(NSString *)url error:(NSError **)error
+/* Like StreamPlayer, reports the outcome through the delegate; a fast
+ * fake reports before returning, which the session must cope with too. */
+- (void)playURL:(NSString *)url
 {
   [self close];
   if ([unopenable containsObject: url])
     {
-      if (error) *error = [NSError errorWithDomain: @"Fake" code: 1
-        userInfo: @{NSLocalizedDescriptionKey: @"broken"}];
-      return NO;
+      [delegate streamPlayer: (StreamPlayer *)self didFailWithError:
+        [NSError errorWithDomain: @"Fake" code: 1
+                        userInfo: @{NSLocalizedDescriptionKey: @"broken"}]];
+      return;
     }
   ASSIGN(openedURL, url);
   opens++;
-  return YES;
+  if (slow)
+    {
+      connecting = YES;
+      return;
+    }
+  playing = YES;
+  [delegate streamPlayerDidStartPlaying: (StreamPlayer *)self];
+}
+- (BOOL)isConnecting { return connecting; }
+- (void)finishConnecting
+{
+  connecting = NO;
+  playing = YES;
+  [delegate streamPlayerDidStartPlaying: (StreamPlayer *)self];
+}
+- (void)failWhilePlaying
+{
+  playing = NO;
+  [delegate streamPlayer: (StreamPlayer *)self didFailWithError:
+    [NSError errorWithDomain: @"Fake" code: 2
+                    userInfo: @{NSLocalizedDescriptionKey: @"connection lost"}]];
 }
 - (void)play { if (openedURL) { playing = YES; paused = NO; } }
 - (void)pause { if (playing) paused = YES; }
 - (void)stop { playing = NO; paused = NO; }
-- (void)close { [self stop]; DESTROY(openedURL); position = 0; }
+- (void)close { [self stop]; connecting = NO; DESTROY(openedURL); position = 0; }
 - (void)seekToTime:(NSTimeInterval)t { position = t; }
 - (NSTimeInterval)currentTime { return position; }
 - (NSTimeInterval)duration { return openedURL ? length : 0; }
@@ -284,6 +311,40 @@ int main(void)
     PASS(m->opens == opens, "picking the playing track does not restart it");
     PASS(![s playItemAtIndex: 7], "a track that is not there cannot be picked");
   END_SET("picking a track")
+
+  START_SET("streams that take time to connect")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    SessionWatcher *w = [[SessionWatcher new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s setDelegate: w];
+    m->slow = YES;
+    [s openItems: @[@"http://radio.example/live"]];
+    PASS([s isConnecting], "the session says it is connecting");
+    PASS([s state] == PlayerSessionPlaying, "playback is under way");
+    PASS([s canStop], "the attempt can be stopped");
+    int changes = w->stateChanges;
+    [m finishConnecting];
+    PASS(![s isConnecting], "once the stream plays it is no longer connecting");
+    PASS(w->stateChanges > changes, "and the change is reported");
+
+    [s openItems: @[@"http://radio.example/other"]];
+    PASS([s isConnecting], "connecting again for the next stream");
+    [s stop];
+    PASS(![s isConnecting] && !m->connecting && [s state] == PlayerSessionStopped,
+         "stop gives up the attempt");
+
+    m->slow = NO;
+    [s openItems: @[@"http://radio.example/live"]];
+    [m failWhilePlaying];
+    PASS([w->failures count] == 1, "a stream that breaks off is reported");
+    PASS([s state] == PlayerSessionStopped, "and playback stops when nothing follows");
+
+    [w->failures removeAllObjects];
+    [s openItems: tracks()];
+    [m failWhilePlaying];
+    PASS([w->failures count] == 1, "a broken track in a list is reported");
+    PASS_EQUAL(m->openedURL, @"/music/2.mp3", "and the next track follows");
+  END_SET("streams that take time to connect")
 
   [arp release];
   return 0;

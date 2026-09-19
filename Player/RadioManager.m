@@ -20,6 +20,9 @@
 static const int kMaxCacheEntries = 200;
 static const int kMaxDownloadRetries = 3;
 
+// Stations fade in and out, and cross-fade when switching
+static const NSTimeInterval kFadeDuration = 1.0;
+
 @implementation RadioManager
 
 @synthesize delegate = _delegate;
@@ -44,8 +47,7 @@ static const int kMaxDownloadRetries = 3;
 {
     self = [super init];
     if (self) {
-        _player = [[StreamPlayer sharedPlayer] retain];
-        [_player setDelegate:self];
+        _fadingPlayers = [[NSMutableSet alloc] init];
         _stations = [[NSArray alloc] init];
         _stationImages = [[NSMutableDictionary alloc] init];
         _iconIndex = [[NSMutableDictionary alloc] init];
@@ -77,7 +79,10 @@ static const int kMaxDownloadRetries = 3;
 - (void)dealloc
 {
     [_player setDelegate:nil];
+    [_player close];
     [_player release];
+    [_fadingPlayers makeObjectsPerformSelector:@selector(close)];
+    [_fadingPlayers release];
     [_stations release];
     [_stationImages release];
     [_iconIndex release];
@@ -95,6 +100,40 @@ static const int kMaxDownloadRetries = 3;
 - (BOOL)isPlaying
 {
     return [_player isPlaying];
+}
+
+- (StreamPlayer *)player
+{
+    return _player;
+}
+
+- (StreamPlayer *)makePlayer
+{
+    return [[[StreamPlayer alloc] init] autorelease];
+}
+
+// The playing station fades out and is closed afterwards, while whatever
+// comes next starts right away: stations cross-fade instead of cutting.
+- (void)retirePlayer
+{
+    if (_player == nil) {
+        return;
+    }
+    StreamPlayer *player = _player;
+    _player = nil;
+    [player setDelegate:nil];
+    if (![player isPlaying]) {
+        [player close];
+        [player release];
+        return;
+    }
+    [_fadingPlayers addObject:player];
+    [player fadeToGain:0.0f duration:kFadeDuration];
+    PlayerRunOnMainThreadAfter(kFadeDuration, ^{
+        [player close];
+        [self->_fadingPlayers removeObject:player];
+    });
+    [player release];
 }
 
 - (void)setVolume:(float)volume
@@ -203,8 +242,8 @@ static const int kMaxDownloadRetries = 3;
     if (!urlString) urlString = [station tuneURL];
     if (!urlString || [urlString length] == 0) return;
 
-    // Anything still being tuned in is abandoned for this station
-    [_player close];
+    // The station playing fades out while the new one connects
+    [self retirePlayer];
     _connecting = YES;
     NSUInteger attempt = ++_tuneAttempt;
     [_currentStationName release];
@@ -245,6 +284,7 @@ static const int kMaxDownloadRetries = 3;
 {
     if (!urlString || [urlString length] == 0) return;
 
+    [self retirePlayer];
     _connecting = YES;
     _tuneAttempt++;
     [_currentStationName release];
@@ -263,8 +303,7 @@ static const int kMaxDownloadRetries = 3;
 {
     _connecting = NO;
     _tuneAttempt++;
-    [_player stop];
-    [_player close];
+    [self retirePlayer];
     [_currentStationName release];
     _currentStationName = nil;
     [_currentStreamURL release];
@@ -352,6 +391,13 @@ static const int kMaxDownloadRetries = 3;
 
 - (void)openAndPlayURL:(NSString *)urlString
 {
+    [self retirePlayer];
+    _player = [[self makePlayer] retain];
+    [_player setDelegate:self];
+    [_player setVolume:_volume];
+    [_player setMuted:_muted];
+    // Silent until it plays, then it fades in
+    [_player setFadeGain:0.0f];
     // Connecting takes seconds; StreamPlayer does it on its own thread and
     // reports back through the StreamPlayerDelegate methods
     [_player playURL:urlString];
@@ -367,6 +413,7 @@ static const int kMaxDownloadRetries = 3;
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
     _connecting = NO;
+    [_player fadeToGain:1.0f duration:kFadeDuration];
     // Find the station matching this stream URL
     RadioStation *currentStation = nil;
     for (RadioStation *s in _stations) {

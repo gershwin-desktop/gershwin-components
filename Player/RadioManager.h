@@ -58,6 +58,7 @@
     NSString *_iconCachePath;
     NSMutableSet *_downloadingKeys;
     NSOperationQueue *_iconQueue;
+    NSMutableSet *_fadingPlayers;    // stations fading out after a switch
     BOOL _connecting;
     NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
     int _maxCacheEntries;
@@ -72,6 +73,7 @@
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, readonly) NSArray *stations;
+/// The player of the current station, nil while nothing is tuned in
 @property (nonatomic, readonly) StreamPlayer *player;
 
 + (instancetype)sharedManager;
@@ -88,8 +90,10 @@
 /// Stream an arbitrary URL directly
 - (void)playURL:(NSString *)urlString;
 
-/// Stop streaming
+/// Stop streaming; the sound fades out
 - (void)stop;
+/// A new player for each station; subclasses may configure it
+- (StreamPlayer *)makePlayer;
 
 /// Return the cached icon for a station, or nil if not yet loaded
 - (NSImage *)imageForStation:(RadioStation *)station;

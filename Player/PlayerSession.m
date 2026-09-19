@@ -104,6 +104,11 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 {
     switch (_state) {
     case PlayerSessionPlaying:
+        if ([self isConnecting]) {
+            // Nothing plays yet that could pause; give up the attempt
+            [self stop];
+            break;
+        }
         [_media pause];
         [self setState:PlayerSessionPaused];
         break;
@@ -172,6 +177,11 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 
 #pragma mark - State
 
+- (BOOL)isConnecting
+{
+    return _state != PlayerSessionStopped && [_media isConnecting];
+}
+
 - (NSTimeInterval)currentTime
 {
     return (_state == PlayerSessionStopped) ? 0.0 : [_media currentTime];
@@ -228,39 +238,36 @@ static const NSTimeInterval kRestartThreshold = 3.0;
 
 - (void)closeMedia
 {
+    _opening = NO;
     [_media close];
 }
 
-// Opens and plays the item at index.  With skippingBroken, items that
-// cannot be opened are reported and the following ones tried, as when an
-// album plays through.
+// Plays the item at index.  Opening happens in the background; with
+// skippingBroken, items that cannot be opened are reported and the
+// following ones tried, as when an album plays through.
 - (BOOL)playFromIndex:(NSUInteger)index skippingBroken:(BOOL)skipping
 {
-    NSUInteger attempts = [_playlist count];
-    while (index != NSNotFound && attempts-- > 0) {
-        NSString *item = [_playlist itemAtIndex:index];
-        NSError *error = nil;
-        [_playlist setCurrentIndex:index];
-        [self notifyTrackChange];
-
-        if ([_media openURL:item error:&error]) {
-            [_media setVolume:_volume];
-            [_media setMuted:_muted];
-            [_media play];
-            [self setState:PlayerSessionPlaying];
-            return YES;
-        }
-
-        if ([_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
-            [_delegate playerSession:self didFailToOpenItem:item error:error];
-        }
-        if (!skipping) {
-            break;
-        }
-        index = [_playlist indexAfterCurrent];
+    if (index == NSNotFound || index >= [_playlist count]) {
+        [self setState:PlayerSessionStopped];
+        return NO;
     }
-    [self setState:PlayerSessionStopped];
-    return NO;
+    _skipping = skipping;
+    _attemptsLeft = [_playlist count];
+    [self startItemAtIndex:index];
+    return YES;
+}
+
+- (void)startItemAtIndex:(NSUInteger)index
+{
+    _attemptsLeft--;
+    [_playlist setCurrentIndex:index];
+    [self notifyTrackChange];
+    [_media setVolume:_volume];
+    [_media setMuted:_muted];
+    // Before -playURL:, which may report back before it returns
+    _opening = YES;
+    [self setState:PlayerSessionPlaying];
+    [_media playURL:[_playlist itemAtIndex:index]];
 }
 
 - (void)notifyTrackChange
@@ -288,12 +295,37 @@ static const NSTimeInterval kRestartThreshold = 3.0;
     [self setState:PlayerSessionStopped];
 }
 
+- (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
+{
+    _opening = NO;
+    if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
+        [_delegate playerSessionDidChangeState:self];
+    }
+}
+
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
     NSString *item = [_playlist currentItem];
+    BOOL wasOpening = _opening;
+    _opening = NO;
     if (item && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
         [_delegate playerSession:self didFailToOpenItem:item error:error];
     }
+    if (_state == PlayerSessionStopped) {
+        return;
+    }
+    if (!wasOpening) {
+        // It broke off while playing: go on as if it had ended
+        _skipping = YES;
+        _attemptsLeft = [_playlist count];
+    }
+    NSUInteger next = _skipping ? [_playlist indexAfterCurrent] : NSNotFound;
+    if (next != NSNotFound && _attemptsLeft > 0) {
+        [self startItemAtIndex:next];
+        return;
+    }
+    [self closeMedia];
+    [self setState:PlayerSessionStopped];
 }
 
 - (void)streamPlayer:(StreamPlayer *)player didDiscoverVideoWithWidth:(int)width

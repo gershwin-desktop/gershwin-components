@@ -39,7 +39,10 @@
 @protocol MediaPlayback <NSObject>
 - (id<StreamPlayerDelegate>)delegate;
 - (void)setDelegate:(id<StreamPlayerDelegate>)delegate;
-- (BOOL)openURL:(NSString *)urlString error:(NSError **)error;
+/// Opens the stream without blocking and plays it; the outcome arrives as
+/// -streamPlayerDidStartPlaying: or -streamPlayer:didFailWithError:.
+- (void)playURL:(NSString *)urlString;
+- (BOOL)isConnecting;
 - (void)play;
 - (void)pause;
 - (void)stop;
@@ -93,6 +96,7 @@
     int _decodeErrorCount;
     volatile BOOL _paused;
     volatile BOOL _connecting;
+    id _attempt;           // StreamOpenAttempt of the current stream
     NSCondition *_pauseCondition;
 
     // Position.  The media clock is the playback position in seconds; it
@@ -109,6 +113,13 @@
     // Audio buffer
     void *_audioBuffer;
     int _audioBufferSize;
+
+    // Fade: a gain ramp on top of the volume, from _fadeFrom at
+    // _fadeStart to _fadeTo after _fadeDuration (monotonic seconds)
+    float _fadeFrom;
+    float _fadeTo;
+    double _fadeStart;
+    double _fadeDuration;
 
     // Properties
     float _volume;
@@ -152,10 +163,6 @@
 /// Total duration in seconds (0 if unknown / indeterminate).
 @property (nonatomic, readonly) NSTimeInterval duration;
 
-/// The player of Internet radio.  Local playback uses its own instance so
-/// the two never take each other's delegate.
-+ (instancetype)sharedPlayer;
-
 /// Open a stream URL (http, https, rtsp, file path, etc.)
 - (BOOL)openURL:(NSString *)urlString error:(NSError **)error;
 /// Opens the stream on the playback thread and plays it; returns at once.
@@ -170,6 +177,11 @@
 - (void)pause;
 /// Moves the position; works while playing, paused, or before -play.
 - (void)seekToTime:(NSTimeInterval)seconds;
+/// Gain applied on top of the volume, for fading in and out; 1 by default.
+- (float)fadeGain;
+- (void)setFadeGain:(float)gain;
+/// Moves the fade gain smoothly to the target over the duration.
+- (void)fadeToGain:(float)gain duration:(NSTimeInterval)duration;
 /// Stop playback and wait for the playback thread to end.
 - (void)stop;
 /// Stop and release all resources of the stream.

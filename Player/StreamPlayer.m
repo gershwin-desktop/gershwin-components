@@ -37,6 +37,19 @@ static NSError *streamError(NSInteger code, NSString *description)
                            userInfo:@{NSLocalizedDescriptionKey: description}];
 }
 
+// One opening of a stream.  It is cancelled on its own, so a playback
+// thread still stuck in a host name lookup (which FFmpeg cannot interrupt)
+// can be abandoned without the next stream waiting for it.
+@interface StreamOpenAttempt : NSObject
+{
+@public
+    volatile BOOL cancelled;
+}
+@end
+
+@implementation StreamOpenAttempt
+@end
+
 @implementation StreamPlayer
 
 @synthesize delegate = _delegate;
@@ -47,12 +60,12 @@ static NSError *streamError(NSInteger code, NSString *description)
 @synthesize videoWidth = _videoWidth;
 @synthesize videoHeight = _videoHeight;
 
-// Lets a blocking network read give up as soon as playback is stopped,
-// instead of holding -stop until FFmpeg's timeout.
+// Lets a blocking network read give up as soon as its attempt is
+// cancelled, instead of holding -stop until FFmpeg's timeout.
 static int interruptCallback(void *opaque)
 {
-    StreamPlayer *player = (StreamPlayer *)opaque;
-    return player->_shouldStop ? 1 : 0;
+    StreamOpenAttempt *attempt = (StreamOpenAttempt *)opaque;
+    return attempt->cancelled ? 1 : 0;
 }
 
 + (void)initialize
@@ -64,24 +77,16 @@ static int interruptCallback(void *opaque)
     }
 }
 
-+ (instancetype)sharedPlayer
-{
-    static StreamPlayer *shared = nil;
-    @synchronized(self) {
-        if (shared == nil) {
-            shared = [[self alloc] init];
-        }
-    }
-    return shared;
-}
-
 - (instancetype)init
 {
     self = [super init];
     if (self) {
         _volume = 1.0f;
+        _fadeFrom = 1.0f;
+        _fadeTo = 1.0f;
         _usesAudioDevice = YES;
         _pauseCondition = [[NSCondition alloc] init];
+        _attempt = [[StreamOpenAttempt alloc] init];
         _seekLock = [[NSLock alloc] init];
         _seekTarget = -1.0;
         _audioStreamIndex = -1;
@@ -93,6 +98,7 @@ static int interruptCallback(void *opaque)
 - (void)dealloc
 {
     [self close];
+    [_attempt release];
     [_pauseCondition release];
     [_seekLock release];
     [super dealloc];
@@ -110,6 +116,43 @@ static int interruptCallback(void *opaque)
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;
     _volume = volume;
+}
+
+#pragma mark - Fading
+
+- (float)fadeGainAt:(double)time
+{
+    @synchronized(self) {
+        if (_fadeDuration <= 0.0 || time >= _fadeStart + _fadeDuration) {
+            return _fadeTo;
+        }
+        double t = MAX(0.0, (time - _fadeStart) / _fadeDuration);
+        // Smoothstep, so a fade starts and ends gently
+        double eased = t * t * (3.0 - 2.0 * t);
+        return _fadeFrom + (float)((_fadeTo - _fadeFrom) * eased);
+    }
+}
+
+- (float)fadeGain
+{
+    return [self fadeGainAt:monotonicSeconds()];
+}
+
+- (void)setFadeGain:(float)gain
+{
+    [self fadeToGain:gain duration:0.0];
+}
+
+- (void)fadeToGain:(float)gain duration:(NSTimeInterval)duration
+{
+    double now = monotonicSeconds();
+    float current = [self fadeGainAt:now];
+    @synchronized(self) {
+        _fadeFrom = current;
+        _fadeTo = MAX(0.0f, MIN(1.0f, gain));
+        _fadeStart = now;
+        _fadeDuration = MAX(0.0, duration);
+    }
 }
 
 - (void)setCurrentURL:(NSString *)url
@@ -162,7 +205,9 @@ static int interruptCallback(void *opaque)
     [self close];
     _generation++;
     _shouldStop = NO;
-    return [self openStream:urlString error:error];
+    [_attempt release];
+    _attempt = [[StreamOpenAttempt alloc] init];
+    return [self openStream:urlString attempt:_attempt error:error];
 }
 
 - (void)playURL:(NSString *)urlString
@@ -172,12 +217,14 @@ static int interruptCallback(void *opaque)
     _shouldStop = NO;
     _connecting = YES;
     [self setCurrentURL:urlString];
+    [_attempt release];
+    _attempt = [[StreamOpenAttempt alloc] init];
 
     // Connecting to a network stream can take seconds; the playback thread
     // does it, so the caller's run loop keeps going.
     _playbackThread = [[NSThread alloc] initWithTarget:self
                                               selector:@selector(openAndPlay:)
-                                                object:@[urlString, @(_generation)]];
+                                                object:@[urlString, @(_generation), _attempt]];
     [_playbackThread start];
 }
 
@@ -191,12 +238,13 @@ static int interruptCallback(void *opaque)
     @autoreleasepool {
         NSString *urlString = [args objectAtIndex:0];
         NSUInteger generation = [[args objectAtIndex:1] unsignedIntegerValue];
+        StreamOpenAttempt *attempt = [args objectAtIndex:2];
         NSError *error = nil;
-        BOOL opened = [self openStream:urlString error:&error];
+        BOOL opened = [self openStream:urlString attempt:attempt error:&error];
 
-        if (_shouldStop || generation != _generation) {
-            // Abandoned: -close frees whatever was opened
-            _connecting = NO;
+        if (attempt->cancelled) {
+            // Abandoned while connecting: the player has moved on and owns
+            // nothing of this attempt any more
             return;
         }
         if (!opened) {
@@ -217,7 +265,11 @@ static int interruptCallback(void *opaque)
 }
 
 // Opens the stream and its decoders; the caller has closed the previous one.
-- (BOOL)openStream:(NSString *)urlString error:(NSError **)error
+// The network part works on a context of its own, which becomes the
+// player's only if the attempt has not been cancelled meanwhile.
+- (BOOL)openStream:(NSString *)urlString
+           attempt:(StreamOpenAttempt *)attempt
+             error:(NSError **)error
 {
     const char *url = [urlString UTF8String];
     AVFormatContext *fmtCtx = avformat_alloc_context();
@@ -226,7 +278,7 @@ static int interruptCallback(void *opaque)
         return NO;
     }
     fmtCtx->interrupt_callback.callback = interruptCallback;
-    fmtCtx->interrupt_callback.opaque = self;
+    fmtCtx->interrupt_callback.opaque = attempt;
 
     // Network options; ignored for local files
     AVDictionary *opts = NULL;
@@ -247,13 +299,20 @@ static int interruptCallback(void *opaque)
         }
         return NO;   // avformat_open_input frees the context on failure
     }
-    _formatCtx = fmtCtx;
 
     ret = avformat_find_stream_info(fmtCtx, NULL);
     if (ret < 0) {
         if (error) *error = streamError(ret, @"The stream format is not recognized");
-        [self close];
+        avformat_close_input(&fmtCtx);
         return NO;
+    }
+
+    @synchronized(self) {
+        if (attempt->cancelled) {
+            avformat_close_input(&fmtCtx);
+            return NO;
+        }
+        _formatCtx = fmtCtx;
     }
 
     _totalDuration = (fmtCtx->duration > 0) ? (double)fmtCtx->duration / AV_TIME_BASE : 0.0;
@@ -268,14 +327,14 @@ static int interruptCallback(void *opaque)
 
     if (_audioStreamIndex < 0 && !_hasVideo) {
         if (error) *error = streamError(2, @"The file contains neither audio nor video");
-        [self close];
+        [self freeStream];
         return NO;
     }
 
     _packet = av_packet_alloc();
     if (!_packet) {
         if (error) *error = streamError(6, @"Failed to allocate packet");
-        [self close];
+        [self freeStream];
         return NO;
     }
 
@@ -494,13 +553,20 @@ static int interruptCallback(void *opaque)
 
 - (void)stop
 {
+    BOOL abandon;
+    @synchronized(self) {
+        ((StreamOpenAttempt *)_attempt)->cancelled = YES;
+        // Not open yet: the thread may be stuck in a host name lookup,
+        // which would hold the caller for as long as that takes
+        abandon = (_formatCtx == NULL);
+    }
     [_pauseCondition lock];
     _shouldStop = YES;
     _paused = NO;
     [_pauseCondition broadcast];
     [_pauseCondition unlock];
 
-    while (_playbackThread && ![_playbackThread isFinished]) {
+    while (!abandon && _playbackThread && ![_playbackThread isFinished]) {
         [NSThread sleepForTimeInterval:0.005];
     }
     [_playbackThread release];
@@ -512,6 +578,13 @@ static int interruptCallback(void *opaque)
 - (void)close
 {
     [self stop];
+    [self freeStream];
+}
+
+// Releases the stream's decoders and device; the playback thread is done
+// with them (stopped, or this is that thread giving up during opening).
+- (void)freeStream
+{
 
     if (_audioBuffer) {
         free(_audioBuffer);
@@ -799,9 +872,14 @@ static int interruptCallback(void *opaque)
 
     int16_t *samples = (int16_t *)_audioBuffer;
     int sampleCount = converted * 2;  // stereo
-    float gain = _muted ? 0.0f : _volume;
+    float volume = _muted ? 0.0f : _volume;
+    // The fade is interpolated across the frame, so it has no steps
+    double now = monotonicSeconds();
+    float gainStart = volume * [self fadeGainAt:now];
+    float gainEnd = volume * [self fadeGainAt:now + (double)converted / _audioSampleRate];
     int i;
     for (i = 0; i < sampleCount; i++) {
+        float gain = gainStart + (gainEnd - gainStart) * (float)(i / 2) / (float)converted;
         samples[i] = (int16_t)(samples[i] * gain);
     }
     ao_play((ao_device *)_aoDev, (char *)_audioBuffer, sampleCount * (int)sizeof(int16_t));

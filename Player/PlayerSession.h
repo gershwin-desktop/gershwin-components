@@ -46,6 +46,9 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
     float _volume;
     BOOL _muted;
     id<PlayerSessionDelegate> _delegate;
+    BOOL _opening;            // the current item has not started yet
+    BOOL _skipping;           // items that fail to open are skipped
+    NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
 }
 
 @property (nonatomic, assign) id<PlayerSessionDelegate> delegate;
@@ -61,6 +64,7 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 /// Appends to the playlist; starts playing them if nothing is playing.
 - (void)addItems:(NSArray *)items;
 /// Plays the given playlist item unless it is already the one playing.
+/// Returns NO if there is no such item.
 - (BOOL)playItemAtIndex:(NSUInteger)index;
 
 - (void)togglePlayPause;
@@ -71,6 +75,8 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 - (void)seekToTime:(NSTimeInterval)seconds;
 - (void)skipBy:(NSTimeInterval)seconds;
 
+/// YES while the current item is being opened (a stream connecting).
+- (BOOL)isConnecting;
 - (NSTimeInterval)currentTime;
 - (NSTimeInterval)duration;
 - (BOOL)hasVideo;

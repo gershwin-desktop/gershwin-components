@@ -19,15 +19,37 @@ static void put16(NSMutableData *d, uint16_t v)
   [d appendBytes: b length: 2];
 }
 
-NSString *TestMediaWriteSilentWAV(NSString *tag, NSTimeInterval seconds)
+NSString *TestMediaWriteTaggedWAV(NSString *tag, NSTimeInterval seconds,
+                                  NSDictionary *info)
 {
   const uint32_t rate = 8000;
   uint32_t dataBytes = (uint32_t)(seconds * rate) * 2;
-  NSMutableData *d = [NSMutableData data];
+  NSMutableData *list = [NSMutableData data];
 
+  if ([info count] > 0)
+    {
+      NSMutableData *items = [NSMutableData data];
+      NSEnumerator *e = [info keyEnumerator];
+      NSString *key;
+      while ((key = [e nextObject]) != nil)
+        {
+          NSData *value = [[info objectForKey: key] dataUsingEncoding: NSUTF8StringEncoding];
+          uint32_t size = (uint32_t)[value length] + 1;   /* NUL terminated */
+          [items appendBytes: [key UTF8String] length: 4];
+          put32(items, size);
+          [items appendData: value];
+          [items increaseLengthBy: 1 + (size & 1)];       /* pad to even */
+        }
+      [list appendBytes: "LIST" length: 4];
+      put32(list, 4 + (uint32_t)[items length]);
+      [list appendBytes: "INFO" length: 4];
+      [list appendData: items];
+    }
+
+  NSMutableData *d = [NSMutableData data];
   /* RIFF header, little endian as the format demands */
   [d appendBytes: "RIFF" length: 4];
-  put32(d, 36 + dataBytes);
+  put32(d, 36 + (uint32_t)[list length] + 8 + dataBytes);
   [d appendBytes: "WAVEfmt " length: 8];
   put32(d, 16);
   put16(d, 1);            /* PCM */
@@ -36,6 +58,7 @@ NSString *TestMediaWriteSilentWAV(NSString *tag, NSTimeInterval seconds)
   put32(d, rate * 2);
   put16(d, 2);
   put16(d, 16);
+  [d appendData: list];
   [d appendBytes: "data" length: 4];
   put32(d, dataBytes);
   [d increaseLengthBy: dataBytes];
@@ -44,4 +67,9 @@ NSString *TestMediaWriteSilentWAV(NSString *tag, NSTimeInterval seconds)
     [NSString stringWithFormat: @"player-%@-%d.wav", tag, (int)getpid()]];
   [d writeToFile: path atomically: YES];
   return path;
+}
+
+NSString *TestMediaWriteSilentWAV(NSString *tag, NSTimeInterval seconds)
+{
+  return TestMediaWriteTaggedWAV(tag, seconds, nil);
 }

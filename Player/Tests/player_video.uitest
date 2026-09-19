@@ -7,6 +7,8 @@
 # quit at the end.
 #
 # Run with: run_uitest Player/Tests/player_video.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
 # Player reopens in Internet radio mode if it was quit in it
 shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i testsrc=duration=30:size=320x240:rate=25 -f lavfi -i sine=duration=30 -c:v mpeg4 -c:a aac -shortest -metadata title='Test Clip' /tmp/player-uitest-${home}/clip.mp4"
@@ -16,8 +18,8 @@ activate application "Player"
 wait until window "Player - Test Clip" timeout 15s
 wait until button "Pause" timeout 5s
 # The picture replaces the cover art
-shell "sleep 1; /System/Library/Tools/drive_ui --pid $(pgrep -u $(id -u) -x Player) find_widgets --class ItemFlowView | cut -f7 | grep -qx 1"
-shell "/System/Library/Tools/drive_ui --pid $(pgrep -u $(id -u) -x Player) find_widgets --class VideoRenderView | grep -q VideoRenderView"
+shell "sleep 1; /System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) find_widgets --class ItemFlowView | cut -f7 | grep -qx 1"
+shell "/System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) find_widgets --class VideoRenderView | grep -q VideoRenderView"
 
 assert window "Player - Test Clip" frame constant
 select menu "View/Enter Full Screen"

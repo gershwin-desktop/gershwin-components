@@ -40,6 +40,7 @@ Player_HEADER_FILES = \
 	PlayerMenu.h \
 	PlayerViews.h \
 	PlayerAsync.h \
+	PlayerMediaInfo.h \
 	RadioStation.h \
 	RadioBrowser.h \
 	StreamPlayer.h \
@@ -55,6 +56,7 @@ Player_OBJC_FILES = \
 	PlayerMenu.m \
 	PlayerViews.m \
 	PlayerAsync.m \
+	PlayerMediaInfo.m \
 	RadioStation.m \
 	RadioBrowser.m \
 	StreamPlayer.m \
@@ -63,12 +65,6 @@ Player_OBJC_FILES = \
 	PreferencesController.m
 
 Player_OBJC_FILES += Player_main.m
-
-#
-# AVFoundation framework - referenced from libs-av build tree
-#
-# Link with AVFoundation framework (installed system-wide via libs-av)
-Player_GUI_LIBS += -lAVFoundation
 
 #
 # ItemFlow framework for album-art carousel
@@ -86,7 +82,7 @@ ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
 ADDITIONAL_GUI_LIBS += -ldispatch
 
 #
-# FFmpeg and libao for internet radio streaming (StreamPlayer)
+# FFmpeg and libao: playback (StreamPlayer) and tags (PlayerMediaInfo)
 #
 ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)
 ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libavformat libavcodec libavutil libswresample libswscale)

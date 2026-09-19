@@ -7,6 +7,8 @@
 # switched back off and the app is quit at the end.
 #
 # Run with: run_uitest Player/Tests/player_playlist.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
 # Player reopens in Internet radio mode if it was quit in it
 shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}"
