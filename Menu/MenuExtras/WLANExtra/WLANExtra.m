@@ -105,7 +105,8 @@ static id<NetworkBackend> CreateNetworkBackend(void)
         NSLog(@"WLANExtra: nmcli failed: %@", e);
         return nil;
     }
-    /* Read before wait - see WLANBackend runCommand for the deadlock rationale. */
+    /* Read before wait: a child that fills the OS pipe buffer blocks in
+     * write() and never exits, so waiting first would deadlock. */
     NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
     [task waitUntilExit];
     NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -261,7 +262,8 @@ static NSString *findTool(NSString *name)
     } @catch (NSException *e) {
         return nil;
     }
-    /* Read before wait - see WLANBackend runCommand for the deadlock rationale. */
+    /* Read before wait: a child that fills the OS pipe buffer blocks in
+     * write() and never exits, so waiting first would deadlock. */
     NSData *data = [[outPipe fileHandleForReading] readDataToEndOfFile];
     [task waitUntilExit];
     if ([task terminationStatus] != 0) return nil;

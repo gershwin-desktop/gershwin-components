@@ -103,7 +103,6 @@ Menu_HEADER_FILES = \
 	FreeBSDBacklightBackend.h \
 	WsconsBacklightBackend.h \
 	MediaKeyController.h \
-	SoundVolume.h \
 	TintedMenuItemCell.h
 
 # Resources
@@ -176,7 +175,7 @@ ifeq ($(PROFILE),1)
 ADDITIONAL_OBJCFLAGS += -DMENU_PROFILING=1
 endif
 
-ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I../Libraries/NetworkBackend -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
+ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
 # --as-needed avoids unnecessary libm dependency (needed on FreeBSD)
 ADDITIONAL_LDFLAGS = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo '-Wl,--as-needed' || echo '')
 AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo 'ADDITIONAL_LDFLAGS=-Wl,--as-needed' || echo '')

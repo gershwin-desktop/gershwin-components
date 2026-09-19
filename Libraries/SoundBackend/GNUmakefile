@@ -14,14 +14,15 @@ ifneq ($(UNAME_S),OpenBSD)
 libSoundBackend_OBJC_FILES += ../../Sound/OSSBackend.m
 endif
 
+libSoundBackend_HEADER_FILES_DIR = ../../Sound
 libSoundBackend_HEADER_FILES = \
-	../../Sound/SoundBackend.h \
-	../../Sound/WavScale.h \
-	../../Sound/ALSABackend.h \
-	../../Sound/OSSBackend.h \
-	../../Sound/SoundBackendFactory.h
+	SoundBackend.h \
+	WavScale.h \
+	ALSABackend.h \
+	OSSBackend.h \
+	SoundBackendFactory.h
 
-libSoundBackend_INSTALL_HEADERS_DIR = SoundBackend
+libSoundBackend_HEADER_FILES_INSTALL_DIR = SoundBackend
 libSoundBackend_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 
 include $(GNUSTEP_MAKEFILES)/library.make
