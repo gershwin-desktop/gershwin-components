@@ -1,8 +1,12 @@
 #import "BuildMonitorExtra.h"
 #import "GSMenuExtraContext.h"
 
-#define POLL_INTERVAL 60.0
 #define CONFIG_PREFIX @"BuildMonitor."
+
+/* GitHub's hourly API limits; every poll costs one request per repository. */
+static const double kRequestsPerHourWithoutToken = 60.0;
+static const double kRequestsPerHourWithToken = 5000.0;
+static const NSTimeInterval kMinimumPollInterval = 60.0;
 
 static NSString *ConfigKey(NSString *key)
 {
@@ -29,6 +33,7 @@ static NSString *ConfigKey(NSString *key)
     NSTextView *_reposTextView;
     NSSecureTextField *_tokenField;
 
+    NSTimer *_pollTimer;
     BOOL _polling;
     BOOL _pollAgain;
     BOOL _running;
@@ -473,6 +478,7 @@ static NSString *ConfigKey(NSString *key)
     _hasAnyRunning = NO;
     _fetchError = NO;
 
+    [self schedulePollTimer];
     [self pollGitHub];
 }
 
@@ -520,6 +526,7 @@ static NSString *ConfigKey(NSString *key)
         if ([_repos count] > 0) {
             [self pollGitHub];
         }
+        [self schedulePollTimer];
     } @catch (NSException *e) {
         NSLog(@"BuildMonitorExtra: exception in menuExtraDidLoad: %@", e);
         _running = NO;
@@ -535,9 +542,31 @@ static NSString *ConfigKey(NSString *key)
     }
 }
 
+/* Polling faster than the hourly request limit allows only earns rate-limit
+   errors, and without a token that limit is small enough to matter. */
+- (NSTimeInterval)pollInterval
+{
+    double perHour = [_token length] > 0 ? kRequestsPerHourWithToken
+                                         : kRequestsPerHourWithoutToken;
+    return MAX(kMinimumPollInterval, _repoCount * 3600.0 / perHour);
+}
+
+- (void)schedulePollTimer
+{
+    [_pollTimer invalidate];
+    _pollTimer = [NSTimer scheduledTimerWithTimeInterval: [self pollInterval]
+                                                  target: self
+                                                selector: @selector(pollGitHub)
+                                                userInfo: nil
+                                                 repeats: YES];
+}
+
 - (void)menuExtraWillUnload
 {
     _running = NO;
+    /* The timer retains its target, so it must go before the extra can. */
+    [_pollTimer invalidate];
+    _pollTimer = nil;
 }
 
 - (NSMenu *)menu
