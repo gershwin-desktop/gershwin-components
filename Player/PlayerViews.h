@@ -42,9 +42,6 @@
 - (void)clear;
 @end
 
-/// Holds the controls in full screen, without a look of its own.
-@interface PlayerOverlayBarView : NSView
-@end
 
 /// A one-line label that shortens text too long for it in the middle, so
 /// the start and the end of a title stay readable.
@@ -59,6 +56,21 @@ void PlayerSetWindowFullScreen(NSWindow *window, BOOL fullScreen);
 /// curves down towards the middle, `depth` pixels higher at the sides, with
 /// the bottom corners rounded by `radius` pixels.
 NSData *PlayerBottomCurveShapePath(CGFloat depth, CGFloat radius);
+
+/// _WM_SHAPE_PATH value for a window with all four corners rounded by
+/// `radius` pixels.
+NSData *PlayerRoundedRectShapePath(CGFloat radius);
+
+/// Puts the window at the top of the stack, above a window the window
+/// manager has just raised (a window gone full screen).
+void PlayerRaiseWindow(NSWindow *window);
+
+/// Asks the window manager to keep the window above the others.
+void PlayerSetWindowAbove(NSWindow *window, BOOL above);
+
+/// Asks the window manager for this outline on the window (nil: none).
+/// Does nothing when the window manager does not draw outlines.
+void PlayerSetWindowShapePath(NSWindow *window, NSData *path);
 
 /// The player window: its bottom edge curves down towards the middle, drawn
 /// by the window manager when it supports window outlines (_WM_SHAPE_PATH).

@@ -123,7 +123,7 @@
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
-    [self setViews:@[overlayBar] hidden:YES];
+    [self putControlsInPanel:NO];
     [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self positionViews] hidden:YES];
