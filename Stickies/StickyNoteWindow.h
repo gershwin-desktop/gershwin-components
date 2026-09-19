@@ -22,6 +22,9 @@
 - (void)collapse;
 - (void)expand;
 - (void)toggleCollapse;
+- (NSRect)uncollapsedFrame;
+- (NSRect)frameBelowReservedTopArea:(NSRect)frameRect;
+- (NSRect)frameFittingScreen:(NSRect)frameRect;
 - (void)mouseDown:(NSEvent *)event;
 - (void)mouseDragged:(NSEvent *)event;
 - (void)mouseUp:(NSEvent *)event;

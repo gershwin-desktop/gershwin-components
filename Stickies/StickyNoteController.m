@@ -108,6 +108,11 @@
 
     [noteWindow setContentView:noteView];
 
+    // A saved note may lie under the menu bar or off a screen that has
+    // since shrunk; NSWindow only constrains titled windows by itself.
+    [noteWindow setFrame:[noteWindow frameFittingScreen:[noteWindow frame]]
+                 display:NO];
+
     if (collapsed) {
         [noteWindow collapse];
     }
@@ -128,7 +133,7 @@
     document.rtfData = [[noteView textView] RTFFromRange:NSMakeRange(0, [currentText length])];
     document.color = noteColor;
     document.font = noteFont;
-    document.frame = [noteWindow frame];
+    document.frame = [noteWindow uncollapsedFrame];
     document.floatOnTop = floatOnTop;
     document.translucent = translucent;
     document.collapsed = collapsed;

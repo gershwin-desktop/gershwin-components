@@ -7,8 +7,10 @@
 #import "StickyNoteWindow.h"
 #import "StickyNoteView.h"
 #import "StickyNoteController.h"
+#import "StickyWorkArea.h"
 
 #define TITLE_BAR_HEIGHT 22.0
+#define MAX_SCREEN_SHARE 0.8
 
 @implementation StickyNoteWindow
 
@@ -62,6 +64,9 @@
     expandedFrame = [self frame];
     NSRect r = expandedFrame;
     r.size.height = TITLE_BAR_HEIGHT + 4;
+    // Screen coordinates grow upward; keep the title bar in place so the
+    // note rolls up into it instead of dropping to its bottom edge.
+    r.origin.y = NSMaxY(expandedFrame) - r.size.height;
     [self setFrame:r display:YES animate:YES];
     StickyNoteController *controller = (StickyNoteController *)[self delegate];
     if (controller) {
@@ -72,12 +77,65 @@
 - (void)expand
 {
     if (!isCollapsed) return;
+    NSRect r = [self uncollapsedFrame];
     isCollapsed = NO;
-    [self setFrame:expandedFrame display:YES animate:YES];
+    [self setFrame:r display:YES animate:YES];
     StickyNoteController *controller = (StickyNoteController *)[self delegate];
     if (controller) {
         [controller setCollapsed:NO];
     }
+}
+
+- (NSRect)frameBelowReservedTopArea:(NSRect)frameRect
+{
+    // Borderless windows are not constrained by NSWindow, and the window
+    // manager does not place them, so keep the title bar out of struts such
+    // as the menu bar ourselves; otherwise the note can no longer be grabbed.
+    NSRect usable = [StickyWorkArea usableFrameOfScreen:[self screen]];
+    if (NSMaxY(frameRect) > NSMaxY(usable)) {
+        frameRect.origin.y = NSMaxY(usable) - NSHeight(frameRect);
+    }
+    return frameRect;
+}
+
+- (NSRect)frameFittingScreen:(NSRect)frameRect
+{
+    // Notes saved on a larger screen must stay graspable and leave room for
+    // other windows, so cap them to a share of the usable area first.
+    NSRect usable = [StickyWorkArea usableFrameOfScreen:[self screen]];
+    CGFloat maxWidth = floor(NSWidth(usable) * MAX_SCREEN_SHARE);
+    CGFloat maxHeight = floor(NSHeight(usable) * MAX_SCREEN_SHARE);
+    if (NSWidth(frameRect) > maxWidth) {
+        frameRect.size.width = maxWidth;
+    }
+    if (NSHeight(frameRect) > maxHeight) {
+        frameRect.origin.y = NSMaxY(frameRect) - maxHeight;
+        frameRect.size.height = maxHeight;
+    }
+
+    frameRect = [self frameBelowReservedTopArea:frameRect];
+    if (NSMinY(frameRect) < NSMinY(usable)) {
+        frameRect.origin.y = NSMinY(usable);
+    }
+    if (NSMaxX(frameRect) > NSMaxX(usable)) {
+        frameRect.origin.x = NSMaxX(usable) - NSWidth(frameRect);
+    }
+    if (NSMinX(frameRect) < NSMinX(usable)) {
+        frameRect.origin.x = NSMinX(usable);
+    }
+    return frameRect;
+}
+
+- (NSRect)uncollapsedFrame
+{
+    if (!isCollapsed) return [self frame];
+    // The note may have been dragged while rolled up; unroll it below
+    // wherever its title bar is now.
+    NSRect current = [self frame];
+    NSRect r = expandedFrame;
+    r.origin.x = current.origin.x;
+    r.origin.y = NSMaxY(current) - r.size.height;
+    return r;
 }
 
 - (void)toggleCollapse
@@ -115,7 +173,9 @@
         NSPoint origin = [self frame].origin;
         origin.x += current.x - mouseDownLocation.x;
         origin.y += current.y - mouseDownLocation.y;
-        [self setFrameOrigin:origin];
+        NSRect r = [self frame];
+        r.origin = origin;
+        [self setFrameOrigin:[self frameBelowReservedTopArea:r].origin];
     } else {
         [super mouseDragged:event];
     }
