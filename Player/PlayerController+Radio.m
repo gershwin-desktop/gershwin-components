@@ -106,25 +106,18 @@
 
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self positionViews] hidden:YES];
-    [self setViews:@[openButton, fullscreenButton] hidden:YES];
     [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:NO];
     [self setViews:[self transportViews] hidden:NO];
-    [self setViews:@[volumeLabel, volumeSlider, muteCheckbox] hidden:NO];
+    [self setViews:[self volumeViews] hidden:NO];
 
+    // As in the local mode: transport at the bottom in the middle, volume
+    // above it
     CGFloat y = METRICS_CONTENT_BOTTOM_MARGIN;
-    NSRect mute = [muteCheckbox frame];
-    NSRect slider = [volumeSlider frame];
-    CGFloat volumeWidth = 50 + METRICS_SPACE_8 + NSWidth(slider) + METRICS_SPACE_8 + NSWidth(mute);
-    CGFloat x = floor(NSMidX(bounds) - volumeWidth / 2.0);
-    [volumeLabel setFrame:NSMakeRect(x, y + 3, 50, 14)];
-    x += 50 + METRICS_SPACE_8;
-    [volumeSlider setFrame:NSMakeRect(x, y, NSWidth(slider), METRICS_BUTTON_HEIGHT)];
-    x += NSWidth(slider) + METRICS_SPACE_8;
-    [muteCheckbox setFrame:NSMakeRect(x, y + 1, NSWidth(mute), 18)];
-    y += METRICS_BUTTON_HEIGHT + METRICS_SPACE_16;
-
     [self layoutTransportCenteredAt:NSMidX(bounds) y:y];
     y += 24 + METRICS_SPACE_12;
+
+    [self layoutVolumeCenteredAt:NSMidX(bounds) y:y];
+    y += METRICS_BUTTON_HEIGHT + METRICS_SPACE_16;
 
     [radioTextLabel setFrame:NSMakeRect(left, y, right - left, 15)];
     y += 15 + 4;

@@ -60,11 +60,9 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     NSImage *pauseImage;
 
     // Bottom row
-    NSButton *openButton;
     NSTextField *volumeLabel;
     NSSlider *volumeSlider;
     NSButton *muteCheckbox;
-    NSButton *fullscreenButton;
 
     // Full screen
     BOOL isFullscreen;

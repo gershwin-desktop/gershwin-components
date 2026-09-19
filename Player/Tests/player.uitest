@@ -17,7 +17,6 @@ launch application "Player"
 wait until window "Player" timeout 15s
 wait until menu bar "Player" timeout 10s
 assert text contains "No file loaded"
-assert button "Open..."
 assert button "Mute"
 assert menu item "Playback/Play" disabled
 assert menu item "Playback/Stop" disabled

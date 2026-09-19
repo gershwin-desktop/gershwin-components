@@ -28,13 +28,13 @@ static const CGFloat kTimeRowHeight = 16.0;
 static const CGFloat kTimeLabelWidth = 48.0;
 static const CGFloat kTransportButtonWidth = 40.0;
 static const CGFloat kTransportButtonHeight = 24.0;
-static const CGFloat kOpenButtonWidth = 100.0;
 static const CGFloat kVolumeSliderWidth = 120.0;
 static const CGFloat kMuteWidth = 56.0;
-static const CGFloat kIconButtonWidth = 32.0;
 static const CGFloat kOverlayHeight = 64.0;
-// How much higher the bottom edge is at the sides than in the middle
-static const CGFloat kBottomCurveDepth = 8.0;
+// How much higher the bottom edge is at the sides than in the middle, and
+// how round its corners are
+static const CGFloat kBottomCurveDepth = 12.0;
+static const CGFloat kBottomCornerRadius = 10.0;
 
 // Arrow keys move this far through a track
 static const NSTimeInterval kSkipSeconds = 5.0;
@@ -294,14 +294,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     nextButton = [self iconButtonWithImage:[self iconNext] title:@"Next"
                                     action:@selector(nextTrack:)];
 
-    openButton = [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease];
-    [openButton setTitle:@"Open..."];
-    [openButton setBezelStyle:NSRoundedBezelStyle];
-    [openButton setRefusesFirstResponder:YES];
-    [openButton setTarget:self];
-    [openButton setAction:@selector(openFile:)];
-    [contentView addSubview:openButton];
-
     volumeLabel = [self labelWithFont:METRICS_FONT_SYSTEM_REGULAR_11];
     [volumeLabel setStringValue:@"Volume:"];
     [volumeLabel setAlignment:NSRightTextAlignment];
@@ -323,9 +315,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [muteCheckbox setTarget:self];
     [muteCheckbox setAction:@selector(toggleMute:)];
     [contentView addSubview:muteCheckbox];
-
-    fullscreenButton = [self iconButtonWithImage:[self iconFullscreen] title:@"Full Screen"
-                                          action:@selector(toggleFullscreen:)];
 
     [self createRadioViews];
 
@@ -401,25 +390,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     }];
 }
 
-- (NSImage *)iconFullscreen
-{
-    return [self iconOfSize:NSMakeSize(10, 10) drawing:^{
-        NSBezierPath *p = [NSBezierPath bezierPath];
-        [p setLineWidth:1.5];
-        [p moveToPoint:NSMakePoint(0.75, 4)];
-        [p lineToPoint:NSMakePoint(0.75, 0.75)];
-        [p lineToPoint:NSMakePoint(4, 0.75)];
-        [p moveToPoint:NSMakePoint(0.75, 0.75)];
-        [p lineToPoint:NSMakePoint(4, 4)];
-        [p moveToPoint:NSMakePoint(6, 9.25)];
-        [p lineToPoint:NSMakePoint(9.25, 9.25)];
-        [p lineToPoint:NSMakePoint(9.25, 6)];
-        [p moveToPoint:NSMakePoint(9.25, 9.25)];
-        [p lineToPoint:NSMakePoint(6, 6)];
-        [p stroke];
-    }];
-}
-
 #pragma mark - Layout
 
 - (void)windowDidResize:(NSNotification *)notification
@@ -432,7 +402,8 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 // the picture fills the screen to its corners
 - (void)updateWindowShape
 {
-    [mainWindow setBottomCurveDepth:isFullscreen ? 0 : kBottomCurveDepth];
+    [mainWindow setBottomCurveDepth:isFullscreen ? 0 : kBottomCurveDepth
+                       cornerRadius:kBottomCornerRadius];
 }
 
 - (void)layoutSubviews
@@ -469,9 +440,9 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     return @[previousButton, playButton, stopButton, nextButton];
 }
 
-- (NSArray *)bottomRowViews
+- (NSArray *)volumeViews
 {
-    return @[openButton, volumeLabel, volumeSlider, muteCheckbox, fullscreenButton];
+    return @[volumeLabel, volumeSlider, muteCheckbox];
 }
 
 - (void)layoutTransportCenteredAt:(CGFloat)midX y:(CGFloat)y
@@ -483,6 +454,19 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
         [button setFrame:NSMakeRect(x, y, kTransportButtonWidth, kTransportButtonHeight)];
         x += kTransportButtonWidth;
     }
+}
+
+// Volume label, slider and Mute as one centered group
+- (void)layoutVolumeCenteredAt:(CGFloat)midX y:(CGFloat)y
+{
+    CGFloat labelWidth = 50;
+    CGFloat width = labelWidth + METRICS_SPACE_8 + kVolumeSliderWidth + METRICS_SPACE_8 + kMuteWidth;
+    CGFloat x = floor(midX - width / 2.0);
+    [volumeLabel setFrame:NSMakeRect(x, y + 3, labelWidth, 14)];
+    x += labelWidth + METRICS_SPACE_8;
+    [volumeSlider setFrame:NSMakeRect(x, y, kVolumeSliderWidth, METRICS_BUTTON_HEIGHT)];
+    x += kVolumeSliderWidth + METRICS_SPACE_8;
+    [muteCheckbox setFrame:NSMakeRect(x, y + 1, kMuteWidth, 18)];
 }
 
 - (void)layoutPositionRowFrom:(CGFloat)left to:(CGFloat)right y:(CGFloat)y
@@ -508,23 +492,16 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [self setViews:[self trackInfoViews] hidden:NO];
     [self setViews:[self positionViews] hidden:NO];
     [self setViews:[self transportViews] hidden:NO];
-    [self setViews:[self bottomRowViews] hidden:NO];
+    [self setViews:[self volumeViews] hidden:NO];
 
+    // The transport sits at the bottom in the middle, where the curved
+    // bottom edge is lowest
     CGFloat y = METRICS_CONTENT_BOTTOM_MARGIN;
-    [openButton setFrame:NSMakeRect(left, y, kOpenButtonWidth, METRICS_BUTTON_HEIGHT)];
-    [fullscreenButton setFrame:NSMakeRect(right - kIconButtonWidth, y,
-                                          kIconButtonWidth, METRICS_BUTTON_HEIGHT)];
-    CGFloat muteX = NSMinX([fullscreenButton frame]) - METRICS_SPACE_12 - kMuteWidth;
-    [muteCheckbox setFrame:NSMakeRect(muteX, y + 1, kMuteWidth, 18)];
-    CGFloat sliderX = muteX - METRICS_SPACE_8 - kVolumeSliderWidth;
-    [volumeSlider setFrame:NSMakeRect(sliderX, y, kVolumeSliderWidth, METRICS_BUTTON_HEIGHT)];
-    CGFloat labelLeft = NSMaxX([openButton frame]) + METRICS_SPACE_12;
-    [volumeLabel setFrame:NSMakeRect(labelLeft, y + 3,
-                                     sliderX - METRICS_SPACE_8 - labelLeft, 14)];
-    y += METRICS_BUTTON_HEIGHT + METRICS_SPACE_16;
-
     [self layoutTransportCenteredAt:NSMidX(bounds) y:y];
     y += kTransportButtonHeight + METRICS_SPACE_12;
+
+    [self layoutVolumeCenteredAt:NSMidX(bounds) y:y];
+    y += METRICS_BUTTON_HEIGHT + METRICS_SPACE_12;
 
     [self layoutPositionRowFrom:left to:right y:y];
     y += kTimeRowHeight + METRICS_SPACE_12;
@@ -574,10 +551,9 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 
     [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:YES];
     [self setViews:[self trackInfoViews] hidden:YES];
-    [self setViews:@[openButton, volumeLabel, volumeSlider, muteCheckbox] hidden:YES];
+    [self setViews:[self volumeViews] hidden:YES];
     [self setViews:[self positionViews] hidden:!controlsShown];
     [self setViews:[self transportViews] hidden:!controlsShown];
-    [fullscreenButton setHidden:!controlsShown];
 
     // The picture ends above the bar, so frames never paint over controls
     CGFloat barHeight = controlsShown ? kOverlayHeight : 0.0;
@@ -587,8 +563,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = NSWidth(bounds) - METRICS_CONTENT_SIDE_MARGIN;
     [self layoutTransportCenteredAt:NSMidX(bounds) y:8];
-    [fullscreenButton setFrame:NSMakeRect(right - kIconButtonWidth, 10,
-                                          kIconButtonWidth, METRICS_BUTTON_HEIGHT)];
     [self layoutPositionRowFrom:left to:right y:kOverlayHeight - kTimeRowHeight - 8];
 }
 
@@ -1230,7 +1204,6 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
     [stopButton setEnabled:[session canStop]];
     [previousButton setEnabled:[session canGoPrevious]];
     [nextButton setEnabled:[session canGoNext]];
-    [fullscreenButton setEnabled:[self showsVideo]];
     // Streams take a moment to connect, and web pages to be looked up
     if ([session isConnecting] || [ytdlpBackend isRunning]) {
         [progressIndicator startAnimation:self];

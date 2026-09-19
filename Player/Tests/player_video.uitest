@@ -23,10 +23,10 @@ shell "/System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) fi
 
 assert window "Player - Test Clip" frame constant
 select menu "View/Enter Full Screen"
-wait until not exists button "Open..." timeout 5s
+wait until not exists button "Mute" timeout 5s
 assert menu item "View/Exit Full Screen"
 press key "Escape"
-wait until button "Open..." timeout 5s
+wait until button "Mute" timeout 5s
 assert menu item "View/Enter Full Screen"
 assert window "Player - Test Clip" frame constant
 

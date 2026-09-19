@@ -71,19 +71,29 @@ static int32_t fixed(double v)
     return (int32_t)lround(v * 65536.0);
 }
 
-NSData *PlayerBottomCurveShapePath(CGFloat depth)
+NSData *PlayerBottomCurveShapePath(CGFloat depth, CGFloat radius)
 {
     // Points: fraction of the width, pixels, fraction of the height, pixels.
-    // The curve is a parabola (a cubic with its control points a third in
-    // from each end), deepest in the middle, where it touches the bottom.
+    // The bottom is a parabola between the rounded corners (a cubic with its
+    // control points a third in from each end), deepest in the middle, where
+    // it touches the bottom.  Each corner is a quarter circle as a cubic.
+    const double k = 0.5522847498;   // control distance of a quarter circle
+    double d = depth;
+    double r = radius;
     int32_t v[] = {
         1,
         0, 0, 0, 0, 0,
         1, fixed(1), 0, 0, 0,
-        1, fixed(1), 0, fixed(1), fixed(-depth),
-        2, fixed(2.0 / 3), 0, fixed(1), fixed(depth / 3),
-           fixed(1.0 / 3), 0, fixed(1), fixed(depth / 3),
-           0, 0, fixed(1), fixed(-depth),
+        1, fixed(1), 0, fixed(1), fixed(-(d + r)),
+        2, fixed(1), 0, fixed(1), fixed(-(d + r) + k * r),
+           fixed(1), fixed(-r + k * r), fixed(1), fixed(-d),
+           fixed(1), fixed(-r), fixed(1), fixed(-d),
+        2, fixed(2.0 / 3), fixed(-r / 3), fixed(1), fixed(d / 3),
+           fixed(1.0 / 3), fixed(r / 3), fixed(1), fixed(d / 3),
+           0, fixed(r), fixed(1), fixed(-d),
+        2, 0, fixed(r - k * r), fixed(1), fixed(-d),
+           0, 0, fixed(1), fixed(-(d + r) + k * r),
+           0, 0, fixed(1), fixed(-(d + r)),
         3
     };
     return [NSData dataWithBytes:v length:sizeof(v)];
@@ -91,7 +101,7 @@ NSData *PlayerBottomCurveShapePath(CGFloat depth)
 
 @implementation PlayerWindow
 
-- (void)setBottomCurveDepth:(CGFloat)depth
+- (void)setBottomCurveDepth:(CGFloat)depth cornerRadius:(CGFloat)radius
 {
     Display *display = NULL;
     Window xid = 0;
@@ -103,17 +113,21 @@ NSData *PlayerBottomCurveShapePath(CGFloat depth)
     if (depth > 0 && !windowManagerSupports(display, pathAtom)) {
         depth = 0;
     }
-    if (depth == _bottomCurveDepth) {
+    if (depth <= 0) {
+        radius = 0;
+    }
+    if (depth == _bottomCurveDepth && radius == _bottomCornerRadius) {
         return;
     }
     _bottomCurveDepth = depth;
+    _bottomCornerRadius = radius;
 
     if (depth > 0) {
         // The outline is in device pixels
         NSRect points = [[self contentView] bounds];
         NSRect pixels = [[self contentView] convertRect:points toView:nil];
         CGFloat scale = NSWidth(points) > 0 ? NSWidth(pixels) / NSWidth(points) : 1.0;
-        NSData *path = PlayerBottomCurveShapePath(round(depth * scale));
+        NSData *path = PlayerBottomCurveShapePath(round(depth * scale), round(radius * scale));
         NSUInteger count = [path length] / sizeof(int32_t);
         const int32_t *values = [path bytes];
         // Xlib takes 32-bit property items as longs
@@ -127,11 +141,6 @@ NSData *PlayerBottomCurveShapePath(CGFloat depth)
         XDeleteProperty(display, xid, pathAtom);
     }
     XFlush(display);
-}
-
-- (CGFloat)resizeIndicatorBottomInset
-{
-    return _bottomCurveDepth;
 }
 
 @end
