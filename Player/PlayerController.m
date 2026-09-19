@@ -28,7 +28,6 @@ static const CGFloat kTimeRowHeight = 16.0;
 static const CGFloat kTimeLabelWidth = 48.0;
 static const CGFloat kTransportButtonWidth = 40.0;
 static const CGFloat kTransportButtonHeight = 24.0;
-static const CGFloat kTransportButtonGap = 8.0;
 static const CGFloat kOpenButtonWidth = 100.0;
 static const CGFloat kVolumeSliderWidth = 120.0;
 static const CGFloat kMuteWidth = 56.0;
@@ -459,13 +458,12 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
 
 - (void)layoutTransportCenteredAt:(CGFloat)midX y:(CGFloat)y
 {
+    // The buttons touch, so they read as one control
     NSArray *buttons = [self transportViews];
-    CGFloat rowWidth = [buttons count] * kTransportButtonWidth
-        + ([buttons count] - 1) * kTransportButtonGap;
-    CGFloat x = floor(midX - rowWidth / 2.0);
+    CGFloat x = floor(midX - [buttons count] * kTransportButtonWidth / 2.0);
     for (NSButton *button in buttons) {
         [button setFrame:NSMakeRect(x, y, kTransportButtonWidth, kTransportButtonHeight)];
-        x += kTransportButtonWidth + kTransportButtonGap;
+        x += kTransportButtonWidth;
     }
 }
 
