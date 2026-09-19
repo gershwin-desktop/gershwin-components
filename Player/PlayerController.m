@@ -233,6 +233,10 @@ static const NSTimeInterval kOverlayHideDelay = 3.0;
                                                      defer:NO];
     [mainWindow setTitle:@"Player"];
     [mainWindow setDelegate:self];
+    // Owned by the controller, whose timers keep updating its views until
+    // the app quits: closing the window (title bar) ends the app with the
+    // same fade-out as quitting, and must not free it before that
+    [mainWindow setReleasedWhenClosed:NO];
     [mainWindow setContentMinSize:NSMakeSize(METRICS_WIN_MIN_WIDTH, kMinHeight)];
     [mainWindow setAcceptsMouseMovedEvents:YES];
 
