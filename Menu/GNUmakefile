@@ -31,6 +31,7 @@ Menu_OBJC_FILES = \
 	DBusMenuParser.m \
 	GTKMenuParser.m \
 	DBusMenuShortcutParser.m \
+	MenuShortcutItems.m \
 	GNUStepMenuActionHandler.m \
 	DBusMenuActionHandler.m \
 	GTKActionHandler.m \

@@ -9,6 +9,7 @@
 #import "DBusMenuShortcutParser.h"
 #import "DBusMenuParser.h"
 #import "DBusMenuActionHandler.h"
+#import "MenuShortcutItems.h"
 #import "DBusSubmenuManager.h"
 #import "MenuUtils.h"
 #import "AppMenuWidget.h"
@@ -1069,34 +1070,17 @@
 
 - (void)reregisterShortcutsForMenuItems:(NSArray *)items serviceName:(NSString *)serviceName objectPath:(NSString *)objectPath
 {
-    /* Snapshot the array: [NSMenu itemArray] returns the menu's LIVE array in
-     * GNUstep, and the menu can be mutated while we walk it (e.g. the system
-     * menu is still being populated) - fast-enumerating the live array then
-     * crashes mid-loop and silently drops the app's shortcuts. */
-    NSArray *snapshot = [items copy];
-    for (NSMenuItem *item in snapshot) {
-        // Check if this item has a shortcut
-        NSString *keyEquivalent = [item keyEquivalent];
-        if (keyEquivalent && [keyEquivalent length] > 0) {
-            NSUInteger modifierMask = [item keyEquivalentModifierMask];
-
-            if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
-                                                                modifiers:modifierMask]) {
-                NSDebugLog(@"DBusMenuImporter: Re-registering DBus shortcut: %@", [item title]);
-                
-                // Re-register through DBusMenuActionHandler
-                [DBusMenuActionHandler setupActionForMenuItem:item
-                                                   serviceName:serviceName
-                                                    objectPath:objectPath
-                                                dbusConnection:_dbusConnection];
-            }
-        }
-        
-        // Process submenus recursively
-        if ([item hasSubmenu]) {
-            [self reregisterShortcutsForMenuItems:[[item submenu] itemArray] 
-                                      serviceName:serviceName 
-                                       objectPath:objectPath];
+    /* Only items this importer set up: Menu's own system menu sits in the
+     * same tree, and handing its Force Quit to the application's handler
+     * left neither the menu item nor Alt-Shift-Escape opening the panel. */
+    for (NSMenuItem *item in MenuItemsWithShortcutsHandledBy(items, [DBusMenuActionHandler class])) {
+        if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:[item keyEquivalent]
+                                                            modifiers:[item keyEquivalentModifierMask]]) {
+            NSDebugLog(@"DBusMenuImporter: Re-registering DBus shortcut: %@", [item title]);
+            [DBusMenuActionHandler setupActionForMenuItem:item
+                                               serviceName:serviceName
+                                                objectPath:objectPath
+                                            dbusConnection:_dbusConnection];
         }
     }
 }

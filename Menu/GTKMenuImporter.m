@@ -10,6 +10,7 @@
 #import "GTKMenuParser.h"
 #import "GTKSubmenuManager.h"
 #import "GTKActionHandler.h"
+#import "MenuShortcutItems.h"
 #import "DBusConnection.h"
 #import "AppMenuWidget.h"
 #import "MenuUtils.h"
@@ -886,43 +887,29 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error) {
 
 - (void)reregisterShortcutsForMenuItems:(NSArray *)items serviceName:(NSString *)serviceName actionPath:(NSString *)actionPath
 {
-    /* Snapshot: [NSMenu itemArray] is the live array in GNUstep; the menu can
-     * be mutated while we walk it, which would abort the loop and drop the
-     * app's shortcuts. */
-    NSArray *snapshot = [items copy];
-    for (NSMenuItem *item in snapshot) {
-        // Check if this item has GTK action data and a shortcut
-        NSString *keyEquivalent = [item keyEquivalent];
-        if (keyEquivalent && [keyEquivalent length] > 0) {
-            NSUInteger modifierMask = [item keyEquivalentModifierMask];
+    /* Only items this importer set up: Menu's own system menu sits in the
+     * same tree, and handing its Force Quit to the application's handler
+     * left neither the menu item nor Alt-Shift-Escape opening the panel. */
+    for (NSMenuItem *item in MenuItemsWithShortcutsHandledBy(items, [GTKActionHandler class])) {
+        if (![DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:[item keyEquivalent]
+                                                             modifiers:[item keyEquivalentModifierMask]]) {
+            continue;
+        }
+        // Get the action name from the menu item's representedObject or title
+        NSString *actionName = [item representedObject];
+        if (!actionName) {
+            // Fallback to generating action name from title
+            actionName = [[item title] lowercaseString];
+            actionName = [actionName stringByReplacingOccurrencesOfString:@" " withString:@"-"];
+        }
 
-            if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
-                                                                modifiers:modifierMask]) {
-                // Get the action name from the menu item's representedObject or title
-                NSString *actionName = [item representedObject];
-                if (!actionName) {
-                    // Fallback to generating action name from title
-                    actionName = [[item title] lowercaseString];
-                    actionName = [actionName stringByReplacingOccurrencesOfString:@" " withString:@"-"];
-                }
-                
-                NSDebugLog(@"GTKMenuImporter: Re-registering GTK shortcut: %@ (action: %@)", [item title], actionName);
-                
-                // Re-register through GTKActionHandler
-                [GTKActionHandler setupActionForMenuItem:item
-                                              actionName:actionName
-                                             serviceName:serviceName
-                                              actionPath:actionPath
-                                          dbusConnection:_dbusConnection];
-            }
-        }
-        
-        // Process submenus recursively
-        if ([item hasSubmenu]) {
-            [self reregisterShortcutsForMenuItems:[[item submenu] itemArray] 
-                                      serviceName:serviceName 
-                                       actionPath:actionPath];
-        }
+        NSDebugLog(@"GTKMenuImporter: Re-registering GTK shortcut: %@ (action: %@)", [item title], actionName);
+
+        [GTKActionHandler setupActionForMenuItem:item
+                                      actionName:actionName
+                                     serviceName:serviceName
+                                      actionPath:actionPath
+                                  dbusConnection:_dbusConnection];
     }
 }
 
