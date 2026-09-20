@@ -880,23 +880,12 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                                              afterDelay:0];
                     }
                 }
-                if ([provider respondsToSelector:@selector(menu)]
-                    && ![self isMenuOnScreen:[menuItem submenu]]) {
-                    if ([provider respondsToSelector:@selector(menuWillOpen)]) {
-                        [provider menuWillOpen];
-                    }
-                    NSMenu *freshSubmenu = [provider menu];
-                    if (freshSubmenu) {
-                        NSMenu *existingSubmenu = [menuItem submenu];
-                        if (existingSubmenu) {
-                            [self configureSubmenu:existingSubmenu forIdentifier:identifier];
-                            [self replaceMenu:existingSubmenu withMenu:freshSubmenu];
-                        } else {
-                            [self configureSubmenu:freshSubmenu forIdentifier:identifier];
-                            [menuItem setSubmenu:freshSubmenu];
-                        }
-                    }
-                }
+                /* The submenu is deliberately left alone here. An extra
+                   reports a new value every second, and building its menu
+                   again means a whole menu with two windows of its own for
+                   something nobody is looking at. What is on screen is the
+                   title and the icon above, and the submenu is built afresh
+                   in menuNeedsUpdate: at the moment it is opened. */
             } @catch (NSException *e) {
                 NSLog(@"GSMenuExtra: exception refreshing %@: %@", identifier, e);
             }
