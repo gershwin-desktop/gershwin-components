@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import "PRFormat.h"
 #import "PRFlatTableController.h"
 #import "PRProfile.h"
 #import "PRAppearance.h"
@@ -108,15 +109,15 @@ objectValueForTableColumn:(NSTableColumn *)column
     NSString *identifier = [column identifier];
 
     if ([identifier isEqualToString:@"self"])
-        return [PRAppearance stringForWeight:[row selfWeight]
-                                        unit:_costUnit
-                                   frequency:_frequency];
+        return [PRFormat stringForWeight:[row selfWeight]
+                                    unit:_costUnit
+                               frequency:_frequency];
     if ([identifier isEqualToString:@"selfPercent"])
-        return [PRAppearance percentOf:[row selfWeight] total:_total];
+        return [PRFormat percentOf:[row selfWeight] total:_total];
     if ([identifier isEqualToString:@"total"])
-        return [PRAppearance stringForWeight:[row totalWeight]
-                                        unit:_costUnit
-                                   frequency:_frequency];
+        return [PRFormat stringForWeight:[row totalWeight]
+                                    unit:_costUnit
+                               frequency:_frequency];
     if ([identifier isEqualToString:@"name"])
         return [row name];
     if ([identifier isEqualToString:@"detail"])

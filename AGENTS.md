@@ -63,7 +63,14 @@ to the SYSTEM domain unless noted.
   demangling, the perf/folded/DTrace stack parsers, call trees and the flat
   cost lists): `gmake`, then run `./obj/t_*`. `Profiler/Tests/*.uitest` drives
   the app itself from a file of folded stacks, so it needs neither perf nor
-  root.
+  root. `Profiler/Tests/cli_smoke.sh` checks the `profiler` command line tool
+  (`sh Tests/cli_smoke.sh` after `gmake`); it needs no display either.
+- `Profiler` builds two things from one engine: the app, and `profiler`, a
+  tool that answers the same questions in a terminal (`profiler memory <pid>`,
+  `profiler objects <program>`, `profiler report <file.folded>`, each with
+  `--json`). Anything the tool needs must stay free of AppKit - `PRFormat`
+  holds the number formatting for that reason, and only `PRAppearance` (the
+  colours and icons) may use AppKit.
 - `Player/Tests/Unit/`: ObjectTesting tools for the playlist, playback session,
   FFmpeg player and menu (`gmake`, then run `./obj/t_*`; `t_PlayerMenu` needs a
   `DISPLAY`). `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.

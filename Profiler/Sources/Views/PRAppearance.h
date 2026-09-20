@@ -9,7 +9,8 @@
 
 @class PRSymbol;
 
-/* Colours, icons and number formats shared by the profile views. */
+/* Colours and icons shared by the profile views. The numbers they show
+   are put into words by PRFormat, which the command line tool uses too. */
 @interface PRAppearance : NSObject
 
 /* Every binary gets its own hue, so one library's frames are recognisable
@@ -25,12 +26,6 @@
 + (NSColor *)unknownColor;
 + (NSColor *)dimmedColor;
 
-/* "1.4 s", "12.0 MB", "3,412 allocations" - whatever the unit means. */
-+ (NSString *)stringForWeight:(double)weight
-                         unit:(PRCostUnit)unit
-                    frequency:(NSUInteger)frequency;
-+ (NSString *)percentOf:(double)weight total:(double)total;
-+ (NSString *)nameOfUnit:(PRCostUnit)unit;
 
 /* The icons of the recording controls, drawn instead of loaded so that they
    stay sharp whatever the scale factor is. */

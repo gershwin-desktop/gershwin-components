@@ -19,13 +19,14 @@ ARCFLAGS = -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
 ../../Sources/Model/PRCallNode.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Model/PRProfile.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Model/PRStackParser.m_FILE_FLAGS += $(ARCFLAGS)
+../../Sources/Model/PRFormat.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Model/PRCensus.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Model/PRMemoryMap.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Views/PRAppearance.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Views/PRFlameGraphView.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Sources/Views/PRLegendView.m_FILE_FLAGS += $(ARCFLAGS)
 
-MODEL_FILES = ../../Sources/Model/PRSymbol.m ../../Sources/Model/PRObjCDemangler.m \
+MODEL_FILES = ../../Sources/Model/PRFormat.m ../../Sources/Model/PRSymbol.m ../../Sources/Model/PRObjCDemangler.m \
 	../../Sources/Model/PRCallNode.m ../../Sources/Model/PRProfile.m \
 	../../Sources/Model/PRStackParser.m
 

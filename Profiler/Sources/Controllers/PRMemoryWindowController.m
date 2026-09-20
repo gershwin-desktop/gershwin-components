@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import "PRFormat.h"
 #import "PRMemoryWindowController.h"
 #import "PRMemoryMap.h"
 #import "PRMemoryMapReader.h"
@@ -331,9 +332,9 @@ static const CGFloat kListWidth = 260.0;
 
 - (NSString *)bytes:(unsigned long long)value
 {
-    return [PRAppearance stringForWeight:(double)value
-                                    unit:PRCostUnitBytes
-                               frequency:0];
+    return [PRFormat stringForWeight:(double)value
+                                unit:PRCostUnitBytes
+                           frequency:0];
 }
 
 - (void)groupingChanged:(id)sender
@@ -383,8 +384,8 @@ objectValueForTableColumn:(NSTableColumn *)column
     if ([identifier isEqualToString:@"resident"])
         return [self bytes:[region resident]];
     if ([identifier isEqualToString:@"share"])
-        return [PRAppearance percentOf:(double)[region resident]
-                                 total:(double)[_map resident]];
+        return [PRFormat percentOf:(double)[region resident]
+                             total:(double)[_map resident]];
     if ([identifier isEqualToString:@"private"])
         return [self bytes:[region privateBytes]];
     if ([identifier isEqualToString:@"swap"])

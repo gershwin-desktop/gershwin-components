@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import "PRFormat.h"
 #import "PRFlameGraphView.h"
 #import "PRAppearance.h"
 #import "PRLegendView.h"
@@ -349,12 +350,12 @@
 
     PRSymbol *symbol = [node symbol];
     double total = [_root totalWeight];
-    NSString *cost = [PRAppearance stringForWeight:[node totalWeight]
+    NSString *cost = [PRFormat stringForWeight:[node totalWeight]
+                                          unit:_costUnit
+                                     frequency:_frequency];
+    NSString *selfCost = [PRFormat stringForWeight:[node selfWeight]
                                               unit:_costUnit
                                          frequency:_frequency];
-    NSString *selfCost = [PRAppearance stringForWeight:[node selfWeight]
-                                                  unit:_costUnit
-                                             frequency:_frequency];
 
     if (symbol == nil)
         return [NSString stringWithFormat:@"%@ - %@ in total",
@@ -362,7 +363,7 @@
 
     return [NSString stringWithFormat:@"%@  -  %@ (%@) inclusive, %@ self  -  %@",
             [symbol displayName], cost,
-            [PRAppearance percentOf:[node totalWeight] total:total],
+            [PRFormat percentOf:[node totalWeight] total:total],
             selfCost, [symbol moduleName]];
 }
 

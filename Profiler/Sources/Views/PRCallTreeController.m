@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import "PRFormat.h"
 #import "PRCallTreeController.h"
 #import "PRCallNode.h"
 #import "PRSymbol.h"
@@ -132,16 +133,16 @@ objectValueForTableColumn:(NSTableColumn *)column
         return symbol ? [symbol displayName] : [node label];
     }
     if ([identifier isEqualToString:@"total"])
-        return [PRAppearance stringForWeight:[node totalWeight]
-                                        unit:_costUnit
-                                   frequency:_frequency];
+        return [PRFormat stringForWeight:[node totalWeight]
+                                    unit:_costUnit
+                               frequency:_frequency];
     if ([identifier isEqualToString:@"totalPercent"])
-        return [PRAppearance percentOf:[node totalWeight] total:_total];
+        return [PRFormat percentOf:[node totalWeight] total:_total];
     if ([identifier isEqualToString:@"self"])
         return [node selfWeight] > 0 ?
-            [PRAppearance stringForWeight:[node selfWeight]
-                                     unit:_costUnit
-                                frequency:_frequency] : @"";
+            [PRFormat stringForWeight:[node selfWeight]
+                                 unit:_costUnit
+                            frequency:_frequency] : @"";
     if ([identifier isEqualToString:@"module"])
         return [[node symbol] moduleName];
 

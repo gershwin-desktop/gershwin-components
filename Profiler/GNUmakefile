@@ -31,6 +31,7 @@ Profiler_OBJC_FILES = \
 	Sources/Model/PRStackParser.m \
 	Sources/Model/PRProcessInfo.m \
 	Sources/Model/PRProcessMonitor.m \
+	Sources/Model/PRFormat.m \
 	Sources/Model/PRCensus.m \
 	Sources/Model/PRMemoryMap.m \
 	Sources/Model/PRMemoryMapReader.m \
@@ -65,6 +66,7 @@ Profiler_HEADER_FILES = \
 	Model/PRStackParser.h \
 	Model/PRProcessInfo.h \
 	Model/PRProcessMonitor.h \
+	Model/PRFormat.h \
 	Model/PRCensus.h \
 	Model/PRMemoryMap.h \
 	Model/PRMemoryMapReader.h \
@@ -99,7 +101,30 @@ Profiler_OBJCFLAGS = -Wall -O2
 ADDITIONAL_OBJCFLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
 Profiler_LDFLAGS = -lgnustep-base -lgnustep-gui -Wl,-rpath,/System/Library/Libraries
 
+# The same engine without the windows, for a terminal or a script: it links
+# only the model and the backends, so it needs no display to run.
+TOOL_NAME = profiler
+profiler_OBJC_FILES = \
+	Sources/Tool/main.m \
+	Sources/Model/PRFormat.m \
+	Sources/Model/PRSymbol.m \
+	Sources/Model/PRObjCDemangler.m \
+	Sources/Model/PRCallNode.m \
+	Sources/Model/PRProfile.m \
+	Sources/Model/PRStackParser.m \
+	Sources/Model/PRCensus.m \
+	Sources/Model/PRMemoryMap.m \
+	Sources/Model/PRMemoryMapReader.m \
+	Sources/Model/PRProcessInfo.m \
+	Sources/Model/PRProcessMonitor.m \
+	Sources/Backends/PRRecorder.m \
+	Sources/Backends/PRPrivilegedTask.m \
+	Sources/Backends/PRCensusClient.m
+profiler_TOOL_LIBS += -lgnustep-base
+profiler_OBJCFLAGS = -Wall -O2
+
 include $(GNUSTEP_MAKEFILES)/library.make
+include $(GNUSTEP_MAKEFILES)/tool.make
 include $(GNUSTEP_MAKEFILES)/application.make
 
 before-install::

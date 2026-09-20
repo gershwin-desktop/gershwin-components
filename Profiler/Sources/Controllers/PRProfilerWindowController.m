@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import "PRFormat.h"
 #import "PRProfilerWindowController.h"
 #import "PRRecordPanelController.h"
 #import "PRRecorderFactory.h"
@@ -520,9 +521,9 @@ static const CGFloat kTransportIconSize = 13.0;
     [self reloadViews];
 
     NSString *name = [profile title] ? [profile title] : @"Profile";
-    NSString *cost = [PRAppearance stringForWeight:[profile totalWeight]
-                                              unit:unit
-                                         frequency:frequency];
+    NSString *cost = [PRFormat stringForWeight:[profile totalWeight]
+                                          unit:unit
+                                     frequency:frequency];
     NSString *headline;
 
     unsigned long stacks = (unsigned long)[profile sampleCount];
@@ -563,8 +564,8 @@ static const CGFloat kTransportIconSize = 13.0;
         double weight = [_profile weightOfThread:identifier];
         NSString *title = [NSString stringWithFormat:@"%@ (%d) - %@",
                            name ? name : @"thread", identifier,
-                           [PRAppearance percentOf:weight
-                                             total:[_profile totalWeight]]];
+                           [PRFormat percentOf:weight
+                                         total:[_profile totalWeight]]];
         [_threadPopUp addItemWithTitle:title];
         [[_threadPopUp lastItem] setTag:(NSInteger)identifier];
     }
@@ -674,8 +675,8 @@ static const CGFloat kTransportIconSize = 13.0;
     [_flameGraph display];
     double total = [_profile weightInRange:_range thread:_thread];
     [_matchedLabel setStringValue:[NSString stringWithFormat:@"%@ matched",
-                                   [PRAppearance percentOf:[_flameGraph matchedWeight]
-                                                     total:total]]];
+                                   [PRFormat percentOf:[_flameGraph matchedWeight]
+                                                 total:total]]];
 }
 
 - (void)updateFlameGraphSize
