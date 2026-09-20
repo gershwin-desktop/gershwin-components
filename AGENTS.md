@@ -59,6 +59,11 @@ to the SYSTEM domain unless noted.
   `TEST_TOOL_NAME` + `test-tool.make`; `ICNSImageRep/test/` has `test_icns.m`;
   `Menu/` has `test.sh` / `test-menu-integration.sh`; `Assistants/BackupAssistant/`
   has shell+ObjC test tools. Inspect the component's `GNUmakefile` for the exact tool.
+- `Profiler/Tests/Unit/`: ObjectTesting tools for the profile model (symbol
+  demangling, the perf/folded/DTrace stack parsers, call trees and the flat
+  cost lists): `gmake`, then run `./obj/t_*`. `Profiler/Tests/*.uitest` drives
+  the app itself from a file of folded stacks, so it needs neither perf nor
+  root.
 - `Player/Tests/Unit/`: ObjectTesting tools for the playlist, playback session,
   FFmpeg player and menu (`gmake`, then run `./obj/t_*`; `t_PlayerMenu` needs a
   `DISPLAY`). `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.

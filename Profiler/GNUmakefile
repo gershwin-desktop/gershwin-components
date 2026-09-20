@@ -1,6 +1,8 @@
+#
 # Copyright (c) 2026 Simon Peter
 #
 # SPDX-License-Identifier: BSD-2-Clause
+#
 
 include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
@@ -14,39 +16,66 @@ VERSION = 1.0
 Profiler_OBJC_FILES = \
 	Sources/main.m \
 	Sources/AppDelegate.m \
-	Sources/ProfilerWindowController.m \
-	Sources/ProcessInfo.m \
-	Sources/ProcessMonitor.m \
-	Sources/GraphView.m \
-	Sources/HotspotTableController.m \
-	Sources/ProfilerController.m
+	Sources/Model/PRSymbol.m \
+	Sources/Model/PRObjCDemangler.m \
+	Sources/Model/PRCallNode.m \
+	Sources/Model/PRProfile.m \
+	Sources/Model/PRStackParser.m \
+	Sources/Model/PRProcessInfo.m \
+	Sources/Model/PRProcessMonitor.m \
+	Sources/Backends/PRPrivilegedTask.m \
+	Sources/Backends/PRRecorder.m \
+	Sources/Backends/PRPerfRecorder.m \
+	Sources/Backends/PRHeaptrackRecorder.m \
+	Sources/Backends/PRDTraceRecorder.m \
+	Sources/Backends/PRRecorderFactory.m \
+	Sources/Views/PRAppearance.m \
+	Sources/Views/PRFlameGraphView.m \
+	Sources/Views/PRTimelineView.m \
+	Sources/Views/PRLiveGraphView.m \
+	Sources/Views/PRCallTreeController.m \
+	Sources/Views/PRFlatTableController.m \
+	Sources/Controllers/PRRecordPanelController.m \
+	Sources/Controllers/PRProfilerWindowController.m
 
-Profiler_HEADERS = \
-	Sources/AppDelegate.h \
-	Sources/ProfilerWindowController.h \
-	Sources/ProcessInfo.h \
-	Sources/ProcessMonitor.h \
-	Sources/GraphView.h \
-	Sources/HotspotTableController.h \
-	Sources/ProfilerController.h
+Profiler_HEADER_FILES_DIR = Sources
+Profiler_HEADER_FILES = \
+	AppDelegate.h \
+	AppearanceMetrics.h \
+	Model/PRTypes.h \
+	Model/PRSymbol.h \
+	Model/PRObjCDemangler.h \
+	Model/PRCallNode.h \
+	Model/PRProfile.h \
+	Model/PRStackParser.h \
+	Model/PRProcessInfo.h \
+	Model/PRProcessMonitor.h \
+	Backends/PRPrivilegedTask.h \
+	Backends/PRRecorder.h \
+	Backends/PRRecorderPrivate.h \
+	Backends/PRPerfRecorder.h \
+	Backends/PRHeaptrackRecorder.h \
+	Backends/PRDTraceRecorder.h \
+	Backends/PRRecorderFactory.h \
+	Views/PRAppearance.h \
+	Views/PRFlameGraphView.h \
+	Views/PRTimelineView.h \
+	Views/PRLiveGraphView.h \
+	Views/PRCallTreeController.h \
+	Views/PRFlatTableController.h \
+	Controllers/PRRecordPanelController.h \
+	Controllers/PRProfilerWindowController.h
 
-Profiler_RESOURCE_FILES = Resources/Dependencies.plist
+Profiler_RESOURCE_FILES = Resources/Dependencies.plist Resources/Profiler.png
 
 Profiler_MAIN_MODEL_FILE =
 
+ADDITIONAL_INCLUDE_DIRS += -ISources -ISources/Model -ISources/Backends \
+	-ISources/Views -ISources/Controllers
+
 Profiler_OBJCFLAGS = -Wall -O2
-Profiler_LDFLAGS = -lgnustep-base -lgnustep-gui -ldispatch -Wl,-rpath,/System/Library/Libraries
-
-AppDelegate.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-ProfilerWindowController.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-ProcessInfo.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-ProcessMonitor.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-GraphView.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-HotspotTableController.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-ProfilerController.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-main.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
-
-ADDITIONAL_OBJCFLAGS += -Wno-import
+ADDITIONAL_OBJCFLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
+Profiler_LDFLAGS = -lgnustep-base -lgnustep-gui -Wl,-rpath,/System/Library/Libraries
 
 include $(GNUSTEP_MAKEFILES)/application.make
 

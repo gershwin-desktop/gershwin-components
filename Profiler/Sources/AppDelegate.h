@@ -4,8 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 
+@class PRProfilerWindowController;
+
 @interface AppDelegate : NSObject <NSApplicationDelegate>
+{
+    PRProfilerWindowController *_windowController;
+}
 @end

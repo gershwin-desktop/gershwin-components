@@ -1,0 +1,32 @@
+#!/usr/bin/env run_uitest
+# OnDemand progress bar UI test
+# Verifies that the progress bar appears when installing missing packages.
+#
+# Prerequisites:
+# - Profiler.app must have a Resources/Dependencies.plist listing packages
+# - linux-perf must NOT be installed (run: sudo apt-get remove linux-perf -y)
+# - OnDemand.bundle must be installed and loaded in Profiler
+#
+# Run with: run_uitest Profiler/Tests/OnDemand_progress.uitest
+
+# Launch Profiler
+launch application "Profiler"
+
+# Wait for the "needs additional software" alert and click Install
+wait until button "Install" timeout 10s
+click button "Install"
+
+# Verify the progress window with progress bar appears
+wait until exists NSProgressIndicator in window "Installing..." timeout 5s
+assert exists NSProgressIndicator in window "Installing..."
+
+# Verify the progress window has a cancel button
+assert exists button "Cancel" in window "Installing..."
+
+# Wait for install to complete (progress window should close)
+wait until not exists window "Installing..." timeout 30s
+
+# Profiler should now be running normally
+assert exists window "Profiler"
+
+log "OnDemand progress bar test PASSED"

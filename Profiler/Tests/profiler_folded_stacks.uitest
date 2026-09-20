@@ -1,0 +1,33 @@
+#!/usr/bin/env run_uitest
+# Profiler: reading a recording and showing where the time went.
+#
+# Uses a file of folded stacks instead of a real recording, so the test needs
+# neither perf nor the rights to sample another process.
+#
+# Run with: run_uitest Profiler/Tests/profiler_folded_stacks.uitest
+
+shell "pkill -x Profiler; sleep 1; true"
+shell "/System/Applications/Utilities/Profiler.app/Profiler /Developer/Library/Sources/gershwin-components/Profiler/Tests/Fixtures/example.folded >/dev/null 2>&1 &"
+
+wait 3s
+target application "Profiler"
+wait until window "Profiler" timeout 20s
+
+# The recording is summed up in the header.
+assert text contains "example.folded"
+assert text contains "1000 samples"
+assert text contains "6 call paths"
+
+# The flat list adds up what each function cost on its own. The hottest one
+# is the solver, with 420 of the 1000 samples. The tabs are switched with
+# drive_ui itself because the test language has no command for it.
+shell "drive_ui --pid $(pgrep -x Profiler) select_tab --text Functions"
+wait 1s
+assert text contains "420 ms"
+
+shell "drive_ui --pid $(pgrep -x Profiler) select_tab --text Summary"
+wait 1s
+assert text contains "Folded stacks read from"
+
+capture screenshot "/tmp/profiler_folded_stacks.png"
+log "Profiler folded stacks test PASSED"

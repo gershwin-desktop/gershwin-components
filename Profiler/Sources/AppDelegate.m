@@ -5,96 +5,126 @@
  */
 
 #import "AppDelegate.h"
-#import "ProfilerWindowController.h"
+#import "PRProfilerWindowController.h"
 
 @implementation AppDelegate
+
+- (void)buildMenu
 {
-    ProfilerWindowController *_windowController;
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Profiler"];
+
+    id<NSMenuItem> infoItem = [menu addItemWithTitle:@"Info"
+                                            action:NULL
+                                     keyEquivalent:@""];
+    NSMenu *info = [[NSMenu alloc] initWithTitle:@"Info"];
+    [info addItemWithTitle:@"About Profiler"
+                    action:@selector(orderFrontStandardInfoPanel:)
+             keyEquivalent:@""];
+    [menu setSubmenu:info forItem:infoItem];
+
+    id<NSMenuItem> profileItem = [menu addItemWithTitle:@"Profile"
+                                               action:NULL
+                                        keyEquivalent:@""];
+    NSMenu *profile = [[NSMenu alloc] initWithTitle:@"Profile"];
+    [[profile addItemWithTitle:@"Record..."
+                        action:@selector(startRecording:)
+                 keyEquivalent:@"r"] setTarget:self];
+    [[profile addItemWithTitle:@"Stop"
+                        action:@selector(stopRecording:)
+                 keyEquivalent:@"."] setTarget:self];
+    [profile addItem:[NSMenuItem separatorItem]];
+    [[profile addItemWithTitle:@"Open Folded Stacks..."
+                        action:@selector(openFoldedStacks:)
+                 keyEquivalent:@"o"] setTarget:self];
+    [[profile addItemWithTitle:@"Save Folded Stacks..."
+                        action:@selector(exportFoldedStacks:)
+                 keyEquivalent:@"s"] setTarget:self];
+    [menu setSubmenu:profile forItem:profileItem];
+
+    id<NSMenuItem> editItem = [menu addItemWithTitle:@"Edit"
+                                            action:NULL
+                                     keyEquivalent:@""];
+    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];
+    [edit addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+    [edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [edit addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [edit addItemWithTitle:@"Select All"
+                    action:@selector(selectAll:)
+             keyEquivalent:@"a"];
+    [menu setSubmenu:edit forItem:editItem];
+
+    id<NSMenuItem> windowsItem = [menu addItemWithTitle:@"Windows"
+                                               action:NULL
+                                        keyEquivalent:@""];
+    NSMenu *windows = [[NSMenu alloc] initWithTitle:@"Windows"];
+    [windows addItemWithTitle:@"Arrange in Front"
+                       action:@selector(arrangeInFront:)
+                keyEquivalent:@""];
+    [windows addItemWithTitle:@"Miniaturize Window"
+                       action:@selector(performMiniaturize:)
+                keyEquivalent:@"m"];
+    [windows addItemWithTitle:@"Close Window"
+                       action:@selector(performClose:)
+                keyEquivalent:@"w"];
+    [menu setSubmenu:windows forItem:windowsItem];
+    [NSApp setWindowsMenu:windows];
+
+    id<NSMenuItem> servicesItem = [menu addItemWithTitle:@"Services"
+                                                action:NULL
+                                         keyEquivalent:@""];
+    NSMenu *services = [[NSMenu alloc] initWithTitle:@"Services"];
+    [menu setSubmenu:services forItem:servicesItem];
+    [NSApp setServicesMenu:services];
+
+    [menu addItemWithTitle:@"Hide" action:@selector(hide:) keyEquivalent:@"h"];
+    [menu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
+
+    [NSApp setMainMenu:menu];
+}
+
+- (void)applicationWillFinishLaunching:(NSNotification *)notification
+{
+    (void)notification;
+    [self buildMenu];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     (void)notification;
-    [self setupMainMenu];
-    _windowController = [[ProfilerWindowController alloc] init];
+    _windowController = [[PRProfilerWindowController alloc] init];
     [_windowController showWindow:self];
+    [[_windowController window] makeKeyAndOrderFront:self];
+    [self openFileFromCommandLine];
 }
 
-- (void)setupMainMenu
+/* "Profiler recording.folded" on the command line, and a file opened from
+   the workspace, both land here. */
+- (BOOL)application:(NSApplication *)application openFile:(NSString *)path
 {
-    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"MainMenu"];
-    NSString *appName = [[NSProcessInfo processInfo] processName];
+    (void)application;
+    return [_windowController openProfileAtPath:path];
+}
 
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:appName];
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"About %@", appName]
-                       action:@selector(orderFrontStandardAboutPanel:)
-                keyEquivalent:@""];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", appName]
-                       action:@selector(hide:)
-                keyEquivalent:@"h"];
-    [appMenu addItemWithTitle:@"Hide Others"
-                       action:@selector(hideOtherApplications:)
-                keyEquivalent:@""];
-    [appMenu addItemWithTitle:@"Show All"
-                       action:@selector(unhideAllApplications:)
-                keyEquivalent:@""];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", appName]
-                       action:@selector(terminate:)
-                keyEquivalent:@"q"];
-    NSMenuItem *appItem = [[NSMenuItem alloc] init];
-    [appItem setTitle:appName];
-    [mainMenu addItem:appItem];
-    [mainMenu setSubmenu:appMenu forItem:appItem];
-    [appItem release];
+- (void)openFileFromCommandLine
+{
+    NSArray *arguments = [[NSProcessInfo processInfo] arguments];
+    NSFileManager *manager = [NSFileManager defaultManager];
 
-    NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
-    [fileMenu addItemWithTitle:@"Close"
-                        action:@selector(performClose:)
-                 keyEquivalent:@"w"];
-    NSMenuItem *fileItem = [[NSMenuItem alloc] init];
-    [fileItem setTitle:@"File"];
-    [mainMenu addItem:fileItem];
-    [mainMenu setSubmenu:fileMenu forItem:fileItem];
-    [fileItem release];
+    for (NSUInteger i = 1; i < [arguments count]; i++) {
+        NSString *argument = [arguments objectAtIndex:i];
+        if ([argument hasPrefix:@"-"])
+            continue;
+        if ([manager isReadableFileAtPath:argument]) {
+            [_windowController openProfileAtPath:argument];
+            return;
+        }
+    }
+}
 
-    NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
-    [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
-    [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
-    [editMenu addItem:[NSMenuItem separatorItem]];
-    [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
-    [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
-    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
-    [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
-    NSMenuItem *editItem = [[NSMenuItem alloc] init];
-    [editItem setTitle:@"Edit"];
-    [mainMenu addItem:editItem];
-    [mainMenu setSubmenu:editMenu forItem:editItem];
-    [editItem release];
-
-    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
-    [windowMenu addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
-    [windowMenu addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
-    [windowMenu addItem:[NSMenuItem separatorItem]];
-    [windowMenu addItemWithTitle:@"Bring All to Front"
-                         action:@selector(arrangeInFront:)
-                  keyEquivalent:@""];
-    NSMenuItem *windowItem = [[NSMenuItem alloc] init];
-    [windowItem setTitle:@"Window"];
-    [mainMenu addItem:windowItem];
-    [mainMenu setSubmenu:windowMenu forItem:windowItem];
-    [windowItem release];
-    [NSApp setWindowsMenu:windowMenu];
-
-    NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
-    NSMenuItem *helpItem = [[NSMenuItem alloc] init];
-    [helpItem setTitle:@"Help"];
-    [mainMenu addItem:helpItem];
-    [mainMenu setSubmenu:helpMenu forItem:helpItem];
-    [helpItem release];
-
-    [NSApp setMainMenu:mainMenu];
+- (void)applicationWillTerminate:(NSNotification *)notification
+{
+    (void)notification;
+    [_windowController stopEverything];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
@@ -103,10 +133,24 @@
     return YES;
 }
 
-- (void)dealloc
+- (void)startRecording:(id)sender
 {
-    [_windowController release];
-    [super dealloc];
+    [_windowController startRecording:sender];
+}
+
+- (void)stopRecording:(id)sender
+{
+    [_windowController stopRecording:sender];
+}
+
+- (void)openFoldedStacks:(id)sender
+{
+    [_windowController openFoldedStacks:sender];
+}
+
+- (void)exportFoldedStacks:(id)sender
+{
+    [_windowController exportFoldedStacks:sender];
 }
 
 @end
