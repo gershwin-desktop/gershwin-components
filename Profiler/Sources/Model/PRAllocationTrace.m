@@ -8,6 +8,9 @@
 #import "PRRecorder.h"
 #import "PRPrivilegedTask.h"
 
+#include <errno.h>
+#include <signal.h>
+
 @implementation PRAllocationSite
 
 @synthesize frames = _frames;
@@ -200,7 +203,9 @@
                       @"be traced."];
         return nil;
     }
-    if (kill(pid, 0) != 0) {
+    /* A process of another user answers EPERM, not ESRCH: it is there, we
+       just may not signal it, and perf with the right rights still can. */
+    if (kill(pid, 0) != 0 && errno == ESRCH) {
         if (error != NULL)
             *error = [self errorWithMessage:
                       [NSString stringWithFormat:@"There is no process %d.",
