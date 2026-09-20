@@ -42,6 +42,13 @@ int main(void)
         ProcessInfo *idle = processWithState(@"S", 0.0);
         PASS_EQUAL([idle statusText], @"Idle", "a process that did nothing is idle");
 
+        /* The column prints one decimal, so a process the user sees as
+         * "1.0" must not be called idle next to it. */
+        ProcessInfo *rounded = processWithState(@"S", 0.96);
+        PASS_EQUAL([rounded statusText], @"Working",
+                   "what the CPU column rounds up to 1.0 counts as working");
+        [rounded release];
+
         ProcessInfo *quiet = processWithState(@"S", 0.4);
         PASS_EQUAL([quiet statusText], @"Idle",
                    "a trace of CPU is still idle");

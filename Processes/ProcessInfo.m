@@ -6,6 +6,7 @@
 
 #import "ProcessInfo.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -160,11 +161,14 @@ static const float kStatusWorkingPercent = 1.0;
     /* Everything else reports what the process DID since the last reading.
      * The kernel's own state is the state at the instant of sampling, so a
      * process that just used a third of a core is almost always caught
-     * "sleeping" - true, and of no use to anybody. */
-    if (_cpu >= kStatusBusyPercent) {
+     * "sleeping" - true, and of no use to anybody. The figure judged is the
+     * one the CPU column shows, not the raw one, so that a row reading "1.0"
+     * is not called idle right next to it. */
+    float shown = roundf(_cpu * 10.0f) / 10.0f;
+    if (shown >= kStatusBusyPercent) {
         return @"Busy";
     }
-    if (_cpu >= kStatusWorkingPercent || state == 'R') {
+    if (shown >= kStatusWorkingPercent || state == 'R') {
         return @"Working";
     }
     return @"Idle";
