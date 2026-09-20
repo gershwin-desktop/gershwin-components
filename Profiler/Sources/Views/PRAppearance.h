@@ -9,7 +9,7 @@
 
 @class PRSymbol;
 
-/* Colours and number formats shared by the profile views. */
+/* Colours, icons and number formats shared by the profile views. */
 @interface PRAppearance : NSObject
 
 /* Every binary gets its own hue, so one library's frames are recognisable
@@ -31,5 +31,10 @@
                     frequency:(NSUInteger)frequency;
 + (NSString *)percentOf:(double)weight total:(double)total;
 + (NSString *)nameOfUnit:(PRCostUnit)unit;
+
+/* The icons of the recording controls, drawn instead of loaded so that they
+   stay sharp whatever the scale factor is. */
++ (NSImage *)recordIconOfSize:(CGFloat)size;
++ (NSImage *)stopIconOfSize:(CGFloat)size;
 
 @end

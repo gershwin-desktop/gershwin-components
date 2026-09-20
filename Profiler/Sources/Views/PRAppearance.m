@@ -133,6 +133,42 @@
     return [NSString stringWithFormat:@"%.0f", weight];
 }
 
++ (void)drawRecordIcon:(NSCustomImageRep *)rep
+{
+    NSRect bounds = NSMakeRect(0, 0, [rep size].width, [rep size].height);
+    [[NSColor colorWithCalibratedRed:0.78 green:0.15 blue:0.15 alpha:1.0] set];
+    [[NSBezierPath bezierPathWithOvalInRect:NSInsetRect(bounds, 1.0, 1.0)] fill];
+}
+
++ (void)drawStopIcon:(NSCustomImageRep *)rep
+{
+    NSRect bounds = NSMakeRect(0, 0, [rep size].width, [rep size].height);
+    [[NSColor colorWithCalibratedWhite:0.25 alpha:1.0] set];
+    [[NSBezierPath bezierPathWithRect:NSInsetRect(bounds, 2.0, 2.0)] fill];
+}
+
++ (NSImage *)iconOfSize:(CGFloat)size drawnWith:(SEL)selector
+{
+    NSSize square = NSMakeSize(size, size);
+    NSCustomImageRep *rep = [[NSCustomImageRep alloc]
+                             initWithDrawSelector:selector delegate:self];
+    [rep setSize:square];
+
+    NSImage *image = [[NSImage alloc] initWithSize:square];
+    [image addRepresentation:rep];
+    return image;
+}
+
++ (NSImage *)recordIconOfSize:(CGFloat)size
+{
+    return [self iconOfSize:size drawnWith:@selector(drawRecordIcon:)];
+}
+
++ (NSImage *)stopIconOfSize:(CGFloat)size
+{
+    return [self iconOfSize:size drawnWith:@selector(drawStopIcon:)];
+}
+
 + (NSString *)percentOf:(double)weight total:(double)total
 {
     if (total <= 0)

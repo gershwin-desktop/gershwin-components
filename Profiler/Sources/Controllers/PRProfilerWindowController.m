@@ -20,6 +20,8 @@ static const CGFloat kWindowWidth = 1120.0;
 static const CGFloat kWindowHeight = 780.0;
 static const CGFloat kTimelineHeight = 56.0;
 static const CGFloat kRowHeight = 22.0;
+static const CGFloat kTransportWidth = 34.0;
+static const CGFloat kTransportIconSize = 13.0;
 
 @implementation PRProfilerWindowController
 
@@ -81,6 +83,24 @@ static const CGFloat kRowHeight = 22.0;
     return button;
 }
 
+/* The recording controls carry the shapes every recorder uses instead of a
+   word, so they are recognised at a glance and stay the same width in every
+   language. They sit flush against each other, which reads as the one pair
+   of controls they are. The title is kept for the tooltip and for tests,
+   which address widgets by name. */
+- (NSButton *)transportButtonWithImage:(NSImage *)image
+                                 title:(NSString *)title
+                                action:(SEL)action
+                                 frame:(NSRect)frame
+{
+    NSButton *button = [self buttonWithTitle:title action:action frame:frame];
+    [button setImage:image];
+    [button setImagePosition:NSImageOnly];
+    [[button cell] setImageDimsWhenDisabled:YES];
+    [button setToolTip:title];
+    return button;
+}
+
 /* Two buttons instead of an NSMatrix: each one is a widget of its own, so
    the interface can be driven and tested by name. */
 - (NSButton *)radioWithTitle:(NSString *)title frame:(NSRect)frame
@@ -114,19 +134,24 @@ static const CGFloat kRowHeight = 22.0;
     CGFloat width = kWindowWidth - 2 * margin;
     CGFloat y = kWindowHeight - METRICS_CONTENT_TOP_MARGIN - kRowHeight;
 
-    _recordButton = [self buttonWithTitle:@"Record..."
-                                   action:@selector(startRecording:)
-                                    frame:NSMakeRect(margin, y + 1, 110,
-                                                     METRICS_BUTTON_HEIGHT)];
+    _recordButton = [self transportButtonWithImage:
+                     [PRAppearance recordIconOfSize:kTransportIconSize]
+                                              title:@"Record"
+                                             action:@selector(startRecording:)
+                                              frame:NSMakeRect(margin, y,
+                                                               kTransportWidth,
+                                                               kRowHeight)];
     [_recordButton setAutoresizingMask:NSViewMinYMargin];
     [content addSubview:_recordButton];
 
-    _stopButton = [self buttonWithTitle:@"Stop"
-                                 action:@selector(stopRecording:)
-                                  frame:NSMakeRect(margin + 110 +
-                                                   METRICS_BUTTON_HORIZ_INTERSPACE,
-                                                   y + 1, 80,
-                                                   METRICS_BUTTON_HEIGHT)];
+    _stopButton = [self transportButtonWithImage:
+                   [PRAppearance stopIconOfSize:kTransportIconSize]
+                                            title:@"Stop"
+                                           action:@selector(stopRecording:)
+                                            frame:NSMakeRect(margin +
+                                                             kTransportWidth,
+                                                             y, kTransportWidth,
+                                                             kRowHeight)];
     [_stopButton setAutoresizingMask:NSViewMinYMargin];
     [_stopButton setEnabled:NO];
     [content addSubview:_stopButton];
@@ -149,7 +174,8 @@ static const CGFloat kRowHeight = 22.0;
     [_searchField setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
     [content addSubview:_searchField];
 
-    CGFloat threadX = margin + 110 + 80 + 2 * METRICS_BUTTON_HORIZ_INTERSPACE;
+    CGFloat threadX = margin + 2 * kTransportWidth +
+                      METRICS_BUTTON_HORIZ_INTERSPACE;
     _threadPopUp = [[NSPopUpButton alloc] initWithFrame:
                     NSMakeRect(threadX, y, 230, kRowHeight) pullsDown:NO];
     [_threadPopUp setTarget:self];
