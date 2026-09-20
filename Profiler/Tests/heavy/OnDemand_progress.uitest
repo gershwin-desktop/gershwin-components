@@ -2,12 +2,15 @@
 # OnDemand progress bar UI test
 # Verifies that the progress bar appears when installing missing packages.
 #
-# Prerequisites:
+# Under 'heavy' because it needs a machine prepared for it and really
+# installs software, so it cannot run in the ordinary suite:
+# - the OnDemand bundle must be listed in GSAppKitUserBundles (the UI test
+#   session loads DriveUI.bundle only, so the alert never appears there)
 # - Profiler.app must have a Resources/Dependencies.plist listing packages
-# - linux-perf must NOT be installed (run: sudo apt-get remove linux-perf -y)
-# - OnDemand.bundle must be installed and loaded in Profiler
+# - those packages must NOT be installed (e.g. sudo apt-get remove linux-perf)
+# - the package manager must be able to install them without asking
 #
-# Run with: run_uitest Profiler/Tests/OnDemand_progress.uitest
+# Run with: UI_TEST_LEVEL=full run_uitest Profiler/Tests/heavy/OnDemand_progress.uitest
 
 # Launch Profiler
 launch application "Profiler"

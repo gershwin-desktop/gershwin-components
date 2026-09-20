@@ -7,7 +7,7 @@
 # Run with: run_uitest Profiler/Tests/profiler_folded_stacks.uitest
 
 shell "pkill -x Profiler; sleep 1; true"
-shell "/System/Applications/Utilities/Profiler.app/Profiler /Developer/Library/Sources/gershwin-components/Profiler/Tests/Fixtures/example.folded >/dev/null 2>&1 &"
+shell "/System/Applications/Utilities/Profiler.app/Profiler ${testdir}/Fixtures/example.folded >/dev/null 2>&1 &"
 
 wait 3s
 target application "Profiler"
@@ -30,4 +30,9 @@ wait 1s
 assert text contains "Folded stacks read from"
 
 capture screenshot "/tmp/profiler_folded_stacks.png"
+
+# Leaves the computer as it was found: a Profiler window left open would
+# cover the Desktop icons the following tests drag around.
+shell "pkill -x Profiler; sleep 1; true"
+
 log "Profiler folded stacks test PASSED"
