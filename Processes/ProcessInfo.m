@@ -5,10 +5,44 @@
  */
 
 #import "ProcessInfo.h"
-#ifndef __linux__
-#include <sys/sysctl.h>
-#endif
+
+#include <stdio.h>
 #include <unistd.h>
+
+double ProcessParseCPUTimeSeconds(NSString *text)
+{
+    if ([text length] == 0) {
+        return 0.0;
+    }
+    /* Days are separated by a hyphen, everything else by colons, and the
+     * last field may carry a fraction: "2-03:04:05", "1:02:03", "0:12.34". */
+    double days = 0.0;
+    NSString *rest = text;
+    NSRange hyphen = [text rangeOfString: @"-"];
+    if (hyphen.location != NSNotFound) {
+        days = [[text substringToIndex: hyphen.location] doubleValue];
+        rest = [text substringFromIndex: NSMaxRange(hyphen)];
+    }
+
+    NSArray *fields = [rest componentsSeparatedByString: @":"];
+    if ([fields count] == 0 || [fields count] > 3) {
+        return 0.0;
+    }
+    double seconds = 0.0;
+    for (NSString *field in fields) {
+        if ([field length] == 0) {
+            return 0.0;
+        }
+        seconds = seconds * 60.0 + [field doubleValue];
+    }
+    return days * 86400.0 + seconds;
+}
+
+/* How much of one processor core counts as busy, and as working at all.
+ * One clock tick in a five second interval is already 0.2%, so the lower
+ * bound has to be well above zero for "idle" to mean idle. */
+static const float kStatusBusyPercent = 50.0;
+static const float kStatusWorkingPercent = 1.0;
 
 @implementation ProcessInfo
 
@@ -24,6 +58,13 @@
 @synthesize tty = _tty;
 @synthesize startTime = _startTime;
 @synthesize cpuTime = _cpuTime;
+@synthesize threads = _threads;
+@synthesize peakResidentMemory = _peakResidentMemory;
+@synthesize majorFaults = _majorFaults;
+@synthesize cpuTicks = _cpuTicks;
+@synthesize usesCPUTicks = _usesCPUTicks;
+@synthesize startToken = _startToken;
+@synthesize health = _health;
 
 - (id)initWithPsLine:(NSString *)line
 {
@@ -48,156 +89,105 @@
             _state = [filtered objectAtIndex:7];
             _startTime = [filtered objectAtIndex:8];
             _cpuTime = [filtered objectAtIndex:9];
+            /* The %CPU that "ps" prints is an average over the whole life of
+             * the process, which says nothing about what it is doing now.
+             * Its cumulative CPU time is a counter, so the difference
+             * between two readings gives a real current figure. */
+            _cpuTicks = (unsigned long long)(ProcessParseCPUTimeSeconds(_cpuTime) *
+                                             (double)sysconf(_SC_CLK_TCK));
+            _usesCPUTicks = YES;
             // Command starts from index 10
             NSRange range = NSMakeRange(10, [filtered count] - 10);
             _command = [[filtered subarrayWithRange:range] componentsJoinedByString:@" "];
         }
-        _lastUpdateTime = [[NSDate date] timeIntervalSince1970];
     }
     return self;
 }
 
-- (void)updateCPUAndMemoryWithTotalMemory:(long)totalMemory numCPUs:(int)numCPUs
+- (long)peakResidentMemory
 {
-    // Update CPU percentage from /proc/[pid]/stat on Linux or via sysctl on BSD
+    /* The BSDs report the high-water mark with the process list, so there is
+     * nothing left to look up. */
+    if (_peakResidentMemory > 0) {
+        return _peakResidentMemory;
+    }
 #ifdef __linux__
-    unsigned long utime = 0, stime = 0;
-#else
-    (void)0;
-#endif
-    
-#ifdef __linux__
-    // Linux: Read from /proc/[pid]/stat
-    char statPath[256];
-    snprintf(statPath, sizeof(statPath), "/proc/%d/stat", _pid);
-    FILE *statFile = fopen(statPath, "r");
-    if (statFile) {
-        char comm[256];
-        char state;
-        int ppid, pgrp, session, tty_nr, tpgid;
-        unsigned int flags;
-        unsigned long minflt, cminflt, majflt, cmajflt;
-        
-        // Parse: pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime ...
-        int fields = fscanf(statFile, "%*d (%[^)]) %c %d %d %d %d %d %u %lu %lu %lu %lu %lu %lu",
-                           comm, &state, &ppid, &pgrp, &session, &tty_nr, &tpgid,
-                           &flags, &minflt, &cminflt, &majflt, &cmajflt, &utime, &stime);
-        
-        if (fields >= 14) {
-            NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
-            NSTimeInterval deltaTime = currentTime - _lastUpdateTime;
-            
-            if (deltaTime > 0 && _lastUpdateTime > 0) {
-                // Calculate CPU percentage
-                // utime and stime are in clock ticks, need to convert to seconds
-                long ticksPerSecond = sysconf(_SC_CLK_TCK);
-                double deltaUtime = (double)(utime - _lastUtime) / ticksPerSecond;
-                double deltaStime = (double)(stime - _lastStime) / ticksPerSecond;
-                double deltaCPU = deltaUtime + deltaStime;
-                
-                // CPU percentage = (CPU time / elapsed time) * 100 * num_CPUs
-                // We use num_CPUs to account for multi-core systems
-                _cpu = (float)((deltaCPU / deltaTime) * 100.0);
-                
-                // Cap at reasonable maximum (numCPUs * 100)
-                if (_cpu > (100.0 * numCPUs)) {
-                    _cpu = 100.0 * numCPUs;
-                }
-            } else if (_lastUpdateTime == 0) {
-                // First update - just initialize
-                _cpu = 0.0;
-            }
-            
-            _lastUtime = utime;
-            _lastStime = stime;
-            _lastUpdateTime = currentTime;
-        }
-        fclose(statFile);
-    }
-    
-    // Read memory info from /proc/[pid]/status for more accurate RSS
-    char statusPath[256];
-    snprintf(statusPath, sizeof(statusPath), "/proc/%d/status", _pid);
-    FILE *statusFile = fopen(statusPath, "r");
-    if (statusFile) {
+    /* VmHWM is the kernel's own high-water mark, which reaches back to the
+     * start of the process - unlike anything this application could have
+     * watched itself. */
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/status", _pid);
+    FILE *status = fopen(path, "r");
+    if (status != NULL) {
         char line[256];
-        while (fgets(line, sizeof(line), statusFile)) {
-            if (strncmp(line, "VmRSS:", 6) == 0) {
-                long rss_kb = 0;
-                sscanf(line, "VmRSS: %ld", &rss_kb);
-                _residentMemory = rss_kb; // Already in KB
-                
-                // Calculate memory percentage
-                if (totalMemory > 0) {
-                    _memory = (float)(rss_kb * 100.0 / totalMemory);
+        while (fgets(line, sizeof(line), status) != NULL) {
+            if (strncmp(line, "VmHWM:", 6) == 0) {
+                long peak = 0;
+                if (sscanf(line, "VmHWM: %ld", &peak) == 1 && peak > 0) {
+                    _peakResidentMemory = peak;
                 }
                 break;
             }
         }
-        fclose(statusFile);
-    }
-    
-#else
-    // BSD: Use sysctl and libutil (or kqueue)
-    // For simplicity, we'll read from /proc if available (some BSD systems have /proc)
-    // Otherwise we'd need to use more complex BSD APIs
-    
-    // Try to read CPU time from /proc if available
-    char statPath[256];
-    snprintf(statPath, sizeof(statPath), "/proc/%d/stat", _pid);
-    FILE *statFile = fopen(statPath, "r");
-    if (statFile) {
-        // BSD /proc format is different but we can try
-        char line[1024];
-        while (fgets(line, sizeof(line), statFile)) {
-            if (strncmp(line, "  Runtime", 9) == 0) {
-                // Runtime in microseconds
-                unsigned long runtime_us;
-                sscanf(line, "  Runtime %lu us", &runtime_us);
-                
-                NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
-                NSTimeInterval deltaTime = currentTime - _lastUpdateTime;
-                
-                if (deltaTime > 0 && _lastUpdateTime > 0) {
-                    double deltaCPU = (double)runtime_us / 1000000.0; // Convert to seconds
-                    _cpu = (float)((deltaCPU / deltaTime) * 100.0 * numCPUs);
-                    
-                    if (_cpu > (100.0 * numCPUs)) {
-                        _cpu = 100.0 * numCPUs;
-                    }
-                }
-                _lastUpdateTime = currentTime;
-                break;
-            }
-        }
-        fclose(statFile);
-    }
-    
-    // For BSD memory: try sysctl or /proc/[pid]/status
-    char statusPath[256];
-    snprintf(statusPath, sizeof(statusPath), "/proc/%d/status", _pid);
-    FILE *statusFile = fopen(statusPath, "r");
-    if (statusFile) {
-        char line[256];
-        while (fgets(line, sizeof(line), statusFile)) {
-            if (strncmp(line, "VmRSS:", 6) == 0) {
-                long rss_kb = 0;
-                sscanf(line, "VmRSS: %ld", &rss_kb);
-                _residentMemory = rss_kb;
-                
-                if (totalMemory > 0) {
-                    _memory = (float)(rss_kb * 100.0 / totalMemory);
-                }
-                break;
-            }
-        }
-        fclose(statusFile);
+        fclose(status);
     }
 #endif
-    
-    // Ensure reasonable values
-    if (_cpu < 0) _cpu = 0;
-    if (_memory < 0) _memory = 0;
+    return _peakResidentMemory;
+}
+
+- (NSString *)stateDescription
+{
+    if ([_state length] == 0) {
+        return @"";
+    }
+    return ProcessStateDescription([_state characterAtIndex: 0]);
+}
+
+- (NSString *)statusText
+{
+    NSString *summary = [_health summary];
+    if (summary != nil) {
+        return summary;
+    }
+
+    unichar state = ([_state length] > 0) ? [_state characterAtIndex: 0] : 0;
+    /* States the user has to know about stand for themselves. */
+    if (state == 'Z' || state == 'D' || state == 'T' || state == 't' ||
+        state == 'X') {
+        return [self stateDescription];
+    }
+
+    /* Everything else reports what the process DID since the last reading.
+     * The kernel's own state is the state at the instant of sampling, so a
+     * process that just used a third of a core is almost always caught
+     * "sleeping" - true, and of no use to anybody. */
+    if (_cpu >= kStatusBusyPercent) {
+        return @"Busy";
+    }
+    if (_cpu >= kStatusWorkingPercent || state == 'R') {
+        return @"Working";
+    }
+    return @"Idle";
+}
+
+- (NSInteger)healthLevel
+{
+    return (_health != nil) ? (NSInteger)[_health level] : 0;
+}
+
+- (NSString *)displayName
+{
+    if ([_command length] == 0) {
+        return @"";
+    }
+    /* The command is the whole command line; the executable is what the user
+     * recognizes the process by. */
+    NSString *first = [[_command componentsSeparatedByString: @" "] objectAtIndex: 0];
+    NSString *name = [first lastPathComponent];
+    if ([name length] == 0) {
+        return first;
+    }
+    return name;
 }
 
 
