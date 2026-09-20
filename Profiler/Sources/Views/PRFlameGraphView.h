@@ -52,4 +52,8 @@
 /* Human readable description of a bar, for the status line. */
 - (NSString *)describeNode:(PRCallNode *)node;
 
+/* Key to the colours of the bars that are on screen, as PRLegendEntry
+   objects, the heaviest binary first. */
+- (NSArray *)legendEntries;
+
 @end

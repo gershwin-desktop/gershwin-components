@@ -20,36 +20,71 @@
     return (double)(hash % 1000) / 1000.0;
 }
 
++ (NSColor *)colorForModuleName:(NSString *)moduleName
+{
+    return [self colorForModuleName:moduleName highlighted:NO];
+}
+
++ (NSColor *)colorForModuleName:(NSString *)moduleName
+                    highlighted:(BOOL)highlighted
+{
+    return [NSColor colorWithCalibratedHue:[self hueForString:moduleName]
+                                saturation:highlighted ? 0.62 : 0.42
+                                brightness:highlighted ? 0.86 : 0.95
+                                     alpha:1.0];
+}
+
++ (NSColor *)kernelColor
+{
+    return [self kernelColorHighlighted:NO];
+}
+
++ (NSColor *)kernelColorHighlighted:(BOOL)highlighted
+{
+    return [NSColor colorWithCalibratedHue:0.58
+                                saturation:0.16
+                                brightness:highlighted ? 0.78 : 0.88
+                                     alpha:1.0];
+}
+
++ (NSColor *)unknownColor
+{
+    return [self unknownColorHighlighted:NO];
+}
+
++ (NSColor *)unknownColorHighlighted:(BOOL)highlighted
+{
+    return [NSColor colorWithCalibratedWhite:highlighted ? 0.72 : 0.82
+                                       alpha:1.0];
+}
+
++ (NSColor *)dimmedColor
+{
+    return [NSColor colorWithCalibratedWhite:0.90 alpha:1.0];
+}
+
 + (NSColor *)colorForSymbol:(PRSymbol *)symbol highlighted:(BOOL)highlighted
 {
     if (symbol == nil)
         return [NSColor colorWithCalibratedWhite:0.75 alpha:1.0];
 
     if ([symbol isUnknown])
-        return [NSColor colorWithCalibratedWhite:highlighted ? 0.72 : 0.82
-                                            alpha:1.0];
+        return [self unknownColorHighlighted:highlighted];
     if ([symbol isKernel])
-        return [NSColor colorWithCalibratedHue:0.58
-                                    saturation:0.16
-                                    brightness:highlighted ? 0.78 : 0.88
-                                         alpha:1.0];
+        return [self kernelColorHighlighted:highlighted];
 
     /* The binary decides the colour, so one library's frames are easy to
        follow; a file of folded stacks names none, and then the function
        itself has to provide the variety. */
     NSString *key = [[symbol moduleName] isEqualToString:@"[unknown]"] ?
         [symbol displayName] : [symbol moduleName];
-    double hue = [self hueForString:key];
-    return [NSColor colorWithCalibratedHue:hue
-                                saturation:highlighted ? 0.62 : 0.42
-                                brightness:highlighted ? 0.86 : 0.95
-                                     alpha:1.0];
+    return [self colorForModuleName:key highlighted:highlighted];
 }
 
 + (NSColor *)dimmedColorForSymbol:(PRSymbol *)symbol
 {
     (void)symbol;
-    return [NSColor colorWithCalibratedWhite:0.90 alpha:1.0];
+    return [self dimmedColor];
 }
 
 + (NSString *)nameOfUnit:(PRCostUnit)unit

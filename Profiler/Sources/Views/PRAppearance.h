@@ -18,6 +18,13 @@
 + (NSColor *)colorForSymbol:(PRSymbol *)symbol highlighted:(BOOL)highlighted;
 + (NSColor *)dimmedColorForSymbol:(PRSymbol *)symbol;
 
+/* The same colours again, addressed by what they stand for, so a legend can
+   name them without holding a symbol of its own. */
++ (NSColor *)colorForModuleName:(NSString *)moduleName;
++ (NSColor *)kernelColor;
++ (NSColor *)unknownColor;
++ (NSColor *)dimmedColor;
+
 /* "1.4 s", "12.0 MB", "3,412 allocations" - whatever the unit means. */
 + (NSString *)stringForWeight:(double)weight
                          unit:(PRCostUnit)unit

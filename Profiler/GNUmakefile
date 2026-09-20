@@ -30,6 +30,7 @@ Profiler_OBJC_FILES = \
 	Sources/Backends/PRDTraceRecorder.m \
 	Sources/Backends/PRRecorderFactory.m \
 	Sources/Views/PRAppearance.m \
+	Sources/Views/PRLegendView.m \
 	Sources/Views/PRFlameGraphView.m \
 	Sources/Views/PRTimelineView.m \
 	Sources/Views/PRLiveGraphView.m \
@@ -58,6 +59,7 @@ Profiler_HEADER_FILES = \
 	Backends/PRDTraceRecorder.h \
 	Backends/PRRecorderFactory.h \
 	Views/PRAppearance.h \
+	Views/PRLegendView.h \
 	Views/PRFlameGraphView.h \
 	Views/PRTimelineView.h \
 	Views/PRLiveGraphView.h \

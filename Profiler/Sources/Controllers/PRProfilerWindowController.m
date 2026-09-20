@@ -132,15 +132,20 @@ static const CGFloat kRowHeight = 22.0;
     [content addSubview:_stopButton];
 
     CGFloat searchWidth = 220;
-    _searchField = [[NSTextField alloc] initWithFrame:
+    _searchField = [[NSSearchField alloc] initWithFrame:
                     NSMakeRect(kWindowWidth - margin - searchWidth, y,
                                searchWidth, kRowHeight)];
     [_searchField setTarget:self];
     [_searchField setAction:@selector(searchChanged:)];
     /* Highlighting while typing is what makes the search useful: the graph
        shows at once how much of the profile a name accounts for. */
-    [_searchField setDelegate:self];
+    [[_searchField cell] setSendsWholeSearchString:NO];
+    [[_searchField cell] setSendsSearchStringImmediately:YES];
     [[_searchField cell] setPlaceholderString:@"Find a function"];
+    /* A theme may clear the field through the change notification instead
+       of the field's own action, so both are followed; searchChanged:
+       ignores the one that brings nothing new. */
+    [_searchField setDelegate:self];
     [_searchField setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
     [content addSubview:_searchField];
 
@@ -258,8 +263,18 @@ static const CGFloat kRowHeight = 22.0;
     [_zoomLabel setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
     [view addSubview:_zoomLabel];
 
+    /* Two rows of keys are enough for the binaries of a typical profile. */
+    CGFloat legendHeight = 2 * 15.0 + 4.0;
+    _legend = [[PRLegendView alloc] initWithFrame:
+               NSMakeRect(METRICS_SPACE_8, METRICS_SPACE_8,
+                          width - 2 * METRICS_SPACE_8, legendHeight)];
+    [_legend setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
+    [view addSubview:_legend];
+
+    CGFloat graphBottom = METRICS_SPACE_8 + legendHeight + METRICS_SPACE_8;
     _flameScroll = [self scrollViewWithFrame:
-                    NSMakeRect(0, 0, width, y - METRICS_SPACE_8)];
+                    NSMakeRect(0, graphBottom, width,
+                               y - METRICS_SPACE_8 - graphBottom)];
     [_flameScroll setHasHorizontalScroller:NO];
     _flameGraph = [[PRFlameGraphView alloc] initWithFrame:
                    [[_flameScroll contentView] bounds]];
@@ -547,6 +562,7 @@ static const CGFloat kRowHeight = 22.0;
     [_flameGraph setRoot:flameRoot];
     [self updateFlameGraphSize];
     [self updateMatchedLabel];
+    [self updateLegend];
 
     [_topDownController setRoot:[_profile callTreeInverted:NO
                                                      range:_range
@@ -606,8 +622,19 @@ static const CGFloat kRowHeight = 22.0;
 - (void)searchChanged:(id)sender
 {
     (void)sender;
-    [_flameGraph setSearchString:[_searchField stringValue]];
+    NSString *text = [_searchField stringValue];
+    NSString *current = [_flameGraph searchString];
+    if ([text isEqualToString:current ? current : @""])
+        return;
+
+    [_flameGraph setSearchString:text];
     [self updateMatchedLabel];
+    [self updateLegend];
+}
+
+- (void)updateLegend
+{
+    [_legend setEntries:[_flameGraph legendEntries]];
 }
 
 - (void)updateMatchedLabel
@@ -683,6 +710,7 @@ static const CGFloat kRowHeight = 22.0;
     (void)node;
     [self updateFlameGraphSize];
     [self updateZoomLabel];
+    [self updateLegend];
 }
 
 - (void)timelineView:(PRTimelineView *)view didSelectRange:(PRTimeRange)range

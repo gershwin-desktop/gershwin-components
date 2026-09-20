@@ -6,6 +6,7 @@
 
 #import "PRFlameGraphView.h"
 #import "PRAppearance.h"
+#import "PRLegendView.h"
 #import "PRCallNode.h"
 #import "PRSymbol.h"
 
@@ -267,6 +268,78 @@
         };
         [message drawAtPoint:NSMakePoint(16, 16) withAttributes:attributes];
     }
+}
+
+/* The legend is built from the bars themselves: which binaries a profile
+   shows differs from recording to recording, so a fixed key would name
+   colours that are not on screen. */
+- (NSArray *)legendEntries
+{
+    [self layoutBoxes];
+
+    NSMutableDictionary *weights = [NSMutableDictionary dictionary];
+    double kernelWeight = 0;
+    double unknownWeight = 0;
+    BOOL namesNoBinaries = NO;
+
+    for (PRFlameBox *box in _boxes) {
+        PRSymbol *symbol = [box->node symbol];
+        if (symbol == nil)
+            continue;
+        double weight = [box->node selfWeight];
+
+        if ([symbol isUnknown]) {
+            unknownWeight += weight;
+        } else if ([symbol isKernel]) {
+            kernelWeight += weight;
+        } else if ([[symbol moduleName] isEqualToString:@"[unknown]"]) {
+            namesNoBinaries = YES;
+        } else {
+            NSString *module = [symbol moduleName];
+            NSNumber *previous = [weights objectForKey:module];
+            [weights setObject:[NSNumber numberWithDouble:
+                                [previous doubleValue] + weight]
+                        forKey:module];
+        }
+    }
+
+    NSArray *modules = [[weights allKeys] sortedArrayUsingComparator:
+                        ^NSComparisonResult(NSString *a, NSString *b) {
+        double left = [[weights objectForKey:a] doubleValue];
+        double right = [[weights objectForKey:b] doubleValue];
+        if (left > right) return NSOrderedAscending;
+        if (left < right) return NSOrderedDescending;
+        return [a localizedCaseInsensitiveCompare:b];
+    }];
+
+    NSMutableArray *entries = [NSMutableArray array];
+    for (NSString *module in modules)
+        [entries addObject:
+         [PRLegendEntry entryWithLabel:module
+                                 color:[PRAppearance colorForModuleName:module]]];
+
+    if (kernelWeight > 0)
+        [entries addObject:
+         [PRLegendEntry entryWithLabel:@"Kernel and drivers"
+                                 color:[PRAppearance kernelColor]]];
+    if (unknownWeight > 0)
+        [entries addObject:
+         [PRLegendEntry entryWithLabel:@"Code that could not be named"
+                                 color:[PRAppearance unknownColor]]];
+    if ([_searchString length] > 0)
+        [entries addObject:
+         [PRLegendEntry entryWithLabel:@"Does not match the search"
+                                 color:[PRAppearance dimmedColor]]];
+
+    /* A file of folded stacks says which functions ran but not which binary
+       they came from, so there is nothing the hues could stand for. */
+    if (namesNoBinaries)
+        [entries addObject:
+         [PRLegendEntry entryWithLabel:@"One colour per function - this "
+                                        @"recording names no binaries"
+                                 color:nil]];
+
+    return entries;
 }
 
 - (NSString *)describeNode:(PRCallNode *)node

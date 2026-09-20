@@ -111,13 +111,18 @@ static const CGFloat kRowHeight = 22.0;
 
     /* Running processes. */
     y -= METRICS_SPACE_8 + kRowHeight;
-    [content addSubview:[self labelWithString:@"Filter:"
-                                        frame:NSMakeRect(margin, y, 44, kRowHeight)
-                                    alignment:NSLeftTextAlignment]];
-    _filterField = [[NSTextField alloc] initWithFrame:
-                    NSMakeRect(margin + 48, y, contentWidth - 48, kRowHeight)];
+    _filterField = [[NSSearchField alloc] initWithFrame:
+                    NSMakeRect(margin, y, contentWidth, kRowHeight)];
     [_filterField setTarget:self];
     [_filterField setAction:@selector(filterChanged:)];
+    /* The list is narrowed down while the name is typed, so the search
+       field sends its action on every keystroke instead of on Return. */
+    [[_filterField cell] setSendsWholeSearchString:NO];
+    [[_filterField cell] setSendsSearchStringImmediately:YES];
+    [[_filterField cell] setPlaceholderString:@"Search for a program by name "
+                                              @"or process id"];
+    /* A theme may clear the field through the change notification instead
+       of the field's own action, so both bring the whole list back. */
     [_filterField setDelegate:self];
     [content addSubview:_filterField];
 

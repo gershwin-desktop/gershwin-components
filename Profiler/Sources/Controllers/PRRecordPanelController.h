@@ -19,7 +19,7 @@
     NSButton *_attachRadio;
     NSButton *_launchRadio;
     NSTableView *_processTable;
-    NSTextField *_filterField;
+    NSSearchField *_filterField;
     NSTextField *_launchField;
     NSTextField *_argumentsField;
     NSPopUpButton *_modePopUp;

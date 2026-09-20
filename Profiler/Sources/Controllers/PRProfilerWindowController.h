@@ -9,6 +9,7 @@
 #import "PRRecorder.h"
 #import "PRFlameGraphView.h"
 #import "PRTimelineView.h"
+#import "PRLegendView.h"
 
 @class PRProfile;
 @class PRCallTreeController;
@@ -29,7 +30,7 @@
     NSButton *_stopButton;
     NSPopUpButton *_threadPopUp;
     NSPopUpButton *_costPopUp;
-    NSTextField *_searchField;
+    NSSearchField *_searchField;
     NSTextField *_matchedLabel;
     NSTextField *_statusLabel;
     NSTextField *_headerLabel;
@@ -42,6 +43,7 @@
     NSButton *_callersRadio;
     NSButton *_hotFramesRadio;
     NSTextField *_zoomLabel;
+    PRLegendView *_legend;
 
     NSOutlineView *_topDownOutline;
     NSOutlineView *_bottomUpOutline;
