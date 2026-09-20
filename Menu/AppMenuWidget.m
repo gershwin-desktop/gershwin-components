@@ -1625,10 +1625,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     }
 
     NSDictionary *appTree;
+    BOOL treeChanged = NO;
     if (cacheValid) {
         appTree = self.cachedAppBundleTree;
     } else {
         appTree = [self scanApplicationBundleTree];
+        /* The scan goes stale on a timer, but the applications installed on
+           a machine hardly ever change. Rebuilding the menu only when they
+           actually did saves tearing down and building up hundreds of items
+           and their icons every half minute. */
+        treeChanged = ![appTree isEqualToDictionary:
+                        (NSDictionary *)self.cachedAppBundleTree];
         self.cachedAppBundleTree = appTree;
         self.cachedAppBundleTreeTime = now;
     }
@@ -1641,7 +1648,7 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        tree down again via NSMenu/NSMenuItem dealloc - a multi-hundred-object
        cascade that showed up as the bulk of Menu's CPU. */
     NSMenu *appsSubmenu = self.cachedAppsSubmenu;
-    if (!appsSubmenu || !cacheValid) {
+    if (!appsSubmenu || treeChanged) {
         appsSubmenu = [[NSMenu alloc] initWithTitle:NSLocalizedString(@"Applications", nil)];
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: Scanning app tree with %ld root keys", (long)[[appTree allKeys] count]);
         [self addMenuItemsFromTree:appTree toMenu:appsSubmenu];
@@ -1909,8 +1916,20 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             [item setTarget:self];
             [item setRepresentedObject:entry[@"_path"]];
             /* Show the application's icon in the menu (Eau renders it at a
-               fixed size in the image column). */
-            NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:entry[@"_path"]];
+               fixed size in the image column). The icon is kept: asking the
+               workspace for it reads and decodes the bundle's PNG every
+               time, and this menu is rebuilt whenever the scan of the
+               installed applications has gone stale. */
+            NSString *bundlePath = entry[@"_path"];
+            NSImage *icon = bundlePath ? [self.appIconCache objectForKey:bundlePath] : nil;
+            if (icon == nil && bundlePath != nil) {
+                icon = [[NSWorkspace sharedWorkspace] iconForFile:bundlePath];
+                if (icon != nil) {
+                    if (self.appIconCache == nil)
+                        self.appIconCache = [NSMutableDictionary dictionary];
+                    [self.appIconCache setObject:icon forKey:bundlePath];
+                }
+            }
             if (icon) {
                 [item setImage:icon];
             }
