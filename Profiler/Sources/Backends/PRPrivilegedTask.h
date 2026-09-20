@@ -20,6 +20,12 @@
 
 + (BOOL)isRoot;
 + (BOOL)isElevationAvailable;
+
+/* In a terminal sudo can ask for the password itself, so no graphical
+   helper is needed; the command line tool says so at startup. A program
+   with no terminal must not be allowed to block on a prompt nobody can
+   answer, which is why this is off by default. */
++ (void)setMayAskOnTerminal:(BOOL)flag;
 /* Why elevation cannot work, for the error message. */
 + (NSString *)elevationProblem;
 

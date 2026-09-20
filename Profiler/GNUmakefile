@@ -70,6 +70,7 @@ Profiler_HEADER_FILES = \
 	Model/PRCensus.h \
 	Model/PRMemoryMap.h \
 	Model/PRMemoryMapReader.h \
+	Model/PRAllocationTrace.h \
 	Backends/PRPrivilegedTask.h \
 	Backends/PRRecorder.h \
 	Backends/PRRecorderPrivate.h \
@@ -115,10 +116,15 @@ profiler_OBJC_FILES = \
 	Sources/Model/PRCensus.m \
 	Sources/Model/PRMemoryMap.m \
 	Sources/Model/PRMemoryMapReader.m \
+	Sources/Model/PRAllocationTrace.m \
 	Sources/Model/PRProcessInfo.m \
 	Sources/Model/PRProcessMonitor.m \
 	Sources/Backends/PRRecorder.m \
 	Sources/Backends/PRPrivilegedTask.m \
+	Sources/Backends/PRPerfRecorder.m \
+	Sources/Backends/PRHeaptrackRecorder.m \
+	Sources/Backends/PRDTraceRecorder.m \
+	Sources/Backends/PRRecorderFactory.m \
 	Sources/Backends/PRCensusClient.m
 profiler_TOOL_LIBS += -lgnustep-base
 profiler_OBJCFLAGS = -Wall -O2

@@ -46,12 +46,20 @@
     return helper;
 }
 
+static BOOL sMayAskOnTerminal = NO;
+
++ (void)setMayAskOnTerminal:(BOOL)flag
+{
+    sMayAskOnTerminal = flag;
+}
+
 + (BOOL)isElevationAvailable
 {
     if ([self isRoot])
         return YES;
-    return [PRToolLocator pathForTool:@"sudo"] != nil &&
-           [self askPassHelper] != nil;
+    if ([PRToolLocator pathForTool:@"sudo"] == nil)
+        return NO;
+    return sMayAskOnTerminal || [self askPassHelper] != nil;
 }
 
 + (NSString *)elevationProblem
@@ -62,7 +70,8 @@
         return @"sudo is not installed, so the profiler cannot obtain the "
                @"rights the sampling tools need.";
     return @"No graphical password helper is configured. Set SUDO_ASKPASS to "
-           @"an askpass program so that sudo can ask for the password.";
+           @"an askpass program so that sudo can ask for the password, or "
+           @"run this from a terminal, where sudo can ask by itself.";
 }
 
 + (NSTask *)taskForTool:(NSString *)toolPath
@@ -81,8 +90,10 @@
     if (sudo == nil)
         return nil;
 
-    NSMutableArray *sudoArguments = [NSMutableArray arrayWithObjects:
-                                     @"-A", @"--", toolPath, nil];
+    /* -A makes sudo use the graphical helper; in a terminal it asks there. */
+    NSMutableArray *sudoArguments = sMayAskOnTerminal
+        ? [NSMutableArray arrayWithObjects:@"--", toolPath, nil]
+        : [NSMutableArray arrayWithObjects:@"-A", @"--", toolPath, nil];
     [sudoArguments addObjectsFromArray:arguments];
     [task setLaunchPath:sudo];
     [task setArguments:sudoArguments];

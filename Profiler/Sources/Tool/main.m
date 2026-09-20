@@ -22,6 +22,9 @@
 #import "PRProcessInfo.h"
 #import "PRCensus.h"
 #import "PRCensusClient.h"
+#import "PRAllocationTrace.h"
+#import "PRRecorderFactory.h"
+#import "PRPrivilegedTask.h"
 
 static BOOL gJSON = NO;
 
@@ -71,7 +74,8 @@ static BOOL Flag(NSArray *arguments, NSString *name)
 static NSArray *Words(NSArray *arguments)
 {
     NSMutableArray *words = [NSMutableArray array];
-    NSSet *takesValue = [NSSet setWithObjects:@"--by", @"--for", @"--top", nil];
+    NSSet *takesValue = [NSSet setWithObjects:@"--by", @"--for", @"--top",
+                         @"--pid", @"--rate", @"--cost", @"--min", @"-o", nil];
     BOOL skip = NO;
 
     for (NSString *argument in arguments) {
@@ -249,6 +253,208 @@ static int WatchObjects(NSArray *words, NSTimeInterval seconds, NSUInteger top)
     return 0;
 }
 
+/* profiler record */
+
+@interface PRRecordWaiter : NSObject <PRRecorderDelegate>
+{
+    PRProfile *_profile;
+    NSError *_error;
+    BOOL _finished;
+    BOOL _quiet;
+}
+@property (nonatomic, readonly, strong) PRProfile *profile;
+@property (nonatomic, readonly, strong) NSError *error;
+@property (nonatomic, assign) BOOL quiet;
+- (BOOL)waitUntilFinished;
+@end
+
+@implementation PRRecordWaiter
+
+@synthesize profile = _profile;
+@synthesize error = _error;
+@synthesize quiet = _quiet;
+
+- (void)recorder:(PRRecorder *)recorder didReportStatus:(NSString *)status
+{
+    (void)recorder;
+    /* Progress belongs on standard error: standard output is the answer. */
+    if (!_quiet)
+        fprintf(stderr, "%s\n", [status UTF8String]);
+}
+
+- (void)recorder:(PRRecorder *)recorder
+    didFinishWithProfile:(PRProfile *)profile
+                   error:(NSError *)error
+{
+    (void)recorder;
+    _profile = profile;
+    _error = error;
+    _finished = YES;
+}
+
+/* The recorders report through the run loop, so the tool has to run one. */
+- (BOOL)waitUntilFinished
+{
+    NSRunLoop *loop = [NSRunLoop currentRunLoop];
+    while (!_finished) {
+        @autoreleasepool {
+            if (![loop runMode:NSDefaultRunLoopMode
+                    beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.2]])
+                [NSThread sleepForTimeInterval:0.05];
+        }
+    }
+    return _profile != nil;
+}
+
+@end
+
+static int PrintProfileTree(PRProfile *profile, NSUInteger top, BOOL tree,
+                            BOOL inverted, NSString *output);
+
+static int Record(NSArray *words, NSArray *arguments, NSUInteger top)
+{
+    BOOL memory = Flag(arguments, @"--memory");
+    NSString *pidText = Option(arguments, @"--pid", nil);
+    NSTimeInterval seconds = [Option(arguments, @"--for", @"10") doubleValue];
+    NSString *output = Option(arguments, @"-o", nil);
+
+    PRRecordRequest *request = [[PRRecordRequest alloc] init];
+    [request setMode:memory ? PRProfileModeMemory : PRProfileModeCPU];
+    [request setFrequency:(NSUInteger)[Option(arguments, @"--rate", @"999") integerValue]];
+    [request setCallGraph:PRCallGraphDwarf];
+    [request setDuration:seconds];
+
+    NSString *cost = Option(arguments, @"--cost", @"peak");
+    if ([cost isEqualToString:@"leaked"])
+        [request setMemoryCost:PRMemoryCostLeaked];
+    else if ([cost isEqualToString:@"allocations"])
+        [request setMemoryCost:PRMemoryCostAllocations];
+    else if ([cost isEqualToString:@"temporary"])
+        [request setMemoryCost:PRMemoryCostTemporary];
+    else
+        [request setMemoryCost:PRMemoryCostPeak];
+
+    if (pidText != nil) {
+        [request setPid:(pid_t)[pidText intValue]];
+        [request setTargetName:[NSString stringWithFormat:@"process %@", pidText]];
+    } else if ([words count] > 1) {
+        [request setLaunchPath:[words objectAtIndex:1]];
+        if ([words count] > 2)
+            [request setArguments:[words subarrayWithRange:
+                                   NSMakeRange(2, [words count] - 2)]];
+        [request setTargetName:[[words objectAtIndex:1] lastPathComponent]];
+    } else {
+        return Fail(@"name what to record: profiler record --pid <pid>, or "
+                    @"profiler record <program> [arguments]");
+    }
+
+    Class recorderClass = [PRRecorderFactory recorderClassForMode:[request mode]];
+    if (recorderClass == nil)
+        return Fail(@"No tool on this system can record that.");
+
+    NSString *warning = [recorderClass warningForRequest:request];
+    if (warning != nil)
+        fprintf(stderr, "%s\n", [warning UTF8String]);
+
+    PRRecorder *recorder = [[recorderClass alloc] init];
+    PRRecordWaiter *waiter = [[PRRecordWaiter alloc] init];
+    [waiter setQuiet:gJSON];
+    [recorder setDelegate:waiter];
+
+    NSError *error = nil;
+    if (![recorder startWithRequest:request error:&error])
+        return Fail([error localizedDescription]);
+
+    if (![waiter waitUntilFinished]) {
+        NSError *failure = [waiter error];
+        return Fail(failure ? [failure localizedDescription] :
+                    @"The recording produced nothing.");
+    }
+    return PrintProfileTree([waiter profile], top,
+                            Flag(arguments, @"--tree"),
+                            Flag(arguments, @"--inverted"), output);
+}
+
+/* profiler allocations */
+
+static int Allocations(NSArray *words, NSArray *arguments, NSUInteger top)
+{
+    if ([words count] < 2)
+        return Fail(@"name a process: profiler allocations <pid>");
+
+    pid_t pid = (pid_t)[[words objectAtIndex:1] intValue];
+    NSTimeInterval seconds = [Option(arguments, @"--for", @"30") doubleValue];
+    NSString *minimum = Option(arguments, @"--min", @"1M");
+    unsigned long long bytes = (unsigned long long)[minimum longLongValue];
+
+    if ([minimum hasSuffix:@"M"] || [minimum hasSuffix:@"m"])
+        bytes *= 1024ULL * 1024ULL;
+    else if ([minimum hasSuffix:@"k"] || [minimum hasSuffix:@"K"])
+        bytes *= 1024ULL;
+    if (bytes == 0)
+        return Fail(@"--min wants a size, such as 1M or 256k.");
+
+    if (!gJSON)
+        fprintf(stderr, "Watching process %d for %.0f seconds...\n",
+                (int)pid, seconds);
+
+    NSError *error = nil;
+    NSArray *sites = [PRAllocationTrace sitesForProcess:pid
+                                                minimum:bytes
+                                                seconds:seconds
+                                                  error:&error];
+    if (sites == nil)
+        return Fail([error localizedDescription]);
+
+    unsigned long long total = 0;
+    for (PRAllocationSite *site in sites)
+        total += [site byteCount];
+
+    if (gJSON) {
+        NSMutableArray *list = [NSMutableArray array];
+        for (PRAllocationSite *site in sites) {
+            if ([list count] >= top)
+                break;
+            [list addObject:@{@"bytes": [NSNumber numberWithUnsignedLongLong:
+                                         [site byteCount]],
+                              @"count": [NSNumber numberWithUnsignedInteger:
+                                         [site count]],
+                              @"frames": [site tellingFrames]}];
+        }
+        return PrintJSON(@{@"pid": [NSNumber numberWithInt:(int)pid],
+                           @"seconds": [NSNumber numberWithDouble:seconds],
+                           @"minimum": [NSNumber numberWithUnsignedLongLong:bytes],
+                           @"bytes": [NSNumber numberWithUnsignedLongLong:total],
+                           @"sites": list});
+    }
+
+    if ([sites count] == 0) {
+        Say(@"No allocation of %@ or more in %.0f seconds.",
+            [PRFormat stringForBytes:(double)bytes], seconds);
+        return 0;
+    }
+
+    NSUInteger times = 0;
+    for (PRAllocationSite *site in sites)
+        times += [site count];
+
+    Say(@"%@ asked for %lu times from %lu place%@ over %.0f seconds",
+        [PRFormat stringForBytes:(double)total], (unsigned long)times,
+        (unsigned long)[sites count], [sites count] == 1 ? @"" : @"s", seconds);
+
+    NSUInteger printed = 0;
+    for (PRAllocationSite *site in sites) {
+        if (printed++ >= top)
+            break;
+        Say(@"");
+        Say(@"%@ in %lu:", [PRFormat stringForBytes:(double)[site byteCount]],
+            (unsigned long)[site count]);
+        for (NSString *frame in [site tellingFrames])
+            Say(@"    %@", frame);
+    }
+    return 0;
+}
+
 /* profiler report */
 
 static void PrintTree(PRCallNode *node, double total, PRCostUnit unit,
@@ -298,9 +504,24 @@ static int ReadRecording(NSArray *words, NSUInteger top, BOOL tree, BOOL inverte
     if ([profile sampleCount] == 0)
         return Fail([NSString stringWithFormat:@"%@ holds no stacks.", path]);
 
+    [profile setTitle:[path lastPathComponent]];
+
+    return PrintProfileTree(profile, top, tree, inverted, nil);
+}
+
+static int PrintProfileTree(PRProfile *profile, NSUInteger top, BOOL tree,
+                            BOOL inverted, NSString *output)
+{
     PRCostUnit unit = [profile costUnit];
     NSUInteger frequency = 999;
     double total = [profile totalWeight];
+
+    if (output != nil) {
+        NSError *error = nil;
+        if (![profile writeFoldedStacksToPath:output error:&error])
+            return Fail([error localizedDescription]);
+        fprintf(stderr, "Recording written to %s\n", [output UTF8String]);
+    }
 
     if (tree) {
         PRCallNode *root = [profile callTreeInverted:inverted
@@ -328,7 +549,7 @@ static int ReadRecording(NSArray *words, NSUInteger top, BOOL tree, BOOL inverte
                               @"share": [NSNumber numberWithDouble:
                                          total > 0 ? [row selfWeight] / total : 0.0]}];
         }
-        return PrintJSON(@{@"file": path,
+        return PrintJSON(@{@"file": [profile title] ? [profile title] : @"",
                            @"unit": [PRFormat nameOfUnit:unit],
                            @"total": [NSNumber numberWithDouble:total],
                            @"stacks": [NSNumber numberWithUnsignedInteger:
@@ -336,7 +557,8 @@ static int ReadRecording(NSArray *words, NSUInteger top, BOOL tree, BOOL inverte
                            @"functions": list});
     }
 
-    Say(@"%@ - %@ on %lu call paths", [path lastPathComponent],
+    Say(@"%@ - %@ on %lu call paths",
+        [profile title] ? [profile title] : @"recording",
         [PRFormat stringForWeight:total unit:unit frequency:frequency],
         (unsigned long)[profile sampleCount]);
     Say(@"");
@@ -361,6 +583,8 @@ static int Usage(void)
     Say(@"  memory <pid>            where that process's memory sits");
     Say(@"  memory --all            every process, biggest first");
     Say(@"  objects <program> [..]  start a program and say which classes grow");
+    Say(@"  record <program>|--pid N  record it and say where the cost went");
+    Say(@"  allocations <pid>       watch for large allocations and name them");
     Say(@"  report <file.folded>    read a recording and say where the cost went");
     Say(@"");
     Say(@"  --json                  print the answer as JSON");
@@ -368,6 +592,10 @@ static int Usage(void)
     Say(@"  --for <seconds>         how long to watch (objects, default 30)");
     Say(@"  --top <rows>            how many rows to print (default 20)");
     Say(@"  --tree [--inverted]     print the call tree instead of the list");
+    Say(@"  --memory [--cost ..]    record the heap instead of the processor");
+    Say(@"  --rate <n>              samples per second while recording");
+    Say(@"  --min <size>            smallest allocation to report, e.g. 1M");
+    Say(@"  -o <file.folded>        keep the recording");
     return 0;
 }
 
@@ -379,6 +607,8 @@ int main(int argc, const char *argv[])
         NSString *command = [words count] > 1 ? [words objectAtIndex:1] : nil;
 
         gJSON = Flag(arguments, @"--json");
+        /* In a terminal sudo can ask for the password itself. */
+        [PRPrivilegedTask setMayAskOnTerminal:isatty(STDIN_FILENO) ? YES : NO];
         NSUInteger top = (NSUInteger)[Option(arguments, @"--top", @"20") integerValue];
         NSTimeInterval seconds = [Option(arguments, @"--for", @"30") doubleValue];
         NSString *by = Option(arguments, @"--by", @"kind");
@@ -396,6 +626,12 @@ int main(int argc, const char *argv[])
         if ([command isEqualToString:@"objects"])
             return WatchObjects([words subarrayWithRange:NSMakeRange(1, [words count] - 1)],
                                 seconds, top);
+        if ([command isEqualToString:@"record"])
+            return Record([words subarrayWithRange:NSMakeRange(1, [words count] - 1)],
+                          arguments, top);
+        if ([command isEqualToString:@"allocations"])
+            return Allocations([words subarrayWithRange:NSMakeRange(1, [words count] - 1)],
+                               arguments, top);
         if ([command isEqualToString:@"report"])
             return ReadRecording([words subarrayWithRange:NSMakeRange(1, [words count] - 1)],
                                  top, Flag(arguments, @"--tree"),

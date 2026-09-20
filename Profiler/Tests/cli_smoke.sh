@@ -48,7 +48,9 @@ checkContains "report speaks JSON" "$out" '"functions"'
 checkContains "JSON carries the total" "$out" '"total": 1000'
 
 out=$("$TOOL" report "$FIXTURE" --tree --top 3)
-checkContains "the tree starts at the root" "$out" "All stacks"
+checkContains "the tree names the recording at its root" "$out" "example.folded"
+checkContains "the tree nests what was called" "$out" "    _start"
+checkContains "and keeps nesting deeper" "$out" "      main"
 
 # Our own memory is always readable.
 out=$("$TOOL" memory $$)
@@ -60,6 +62,20 @@ out=$("$TOOL" memory $$ --json)
 checkContains "memory speaks JSON" "$out" '"resident"'
 out=$("$TOOL" memory --all | head -3)
 checkContains "every process can be listed" "$out" "PROGRAM"
+
+# Recording needs a profiling tool and often the rights to use it, so the
+# checks here are the ones that hold on any machine: the commands exist,
+# they explain themselves, and they refuse clearly when told nothing.
+out=$("$TOOL" --help)
+checkContains "the help lists record" "$out" "record"
+checkContains "the help lists allocations" "$out" "allocations"
+
+"$TOOL" record >/dev/null 2>&1
+check "record without a target fails" "$?" "1"
+"$TOOL" allocations >/dev/null 2>&1
+check "allocations without a process fails" "$?" "1"
+out=$("$TOOL" allocations 999999 --for 1 2>&1)
+checkContains "allocations says when there is no such process" "$out" "no process"
 
 # What a caller has to be able to rely on.
 "$TOOL" report /nonexistent.folded >/dev/null 2>&1
