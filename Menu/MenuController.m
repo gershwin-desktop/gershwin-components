@@ -1006,71 +1006,75 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         }
 
         while (_powerKeyMonitorRunning) {
-            int ret = poll(fds, nfds, 1000);
-            if (ret < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-            if (ret == 0) continue;
+            /* One pool per pass: the loop only ends with the session, so a
+               pool around it would never be drained. */
+            @autoreleasepool {
+                int ret = poll(fds, nfds, 1000);
+                if (ret < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if (ret == 0) continue;
 
-            BOOL anyValidFD = NO;
-            for (int i = 0; i < nfds; i++) {
-                if (fds[i].fd < 0) continue;
-                anyValidFD = YES;
-                /* A deleted/replaced input device leaves its fd permanently
-                 * readable with POLLHUP/POLLERR, so poll() returns immediately
-                 * and the loop busy-spins at 100% CPU.  Drain any pending
-                 * events first (a power-key RELEASE may still be queued - if
-                 * it is lost while the long-press timer runs, the timer fires
-                 * and shuts the machine down without asking), then close the
-                 * dead fd and stop polling the slot (poll() ignores entries
-                 * with fd < 0). */
-                if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-                    if (fds[i].revents & POLLIN) {
-                        struct input_event ev;
-                        while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
-                            if (ev.type == EV_KEY && ev.code == KEY_POWER) {
-                                if (ev.value == 1) {
-                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                        [self _xf86PowerKeyPressed];
-                                    });
-                                } else if (ev.value == 0) {
-                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                        [self _xf86PowerKeyReleased];
-                                    });
+                BOOL anyValidFD = NO;
+                for (int i = 0; i < nfds; i++) {
+                    if (fds[i].fd < 0) continue;
+                    anyValidFD = YES;
+                    /* A deleted/replaced input device leaves its fd permanently
+                     * readable with POLLHUP/POLLERR, so poll() returns immediately
+                     * and the loop busy-spins at 100% CPU.  Drain any pending
+                     * events first (a power-key RELEASE may still be queued - if
+                     * it is lost while the long-press timer runs, the timer fires
+                     * and shuts the machine down without asking), then close the
+                     * dead fd and stop polling the slot (poll() ignores entries
+                     * with fd < 0). */
+                    if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                        if (fds[i].revents & POLLIN) {
+                            struct input_event ev;
+                            while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
+                                if (ev.type == EV_KEY && ev.code == KEY_POWER) {
+                                    if (ev.value == 1) {
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self _xf86PowerKeyPressed];
+                                        });
+                                    } else if (ev.value == 0) {
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self _xf86PowerKeyReleased];
+                                        });
+                                    }
                                 }
                             }
                         }
+                        close(fds[i].fd);
+                        _powerKeyFDs[i] = -1;
+                        fds[i].fd = -1;
+                        continue;
                     }
-                    close(fds[i].fd);
-                    _powerKeyFDs[i] = -1;
-                    fds[i].fd = -1;
-                    continue;
-                }
-                if (fds[i].revents & POLLIN) {
-                    struct input_event ev;
-                    /* fd is O_NONBLOCK: drain until EAGAIN.  Never spin on
-                     * error - a non-EAGAIN failure just ends the drain and
-                     * the next poll() iteration reports HUP/ERR. */
-                    while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
-                        if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 1) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self _xf86PowerKeyPressed];
-                            });
-                        } else if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 0) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self _xf86PowerKeyReleased];
-                            });
+                    if (fds[i].revents & POLLIN) {
+                        struct input_event ev;
+                        /* fd is O_NONBLOCK: drain until EAGAIN.  Never spin on
+                         * error - a non-EAGAIN failure just ends the drain and
+                         * the next poll() iteration reports HUP/ERR. */
+                        while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
+                            if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 1) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    [self _xf86PowerKeyPressed];
+                                });
+                            } else if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 0) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    [self _xf86PowerKeyReleased];
+                                });
+                            }
                         }
                     }
                 }
-            }
-            /* All monitored fds are dead (POLLHUP/POLLERR closed them all).
-             * Calling poll() with all -1 fds returns 0 immediately, spinning
-             * the CPU at 100%.  Detect this and exit the thread cleanly. */
-            if (!anyValidFD) {
-                NSDebugLLog(@"gwcomp", @"MenuController: All power-key evdev fds dead - stopping monitor");
-                break;
+                /* All monitored fds are dead (POLLHUP/POLLERR closed them all).
+                 * Calling poll() with all -1 fds returns 0 immediately, spinning
+                 * the CPU at 100%.  Detect this and exit the thread cleanly. */
+                if (!anyValidFD) {
+                    NSDebugLLog(@"gwcomp", @"MenuController: All power-key evdev fds dead - stopping monitor");
+                    break;
+                }
             }
         }
 

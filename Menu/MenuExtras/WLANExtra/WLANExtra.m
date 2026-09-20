@@ -295,17 +295,23 @@ static NSString *findTool(NSString *name)
        background queue; the state refresh is marshalled back to the main
        thread. */
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *password = nil;
-        if ([security length] > 0) {
-            password = [self runPasswordPanelForSSID:ssid];
-            if (!password) return;
-        }
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased while doing this work is
+           held until the process ends. */
+        @autoreleasepool {
+            NSString *password = nil;
+            if ([security length] > 0) {
+                password = [self runPasswordPanelForSSID:ssid];
+                if (!password) return;
+            }
 
-        WLAN *connectTarget = target;
-        [_backend connectToWLAN:connectTarget withPassword:password];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self updateState];
-        });
+            WLAN *connectTarget = target;
+            [_backend connectToWLAN:connectTarget withPassword:password];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self updateState];
+            });
+        }
     });
 }
 
@@ -577,57 +583,59 @@ static NSString *findTool(NSString *name)
         if (!_running) return;
         (void)timer;
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            BOOL wasAvailable = _backendAvailable;
-            BOOL available = [_backend isAvailable];
-            if (!available) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    _backendAvailable = NO;
-                    _signalStrength = 0;
-                    _networkList = @[];
-                    _connectedWLAN = nil;
-                    if (wasAvailable) {
-                        [_context invalidatePresentation];
-                    }
-                });
-                return;
-            }
-            if (!_wlanEnabled) return;
-            int oldSignal = _signalStrength;
-            WLAN *oldConnected = _connectedWLAN;
-            NSUInteger oldCount = [_networkList count];
+            @autoreleasepool {
+                BOOL wasAvailable = _backendAvailable;
+                BOOL available = [_backend isAvailable];
+                if (!available) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        _backendAvailable = NO;
+                        _signalStrength = 0;
+                        _networkList = @[];
+                        _connectedWLAN = nil;
+                        if (wasAvailable) {
+                            [_context invalidatePresentation];
+                        }
+                    });
+                    return;
+                }
+                if (!_wlanEnabled) return;
+                int oldSignal = _signalStrength;
+                WLAN *oldConnected = _connectedWLAN;
+                NSUInteger oldCount = [_networkList count];
 
-            // When already connected, skip the full scan - just check if
-            // the connection is still alive and update signal strength.
-            WLAN *connected = nil;
-            NSArray *nets = nil;
-            if (oldConnected) {
-                connected = [_backend connectedWLAN];
-                int signal = connected ? [connected signalStrength] : 0;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    _backendAvailable = YES;
-                    _connectedWLAN = connected;
-                    _signalStrength = signal;
-                    if (oldSignal != _signalStrength ||
-                        (!oldConnected && _connectedWLAN) || (oldConnected && !_connectedWLAN)) {
-                        [_context invalidatePresentation];
-                    }
-                });
-            } else {
-                nets = [_backend scanForWLANs];
-                connected = [_backend connectedWLAN];
-                int signal = connected ? [connected signalStrength] : 0;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    _backendAvailable = YES;
-                    if ([nets count] > 0 || connected) {
-                        _networkList = nets;
+                // When already connected, skip the full scan - just check if
+                // the connection is still alive and update signal strength.
+                WLAN *connected = nil;
+                NSArray *nets = nil;
+                if (oldConnected) {
+                    connected = [_backend connectedWLAN];
+                    int signal = connected ? [connected signalStrength] : 0;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        _backendAvailable = YES;
                         _connectedWLAN = connected;
                         _signalStrength = signal;
-                    }
-                    if (oldSignal != _signalStrength || oldCount != [_networkList count] ||
-                        (!oldConnected && _connectedWLAN) || (oldConnected && !_connectedWLAN)) {
-                        [_context invalidatePresentation];
-                    }
-                });
+                        if (oldSignal != _signalStrength ||
+                            (!oldConnected && _connectedWLAN) || (oldConnected && !_connectedWLAN)) {
+                            [_context invalidatePresentation];
+                        }
+                    });
+                } else {
+                    nets = [_backend scanForWLANs];
+                    connected = [_backend connectedWLAN];
+                    int signal = connected ? [connected signalStrength] : 0;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        _backendAvailable = YES;
+                        if ([nets count] > 0 || connected) {
+                            _networkList = nets;
+                            _connectedWLAN = connected;
+                            _signalStrength = signal;
+                        }
+                        if (oldSignal != _signalStrength || oldCount != [_networkList count] ||
+                            (!oldConnected && _connectedWLAN) || (oldConnected && !_connectedWLAN)) {
+                            [_context invalidatePresentation];
+                        }
+                    });
+                }
             }
         });
     } @catch (NSException *e) {

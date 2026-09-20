@@ -124,38 +124,44 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         [self checkInitialActiveWindow];
 
         while (!_stopMonitoring) {
-            XEvent event;
-            XNextEvent(_display, &event);
-            if (event.type == PropertyNotify
-                && event.xproperty.window == _rootWindow
-                && event.xproperty.atom == _netActiveWindowAtom) {
-                [self checkActiveWindow];
-            } else if (event.type == PropertyNotify
-                && event.xproperty.window == _rootWindow
-                && event.xproperty.atom == _gershwinActiveAppAtom) {
-                /* The frontmost application changed without a window change
-                   (e.g. Alt-Tab between two windowless apps).  Re-post the
-                   current active window (0 when windowless) so the widget
-                   re-evaluates its application-level menu. */
-                NSDictionary *userInfo = @{@"windowId": @(_currentActiveWindow)};
-                [self performSelectorOnMainThread:@selector(_postWindowNotification:)
-                                       withObject:userInfo
-                                    waitUntilDone:NO];
-            } else if (event.type == PropertyNotify
-                && event.xproperty.window == _rootWindow
-                && event.xproperty.atom == netSupportedAtom) {
-                /* Something rewrote the WM-owned _NET_SUPPORTED list (e.g. a
-                   window-manager property-reassertion timer); let the
-                   controller restore our merged global-menu atoms. */
-                NSDictionary *userInfo = @{@"atom": @"_NET_SUPPORTED"};
-                [self performSelectorOnMainThread:@selector(_postRootPropertyNotification:)
-                                       withObject:userInfo
-                                    waitUntilDone:NO];
-            } else if (event.type == DestroyNotify || event.type == UnmapNotify) {
-                Window affected = (event.type == DestroyNotify)
-                    ? event.xdestroywindow.window : event.xunmap.window;
-                if (affected != 0 && affected == _currentActiveWindow) {
+            /* One pool per event, not one for the whole loop: this thread
+               never leaves the loop, so a pool around it would hold every
+               object autoreleased for every X event until the session ends,
+               and a busy desktop sends them by the thousand per minute. */
+            @autoreleasepool {
+                XEvent event;
+                XNextEvent(_display, &event);
+                if (event.type == PropertyNotify
+                    && event.xproperty.window == _rootWindow
+                    && event.xproperty.atom == _netActiveWindowAtom) {
                     [self checkActiveWindow];
+                } else if (event.type == PropertyNotify
+                    && event.xproperty.window == _rootWindow
+                    && event.xproperty.atom == _gershwinActiveAppAtom) {
+                    /* The frontmost application changed without a window change
+                       (e.g. Alt-Tab between two windowless apps).  Re-post the
+                       current active window (0 when windowless) so the widget
+                       re-evaluates its application-level menu. */
+                    NSDictionary *userInfo = @{@"windowId": @(_currentActiveWindow)};
+                    [self performSelectorOnMainThread:@selector(_postWindowNotification:)
+                                           withObject:userInfo
+                                        waitUntilDone:NO];
+                } else if (event.type == PropertyNotify
+                    && event.xproperty.window == _rootWindow
+                    && event.xproperty.atom == netSupportedAtom) {
+                    /* Something rewrote the WM-owned _NET_SUPPORTED list (e.g. a
+                       window-manager property-reassertion timer); let the
+                       controller restore our merged global-menu atoms. */
+                    NSDictionary *userInfo = @{@"atom": @"_NET_SUPPORTED"};
+                    [self performSelectorOnMainThread:@selector(_postRootPropertyNotification:)
+                                           withObject:userInfo
+                                        waitUntilDone:NO];
+                } else if (event.type == DestroyNotify || event.type == UnmapNotify) {
+                    Window affected = (event.type == DestroyNotify)
+                        ? event.xdestroywindow.window : event.xunmap.window;
+                    if (affected != 0 && affected == _currentActiveWindow) {
+                        [self checkActiveWindow];
+                    }
                 }
             }
         }

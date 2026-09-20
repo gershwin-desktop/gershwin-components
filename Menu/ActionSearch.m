@@ -885,21 +885,27 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
        readDataToEndOfFile blocks until mdfind exits (terminating the task
        from -cancelIndexSearch closes the pipe and unblocks the read). */
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-        NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        NSMutableArray *paths = [NSMutableArray array];
-        if (output) {
-            NSArray *lines = [output componentsSeparatedByCharactersInSet:
-                [NSCharacterSet newlineCharacterSet]];
-            for (NSString *line in lines) {
-                if ([line length] == 0) continue;
-                [paths addObject:line];
-                if ([paths count] >= kMaxResultsShown) break;
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased while doing this work is
+           held until the process ends. */
+        @autoreleasepool {
+            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+            NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSMutableArray *paths = [NSMutableArray array];
+            if (output) {
+                NSArray *lines = [output componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet newlineCharacterSet]];
+                for (NSString *line in lines) {
+                    if ([line length] == 0) continue;
+                    [paths addObject:line];
+                    if ([paths count] >= kMaxResultsShown) break;
+                }
             }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf indexSearchFinished:paths forQuery:query];
+            });
         }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf indexSearchFinished:paths forQuery:query];
-        });
     });
 }
 

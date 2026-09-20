@@ -1069,120 +1069,125 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         int x11Fd = ConnectionNumber(_display);
         
         while (!_shouldStopEventMonitoring && _display) {
-            @try {
-                // Use select() on the X11 fd to block until events arrive
-                // This avoids busy-polling with usleep and saves CPU
-                fd_set readfds;
-                FD_ZERO(&readfds);
-                FD_SET(x11Fd, &readfds);
-                struct timeval timeout;
-                timeout.tv_sec = 1;
-                timeout.tv_usec = 0;
+            /* One pool per pass, not one for the whole loop: this thread runs
+               until the session ends, so a pool around the loop would hold
+               everything autoreleased for every key event for as long. */
+            @autoreleasepool {
+                @try {
+                    // Use select() on the X11 fd to block until events arrive
+                    // This avoids busy-polling with usleep and saves CPU
+                    fd_set readfds;
+                    FD_ZERO(&readfds);
+                    FD_SET(x11Fd, &readfds);
+                    struct timeval timeout;
+                    timeout.tv_sec = 1;
+                    timeout.tv_usec = 0;
                 
-                int selectResult = select(x11Fd + 1, &readfds, NULL, NULL, &timeout);
-                if (selectResult < 0) {
-                    if (errno == EINTR) continue;
-                    NSLog(@"X11ShortcutManager: select() error: %s", strerror(errno));
-                    usleep(100000);
-                    continue;
-                }
+                    int selectResult = select(x11Fd + 1, &readfds, NULL, NULL, &timeout);
+                    if (selectResult < 0) {
+                        if (errno == EINTR) continue;
+                        NSLog(@"X11ShortcutManager: select() error: %s", strerror(errno));
+                        usleep(100000);
+                        continue;
+                    }
                 
-                // selectResult == 0 means timeout with no events, loop back
-                if (selectResult == 0 || _shouldStopEventMonitoring) {
-                    continue;
-                }
+                    // selectResult == 0 means timeout with no events, loop back
+                    if (selectResult == 0 || _shouldStopEventMonitoring) {
+                        continue;
+                    }
                 
-                // Process all pending X11 events
-                while (XPending(_display) && !_shouldStopEventMonitoring) {
-                    @try {
-                        XEvent event;
-                        XNextEvent(_display, &event);
+                    // Process all pending X11 events
+                    while (XPending(_display) && !_shouldStopEventMonitoring) {
+                        @try {
+                            XEvent event;
+                            XNextEvent(_display, &event);
                         
-                        if (event.type == KeyPress) {
-                            XKeyEvent *keyEvent = &event.xkey;
+                            if (event.type == KeyPress) {
+                                XKeyEvent *keyEvent = &event.xkey;
                             
-                            // Filter out lock key masks so NumLock/CapsLock do not break matching
-                            unsigned int filteredState = keyEvent->state;
-                            filteredState &= ~(_numlock_mask | _capslock_mask | _scrolllock_mask);
+                                // Filter out lock key masks so NumLock/CapsLock do not break matching
+                                unsigned int filteredState = keyEvent->state;
+                                filteredState &= ~(_numlock_mask | _capslock_mask | _scrolllock_mask);
                             
-                            KeySym ks = XkbKeycodeToKeysym(_display, keyEvent->keycode, 0, 0);
-                            const char *ksname = ks != NoSymbol ? XKeysymToString(ks) : "(none)";
-                            /* Runtime-gated: this fires for EVERY grabbed key
-                             * event, including autorepeat floods; an
-                             * unconditional NSLog here turned key repeats into
-                             * a log-I/O burn. */
-                            NSDebugLLog(@"gwcomp", @"X11ShortcutManager: KeyPress event - keycode=%d, keysym=%s, state=%u (filtered from %u), window=%lu",
-                                  keyEvent->keycode, ksname, filteredState, keyEvent->state, keyEvent->window);
+                                KeySym ks = XkbKeycodeToKeysym(_display, keyEvent->keycode, 0, 0);
+                                const char *ksname = ks != NoSymbol ? XKeysymToString(ks) : "(none)";
+                                /* Runtime-gated: this fires for EVERY grabbed key
+                                 * event, including autorepeat floods; an
+                                 * unconditional NSLog here turned key repeats into
+                                 * a log-I/O burn. */
+                                NSDebugLLog(@"gwcomp", @"X11ShortcutManager: KeyPress event - keycode=%d, keysym=%s, state=%u (filtered from %u), window=%lu",
+                                      keyEvent->keycode, ksname, filteredState, keyEvent->state, keyEvent->window);
                             
-                            // Create key for lookup using the filtered state (no swapping needed)
-                            NSString *keycodeModifierKey = [NSString stringWithFormat:@"%d_%u", 
-                                                          keyEvent->keycode, filteredState];
+                                // Create key for lookup using the filtered state (no swapping needed)
+                                NSString *keycodeModifierKey = [NSString stringWithFormat:@"%d_%u", 
+                                                              keyEvent->keycode, filteredState];
                             
-                            /* Alt+Space always opens the Action Search - even if an app
-                               menu managed to claim the grab, dispatch toggleSearch:
-                               directly.  This is Menu.app's own reserved global key. */
-                            if ([self isReservedActionSearchShortcut:keyEvent->keycode
-                                                             modifier:filteredState]) {
-                                NSDebugLog(@"X11ShortcutManager: Reserved Alt+Space - opening Action Search");
-                                dispatch_async(dispatch_get_main_queue(), ^{
-                                    [[ActionSearchController sharedController] toggleSearch:nil];
-                                });
-                                continue;
-                            }
-                            
-                            // Find the menu item for this shortcut
-                            NSString *menuItemKey = [_grabbedKeys objectForKey:keycodeModifierKey];
-                            if (menuItemKey) {
-                                NSDebugLLog(@"gwcomp", @"X11ShortcutManager: Found matching shortcut for key: %@", keycodeModifierKey);
-                                // Trigger the menu action on the main thread
-                                dispatch_async(dispatch_get_main_queue(), ^{
-                                    [self triggerMenuActionForKey:menuItemKey];
-                                });
-                            } else if (ks != NoSymbol && [_xf86Actions count] > 0) {
-                                // Check XF86 special keys (volume, brightness, etc.)
-                                NSNumber *ksNum = @((unsigned long)ks);
-                                NSDictionary *action = [_xf86Actions objectForKey:ksNum];
-                                if (action) {
-                                    NSDebugLLog(@"gwcomp", @"X11ShortcutManager: Found XF86 key action for keysym 0x%lx (%s)", (unsigned long)ks, ksname);
+                                /* Alt+Space always opens the Action Search - even if an app
+                                   menu managed to claim the grab, dispatch toggleSearch:
+                                   directly.  This is Menu.app's own reserved global key. */
+                                if ([self isReservedActionSearchShortcut:keyEvent->keycode
+                                                                 modifier:filteredState]) {
+                                    NSDebugLog(@"X11ShortcutManager: Reserved Alt+Space - opening Action Search");
                                     dispatch_async(dispatch_get_main_queue(), ^{
-                                        [self triggerXF86Action:action];
+                                        [[ActionSearchController sharedController] toggleSearch:nil];
                                     });
+                                    continue;
+                                }
+                            
+                                // Find the menu item for this shortcut
+                                NSString *menuItemKey = [_grabbedKeys objectForKey:keycodeModifierKey];
+                                if (menuItemKey) {
+                                    NSDebugLLog(@"gwcomp", @"X11ShortcutManager: Found matching shortcut for key: %@", keycodeModifierKey);
+                                    // Trigger the menu action on the main thread
+                                    dispatch_async(dispatch_get_main_queue(), ^{
+                                        [self triggerMenuActionForKey:menuItemKey];
+                                    });
+                                } else if (ks != NoSymbol && [_xf86Actions count] > 0) {
+                                    // Check XF86 special keys (volume, brightness, etc.)
+                                    NSNumber *ksNum = @((unsigned long)ks);
+                                    NSDictionary *action = [_xf86Actions objectForKey:ksNum];
+                                    if (action) {
+                                        NSDebugLLog(@"gwcomp", @"X11ShortcutManager: Found XF86 key action for keysym 0x%lx (%s)", (unsigned long)ks, ksname);
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self triggerXF86Action:action];
+                                        });
+                                    } else {
+                                        NSDebugLog(@"X11ShortcutManager: No matching shortcut found for key: %@", keycodeModifierKey);
+                                    }
                                 } else {
                                     NSDebugLog(@"X11ShortcutManager: No matching shortcut found for key: %@", keycodeModifierKey);
                                 }
-                            } else {
-                                NSDebugLog(@"X11ShortcutManager: No matching shortcut found for key: %@", keycodeModifierKey);
-                            }
-                        } else if (event.type == KeyRelease) {
-                            // Dispatch XF86 key release actions (e.g. power key
-                            // short/long-press detection needs the release event).
-                            XKeyEvent *keyEvent = &event.xkey;
-                            KeySym ks = XkbKeycodeToKeysym(_display, keyEvent->keycode, 0, 0);
-                            if (ks != NoSymbol && [_xf86ReleaseActions count] > 0) {
-                                NSNumber *ksNum = @((unsigned long)ks);
-                                NSDictionary *action = [_xf86ReleaseActions objectForKey:ksNum];
-                                if (action) {
-                                    NSDebugLLog(@"gwcomp", @"X11ShortcutManager: Found XF86 key release action for keysym 0x%lx (%s)", (unsigned long)ks, XKeysymToString(ks));
-                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                        [self triggerXF86Action:action];
-                                    });
+                            } else if (event.type == KeyRelease) {
+                                // Dispatch XF86 key release actions (e.g. power key
+                                // short/long-press detection needs the release event).
+                                XKeyEvent *keyEvent = &event.xkey;
+                                KeySym ks = XkbKeycodeToKeysym(_display, keyEvent->keycode, 0, 0);
+                                if (ks != NoSymbol && [_xf86ReleaseActions count] > 0) {
+                                    NSNumber *ksNum = @((unsigned long)ks);
+                                    NSDictionary *action = [_xf86ReleaseActions objectForKey:ksNum];
+                                    if (action) {
+                                        NSDebugLLog(@"gwcomp", @"X11ShortcutManager: Found XF86 key release action for keysym 0x%lx (%s)", (unsigned long)ks, XKeysymToString(ks));
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self triggerXF86Action:action];
+                                        });
+                                    }
                                 }
                             }
                         }
-                    }
-                    @catch (NSException *exception) {
-                        NSLog(@"X11ShortcutManager: Exception processing X11 event: %@", exception);
+                        @catch (NSException *exception) {
+                            NSLog(@"X11ShortcutManager: Exception processing X11 event: %@", exception);
+                        }
                     }
                 }
-            }
-            @catch (NSException *exception) {
-                NSLog(@"X11ShortcutManager: Critical exception in event monitoring thread: %@", exception);
-                // Sleep on critical errors to prevent rapid error loops
-                usleep(500000); // 500ms
-            }
-            @catch (...) {
-                NSLog(@"X11ShortcutManager: Unknown exception in event monitoring thread");
-                usleep(500000); // 500ms
+                @catch (NSException *exception) {
+                    NSLog(@"X11ShortcutManager: Critical exception in event monitoring thread: %@", exception);
+                    // Sleep on critical errors to prevent rapid error loops
+                    usleep(500000); // 500ms
+                }
+                @catch (...) {
+                    NSLog(@"X11ShortcutManager: Unknown exception in event monitoring thread");
+                    usleep(500000); // 500ms
+                }
             }
         }
     }
