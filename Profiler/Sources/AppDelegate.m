@@ -6,6 +6,8 @@
 
 #import "AppDelegate.h"
 #import "PRProfilerWindowController.h"
+#import "PRObjectCensusController.h"
+#import "PRMemoryWindowController.h"
 
 @implementation AppDelegate
 
@@ -32,6 +34,13 @@
     [[profile addItemWithTitle:@"Stop"
                         action:@selector(stopRecording:)
                  keyEquivalent:@"."] setTarget:self];
+    [profile addItem:[NSMenuItem separatorItem]];
+    [[profile addItemWithTitle:@"Show Memory in Use..."
+                        action:@selector(showMemory:)
+                 keyEquivalent:@"u"] setTarget:self];
+    [[profile addItemWithTitle:@"Watch Objects in Use..."
+                        action:@selector(watchObjects:)
+                 keyEquivalent:@"j"] setTarget:self];
     [profile addItem:[NSMenuItem separatorItem]];
     [[profile addItemWithTitle:@"Open Folded Stacks..."
                         action:@selector(openFoldedStacks:)
@@ -125,6 +134,8 @@
 {
     (void)notification;
     [_windowController stopEverything];
+    [_censusController stopEverything];
+    [_memoryController stopEverything];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
@@ -141,6 +152,28 @@
 - (void)stopRecording:(id)sender
 {
     [_windowController stopRecording:sender];
+}
+
+/* Where a running program's memory sits needs neither a recording nor any
+   preparation, so it is a window of its own rather than a profile. */
+- (void)showMemory:(id)sender
+{
+    (void)sender;
+    if (_memoryController == nil)
+        _memoryController = [[PRMemoryWindowController alloc] init];
+    [_memoryController showWindow:self];
+    [[_memoryController window] makeKeyAndOrderFront:self];
+}
+
+/* The object census is a watch on a running program rather than a reading
+   of a recording, so it lives in a window of its own. */
+- (void)watchObjects:(id)sender
+{
+    (void)sender;
+    if (_censusController == nil)
+        _censusController = [[PRObjectCensusController alloc] init];
+    [_censusController showWindow:self];
+    [[_censusController window] makeKeyAndOrderFront:self];
 }
 
 - (void)openFoldedStacks:(id)sender
