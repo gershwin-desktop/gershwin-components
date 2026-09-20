@@ -1871,6 +1871,122 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     return item;
 }
 
+/* An application's icon is stored at up to 1024x1024 - four megabytes once
+   decoded - and the menu draws it at the height of a line of text. Keeping
+   the icon as it came would hold all of that for every installed
+   application, so it is scaled down once and only the small copy is kept.
+   36 pixels is enough for the largest scale factor a menu is drawn at.
+
+   The pixels are averaged by hand rather than drawn through a graphics
+   context: drawing into a bitmap context produced empty images here, and
+   -lockFocus would open a window on the display server for every icon. An
+   icon that cannot be read this way is handed back untouched, so a menu
+   never loses its picture over this. */
+static NSImage *MenuSizedIcon(NSImage *icon)
+{
+    const NSInteger side = 36;
+    NSBitmapImageRep *source = nil;
+    NSBitmapImageRep *small;
+    const unsigned char *src;
+    unsigned char *dst;
+    NSInteger sourceWidth, sourceHeight, samples, sourceRow, smallRow;
+    NSInteger x, y;
+    int wide, hasAlpha, colour;
+
+    if (icon == nil)
+        return nil;
+
+    for (NSImageRep *rep in [icon representations]) {
+        if ([rep isKindOfClass:[NSBitmapImageRep class]]) {
+            NSBitmapImageRep *bitmap = (NSBitmapImageRep *)rep;
+            /* The biggest one scales down best. */
+            if (source == nil || [bitmap pixelsWide] > [source pixelsWide])
+                source = bitmap;
+        }
+    }
+    if (source == nil || [source isPlanar]
+        || ([source bitsPerSample] != 8 && [source bitsPerSample] != 16))
+        return icon;
+
+    sourceWidth = [source pixelsWide];
+    sourceHeight = [source pixelsHigh];
+    samples = [source samplesPerPixel];
+    sourceRow = [source bytesPerRow];
+    src = [source bitmapData];
+    /* Icons come in several shapes: grey or colour, with or without a
+       transparency channel, one or two bytes per sample. */
+    wide = ([source bitsPerSample] == 16);
+    hasAlpha = [source hasAlpha] ? 1 : 0;
+    colour = (samples - hasAlpha) >= 3;
+    if (src == NULL || sourceWidth <= 0 || sourceHeight <= 0)
+        return icon;
+    if (sourceWidth <= side && sourceHeight <= side)
+        return icon;
+
+    small = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                    pixelsWide:side
+                                                    pixelsHigh:side
+                                                 bitsPerSample:8
+                                               samplesPerPixel:4
+                                                      hasAlpha:YES
+                                                      isPlanar:NO
+                                                colorSpaceName:NSDeviceRGBColorSpace
+                                                   bytesPerRow:0
+                                                  bitsPerPixel:0];
+    dst = [small bitmapData];
+    if (dst == NULL)
+        return icon;
+    smallRow = [small bytesPerRow];
+
+    for (y = 0; y < side; y++) {
+        NSInteger firstRow = y * sourceHeight / side;
+        NSInteger lastRow = MAX(firstRow + 1, (y + 1) * sourceHeight / side);
+
+        for (x = 0; x < side; x++) {
+            NSInteger firstColumn = x * sourceWidth / side;
+            NSInteger lastColumn = MAX(firstColumn + 1,
+                                       (x + 1) * sourceWidth / side);
+            unsigned long red = 0, green = 0, blue = 0, alpha = 0, taken = 0;
+            NSInteger sy, sx;
+            unsigned char *out;
+
+            for (sy = firstRow; sy < lastRow; sy++) {
+                const unsigned char *row = src + sy * sourceRow;
+                for (sx = firstColumn; sx < lastColumn; sx++) {
+                    const unsigned char *pixel =
+                        row + sx * samples * (wide ? 2 : 1);
+                    unsigned value[4];
+                    NSInteger sample;
+
+                    for (sample = 0; sample < samples && sample < 4; sample++)
+                        value[sample] = wide
+                            ? (unsigned)(((const unsigned short *)pixel)[sample] >> 8)
+                            : (unsigned)pixel[sample];
+
+                    red += value[0];
+                    green += colour ? value[1] : value[0];
+                    blue += colour ? value[2] : value[0];
+                    alpha += hasAlpha ? value[samples - 1] : 255;
+                    taken++;
+                }
+            }
+            if (taken == 0)
+                taken = 1;
+
+            out = dst + y * smallRow + x * 4;
+            out[0] = (unsigned char)(red / taken);
+            out[1] = (unsigned char)(green / taken);
+            out[2] = (unsigned char)(blue / taken);
+            out[3] = (unsigned char)(alpha / taken);
+        }
+    }
+
+    [small setSize:NSMakeSize(side, side)];
+    NSImage *scaled = [[NSImage alloc] initWithSize:NSMakeSize(side, side)];
+    [scaled addRepresentation:small];
+    return scaled;
+}
+
 - (void)addMenuItemsFromTree:(NSDictionary *)tree toMenu:(NSMenu *)menu
 {
     /* Collect both subdirectory submenus and app items, then interleave
@@ -1923,7 +2039,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             NSString *bundlePath = entry[@"_path"];
             NSImage *icon = bundlePath ? [self.appIconCache objectForKey:bundlePath] : nil;
             if (icon == nil && bundlePath != nil) {
-                icon = [[NSWorkspace sharedWorkspace] iconForFile:bundlePath];
+                icon = MenuSizedIcon([[NSWorkspace sharedWorkspace]
+                                      iconForFile:bundlePath]);
                 if (icon != nil) {
                     if (self.appIconCache == nil)
                         self.appIconCache = [NSMutableDictionary dictionary];
