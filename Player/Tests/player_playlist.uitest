@@ -16,7 +16,11 @@ shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track One' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/One.mp3"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Two' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Two.mp3"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Three' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Three.mp3"
-shell "openapp Player /tmp/player-uitest-${home}/One.mp3 /tmp/player-uitest-${home}/Two.mp3 /tmp/player-uitest-${home}/Three.mp3 >/dev/null 2>&1 &"
+# What the player says about opening and playing the files is the only way to
+# tell a failed decode from a lost click when this fails on a build machine;
+# a failing script prints what lands in /tmp/uitest-logs.
+shell "mkdir -p /tmp/uitest-logs && rm -f /tmp/uitest-logs/player.log"
+shell "openapp Player /tmp/player-uitest-${home}/One.mp3 /tmp/player-uitest-${home}/Two.mp3 /tmp/player-uitest-${home}/Three.mp3 >/tmp/uitest-logs/player.log 2>&1 &"
 wait 2s
 activate application "Player"
 wait until window "Player - Track One" timeout 15s

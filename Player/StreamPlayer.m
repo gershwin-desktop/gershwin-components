@@ -774,7 +774,7 @@ static int interruptCallback(void *opaque)
 // stop, pause and seek so that those take effect at once.
 - (void)waitForMediaTime:(double)t lead:(double)lead
 {
-    if (t - lead - [self masterClock] > kMaxFrameWait) {
+    if ([self waitWouldBeForABrokenTimestamp:t lead:lead]) {
         return;
     }
     while (!_shouldStop && !_paused && ![self seekPending]) {
@@ -784,6 +784,20 @@ static int interruptCallback(void *opaque)
         }
         [NSThread sleepForTimeInterval:MIN(remaining, 0.01)];
     }
+}
+
+// Without a sound device the wait is the only thing that keeps playback at
+// its real speed, and decoding is always a few seconds ahead of it, so "far
+// ahead of the clock" cannot mean a broken timestamp there; only a time
+// beyond the end of the stream can.  A device paces playback itself, and a
+// frame far ahead of its position means the sound has stalled - waiting for
+// that one would freeze the picture, so it is skipped as before.
+- (BOOL)waitWouldBeForABrokenTimestamp:(double)t lead:(double)lead
+{
+    if (_clockFromWall && _totalDuration > 0.0) {
+        return t > _totalDuration + kMaxFrameWait;
+    }
+    return t - lead - [self masterClock] > kMaxFrameWait;
 }
 
 - (double)secondsOfFrame:(AVFrame *)frame timeBase:(double)timeBase
