@@ -875,6 +875,11 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 if ([provider respondsToSelector:@selector(icon)]) {
                     [self showIconOfExtra:provider inItem:menuItem];
                     if (_extrasMenuView) {
+                        /* Every extra ticks in the same timer pass, and each
+                           queued redraw of the whole bar ran on its own. */
+                        [NSObject cancelPreviousPerformRequestsWithTarget:_extrasMenuView
+                                                                 selector:@selector(display)
+                                                                   object:nil];
                         [_extrasMenuView performSelector:@selector(display)
                                              withObject:nil
                                              afterDelay:0];

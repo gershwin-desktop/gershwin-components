@@ -20,6 +20,10 @@ extern NSString * const WindowMonitorActiveWindowChangedNotification;
 // contains the property's atom name under @"atom".
 extern NSString * const WindowMonitorRootPropertyChangedNotification;
 
+// Posted on the main thread when _NET_ACTIVE_WINDOW names a different window
+// that is viewable, before any filtering.  userInfo holds @"windowId".
+extern NSString * const WindowMonitorViewableActiveWindowNotification;
+
 /**
  * WindowMonitor
  * 

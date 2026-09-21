@@ -21,16 +21,51 @@
     Atom _netActiveWindowAtom;
     Atom _gershwinActiveAppAtom;
     unsigned long _currentActiveWindow;
+    unsigned long _viewableActiveWindow;
+    BOOL _activeWindowUnviewable;
     BOOL _monitoring;
     BOOL _stopMonitoring;
 }
 - (void)_postWindowNotification:(NSDictionary *)userInfo;
+- (void)_noteActiveWindow:(unsigned long)window
+                 viewable:(BOOL)viewable;
 @end
 
 @implementation WindowMonitor
 
 NSString * const WindowMonitorActiveWindowChangedNotification = @"WindowMonitorActiveWindowChangedNotification";
 NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorRootPropertyChangedNotification";
+NSString * const WindowMonitorViewableActiveWindowNotification = @"WindowMonitorViewableActiveWindowNotification";
+
+- (void)_postViewableWindowNotification:(NSDictionary *)userInfo
+{
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:WindowMonitorViewableActiveWindowNotification
+                      object:self
+                    userInfo:userInfo];
+}
+
+/* Reports _NET_ACTIVE_WINDOW unfiltered, as soon as it can be seen.  The
+   controller used to read it every 100 ms on the main thread for this, and
+   those two round trips per tick were most of what an idle Menu did and
+   woke the X server twenty times a second. */
+- (void)_noteActiveWindow:(unsigned long)window
+                 viewable:(BOOL)viewable
+{
+    /* An active window that is not mapped yet shows up by a MapNotify of
+       its own or of its frame, with no change of the root property. */
+    _activeWindowUnviewable = (window != 0 && !viewable);
+    unsigned long shown = viewable ? window : 0;
+    if (shown == _viewableActiveWindow) {
+        return;
+    }
+    _viewableActiveWindow = shown;
+    if (shown != 0) {
+        [self performSelectorOnMainThread:@selector(_postViewableWindowNotification:)
+                               withObject:@{@"windowId": @(shown)}
+                            waitUntilDone:NO];
+    }
+}
 
 - (void)_postRootPropertyNotification:(NSDictionary *)userInfo
 {
@@ -68,6 +103,8 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         _netActiveWindowAtom = 0;
         _gershwinActiveAppAtom = 0;
         _currentActiveWindow = 0;
+        _viewableActiveWindow = 0;
+        _activeWindowUnviewable = NO;
         _monitoring = NO;
         _stopMonitoring = NO;
         
@@ -159,9 +196,12 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
                 } else if (event.type == DestroyNotify || event.type == UnmapNotify) {
                     Window affected = (event.type == DestroyNotify)
                         ? event.xdestroywindow.window : event.xunmap.window;
-                    if (affected != 0 && affected == _currentActiveWindow) {
+                    if (affected != 0 && (affected == _currentActiveWindow
+                                          || affected == _viewableActiveWindow)) {
                         [self checkActiveWindow];
                     }
+                } else if (event.type == MapNotify && _activeWindowUnviewable) {
+                    [self checkActiveWindow];
                 }
             }
         }
@@ -197,11 +237,16 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     }
 
     // Same logic as checkActiveWindow - trust WM unless window is explicitly unmapped
-    if (newActiveWindow != 0) {
+    if (newActiveWindow == 0) {
+        [self _noteActiveWindow:0 viewable:NO];
+    } else {
         XWindowAttributes attrs;
         BOOL canGetAttrs = XGetWindowAttributes(_display, (Window)newActiveWindow, &attrs);
+        [self _noteActiveWindow:newActiveWindow
+                       viewable:(canGetAttrs && attrs.map_state == IsViewable)];
         
         if (canGetAttrs && attrs.map_state != IsViewable) {
+            XSelectInput(_display, (Window)newActiveWindow, StructureNotifyMask | PropertyChangeMask);
             // Require IsViewable: reject both IsUnmapped and IsUnviewable (mapped but ancestor unmapped).
             NSDebugLLog(@"gwcomp", @"WindowMonitor: Initial active window %lu is not viewable (map_state %d)", newActiveWindow, attrs.map_state);
             newActiveWindow = 0;
@@ -261,13 +306,18 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     // FIX: Don't report window==0 unless X11 truly says there's no active window
     // If XGetWindowProperty returns a window ID, trust it - even if we can't query its attributes
     // Window attributes can fail during WM operations (reparenting, etc) but the window is still valid
-    if (newActiveWindow != 0) {
+    if (newActiveWindow == 0) {
+        [self _noteActiveWindow:0 viewable:NO];
+    } else {
         XWindowAttributes attrs;
         // Try to get attributes, but don't reject the window if this fails
         // The window manager set this as active, so trust it
         BOOL canGetAttrs = XGetWindowAttributes(_display, (Window)newActiveWindow, &attrs);
+        [self _noteActiveWindow:newActiveWindow
+                       viewable:(canGetAttrs && attrs.map_state == IsViewable)];
         
         if (canGetAttrs && attrs.map_state != IsViewable) {
+            XSelectInput(_display, (Window)newActiveWindow, StructureNotifyMask | PropertyChangeMask);
             // Require IsViewable: reject both IsUnmapped (minimized/hidden) and
             // IsUnviewable (mapped but an ancestor is not). Neither can have focus.
             NSDebugLLog(@"gwcomp", @"WindowMonitor: Active window %lu is not viewable (map_state %d) - treating as no active window", newActiveWindow, attrs.map_state);

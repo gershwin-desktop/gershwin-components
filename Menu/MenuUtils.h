@@ -31,7 +31,6 @@
 // Read _NET_ACTIVE_WINDOW on a fresh connection (safe from any thread).
 + (unsigned long)getActiveWindowFresh;
 + (NSArray *)getAllWindows;
-+ (unsigned long)getActiveWindow;
 + (NSString *)getWindowProperty:(unsigned long)windowId atomName:(NSString *)atomName;
 + (NSString*)getWindowMenuService:(unsigned long)windowId;
 + (NSString*)getWindowMenuPath:(unsigned long)windowId;

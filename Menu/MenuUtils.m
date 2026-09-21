@@ -75,42 +75,6 @@ static dispatch_once_t _sharedDisplayOnce;
     return activeWindow;
 }
 
-+ (unsigned long)getActiveWindow
-{
-    Display *display = [self sharedDisplay];
-    if (!display) return 0;
-
-    Atom actualType;
-    int actualFormat;
-    unsigned long nitems, bytesAfter;
-    unsigned char *prop = NULL;
-    unsigned long activeWindow = 0;
-
-    Atom atom = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
-    if (XGetWindowProperty(display, DefaultRootWindow(display), atom,
-                          0, 1, False, XA_WINDOW,
-                          &actualType, &actualFormat, &nitems, &bytesAfter,
-                          &prop) == 0 && prop) {
-        if (nitems > 0) {
-            activeWindow = *(Window*)prop;
-        }
-        XFree(prop);
-    }
-
-    // Systematic fix: If the active window ID is reported but the window is NO LONGER VALID
-    // or NOT MAPPED, then it's effectively NOT the active window anymore.
-    if (activeWindow != 0) {
-        XWindowAttributes attrs;
-        // XGetWindowAttributes returns non-zero on success
-        if (XGetWindowAttributes(display, (Window)activeWindow, &attrs) == 0 ||
-            attrs.map_state != IsViewable) {
-            activeWindow = 0;
-        }
-    }
-
-    return activeWindow;
-}
-
 // Internal helper that reuses an existing display connection
 + (NSString *)_getApplicationNameForWindow:(unsigned long)windowId display:(Display *)display
 {

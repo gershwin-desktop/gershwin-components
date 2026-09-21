@@ -1533,32 +1533,21 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                                                 userInfo:nil
                                                                  repeats:YES];
 
-    // Fallback poll for the active window.  The WindowMonitor is event-driven
-    // via a dispatch source on its own X connection; that source has been
-    // observed to stop firing after a while (GCD read-source on an Xlib fd),
-    // which leaves the menu stuck on the previously active app.  Polling every
-    // 100ms on a fresh connection keeps the menu tracking responsive (the menu
-    // must follow an app switch within ~100ms).
-    self.activeWindowPollTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
-                                                                  target:self
-                                                                selector:@selector(activeWindowPollTick:)
-                                                                userInfo:nil
-                                                                 repeats:YES];
+    /* The widget follows every viewable active window, including those the
+       filtered notification above keeps back; the menu must follow an app
+       switch at once. */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(viewableActiveWindowNotification:)
+                                                 name:WindowMonitorViewableActiveWindowNotification
+                                               object:nil];
     
     NSDebugLLog(@"gwcomp", @"MenuController: Window monitoring setup complete");
 }
 
-- (void)activeWindowPollTick:(NSTimer *)timer
+- (void)viewableActiveWindowNotification:(NSNotification *)notification
 {
     @try {
-        /* Read the active window live via MenuUtils' shared X connection.
-           Do NOT use the WindowMonitor's cached value: its event loop is
-           known to stall (see the monitor setup comment), so the cache goes
-           stale and Menu would miss or lag active-app switches.  Do NOT open
-           a fresh X connection per tick either - that churns ~36000 connects
-           per hour and accumulated CPU on long-running sessions.  The shared
-           persistent connection gives a fresh read with no per-tick cost. */
-        unsigned long activeWindow = [MenuUtils getActiveWindow];
+        unsigned long activeWindow = [notification.userInfo[@"windowId"] unsignedLongValue];
 
         if (activeWindow == 0 || activeWindow == self.lastProcessedWindowId) {
             return;
@@ -1570,7 +1559,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         self.lastProcessedTime = [[NSDate date] timeIntervalSince1970];
     }
     @catch (NSException *ex) {
-        NSDebugLLog(@"gwcomp", @"MenuController: Exception in activeWindowPollTick: %@", ex);
+        NSDebugLLog(@"gwcomp", @"MenuController: Exception in viewableActiveWindowNotification: %@", ex);
     }
 }
 
