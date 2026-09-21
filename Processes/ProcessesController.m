@@ -74,9 +74,75 @@ static const CGFloat kSparklineHeight = 54.0;
 /* NSTableView subclass that draws full-row alternating backgrounds (no
  * per-cell gaps) and lets a right-click act on the row under the pointer. */
 @interface ProcessTableView : NSTableView
+{
+    BOOL _fillingLastColumn;
+}
+- (void)fillLastColumnToWidth;
 @end
 
 @implementation ProcessTableView
+
+/* GNUstep leaves -setColumnAutoresizingStyle: unimplemented, and it only
+ * sizes the last column to fit when the table happened to fill the previous
+ * width exactly, so a narrower column anywhere leaves white space to the
+ * right of the last one.  Give that space to the last column, and only that
+ * way round: a table wider than the window scrolls as before. */
+- (void)fillLastColumnToWidth
+{
+    NSView *clip = [self superview];
+    NSTableColumn *last;
+    CGFloat visible, used, gap;
+
+    if (_fillingLastColumn || clip == nil || [self numberOfColumns] == 0) {
+        return;
+    }
+
+    last = [[self tableColumns] lastObject];
+    if ([last isResizable] == NO) {
+        return;
+    }
+
+    visible = [self convertRect:[clip bounds] fromView:clip].size.width;
+    used = NSWidth([self frame]);
+    gap = visible - used;
+
+    /* Below a point the gap is rounding, not a gap; acting on it would make
+     * the table and the scroll view chase each other. */
+    if (gap <= 1.0) {
+        return;
+    }
+
+    _fillingLastColumn = YES;
+    [last setWidth:[last width] + gap];
+    _fillingLastColumn = NO;
+}
+
+- (void)tile
+{
+    [super tile];
+    [self fillLastColumnToWidth];
+}
+
+- (void)viewDidMoveToSuperview
+{
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+
+    [super viewDidMoveToSuperview];
+    [nc removeObserver:self name:NSViewFrameDidChangeNotification object:nil];
+    if ([self superview] != nil) {
+        [[self superview] setPostsFrameChangedNotifications:YES];
+        [nc addObserver:self
+               selector:@selector(clipViewFrameChanged:)
+                   name:NSViewFrameDidChangeNotification
+                 object:[self superview]];
+    }
+    [self fillLastColumnToWidth];
+}
+
+- (void)clipViewFrameChanged:(NSNotification *)aNotification
+{
+    [self fillLastColumnToWidth];
+}
 
 - (void)drawRow:(NSInteger)row clipRect:(NSRect)clipRect
 {
@@ -1512,7 +1578,10 @@ static ProcessesController *sharedController = nil;
                                  NSHeight(bounds) - topStrip - bottomStrip)];
     [scrollView setHasVerticalScroller:YES];
     [scrollView setHasHorizontalScroller:YES];
-    [scrollView setAutohidesScrollers:YES];
+    /* Keep the scrollers' space reserved.  Hiding them makes the visible
+     * area change size the moment a column is dragged past the window
+     * width, and every row jumps by the height of the horizontal scroller. */
+    [scrollView setAutohidesScrollers:NO];
     [scrollView setBorderType:NSBezelBorder];
     [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
@@ -1523,7 +1592,9 @@ static ProcessesController *sharedController = nil;
     [_processesTableView setDataSource:self];
     [_processesTableView setDelegate:self];
     [_processesTableView setAllowsMultipleSelection:NO];
-    [_processesTableView setIntercellSpacing:NSMakeSize(0, 0)];
+    /* Rows stay tight, but columns need a gap: a right aligned number would
+     * otherwise end flush against the next column's text. */
+    [_processesTableView setIntercellSpacing:NSMakeSize(6.0, 0.0)];
     [_processesTableView setGridStyleMask:NSTableViewGridNone];
     [_processesTableView setTarget:self];
     [_processesTableView setDoubleAction:@selector(tableViewDoubleClick:)];
