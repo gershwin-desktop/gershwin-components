@@ -135,6 +135,9 @@ NSString *PRMemoryKindExplanation(PRMemoryKind kind)
     PRMemoryRegion *region = nil;
     NSCharacterSet *hex = [NSCharacterSet characterSetWithCharactersInString:
                            @"0123456789abcdefABCDEF"];
+    /* -invertedSet copies the whole Unicode bitmap, some 139 KB, and a
+       process's smaps has thousands of lines. */
+    NSCharacterSet *nonHex = [hex invertedSet];
 
     for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
         if ([line length] == 0)
@@ -145,7 +148,7 @@ NSString *PRMemoryKindExplanation(PRMemoryKind kind)
         NSRange dash = [line rangeOfString:@"-"];
         BOOL isHeader = dash.location != NSNotFound && dash.location > 0 &&
             [[line substringToIndex:dash.location]
-             rangeOfCharacterFromSet:[hex invertedSet]].location == NSNotFound;
+             rangeOfCharacterFromSet:nonHex].location == NSNotFound;
 
         if (isHeader) {
             NSArray *fields = [[line componentsSeparatedByCharactersInSet:

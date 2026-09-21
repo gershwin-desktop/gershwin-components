@@ -41,6 +41,10 @@
     PRCensusSnapshot *snapshot = [[PRCensusSnapshot alloc] init];
     NSMutableArray *rows = [NSMutableArray array];
     NSMutableDictionary *byName = [NSMutableDictionary dictionary];
+    /* -invertedSet copies the whole Unicode bitmap, some 139 KB, and this
+       runs for every field of every class in the census. */
+    NSCharacterSet *nonDigits = [[NSCharacterSet characterSetWithCharactersInString:
+                                  @"-0123456789"] invertedSet];
 
     for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
         if ([line length] == 0 || [line isEqualToString:@"."])
@@ -53,13 +57,11 @@
         if ([fields count] < 4)
             continue;
 
-        NSCharacterSet *digits = [NSCharacterSet characterSetWithCharactersInString:
-                                  @"-0123456789"];
         BOOL counts = YES;
         for (NSUInteger field = 0; field < 3; field++) {
             NSString *value = [fields objectAtIndex:field];
             if ([value length] == 0 ||
-                [value rangeOfCharacterFromSet:[digits invertedSet]].location
+                [value rangeOfCharacterFromSet:nonDigits].location
                 != NSNotFound)
                 counts = NO;
         }
