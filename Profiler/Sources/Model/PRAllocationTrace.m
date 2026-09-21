@@ -227,6 +227,11 @@
        keeps the big ones, which is what makes this cheap enough to leave
        running on a desktop. */
     NSArray *recordArguments = @[@"record",
+                                 /* Only this process: perf follows children
+                                    by default, and a program that starts
+                                    others would report their allocations as
+                                    its own. */
+                                 @"--no-inherit",
                                  @"-e", @"syscalls:sys_enter_mmap",
                                  @"--filter", [NSString stringWithFormat:
                                                @"len > %llu", minimumBytes],
