@@ -423,6 +423,13 @@ static NSString *const kStateStopped = @"stopped";
 
 - (void)startItemAtIndex:(NSUInteger)index
 {
+    // A start that has not finished yet owns the media object.  Starting a
+    // second one on top of it - Next pressed in the moment the list was
+    // already moving on by itself - left neither of them playing and the
+    // player stopped, so the pending one is taken down first.
+    if (_opening) {
+        [self closeMedia];
+    }
     _attemptsLeft--;
     if (index != _resumeIndex) {
         // Only the restored track continues where it was, and only once

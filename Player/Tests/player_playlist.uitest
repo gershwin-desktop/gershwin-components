@@ -13,7 +13,10 @@ shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
 shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
 shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}"
-shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track One' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/One.mp3"
+# The first track is long: the player starts the next one a second before a
+# track ends, and a Next clicked in that moment would move on to the third
+# track, which is not what the step below means to check.
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=12 -metadata title='Track One' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/One.mp3"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Two' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Two.mp3"
 shell "ffmpeg -loglevel error -f lavfi -i sine=duration=3 -metadata title='Track Three' -metadata artist='Uitest Band' -metadata album='Uitest Album' /tmp/player-uitest-${home}/Three.mp3"
 # What the player says about opening and playing the files is the only way to
