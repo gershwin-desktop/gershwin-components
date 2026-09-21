@@ -10,6 +10,9 @@
 #import <X11/Xutil.h>
 #import <X11/Xatom.h>
 #import <dispatch/dispatch.h>
+#ifdef __GLIBC__
+#import <malloc.h>
+#endif
 
 @interface MenuUtils (Private)
 + (NSString *)_getApplicationNameForWindow:(unsigned long)windowId display:(Display *)display;
@@ -38,6 +41,17 @@ static dispatch_once_t _sharedDisplayOnce;
         XCloseDisplay(_sharedDisplay);
         _sharedDisplay = NULL;
     }
+}
+
++ (void)releaseFreedHeapMemory
+{
+#ifdef __GLIBC__
+    /* glibc gives memory back only from the top of the heap.  After a burst
+       of short-lived allocations the freed pages below a surviving object
+       stay resident for the life of the process.  The allocators of the
+       BSDs return such pages on their own. */
+    malloc_trim(0);
+#endif
 }
 
 + (Display *)openDisplay

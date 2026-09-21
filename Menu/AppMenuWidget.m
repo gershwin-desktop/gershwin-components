@@ -1653,6 +1653,12 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: Scanning app tree with %ld root keys", (long)[[appTree allKeys] count]);
         [self addMenuItemsFromTree:appTree toMenu:appsSubmenu];
         self.cachedAppsSubmenu = appsSubmenu;
+        /* Decoding every application's icon is the biggest burst of
+           allocations Menu ever makes (first at launch); what it freed is
+           given back once the current autorelease pool has been drained. */
+        [MenuUtils performSelector:@selector(releaseFreedHeapMemory)
+                        withObject:nil
+                        afterDelay:0];
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: (Re)built persistent apps submenu with %ld items", (long)[appsSubmenu numberOfItems]);
         if ([appsSubmenu numberOfItems] == 0) {
             NSMenuItem *none = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"No applications found", nil)
@@ -2039,8 +2045,14 @@ static NSImage *MenuSizedIcon(NSImage *icon)
             NSString *bundlePath = entry[@"_path"];
             NSImage *icon = bundlePath ? [self.appIconCache objectForKey:bundlePath] : nil;
             if (icon == nil && bundlePath != nil) {
-                icon = MenuSizedIcon([[NSWorkspace sharedWorkspace]
-                                      iconForFile:bundlePath]);
+                /* The full-size icon comes back autoreleased: without a
+                   pool of its own, every decoded icon of the whole menu
+                   stays alive until the menu is built (54 MB at once), and
+                   the heap keeps that high-water mark afterwards. */
+                @autoreleasepool {
+                    icon = MenuSizedIcon([[NSWorkspace sharedWorkspace]
+                                          iconForFile:bundlePath]);
+                }
                 if (icon != nil) {
                     if (self.appIconCache == nil)
                         self.appIconCache = [NSMutableDictionary dictionary];
@@ -2264,10 +2276,15 @@ static NSImage *MenuSizedIcon(NSImage *icon)
                                         representedObject:pane[@"name"]
                                                   submenu:nil
                                                    toMenu:submenu];
-        /* Show the pane's icon (Eau renders it at a fixed size). */
+        /* Show the pane's icon (Eau renders it at a fixed size).  Some
+           panes ship 500x500 icons; like application icons they are kept
+           only at the size a menu draws them (4 MB less for all panes). */
         NSString *iconPath = pane[@"icon"];
         if (iconPath && [iconPath length] > 0) {
-            NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+            NSImage *icon = nil;
+            @autoreleasepool {
+                icon = MenuSizedIcon([[NSImage alloc] initWithContentsOfFile:iconPath]);
+            }
             if (icon) {
                 [item setImage:icon];
             }

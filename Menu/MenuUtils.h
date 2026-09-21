@@ -13,6 +13,10 @@
 + (Display *)sharedDisplay;
 + (void)cleanup;
 
+// Hand the pages of freed heap memory back to the system.  For after work
+// that allocates a lot and frees it again; costs a few milliseconds.
++ (void)releaseFreedHeapMemory;
+
 + (NSString *)getApplicationNameForWindow:(unsigned long)windowId;
 + (BOOL)isWindowValid:(unsigned long)windowId;
 + (BOOL)isWindowMapped:(unsigned long)windowId;
