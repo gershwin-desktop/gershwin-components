@@ -13,6 +13,16 @@
 #define DS_LOCAL_GROUPS_PLIST @"/Local/Library/DirectoryServices/Groups.plist"
 #define DS_DOMAIN_PLIST @"/Local/Library/DirectoryServices/Domain.plist"
 
+// NextBSD ships its own NSS module for these plists (nss_directory_services)
+// and owns /etc/nsswitch.conf, so dscli must not rewrite it there. Detected at
+// runtime, not by #ifdef: NextBSD compiles as FreeBSD. Same test as
+// gershwin-developer's install script: only NextBSD has /usr/lib/system.
+static BOOL isNextBSD(void) {
+    BOOL isDir = NO;
+    return [[NSFileManager defaultManager] fileExistsAtPath:@"/usr/lib/system"
+                                               isDirectory:&isDir] && isDir;
+}
+
 // Get the appropriate users plist path (Network first, then Local)
 static NSString *getUsersPlistPath(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -1144,8 +1154,13 @@ static int cmdInit(void) {
         printf("Created: %s\n", [DS_LOCAL_GROUPS_PLIST UTF8String]);
     }
 
-    // Configure nsswitch.conf
-    configureNsswitch();
+    // Configure nsswitch.conf. On NextBSD the switch names
+    // nss_directory_services and is seeded from nextbsd-overlays; leave it.
+    if (isNextBSD()) {
+        printf("nsswitch.conf: managed by NextBSD (directory_services); not modified\n");
+    } else {
+        configureNsswitch();
+    }
 
     // Configure sudoers for admin group with GNUstep environment
     printf("\nConfiguring sudo environment...\n");
