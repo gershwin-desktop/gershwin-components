@@ -958,6 +958,9 @@ static const unsigned long long modelMinSizes[] = {
 - (void)transcriptionProgress:(NSNumber *)progress
 {
     int p = [progress intValue];
+    if (p > 0) {
+        [progressBar setHidden:NO];
+    }
     [progressBar setDoubleValue:(double)p];
     if (p < 100) {
         NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate]
@@ -971,6 +974,7 @@ static const unsigned long long modelMinSizes[] = {
 - (void)transcriptionFinished:(NSString *)result
 {
     [progressBar setDoubleValue:100.0];
+    [progressBar setHidden:YES];
     [self setState:WhisperStateDone];
     [statusLabel setStringValue:@"Done"];
 
@@ -1000,6 +1004,7 @@ static const unsigned long long modelMinSizes[] = {
 
 - (void)transcriptionFailed:(NSString *)error
 {
+    [progressBar setHidden:YES];
     [self setState:WhisperStateError];
     [statusLabel setStringValue:error];
 }
@@ -1020,6 +1025,7 @@ static const unsigned long long modelMinSizes[] = {
 
     if (isRecording) {
         [recordSpinner startAnimation:nil];
+        [progressBar setHidden:NO];
         [progressBar setIndeterminate:YES];
         [progressBar startAnimation:nil];
     } else {
@@ -1028,6 +1034,7 @@ static const unsigned long long modelMinSizes[] = {
         [progressBar setIndeterminate:NO];
         if (!isWorking) {
             [progressBar setDoubleValue:0.0];
+            [progressBar setHidden:YES];
         }
     }
 
@@ -1502,7 +1509,6 @@ static const unsigned long long modelMinSizes[] = {
     [self rebuildTextView];
     NSLog(@"appendStreamingResult: rebuilt text view (%lu segments)",
           (unsigned long)[segments count]);
-    [self updateUIForState];
 }
 
 // Transcribe raw PCM data and append only new segments to the UI.
@@ -2154,6 +2160,7 @@ static const unsigned long long modelMinSizes[] = {
     [progressBar setMinValue:0.0];
     [progressBar setMaxValue:100.0];
     [progressBar setDoubleValue:0.0];
+    [progressBar setHidden:YES];
     [contentView addSubview:progressBar];
 
     statusLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
