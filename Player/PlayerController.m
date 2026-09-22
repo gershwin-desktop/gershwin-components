@@ -102,6 +102,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [ytdlpBackend release];
     [preferencesController release];
     [fadeStartDate release];
+    [mediaRemoteConnection release];
+    [mediaRemote release];
     [mainWindow release];
     [super dealloc];
 }
@@ -126,6 +128,30 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
+    // Serve the media remote so other programs in this session can pause
+    // playback while they need the sound (Whisper, while recording).
+    // Requests arrive on this run loop, so they may talk to us directly.
+    mediaRemote = [[PlayerMediaRemote alloc] initWithPlayer:self];
+    NSConnection *conn = [[NSConnection alloc] init];
+    [conn setRootObject:mediaRemote];
+    @try {
+        if ([conn registerName:GSMediaPlayer2PlayerServiceName]) {
+            // Common modes, so a modal panel does not stall a client that
+            // asked for silence
+            [[NSRunLoop currentRunLoop] addPort:[conn receivePort]
+                                         forMode:NSRunLoopCommonModes];
+            mediaRemoteConnection = conn;
+        } else {
+            NSLog(@"Player: cannot register %@, remote control is off",
+                  GSMediaPlayer2PlayerServiceName);
+            [conn release];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"Player: cannot register %@: %@",
+              GSMediaPlayer2PlayerServiceName, e);
+        [conn release];
+    }
+
     // Files given at launch were opened already and take precedence over
     // the list and the radio mode of the last run.
     if ([[session playlist] count] == 0) {
@@ -1001,6 +1027,78 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [self updateControls];
 }
 
+#pragma mark - PlayerMediaRemoteTarget
+
+// What the media remote asks of us.  Every command is idempotent ("make
+// it play", not "toggle"), so PlayerMediaRemote holds the pause bookkeeping
+// above these (MediaRemote/PROTOCOL.md).
+
+- (NSString *)mediaRemotePlaybackStatus
+{
+    if (playerMode == PlayerModeRadio) {
+        RadioManager *radio = [RadioManager sharedManager];
+        // Tuning in counts as playing: it is audible at once and a pause
+        // has to silence it all the same
+        if ([radio isPlaying] || [self radioTuning]) {
+            return GSMediaPlayer2Playing;
+        }
+        return GSMediaPlayer2Stopped;
+    }
+    switch ([session state]) {
+        case PlayerSessionPlaying:
+            return GSMediaPlayer2Playing;
+        case PlayerSessionPaused:
+            return GSMediaPlayer2Paused;
+        default:
+            return GSMediaPlayer2Stopped;
+    }
+}
+
+- (void)mediaRemotePlay
+{
+    if (playerMode == PlayerModeRadio) {
+        RadioManager *radio = [RadioManager sharedManager];
+        if (![radio isPlaying] && ![self radioTuning]) {
+            [self radioPlayPause];
+        }
+        return;
+    }
+    if ([session state] != PlayerSessionPlaying) {
+        [session togglePlayPause];
+    }
+}
+
+- (void)mediaRemotePause
+{
+    if (playerMode == PlayerModeRadio) {
+        // A live stream cannot pause: stop it, which is silent all the same
+        [self radioStop];
+        return;
+    }
+    if ([session state] == PlayerSessionPlaying) {
+        [session togglePlayPause];
+    }
+}
+
+- (void)mediaRemoteStop
+{
+    if (playerMode == PlayerModeRadio) {
+        [self radioStop];
+    } else {
+        [session stop];
+    }
+}
+
+- (void)mediaRemoteNext
+{
+    [self nextTrack:nil];
+}
+
+- (void)mediaRemotePrevious
+{
+    [self previousTrack:nil];
+}
+
 #pragma mark - Volume
 
 - (float)volume
@@ -1068,6 +1166,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self showCoverArt];
     }
     [self updateControls];
+    // Playback moved for a reason of its own: a client's pause ends here
+    [mediaRemote notePlaybackChanged];
 }
 
 - (void)playerSessionDidChangeTrack:(PlayerSession *)aSession

@@ -446,6 +446,8 @@
     }
     [self updateControls];
     [self updateWindowTitle];
+    // The radio started on its own: a client's pause ends here
+    [mediaRemote notePlaybackChanged];
 }
 
 - (void)radioManagerDidStop:(RadioManager *)manager

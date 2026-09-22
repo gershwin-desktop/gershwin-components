@@ -14,6 +14,7 @@
 #import "PreferencesController.h"
 #import "PlayerSession.h"
 #import "PlayerViews.h"
+#import "PlayerMediaRemote.h"
 
 @class RadioStation;
 
@@ -29,7 +30,7 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
  */
 @interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource,
     ItemFlowViewDelegate, RadioManagerDelegate, YTDLPBackendDelegate,
-    PlayerSessionDelegate, PlayerContentViewController>
+    PlayerSessionDelegate, PlayerContentViewController, PlayerMediaRemoteTarget>
 {
     PlayerWindow *mainWindow;
     PlayerContentView *contentView;
@@ -96,6 +97,11 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     NSTimer *fadeTimer;
     NSDate *fadeStartDate;
     float fadeStartVolume;
+
+    // Remote control for other programs in this session (GSMediaPlayer2,
+    // MediaRemote/PROTOCOL.md): Whisper pauses us while its mic is open
+    PlayerMediaRemote *mediaRemote;
+    NSConnection *mediaRemoteConnection;
 }
 
 @property (nonatomic, readonly) NSWindow *mainWindow;

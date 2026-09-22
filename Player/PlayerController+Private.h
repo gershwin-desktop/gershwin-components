@@ -34,6 +34,7 @@ extern NSString *const PlayerDefaultsRadioPlaying;
 - (void)showCoverArt;
 - (void)playlistDidChange;
 - (void)updateControls;
+- (BOOL)radioTuning;
 - (void)revalidateMenu;
 - (void)updateTrackInfo;
 - (void)updateWindowTitle;

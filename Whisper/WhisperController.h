@@ -68,6 +68,8 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 
     // Recording state
     void *captureHandle;
+    // YES while Player is paused because this recording needs the sound
+    BOOL playerPausedForRecording;
     NSString *currentLangCode;
     NSTimer *recordTimer;
     NSTimer *streamTimer;
@@ -110,6 +112,9 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 // Actions
 - (IBAction)recordAudio:(id)sender;
 - (IBAction)stopRecording:(id)sender;
+/// Gives Player back the pause -pausePlayerForRecording took, if it is
+/// still ours to give (never resumes a pause the user took themselves).
+- (void)resumePlayerIfPaused;
 - (IBAction)openFile:(id)sender;
 - (IBAction)modelSelected:(id)sender;
 - (IBAction)languageChanged:(id)sender;

@@ -4,10 +4,10 @@
 #
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_PlayerPlaylist t_StreamPlayer t_PlayerSession t_PlayerSessionMedia t_PlayerMenu t_PlayerViews t_PlayerMediaInfo t_RadioManager
+TEST_TOOL_NAME = t_PlayerPlaylist t_StreamPlayer t_PlayerSession t_PlayerSessionMedia t_PlayerMenu t_PlayerViews t_PlayerMediaInfo t_RadioManager t_MediaRemote
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
-ADDITIONAL_INCLUDE_DIRS += -I../..
+ADDITIONAL_INCLUDE_DIRS += -I../.. -I../../../MediaRemote
 ADDITIONAL_OBJCFLAGS += -Wno-deprecated
 
 t_PlayerPlaylist_OBJC_FILES = t_PlayerPlaylist.m
@@ -23,6 +23,7 @@ t_PlayerViews_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs x11)
 t_PlayerMediaInfo_OBJC_FILES = t_PlayerMediaInfo.m TestMedia.m ../../PlayerMediaInfo.m
 t_RadioManager_OBJC_FILES = t_RadioManager.m TestMedia.m ../../RadioManager.m \
 	../../RadioBrowser.m ../../RadioStation.m ../../PlayerAsync.m ../../StreamPlayer.m
+t_MediaRemote_OBJC_FILES = t_MediaRemote.m ../../../MediaRemote/GSMediaPlayer2.m
 t_RadioManager_TOOL_LIBS += -lgnustep-gui $(FFMPEG_LIBS)
 t_StreamPlayer_OBJC_FILES = t_StreamPlayer.m TestMedia.m ../../StreamPlayer.m
 

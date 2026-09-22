@@ -35,6 +35,7 @@ Player_LANGUAGES = English
 Player_HEADER_FILES = \
 	PlayerController.h \
 	PlayerController+Private.h \
+	PlayerMediaRemote.h \
 	PlayerSession.h \
 	PlayerPlaylist.h \
 	PlayerMenu.h \
@@ -51,6 +52,8 @@ Player_HEADER_FILES = \
 Player_OBJC_FILES = \
 	PlayerController.m \
 	PlayerController+Radio.m \
+	PlayerMediaRemote.m \
+	../MediaRemote/GSMediaPlayer2.m \
 	PlayerSession.m \
 	PlayerPlaylist.m \
 	PlayerMenu.m \
@@ -76,6 +79,8 @@ Player_OBJC_FILES += Player_main.m
 ITEMFLOW_SRC := $(CURDIR)/../ItemFlow
 ITEMFLOW_LIB := $(ITEMFLOW_SRC)/ItemFlow.framework/Versions/Current
 ADDITIONAL_INCLUDE_DIRS += -I$(ITEMFLOW_SRC)
+# The media remote protocol shared with Whisper (GSMediaPlayer2)
+ADDITIONAL_INCLUDE_DIRS += -I../MediaRemote
 ADDITIONAL_LDFLAGS += -L$(ITEMFLOW_LIB)
 ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
 # ItemFlow itself still uses libdispatch; on FreeBSD the strict linker needs it explicitly.
