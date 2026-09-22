@@ -91,5 +91,6 @@
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector;
 - (void)showKeyboardLayoutLog:(id)sender;
 - (void)updateLocalizedStrings;
+- (void)releaseLoginUI;
 
 @end

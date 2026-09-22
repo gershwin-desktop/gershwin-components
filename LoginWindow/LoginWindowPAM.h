@@ -31,6 +31,7 @@
 - (BOOL)openSession;
 - (BOOL)openSessionAsUser;
 - (void)closeSession;
+- (void)clearCredentials;
 - (char **)getEnvironmentList;
 - (NSString *)getLastError;
 
