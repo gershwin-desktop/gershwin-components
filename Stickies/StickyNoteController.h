@@ -46,6 +46,7 @@
 - (void)loadWindow;
 - (void)showWindow;
 - (void)saveNote;
+- (void)saveNow;
 - (void)closeNote;
 - (void)updateWindowAppearance;
 - (void)updateWindowLevel;

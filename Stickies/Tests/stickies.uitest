@@ -1,6 +1,7 @@
 #!/usr/bin/env run_uitest
 # Stickies: the sticky-notes app must start, show a note window and its main
-# menu, then quit with the standard Cmd+Q shortcut.
+# menu, save on demand with Cmd+S (a shortcut with no menu item), then quit
+# with the standard Cmd+Q shortcut.
 #
 # Leaves the computer as it was found: the app is quit at the end.
 #
@@ -15,6 +16,19 @@ assert menu item "File/New Note" shortcut "Cmd+N"
 assert menu item "Edit/Copy" shortcut "Cmd+C"
 activate application "Stickies"
 wait until menu bar "Stickies" timeout 10s
+
+# Cmd+S saves at once, although no menu item carries that shortcut: the note
+# window claims the key equivalent itself.  The notes loaded at launch save
+# themselves 5s after their text is set, so wait that out and delete the
+# database: from here on nothing but Cmd+S can create it again.
+assert not exists menu item "File/Save"
+shell "rm -f ~/Library/Stickies/StickiesDatabase; i=0; while [ $i -lt 10 ] && [ ! -s ~/Library/Stickies/StickiesDatabase ]; do i=$((i + 1)); sleep 1; done; rm -f ~/Library/Stickies/StickiesDatabase"
+press key "Cmd+S"
+# The key event reaches the app a moment after xdotool returns, hence the loop.
+shell "i=0; while [ $i -lt 3 ]; do test -s ~/Library/Stickies/StickiesDatabase && exit 0; i=$((i + 1)); sleep 1; done; exit 1"
+assert exists application "Stickies"
+assert window "Sticky Note"
+
 press "Alt+Q"
 wait until not exists window "Sticky Note" timeout 5s
 assert not exists application "Stickies"

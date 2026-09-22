@@ -147,6 +147,24 @@
     }
 }
 
+- (BOOL)performKeyEquivalent:(NSEvent *)event
+{
+    // NSApplication asks the key window before the main menu, so a note window
+    // handles Cmd-S here although no menu item carries that shortcut.
+    if ([event type] == NSKeyDown &&
+        ([event modifierFlags] & (NSControlKeyMask | NSAlternateKeyMask |
+                                  NSCommandKeyMask)) == NSCommandKeyMask) {
+        NSString *key = [[event charactersIgnoringModifiers] lowercaseString];
+        id controller = [self delegate];
+        if ([key isEqualToString:@"s"] &&
+            [controller respondsToSelector:@selector(saveNow)]) {
+            [controller saveNow];
+            return YES;
+        }
+    }
+    return [super performKeyEquivalent:event];
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
     StickyNoteView *cv = (StickyNoteView *)[self contentView];

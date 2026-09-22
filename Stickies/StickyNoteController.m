@@ -140,6 +140,23 @@
     document.modificationDate = modificationDate;
 }
 
+// A manual save (Cmd-S) writes everything now instead of waiting for the
+// delayed auto-save, and drops that pending auto-save: it would only rewrite
+// what was just written.
+- (void)saveNow
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(autoSave)
+                                               object:nil];
+    StickiesAppDelegate *delegate = (StickiesAppDelegate *)[NSApp delegate];
+    if (delegate) {
+        [delegate saveNotes];
+    } else {
+        [self saveNote];
+        [[StickyNoteDatabase sharedDatabase] save];
+    }
+}
+
 - (void)closeNote
 {
     NSString *currentText = [[noteView textView] string];
