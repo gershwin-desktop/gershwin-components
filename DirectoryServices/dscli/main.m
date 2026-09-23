@@ -16,12 +16,12 @@
 // NextBSD ships its own NSS module for these plists (nss_directory_services),
 // owns /etc/nsswitch.conf, and has sudo in base reading only /etc/sudoers.d.
 // Detected at runtime, not by #ifdef: NextBSD compiles as FreeBSD. The marker
-// is nextbsd-installer, which the NextBSD-userland package ships, so it is on
-// every NextBSD install and on no other system. (/usr/lib/system would be
-// wrong: macOS has that too.)
+// is nextbsd-version, which both image builders write before anything else is
+// built, so it is on every NextBSD image and on no other system.
+// (/usr/lib/system would be wrong: macOS has that too.)
 static BOOL isNextBSD(void) {
     return [[NSFileManager defaultManager]
-               fileExistsAtPath:@"/usr/sbin/nextbsd-installer"];
+               fileExistsAtPath:@"/bin/nextbsd-version"];
 }
 
 // Get the appropriate users plist path (Network first, then Local)
