@@ -225,7 +225,11 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   }
 
   if ([withUpdates count] == 0) {
+    // Being up to date is not a problem, so it should not wear the same
+    // caution icon as a real error - NSAlert defaults to that icon unless
+    // given one explicitly.
     NSAlert *alert = [[NSAlert alloc] init];
+    [alert setIcon:[NSImage imageNamed:@"SoftwareUpdate"]];
     [alert setMessageText:@"Your software is up to date."];
     [alert runModal];
     [NSApp terminate:nil];
