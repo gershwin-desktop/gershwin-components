@@ -17,6 +17,7 @@
 #import "OnDemandController.h"
 #import <PackageManager/GWSystemCommandExecutor.h>
 #import <PackageManager/GWAppImageDownloader.h>
+#import <PackageManager/ODLogWindowController.h>
 
 #pragma mark - Constants (derived from AppearanceMetrics.h)
 
@@ -35,91 +36,6 @@ static const CGFloat kIconLeft = 24.0;            // METRICS_ICON_LEFT
 static const CGFloat kTextLeft = 104.0;           // METRICS_TEXT_LEFT = 24 + 64 + 16
 static const CGFloat kSpace8 = 8.0;               // METRICS_SPACE_8
 static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
-
-#pragma mark - ODLogWindowController
-
-@interface ODLogWindowController : NSWindowController
-{
-  NSScrollView *_scrollView;
-  NSTextView *_logView;
-}
-- (void)appendLog:(NSString *)text;
-- (void)clearLog;
-@end
-
-@implementation ODLogWindowController
-
-- (instancetype)init
-{
-  NSRect screenFrame = [[NSScreen mainScreen] frame];
-  CGFloat logHeight = screenFrame.size.height / 4.0;
-  NSRect logFrame = NSMakeRect(screenFrame.origin.x,
-                                screenFrame.origin.y,
-                                screenFrame.size.width,
-                                logHeight);
-  NSWindow *logWindow = [[NSWindow alloc]
-    initWithContentRect:logFrame
-              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-                       | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
-                backing:NSBackingStoreBuffered
-                  defer:YES];
-  [logWindow setTitle:@"Installer Log"];
-  [logWindow setMinSize:NSMakeSize(400, 100)];
-
-  self = [super initWithWindow:logWindow];
-  if (self)
-    {
-      NSView *contentView = [logWindow contentView];
-      NSRect frame = [contentView bounds];
-
-      _scrollView = [[NSScrollView alloc] initWithFrame:frame];
-      [_scrollView setHasVerticalScroller:YES];
-      [_scrollView setHasHorizontalScroller:NO];
-      [_scrollView setBorderType:NSNoBorder];
-      [_scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-
-      NSSize contentSize = [_scrollView contentSize];
-      _logView = [[NSTextView alloc]
-        initWithFrame:NSMakeRect(0, 0, contentSize.width, contentSize.height)];
-      [_logView setMinSize:NSMakeSize(0.0, contentSize.height)];
-      [_logView setMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
-      [_logView setVerticallyResizable:YES];
-      [_logView setHorizontallyResizable:NO];
-      [_logView setEditable:NO];
-      [_logView setSelectable:YES];
-      [_logView setFont:[NSFont userFixedPitchFontOfSize:10]];
-      [_logView setTextColor:[NSColor darkGrayColor]];
-      [_logView setBackgroundColor:[NSColor whiteColor]];
-      [[_logView textContainer] setContainerSize:NSMakeSize(contentSize.width, FLT_MAX)];
-      [[_logView textContainer] setWidthTracksTextView:YES];
-
-      [_scrollView setDocumentView:_logView];
-      [contentView addSubview:_scrollView];
-    }
-  return self;
-}
-
-- (void)appendLog:(NSString *)text
-{
-  if (!text || !_logView) return;
-  NSDictionary *attrs = @{
-    NSFontAttributeName: [NSFont userFixedPitchFontOfSize:10],
-    NSForegroundColorAttributeName: [NSColor darkGrayColor]
-  };
-  NSAttributedString *astr = [[NSAttributedString alloc] initWithString:text
-                                                             attributes:attrs];
-  [[_logView textStorage] appendAttributedString:astr];
-  [_logView scrollRangeToVisible:NSMakeRange([[_logView string] length], 0)];
-}
-
-- (void)clearLog
-{
-  if (!_logView) return;
-  [[_logView textStorage] replaceCharactersInRange:
-    NSMakeRange(0, [[_logView string] length]) withString:@""];
-}
-
-@end
 
 #pragma mark - OnDemandController
 

@@ -22,6 +22,8 @@
 #import "GWPackageManagerBackend.h"
 #import "GWPackageManager.h"
 #import "GWHeaderDatabase.h"
+#import "GWDebBackend.h"
+#import "GWSudoHelper.h"
 
 /* The key a Dependencies.plist uses for "any system with this kernel",
  * which is what dependencySearchOrder falls back to last. */
@@ -224,6 +226,7 @@ static void runTest(NSString *name, BOOL (^block)(void))
   NSError *_uninstallError;
   NSArray *_filesResult;
   NSString *_owningFileResult;
+  NSSet *_installedPackageNames;
 }
 @property (readonly) NSArray<NSDictionary *> *recordedCalls;
 @property (readonly) NSString *backendName;
@@ -231,6 +234,7 @@ static void runTest(NSString *name, BOOL (^block)(void))
 - (void)setUninstallResult:(BOOL)result error:(NSError *)error;
 - (void)setFilesResult:(NSArray *)files;
 - (void)setOwningFileResult:(NSString *)path;
+- (void)setInstalledPackageNames:(NSArray<NSString *> *)names;
 - (void)clearResults;
 @end
 
@@ -264,10 +268,23 @@ static void runTest(NSString *name, BOOL (^block)(void))
 
 - (void)setFilesResult:(NSArray *)files { _filesResult = files; }
 - (void)setOwningFileResult:(NSString *)path { _owningFileResult = path; }
+- (void)setInstalledPackageNames:(NSArray<NSString *> *)names
+{
+  _installedPackageNames = names ? [NSSet setWithArray:names] : nil;
+}
 
 - (void)clearResults { [_recordedCalls removeAllObjects]; }
 
 - (NSArray *)recordedCalls { return [_recordedCalls copy]; }
+
+- (BOOL)isPackageInstalled:(NSString *)packageName
+{
+  [_recordedCalls addObject:@{
+    @"method": @"isPackageInstalled:",
+    @"packageName": packageName ?: @"",
+  }];
+  return [_installedPackageNames containsObject:packageName];
+}
 
 - (BOOL)installPackages:(NSArray *)packageNames
         localFilePaths:(NSArray *)filePaths
@@ -796,6 +813,8 @@ static void runTest(NSString *name, BOOL (^block)(void))
 + (BOOL)testFreeBSDBackendExecuteCommand;
 + (BOOL)testOpenBSDBackendExecuteCommand;
 + (BOOL)testInstallFailsReportsError;
++ (BOOL)testDebBackendIsPackageInstalledAgainstRealSystem;
++ (BOOL)testSudoCommandNeverDuplicatesToolPath;
 @end
 
 @implementation BackendTestHelper
@@ -893,6 +912,75 @@ static void runTest(NSString *name, BOOL (^block)(void))
   return YES;
 }
 
+// A mocked executor only proves the backend parses whatever canned output
+// the test author assumed dpkg-query would produce - it can't catch the
+// backend invoking the wrong binary or an invalid flag, since the mock
+// never actually runs anything. That gap let isPackageInstalled: call plain
+// "dpkg -W" (dpkg has no -W; only dpkg-query does) ship silently: every
+// query failed with a non-zero exit and was read as "not installed",
+// so Software Update's prerequisites step tried to reinstall dozens of
+// already-installed packages. Skips itself (returns YES) off Debian-family
+// systems rather than asserting on the wrong package manager.
++ (BOOL)testDebBackendIsPackageInstalledAgainstRealSystem
+{
+  if (![[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/dpkg-query"]) {
+    return YES; // not a Debian-family system; nothing to verify here
+  }
+
+  GWDebBackend *backend = [[GWDebBackend alloc] init];
+
+  TAssertTrue([backend isPackageInstalled:@"dpkg"],
+              @"dpkg itself must be installed on any system that has dpkg-query");
+  TAssertTrue(![backend isPackageInstalled:@"this-package-definitely-does-not-exist-xyz123"],
+              @"a nonexistent package name must report not installed");
+
+  return YES;
+}
+
+// Every backend built its argv the same hand-rolled way: prepend sudo's
+// flags, then unconditionally re-add the tool's own path before the real
+// arguments - correct when escalating through sudo (sudo's first argument
+// names the program to run), but wrong when already root, where the launch
+// path IS the tool and NSTask sets argv[0] to it on its own. The stray extra
+// copy landed as the tool's first REAL argument: apt-get read
+// "/usr/bin/apt-get" as an unknown operation and failed every real install
+// this app ever ran as root (its actual production context), while every
+// mocked backend test stayed green because tests run as a normal user, where
+// the sudo-prefixed branch happens to mask the bug. Exercises whichever
+// branch this process's real uid takes; CI usually runs as non-root, so a
+// root run (as the privileged helper itself is) is the only way to see the
+// other branch - see GWSudoHelper.h for why the invariant must hold either way.
++ (BOOL)testSudoCommandNeverDuplicatesToolPath
+{
+  NSString *toolPath = @"/usr/bin/apt-get";
+  NSArray *toolArgs = @[@"install", @"-y", @"somepackage"];
+  NSArray *args = nil;
+  NSString *launchPath = GWSudoCommand(toolPath, toolArgs, &args);
+
+  NSUInteger toolPathOccurrences = 0;
+  for (NSString *arg in args) {
+    if ([arg isEqualToString:toolPath]) toolPathOccurrences++;
+  }
+
+  if ([launchPath isEqualToString:toolPath]) {
+    // Already root: NSTask supplies argv[0], so the tool path must not also
+    // appear as a real argument.
+    TAssertTrue(toolPathOccurrences == 0,
+                @"already-root command must not repeat the tool path as an argument");
+  } else {
+    // Escalating: sudo needs the tool path as its own first argument, and
+    // exactly once.
+    TAssertTrue(toolPathOccurrences == 1,
+                @"sudo command must name the tool path exactly once");
+  }
+
+  NSArray *trailingArgs = [args subarrayWithRange:NSMakeRange([args count] - [toolArgs count], [toolArgs count])];
+  TAssertEqualObjects(trailingArgs, toolArgs,
+                       @"the real arguments must survive, in order, as the command's tail");
+
+  return YES;
+}
+
 @end
 
 #pragma mark - GWPackageManager Public API Tests
@@ -905,6 +993,8 @@ static void runTest(NSString *name, BOOL (^block)(void))
 + (BOOL)testUninstallPackages;
 + (BOOL)testFilesForPackage;
 + (BOOL)testPackageOwningFile;
++ (BOOL)testIsPackageInstalled;
++ (BOOL)testMissingPackagesFrom;
 + (BOOL)testRunInstallFromPlistCallsBackend;
 + (BOOL)testRunInstallFromPlistInstallationFails;
 + (BOOL)testRunUninstallFromPlist;
@@ -1031,6 +1121,34 @@ static void runTest(NSString *name, BOOL (^block)(void))
 
   TAssertEqualObjects(owner, @"sl",
                       @"Should identify sl as owning package");
+
+  return YES;
+}
+
++ (BOOL)testIsPackageInstalled
+{
+  GWMockPackageManagerBackend *mockBackend = [[GWMockPackageManagerBackend alloc] init];
+  [mockBackend setInstalledPackageNames:@[@"sl"]];
+  GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:mockBackend];
+
+  TAssertTrue([pm isPackageInstalled:@"sl"],
+              @"sl was marked installed on the mock backend");
+  TAssertTrue(![pm isPackageInstalled:@"freerdp"],
+              @"freerdp was not marked installed on the mock backend");
+
+  return YES;
+}
+
++ (BOOL)testMissingPackagesFrom
+{
+  GWMockPackageManagerBackend *mockBackend = [[GWMockPackageManagerBackend alloc] init];
+  [mockBackend setInstalledPackageNames:@[@"sl"]];
+  GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:mockBackend];
+
+  NSArray *missing = [pm missingPackagesFrom:@[@"sl", @"freerdp", @"cowsay"]];
+
+  TAssertEqualObjects(missing, (@[@"freerdp", @"cowsay"]),
+                      @"Only the not-installed packages should come back, in order");
 
   return YES;
 }
@@ -1406,6 +1524,12 @@ static void runTest(NSString *name, BOOL (^block)(void))
   runTest(@"testInstallFailsReportsError", ^{
     return [BackendTestHelper testInstallFailsReportsError];
   });
+  runTest(@"testDebBackendIsPackageInstalledAgainstRealSystem", ^{
+    return [BackendTestHelper testDebBackendIsPackageInstalledAgainstRealSystem];
+  });
+  runTest(@"testSudoCommandNeverDuplicatesToolPath", ^{
+    return [BackendTestHelper testSudoCommandNeverDuplicatesToolPath];
+  });
 
   // --- GWPackageManager API Tests ---
   runTest(@"testInitWithBackend", ^{
@@ -1428,6 +1552,12 @@ static void runTest(NSString *name, BOOL (^block)(void))
   });
   runTest(@"testPackageOwningFile", ^{
     return [PackageManagerTestHelper testPackageOwningFile];
+  });
+  runTest(@"testIsPackageInstalled", ^{
+    return [PackageManagerTestHelper testIsPackageInstalled];
+  });
+  runTest(@"testMissingPackagesFrom", ^{
+    return [PackageManagerTestHelper testMissingPackagesFrom];
   });
   runTest(@"testRunInstallFromPlistCallsBackend", ^{
     return [PackageManagerTestHelper testRunInstallFromPlistCallsBackend];

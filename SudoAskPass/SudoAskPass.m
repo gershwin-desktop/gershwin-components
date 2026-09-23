@@ -15,6 +15,17 @@
 #include <sys/un.h>
 #include <security/pam_appl.h>
 
+#import "AppearanceMetrics.h"
+
+// Height of the collapsed panel and of the details box revealed by "Details".
+// Everything else (icon/text positions, button row) is derived from
+// AppearanceMetrics so spacing stays correct if these change.
+static const float kWinWidth = METRICS_WIN_MIN_WIDTH - 100.0;   // 400: a password prompt is not a full dialog
+static const float kCompactHeight = 220.0;
+static const float kDetailsBoxHeight = 90.0;
+static const float kExpandedHeight = kCompactHeight + kDetailsBoxHeight + METRICS_SPACE_16 + METRICS_SPACE_8;
+static const float kLabelWidth = 60.0;
+
 #define DS_SOCKET_PATH "/var/run/dshelper.sock"
 
 /* Outcome of asking one authentication backend about a password.
@@ -82,14 +93,19 @@ static int savedStdoutFd = -1;
 @interface SudoAskPassController : NSObject<NSTextFieldDelegate>
 {
     NSWindow *window;
+    NSImageView *iconView;
+    NSTextField *headlineField;
+    NSTextField *nameLabelField;
+    NSTextField *nameValueField;
+    NSTextField *passwordLabelField;
     NSSecureTextField *passwordField;
-    NSTextField *promptLabel;
     NSButton *okButton;
     NSButton *cancelButton;
     NSButton *detailsButton;
     NSTextField *commandLabel;
     NSScrollView *commandScrollView;
     NSString *sudoCommand;
+    NSString *requesterName;
     BOOL cancelled;
     BOOL detailsVisible;
 }
@@ -120,6 +136,16 @@ static int savedStdoutFd = -1;
     if (self) {
         cancelled = NO;
         detailsVisible = NO;
+
+        // sudo does not reliably pass the original command to askpass
+        // programs, so a caller that wants to be named in the headline sets
+        // this itself (e.g. ASKPASS_REQUESTER="Software Update").
+        const char *requester = getenv("ASKPASS_REQUESTER");
+        if (requester && strlen(requester) > 0) {
+            requesterName = [[NSString stringWithUTF8String:requester] retain];
+        } else {
+            requesterName = [@"An application" retain];
+        }
     }
     return self;
 }
@@ -133,7 +159,7 @@ static int savedStdoutFd = -1;
         // Look for the command after sudo options (skip -A, -E, etc.)
         NSMutableArray *commandParts = [NSMutableArray array];
         BOOL foundCommand = NO;
-        for (int i = 1; i < [args count]; i++) {
+        for (NSUInteger i = 1; i < [args count]; i++) {
             NSString *arg = [args objectAtIndex:i];
             // Skip sudo options that start with dash
             if ([arg hasPrefix:@"-"] && !foundCommand) {
@@ -151,9 +177,16 @@ static int savedStdoutFd = -1;
 
 
     // Create window with initial size (compact mode)
-    NSRect windowRect = NSMakeRect(100, 100, 400, 150);
+    NSRect windowRect = NSMakeRect(100, 100, kWinWidth, kCompactHeight);
+    // Resizable is required for -setFrame: (used by -detailsClicked: to
+    // reveal the details box) to actually take effect: a non-resizable
+    // GNUstep window advertises fixed X11 size hints, and the window
+    // manager clamps any resize request - including a programmatic one from
+    // this process - back to the original size, so only the position half
+    // of the request took effect and the details box was never revealed.
     window = [[NSWindow alloc] initWithContentRect:windowRect
-                                         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+                                         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                                     | NSWindowStyleMaskResizable)
                                            backing:NSBackingStoreBuffered
                                              defer:NO];
 
@@ -162,77 +195,144 @@ static int savedStdoutFd = -1;
         exit(1);
     }
 
-    [window setTitle:@"Password"];
+    [window setTitle:@"Authenticate"];
     [window center];
     [window setLevel:NSFloatingWindowLevel]; // Keep window on top
 
     // Disable system beeps and alerts for this window
     [window setHidesOnDeactivate:NO];
 
-    // Create prompt label
-    NSRect promptRect = NSMakeRect(24, 90, 352, 30);
-    promptLabel = [[NSTextField alloc] initWithFrame:promptRect];
-    [promptLabel setStringValue:@"Enter your password for sudo:"];
-    [promptLabel setBezeled:NO];
-    [promptLabel setDrawsBackground:NO];
-    [promptLabel setEditable:NO];
-    [promptLabel setSelectable:NO];
-    [[window contentView] addSubview:promptLabel];
+    float contentRight = kWinWidth - METRICS_CONTENT_SIDE_MARGIN;
+    NSView *contentView = [window contentView];
 
-    // Create password field
-    NSRect passwordRect = NSMakeRect(24, 60, 352, 22);
+    // Headline: bold, names the requesting app so the user knows what is
+    // asking for their password (sudo does not reliably pass this on).
+    NSRect headlineRect = NSMakeRect(METRICS_TEXT_LEFT,
+                                      kCompactHeight - METRICS_CONTENT_TOP_MARGIN - 40.0,
+                                      contentRight - METRICS_TEXT_LEFT, 40.0);
+    headlineField = [[NSTextField alloc] initWithFrame:headlineRect];
+    [headlineField setStringValue:[NSString stringWithFormat:
+        @"%@ requires that you type your password.", requesterName]];
+    [headlineField setFont:METRICS_FONT_SYSTEM_BOLD_13];
+    [headlineField setBezeled:NO];
+    [headlineField setDrawsBackground:NO];
+    [headlineField setEditable:NO];
+    [headlineField setSelectable:NO];
+
+    // Lock icon, top-left, same placement alerts use for their icon -
+    // centered against the headline's own (up to two-line) span rather than
+    // a fixed top offset, or it visibly sits below the text block's center
+    // (see the identical fix in SoftwareUpdate's SWMainWindowController).
+    NSRect iconRect = NSMakeRect(METRICS_ICON_LEFT,
+                                  NSMidY(headlineRect) - METRICS_ICON_SIDE / 2.0,
+                                  METRICS_ICON_SIDE, METRICS_ICON_SIDE);
+    iconView = [[NSImageView alloc] initWithFrame:iconRect];
+    [iconView setImage:[NSImage imageNamed:@"Lock"]];
+    [iconView setImageFrameStyle:NSImageFrameNone];
+    [contentView addSubview:iconView];
+    [[headlineField cell] setWraps:YES];
+    [contentView addSubview:headlineField];
+
+    // Name row: the account sudo will authenticate, read-only.
+    NSRect nameLabelRect = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, 90.0,
+                                       kLabelWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT);
+    nameLabelField = [[NSTextField alloc] initWithFrame:nameLabelRect];
+    [nameLabelField setStringValue:@"Name:"];
+    [nameLabelField setAlignment:NSRightTextAlignment];
+    [nameLabelField setBezeled:NO];
+    [nameLabelField setDrawsBackground:NO];
+    [nameLabelField setEditable:NO];
+    [nameLabelField setSelectable:NO];
+    [contentView addSubview:nameLabelField];
+
+    float fieldLeft = METRICS_CONTENT_SIDE_MARGIN + kLabelWidth + METRICS_SPACE_8;
+    NSRect nameValueRect = NSMakeRect(fieldLeft, 90.0,
+                                       contentRight - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT);
+    nameValueField = [[NSTextField alloc] initWithFrame:nameValueRect];
+    [nameValueField setStringValue:(NSUserName() ?: @"")];
+    [nameValueField setEditable:NO];
+    [nameValueField setSelectable:NO];
+    [nameValueField setTextColor:[NSColor disabledControlTextColor]];
+    [contentView addSubview:nameValueField];
+
+    // Password row, directly below Name.
+    NSRect passwordLabelRect = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, 56.0,
+                                           kLabelWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT);
+    passwordLabelField = [[NSTextField alloc] initWithFrame:passwordLabelRect];
+    [passwordLabelField setStringValue:@"Password:"];
+    [passwordLabelField setAlignment:NSRightTextAlignment];
+    [passwordLabelField setBezeled:NO];
+    [passwordLabelField setDrawsBackground:NO];
+    [passwordLabelField setEditable:NO];
+    [passwordLabelField setSelectable:NO];
+    [contentView addSubview:passwordLabelField];
+
+    NSRect passwordRect = NSMakeRect(fieldLeft, 56.0,
+                                      contentRight - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT);
     passwordField = [[NSSecureTextField alloc] initWithFrame:passwordRect];
     [passwordField setDelegate:self];  // Set delegate to monitor text changes
-    [[window contentView] addSubview:passwordField];
+    [contentView addSubview:passwordField];
 
-    // Create Details button (left side)
-    NSRect detailsRect = NSMakeRect(24, 20, 80, 24);
+    // Details button (left side)
+    NSRect detailsRect = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, METRICS_CONTENT_BOTTOM_MARGIN,
+                                     METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT);
     detailsButton = [[NSButton alloc] initWithFrame:detailsRect];
     [detailsButton setTitle:@"Details"];
     [detailsButton setTarget:self];
     [detailsButton setAction:@selector(detailsClicked:)];
-    [[window contentView] addSubview:detailsButton];
+    [contentView addSubview:detailsButton];
 
-    // Create OK button (right side, 24px from right edge: 400-24-80 = 296)
-    NSRect okRect = NSMakeRect(296, 20, 80, 24);
+    // OK button (right side, default - the theme pulses whatever cell is
+    // registered as the window's default button).
+    NSRect okRect = NSMakeRect(contentRight - METRICS_BUTTON_MIN_WIDTH, METRICS_CONTENT_BOTTOM_MARGIN,
+                                METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT);
     okButton = [[NSButton alloc] initWithFrame:okRect];
     [okButton setTitle:@"OK"];
     [okButton setTarget:self];
     [okButton setAction:@selector(okClicked:)];
     [okButton setKeyEquivalent:@"\r"];
     [okButton setEnabled:NO]; // Initially disabled
-    [[window contentView] addSubview:okButton];
+    [contentView addSubview:okButton];
+    [window setDefaultButtonCell:[okButton cell]];
 
-    // Create Cancel button (12px gap from OK: 296-80-12 = 204)
-    NSRect cancelRect = NSMakeRect(204, 20, 80, 24);
+    // Cancel button, to the left of OK.
+    NSRect cancelRect = NSMakeRect(NSMinX(okRect) - METRICS_BUTTON_HORIZ_INTERSPACE - METRICS_BUTTON_MIN_WIDTH,
+                                    METRICS_CONTENT_BOTTOM_MARGIN,
+                                    METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT);
     cancelButton = [[NSButton alloc] initWithFrame:cancelRect];
     [cancelButton setTitle:@"Cancel"];
     [cancelButton setTarget:self];
     [cancelButton setAction:@selector(cancelClicked:)];
     [cancelButton setKeyEquivalent:@"\033"];
-    [[window contentView] addSubview:cancelButton];
+    [contentView addSubview:cancelButton];
 
-    // Create command details (initially hidden)
-    NSRect commandRect = NSMakeRect(24, 55, 352, 60);
+    // Details box (initially hidden): requesting app and what will run as
+    // root, so the user can check before typing a password. Never shown by
+    // default - the only reason to open it is curiosity, not the workflow.
+    NSRect commandRect = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
+                                     METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_16,
+                                     contentRight - METRICS_CONTENT_SIDE_MARGIN, kDetailsBoxHeight);
     commandScrollView = [[NSScrollView alloc] initWithFrame:commandRect];
     [commandScrollView setHasVerticalScroller:YES];
-    [commandScrollView setHasHorizontalScroller:YES];
+    [commandScrollView setHasHorizontalScroller:NO];
     [commandScrollView setAutohidesScrollers:YES];
     [commandScrollView setBorderType:NSBezelBorder];
     [commandScrollView setHidden:YES];
 
     NSSize contentSize = [commandScrollView contentSize];
     commandLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, contentSize.width, contentSize.height)];
-    [commandLabel setStringValue:[NSString stringWithFormat:@"%@", sudoCommand]];
+    [commandLabel setStringValue:[NSString stringWithFormat:
+        @"Requested by: %@\nWill run as root:\n%@", requesterName, sudoCommand ?: @""]];
+    [commandLabel setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [[commandLabel cell] setWraps:YES];
     [commandLabel setBezeled:NO];
     [commandLabel setDrawsBackground:YES];
     [commandLabel setBackgroundColor:[NSColor controlBackgroundColor]];
     [commandLabel setEditable:NO];
     [commandLabel setSelectable:YES];
-    [commandLabel setFont:[NSFont fontWithName:@"Monaco" size:10]];
     [commandScrollView setDocumentView:commandLabel];
 
-    [[window contentView] addSubview:commandScrollView];
+    [contentView addSubview:commandScrollView];
 
     // Show window immediately and aggressively
     [window makeKeyAndOrderFront:nil];
@@ -311,14 +411,19 @@ static int savedStdoutFd = -1;
 - (void)dealloc
 {
     [window release];
+    [iconView release];
+    [headlineField release];
+    [nameLabelField release];
+    [nameValueField release];
+    [passwordLabelField release];
     [passwordField release];
-    [promptLabel release];
     [okButton release];
     [cancelButton release];
     [detailsButton release];
     [commandLabel release];
     [commandScrollView release];
     [sudoCommand release];
+    [requesterName release];
     [super dealloc];
 }
 
@@ -327,39 +432,69 @@ static int savedStdoutFd = -1;
     @try {
         detailsVisible = !detailsVisible;
 
-        NSRect currentFrame = [window frame];
-        NSRect newFrame;
+        float newHeight = detailsVisible ? kExpandedHeight : kCompactHeight;
+        float fieldLeft = METRICS_CONTENT_SIDE_MARGIN + kLabelWidth + METRICS_SPACE_8;
+        float contentRight = kWinWidth - METRICS_CONTENT_SIDE_MARGIN;
+
+        // Icon and headline are anchored to the window TOP, so their
+        // content-view Y (measured from the bottom) depends on the height.
+        // Icon is centered on the headline's own span, not top-anchored -
+        // see the -init rationale above.
+        NSRect headlineRect = NSMakeRect(METRICS_TEXT_LEFT,
+                                          newHeight - METRICS_CONTENT_TOP_MARGIN - 40.0,
+                                          contentRight - METRICS_TEXT_LEFT, 40.0);
+        [headlineField setFrame:headlineRect];
+        [iconView setFrame:NSMakeRect(METRICS_ICON_LEFT,
+                                       NSMidY(headlineRect) - METRICS_ICON_SIDE / 2.0,
+                                       METRICS_ICON_SIDE, METRICS_ICON_SIDE)];
 
         if (detailsVisible) {
-            // Expand window to show details - make it taller to fit command area
-            newFrame = NSMakeRect(currentFrame.origin.x, currentFrame.origin.y - 132, 400, 282);
+            // Grow the window downward (top edge stays put on screen) and
+            // make room above the details box for Name/Password.
             [detailsButton setTitle:@"Hide Details"];
 
-            [promptLabel setFrame:NSMakeRect(24, 222, 352, 20)];  // 40px from top
-            [passwordField setFrame:NSMakeRect(24, 192, 352, 22)]; // 68px from top
-            [commandScrollView setFrame:NSMakeRect(24, 54, 352, 130)];
-            [commandScrollView setHidden:NO];
+            float passwordY = METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT
+                             + METRICS_SPACE_16 + kDetailsBoxHeight + METRICS_SPACE_16;
+            float nameY = passwordY + METRICS_TEXT_INPUT_FIELD_HEIGHT + METRICS_SPACE_12;
 
-            // Buttons stay at bottom
-            [detailsButton setFrame:NSMakeRect(24, 20, 80, 24)];
-            [cancelButton setFrame:NSMakeRect(204, 20, 80, 24)];
-            [okButton setFrame:NSMakeRect(296, 20, 80, 24)];
+            [nameLabelField setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, nameY,
+                                                 kLabelWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [nameValueField setFrame:NSMakeRect(fieldLeft, nameY,
+                                                 contentRight - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [passwordLabelField setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, passwordY,
+                                                     kLabelWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [passwordField setFrame:NSMakeRect(fieldLeft, passwordY,
+                                                contentRight - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [commandScrollView setHidden:NO];
         } else {
-            // Collapse window to hide details - RESET to EXACT original compact positions
-            newFrame = NSMakeRect(currentFrame.origin.x, currentFrame.origin.y + 132, 400, 150);
             [detailsButton setTitle:@"Details"];
 
-            // CRITICAL: Reset to EXACT original compact view positions as in showPasswordDialog
-            [promptLabel setFrame:NSMakeRect(24, 90, 352, 20)];  // EXACT original position
-            [passwordField setFrame:NSMakeRect(24, 60, 352, 22)]; // EXACT original position
+            [nameLabelField setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, 90.0,
+                                                 kLabelWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [nameValueField setFrame:NSMakeRect(fieldLeft, 90.0,
+                                                 contentRight - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [passwordLabelField setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, 56.0,
+                                                     kLabelWidth, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+            [passwordField setFrame:NSMakeRect(fieldLeft, 56.0,
+                                                contentRight - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
             [commandScrollView setHidden:YES];
-
-            // Reset buttons to EXACT original positions
-            [detailsButton setFrame:NSMakeRect(24, 20, 80, 24)];
-            [cancelButton setFrame:NSMakeRect(204, 20, 80, 24)];
-            [okButton setFrame:NSMakeRect(296, 20, 80, 24)];
         }
 
+        // -setFrame: takes a FRAME rect (titlebar included), not the CONTENT
+        // rect newHeight is expressed in - going through
+        // -frameRectForContentRect: gets the conversion right regardless of
+        // the actual titlebar height, and anchoring on the OLD frame's top
+        // edge (NSMaxY) keeps it fixed on screen while the window grows
+        // downward, matching -detailsClicked: in SoftwareUpdate's
+        // SWProgressWindowController (the identical bug, fixed the same way).
+        NSRect desiredContentRect = NSMakeRect(0, 0, kWinWidth, newHeight);
+        NSRect desiredFrameRect = [window frameRectForContentRect:desiredContentRect];
+        float frameHeight = NSHeight(desiredFrameRect);
+
+        NSRect currentFrame = [window frame];
+        NSRect newFrame = NSMakeRect(currentFrame.origin.x,
+                                      NSMaxY(currentFrame) - frameHeight,
+                                      kWinWidth, frameHeight);
         [window setFrame:newFrame display:YES animate:YES];
     }
     @catch (NSException *exception) {

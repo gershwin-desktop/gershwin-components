@@ -1,0 +1,49 @@
+ADDITIONAL_INCLUDE_DIRS += -I../../Models
+
+ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
+../../Models/SWRepository.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWRepositoryList.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWGitTool.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWSelectionRules.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWGitHubBuildStatus.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWUpdateChecker.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWRepositoryUpdater.m_FILE_FLAGS += $(ARCFLAGS)
+
+t_SWRepositoryList_OBJC_FILES += \
+  ../../Models/SWRepository.m \
+  ../../Models/SWRepositoryList.m
+
+t_SWGitTool_OBJC_FILES += \
+  ../../Models/SWGitTool.m
+
+t_SWSelectionRules_OBJC_FILES += \
+  ../../Models/SWRepository.m \
+  ../../Models/SWSelectionRules.m
+
+t_SWGitHubBuildStatus_OBJC_FILES += \
+  ../../Models/SWGitHubBuildStatus.m
+t_SWGitHubBuildStatus_TOOL_LIBS += -lgnustep-base
+
+t_SWUpdateChecker_OBJC_FILES += \
+  ../../Models/SWRepository.m \
+  ../../Models/SWRepositoryList.m \
+  ../../Models/SWGitTool.m \
+  ../../Models/SWGitHubBuildStatus.m \
+  ../../Models/SWSelectionRules.m \
+  ../../Models/SWUpdateChecker.m
+# The parallel check uses dispatch_group/dispatch_semaphore.
+t_SWUpdateChecker_TOOL_LIBS += -ldispatch
+
+t_SWRepositoryUpdater_OBJC_FILES += \
+  ../../Models/SWRepository.m \
+  ../../Models/SWGitTool.m \
+  ../../Models/SWRepositoryUpdater.m
+
+../../Models/SWPrerequisitesInstaller.m_FILE_FLAGS += $(ARCFLAGS)
+t_SWPrerequisitesInstaller_OBJC_FILES += \
+  ../../Models/SWPrerequisitesInstaller.m
+# Needs PackageManager (installed system-wide by gmake install in
+# PackageManager/) for GWPackageManager/GWOSDetector.
+t_SWPrerequisitesInstaller_TOOL_LIBS += \
+  -L/System/Library/Frameworks/PackageManager.framework/Versions/1 -lPackageManager
+ADDITIONAL_LDFLAGS += -Wl,-rpath,/System/Library/Frameworks/PackageManager.framework/Versions/1
