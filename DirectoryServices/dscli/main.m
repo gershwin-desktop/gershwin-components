@@ -13,14 +13,15 @@
 #define DS_LOCAL_GROUPS_PLIST @"/Local/Library/DirectoryServices/Groups.plist"
 #define DS_DOMAIN_PLIST @"/Local/Library/DirectoryServices/Domain.plist"
 
-// NextBSD ships its own NSS module for these plists (nss_directory_services)
-// and owns /etc/nsswitch.conf, so dscli must not rewrite it there. Detected at
-// runtime, not by #ifdef: NextBSD compiles as FreeBSD. Same test as
-// gershwin-developer's install script: only NextBSD has /usr/lib/system.
+// NextBSD ships its own NSS module for these plists (nss_directory_services),
+// owns /etc/nsswitch.conf, and has sudo in base reading only /etc/sudoers.d.
+// Detected at runtime, not by #ifdef: NextBSD compiles as FreeBSD. The marker
+// is nextbsd-installer, which the NextBSD-userland package ships, so it is on
+// every NextBSD install and on no other system. (/usr/lib/system would be
+// wrong: macOS has that too.)
 static BOOL isNextBSD(void) {
-    BOOL isDir = NO;
-    return [[NSFileManager defaultManager] fileExistsAtPath:@"/usr/lib/system"
-                                               isDirectory:&isDir] && isDir;
+    return [[NSFileManager defaultManager]
+               fileExistsAtPath:@"/usr/sbin/nextbsd-installer"];
 }
 
 // Get the appropriate users plist path (Network first, then Local)

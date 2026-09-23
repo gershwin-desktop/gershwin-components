@@ -6,9 +6,10 @@ SUBPROJECTS = dshelper dscli
 # NextBSD resolves users and groups from the same plists with its own NSS
 # module, nss_directory_services (nextbsd-userland), and owns
 # /etc/nsswitch.conf, so nss_gershwin is neither built nor installed there.
-# Same NextBSD test as gershwin-developer's install-system-domain.sh: only
-# NextBSD has /usr/lib/system.
-ifeq ($(wildcard /usr/lib/system),)
+# nextbsd-installer is shipped by the NextBSD-userland package, so it is on
+# every NextBSD install and on no other system. (/usr/lib/system would be
+# wrong: macOS has that too.)
+ifeq ($(wildcard /usr/sbin/nextbsd-installer),)
 SUBPROJECTS += nss_gershwin
 endif
 
