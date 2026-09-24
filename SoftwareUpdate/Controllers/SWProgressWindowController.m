@@ -8,12 +8,64 @@
 #import "AppearanceMetrics.h"
 
 static const float kWinWidth = METRICS_WIN_MIN_WIDTH;
-static const float kCollapsedHeight = 150.0;
+// Built up the same way the layout itself is: header text block, then the
+// details disclosure row, then (when expanded) the phases box, then the
+// footer button row - so kCollapsedHeight/kExpandedHeight always match what
+// -buildContent actually lays out instead of being independent guesses.
+static const float kHeaderHeight = METRICS_CONTENT_TOP_MARGIN + 20.0 + METRICS_SPACE_16
+                                  + 20.0 + METRICS_SPACE_8 + 16.0;
+static const float kDetailsRowHeight = METRICS_BUTTON_HEIGHT;
+static const float kFooterHeight = METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT;
 static const float kPhasesBoxHeight = 200.0;
-static const float kExpandedHeight = 380.0;
+static const float kCollapsedHeight = kHeaderHeight + METRICS_SPACE_16 + kDetailsRowHeight
+                                     + METRICS_SPACE_16 + kFooterHeight;
+static const float kExpandedHeight = kHeaderHeight + METRICS_SPACE_16 + kDetailsRowHeight
+                                    + METRICS_SPACE_16 + kPhasesBoxHeight
+                                    + METRICS_SPACE_16 + kFooterHeight;
+// The Eau theme's disclosure triangle is drawn at 40% of its button's frame
+// (Eau+Button.m), so the stock 13x13 GNUstep disclosure button renders a
+// ~5pt glyph - much smaller and fainter than the handoff mockup's bold,
+// nearly edge-to-edge triangle. Sizing the button up is the only lever this
+// theme call exposes for that.
+static const float kDisclosureSide = 24.0;
 static const float kPhaseRowHeight = 22.0;
 static const float kItemRowHeight = 20.0;
 static const float kIconSmall = 16.0;
+
+// GNUstep's NSView -alphaValue is a documented no-op (there is no layer
+// backing yet), so fading the phases box in/out cannot be done by animating
+// a view's own opacity. NSImage compositing DOES support a real alpha
+// fraction, though (-drawInRect:fromRect:operation:fraction:), so this view
+// fakes the fade by drawing a snapshot of the box's content at a controllable
+// fraction instead of the box itself.
+@interface GWFadeOverlayView : NSView
+{
+  NSImage *_fadeImage;
+  CGFloat _fadeFraction;
+}
+- (void)setFadeImage:(NSImage *)image;
+- (void)setFadeFraction:(CGFloat)fraction;
+@end
+
+@implementation GWFadeOverlayView
+- (void)setFadeImage:(NSImage *)image
+{
+  _fadeImage = image;
+}
+- (void)setFadeFraction:(CGFloat)fraction
+{
+  _fadeFraction = fraction;
+  [self setNeedsDisplay:YES];
+}
+- (void)drawRect:(NSRect)dirtyRect
+{
+  if (_fadeFraction <= 0.0) return;
+  [_fadeImage drawInRect:[self bounds]
+                 fromRect:NSMakeRect(0, 0, [_fadeImage size].width, [_fadeImage size].height)
+                operation:NSCompositeSourceOver
+                 fraction:_fadeFraction];
+}
+@end
 
 @interface SWProgressWindowController ()
 {
@@ -26,6 +78,8 @@ static const float kIconSmall = 16.0;
   NSView *_phasesContainer;
   NSMutableArray<SWProgressPhase *> *_phases;
   BOOL _detailsVisible;
+  NSTimer *_detailsAnimTimer;
+  GWFadeOverlayView *_boxFadeOverlay;
 }
 @end
 
@@ -65,6 +119,10 @@ static const float kIconSmall = 16.0;
   [_headlineField setDrawsBackground:NO];
   [_headlineField setEditable:NO];
   [_headlineField setSelectable:NO];
+  // Pin to the window's top edge (fixed local y grows automatically as the
+  // content view's height changes) so this stays visually still while the
+  // disclosure animation grows/shrinks the window from the bottom.
+  [_headlineField setAutoresizingMask:NSViewMinYMargin];
   [content addSubview:_headlineField];
 
   _progressBar = [[NSProgressIndicator alloc] initWithFrame:
@@ -74,6 +132,7 @@ static const float kIconSmall = 16.0;
   [_progressBar setIndeterminate:NO];
   [_progressBar setMinValue:0.0];
   [_progressBar setMaxValue:1.0];
+  [_progressBar setAutoresizingMask:NSViewMinYMargin];
   [content addSubview:_progressBar];
 
   _statusField = [[NSTextField alloc] initWithFrame:
@@ -85,15 +144,43 @@ static const float kIconSmall = 16.0;
   [_statusField setDrawsBackground:NO];
   [_statusField setEditable:NO];
   [_statusField setSelectable:NO];
+  [_statusField setAutoresizingMask:NSViewMinYMargin];
   [content addSubview:_statusField];
 
+  // The handoff mockup uses a plain disclosure triangle next to a static
+  // "Details" label (the triangle flips direction, the label never changes),
+  // not a bordered push button whose title text swaps between "Details" and
+  // "Hide Details" - GNUstep has this natively (NSDisclosureBezelStyle +
+  // NSPushOnPushOffButton; the Eau theme already draws the triangle open or
+  // closed from the button's own on/off state), so use that instead of
+  // hand-rolling the look with a regular button. It sits directly below the
+  // status line and above the (revealed/hidden) box, matching the mockup -
+  // not down at the bottom sharing a row with Stop, which is where the box
+  // ended up appearing BELOW this row instead of above it.
+  float detailsRowY = NSMinY([_statusField frame]) - METRICS_SPACE_16 - kDetailsRowHeight;
   _detailsButton = [[NSButton alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, METRICS_CONTENT_BOTTOM_MARGIN,
-               METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT)];
-  [_detailsButton setTitle:@"Details"];
+    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
+               detailsRowY + (kDetailsRowHeight - kDisclosureSide) / 2.0,
+               kDisclosureSide, kDisclosureSide)];
+  [_detailsButton setBezelStyle:NSDisclosureBezelStyle];
+  [_detailsButton setButtonType:NSPushOnPushOffButton];
+  [_detailsButton setTitle:@""];
   [_detailsButton setTarget:self];
   [_detailsButton setAction:@selector(detailsClicked:)];
+  [_detailsButton setAutoresizingMask:NSViewMinYMargin];
   [content addSubview:_detailsButton];
+
+  NSTextField *detailsLabel = [[NSTextField alloc] initWithFrame:
+    NSMakeRect(NSMaxX([_detailsButton frame]) + METRICS_SPACE_8, detailsRowY,
+               100.0, kDetailsRowHeight)];
+  [detailsLabel setStringValue:@"Details"];
+  [detailsLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+  [detailsLabel setBezeled:NO];
+  [detailsLabel setDrawsBackground:NO];
+  [detailsLabel setEditable:NO];
+  [detailsLabel setSelectable:NO];
+  [detailsLabel setAutoresizingMask:NSViewMinYMargin];
+  [content addSubview:detailsLabel];
 
   _stopButton = [[NSButton alloc] initWithFrame:
     NSMakeRect(contentRight - METRICS_BUTTON_MIN_WIDTH, METRICS_CONTENT_BOTTOM_MARGIN,
@@ -103,16 +190,29 @@ static const float kIconSmall = 16.0;
   [_stopButton setAction:@selector(stopClicked:)];
   [content addSubview:_stopButton];
 
+  // Directly below the details row (revealed/hidden, not repositioned, as
+  // the window grows/shrinks) - pinned to the top the same way, so its
+  // distance below the details row stays constant at any window height,
+  // including while the disclosure animation is mid-flight.
   NSRect boxFrame = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
-                                METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_16,
+                                detailsRowY - METRICS_SPACE_16 - kPhasesBoxHeight,
                                 contentRight - METRICS_CONTENT_SIDE_MARGIN, kPhasesBoxHeight);
   _phasesScroll = [[NSScrollView alloc] initWithFrame:boxFrame];
   [_phasesScroll setHasVerticalScroller:YES];
   [_phasesScroll setBorderType:NSBezelBorder];
   [_phasesScroll setHidden:YES];
+  [_phasesScroll setAutoresizingMask:NSViewMinYMargin];
   _phasesContainer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(boxFrame), kPhasesBoxHeight)];
   [_phasesScroll setDocumentView:_phasesContainer];
   [content addSubview:_phasesScroll];
+
+  // Sits exactly over the box and is only ever shown mid-fade (see
+  // -detailsClicked:); hidden and empty the rest of the time. Also pinned to
+  // the top so it tracks the box's own position through the resize.
+  _boxFadeOverlay = [[GWFadeOverlayView alloc] initWithFrame:boxFrame];
+  [_boxFadeOverlay setHidden:YES];
+  [_boxFadeOverlay setAutoresizingMask:NSViewMinYMargin];
+  [content addSubview:_boxFadeOverlay];
 }
 
 #pragma mark - Public API
@@ -188,42 +288,115 @@ static const float kIconSmall = 16.0;
 
 - (void)detailsClicked:(id)sender
 {
+  // NSPushOnPushOffButton already flipped [_detailsButton state] before this
+  // action fired, which is what drives the Eau theme's arrow direction - so
+  // _detailsVisible only needs to track it for the resize math below.
   _detailsVisible = !_detailsVisible;
-  [_detailsButton setTitle:_detailsVisible ? @"Hide Details" : @"Details"];
 
-  float newHeight = _detailsVisible ? kExpandedHeight : kCollapsedHeight;
-  float contentRight = kWinWidth - METRICS_CONTENT_SIDE_MARGIN;
+  float targetContentHeight = _detailsVisible ? kExpandedHeight : kCollapsedHeight;
 
-  [_headlineField setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
-    newHeight - METRICS_CONTENT_TOP_MARGIN - 20.0, contentRight - METRICS_CONTENT_SIDE_MARGIN, 20.0)];
-  [_progressBar setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
-    NSMinY([_headlineField frame]) - METRICS_SPACE_16 - 20.0, contentRight - METRICS_CONTENT_SIDE_MARGIN, 20.0)];
-  [_statusField setFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
-    NSMinY([_progressBar frame]) - METRICS_SPACE_8 - 16.0, contentRight - METRICS_CONTENT_SIDE_MARGIN, 16.0)];
+  // The details box's own frame never depends on newHeight (it sits at a
+  // fixed distance from the button row below it - see buildContent), so
+  // revealing/hiding it is purely a visibility flip. Show it before growing
+  // so the roll-down animation clips it into view; keep it visible through
+  // a shrink so it clips OUT of view, only hiding it once fully collapsed
+  // (below), matching the roller-blind reveal used for WindowShade.
+  // Real views can't fade in GNUstep (-alphaValue is a documented no-op, no
+  // layer backing yet), so a genuine fade needs NSImage's fraction-based
+  // compositing instead - capture the box as a snapshot, hide the real
+  // (interactive) one, and cross-fade the snapshot's opacity over the same
+  // ticks that grow/shrink the window, so it rolls into view AND fades in
+  // at once rather than just one or the other.
+  if (_detailsVisible) {
+    [_phasesScroll setHidden:NO];
+    NSRect boxBounds = [_phasesScroll bounds];
+    NSBitmapImageRep *rep = [_phasesScroll bitmapImageRepForCachingDisplayInRect:boxBounds];
+    [_phasesScroll cacheDisplayInRect:boxBounds toBitmapImageRep:rep];
+    NSImage *snapshot = [[NSImage alloc] initWithSize:[rep size]];
+    [snapshot addRepresentation:rep];
+    [_phasesScroll setHidden:YES];
+    [_boxFadeOverlay setFadeImage:snapshot];
+    [_boxFadeOverlay setFadeFraction:0.0];
+    [_boxFadeOverlay setHidden:NO];
+  } else {
+    NSRect boxBounds = [_phasesScroll bounds];
+    NSBitmapImageRep *rep = [_phasesScroll bitmapImageRepForCachingDisplayInRect:boxBounds];
+    [_phasesScroll cacheDisplayInRect:boxBounds toBitmapImageRep:rep];
+    NSImage *snapshot = [[NSImage alloc] initWithSize:[rep size]];
+    [snapshot addRepresentation:rep];
+    [_phasesScroll setHidden:YES];
+    [_boxFadeOverlay setFadeImage:snapshot];
+    [_boxFadeOverlay setFadeFraction:1.0];
+    [_boxFadeOverlay setHidden:NO];
+  }
 
-  [_phasesScroll setHidden:!_detailsVisible];
-
-  // -setFrame: takes a FRAME rect (screen frame, titlebar included), not the
-  // CONTENT rect newHeight is expressed in - passing newHeight straight
-  // through made the window's actual content area a titlebar-height (22pt)
-  // short of what every field above was just laid out for. Converting
-  // through -frameRectForContentRect: gets the right frame height regardless
-  // of the window's actual titlebar height; anchoring on the OLD frame's top
-  // edge (NSMaxY), not a hand-computed delta, is what keeps that edge fixed
-  // on screen while the window grows downward to reveal the details box -
-  // the previous delta math left the window's reported height unchanged
-  // entirely on a non-resizable window (the WM's fixed-size hints clamped
-  // it), which is also fixed below by making the window resizable.
+  // -setFrame: takes a FRAME rect (screen frame, titlebar included), not a
+  // content rect - convert through -frameRectForContentRect: so the result
+  // is correct regardless of titlebar height AND of the display's current
+  // backing scale factor (a hardcoded content width/height here would only
+  // match the window's actual on-screen size at scale 1.0).
   NSWindow *window = [self window];
-  NSRect desiredContentRect = NSMakeRect(0, 0, kWinWidth, newHeight);
+  NSRect desiredContentRect = NSMakeRect(0, 0, kWinWidth, targetContentHeight);
   NSRect desiredFrameRect = [window frameRectForContentRect:desiredContentRect];
-  float frameHeight = NSHeight(desiredFrameRect);
+  float toFrameHeight = NSHeight(desiredFrameRect);
 
   NSRect currentFrame = [window frame];
-  NSRect newFrame = NSMakeRect(currentFrame.origin.x,
-                                NSMaxY(currentFrame) - frameHeight,
-                                kWinWidth, frameHeight);
-  [window setFrame:newFrame display:YES animate:NO];
+  float fromFrameHeight = NSHeight(currentFrame);
+  float fixedWidth = NSWidth(currentFrame);   // never changes: only height animates
+  float fixedX = currentFrame.origin.x;
+  float topY = NSMaxY(currentFrame);          // titlebar edge to hold fixed
+
+  if (fromFrameHeight == toFrameHeight) return;
+
+  // Roller-blind animation, same easing/timing as the WindowShade roll-up in
+  // gershwin-windowmanager's XCBFrame -animateFrameHeightFrom:toHeight: -
+  // 60fps timer, 0.22s, quadratic ease-out - so a details disclosure feels
+  // like the same physical motion as the window manager's own shade.
+  if (_detailsAnimTimer) {
+    [_detailsAnimTimer invalidate];
+    _detailsAnimTimer = nil;
+  }
+
+  __weak SWProgressWindowController *weakSelf = self;
+  NSTimeInterval duration = 0.22;
+  NSDate *startDate = [NSDate date];
+  BOOL collapsing = !_detailsVisible;
+
+  NSTimer *timer = [NSTimer timerWithTimeInterval:1.0 / 60.0
+                                          repeats:YES
+                                            block:^(NSTimer *stepTimer) {
+    SWProgressWindowController *strongSelf = weakSelf;
+    if (!strongSelf) {
+      [stepTimer invalidate];
+      return;
+    }
+
+    NSTimeInterval elapsed = -1.0 * [startDate timeIntervalSinceNow];
+    CGFloat progress = elapsed / duration;
+    if (progress < 0.0) progress = 0.0;
+    if (progress > 1.0) progress = 1.0;
+    BOOL done = progress >= 1.0;
+    if (!done)
+      progress = 1.0 - (1.0 - progress) * (1.0 - progress);   // ease-out
+
+    float h = fromFrameHeight + (toFrameHeight - fromFrameHeight) * progress;
+    NSRect stepFrame = NSMakeRect(fixedX, topY - h, fixedWidth, h);
+    [strongSelf->_boxFadeOverlay setFadeFraction:collapsing ? (1.0 - progress) : progress];
+    [[strongSelf window] setFrame:stepFrame display:YES animate:NO];
+
+    if (done) {
+      [stepTimer invalidate];
+      strongSelf->_detailsAnimTimer = nil;
+      NSRect finalFrame = NSMakeRect(fixedX, topY - toFrameHeight, fixedWidth, toFrameHeight);
+      [[strongSelf window] setFrame:finalFrame display:YES animate:NO];
+      [strongSelf->_boxFadeOverlay setHidden:YES];
+      if (!collapsing)
+        [strongSelf->_phasesScroll setHidden:NO];
+    }
+  }];
+
+  _detailsAnimTimer = timer;
+  [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSDefaultRunLoopMode];
 }
 
 - (void)stopClicked:(id)sender
