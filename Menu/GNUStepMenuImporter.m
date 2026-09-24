@@ -1575,7 +1575,13 @@ static GNUStepMenuImporter *sSharedImporter = nil;
        offer, so fall through to the stale-state path instead of blocking. */
     NSConnection *connection = [GNUStepMenuActionHandler existingConnectionForClient:clientName];
     if (connection && [connection isValid]) {
+        /* -rootProxy waits on the REPLY timeout, not the request timeout
+           (it has no request of its own to bound yet) - GNUstep defaults
+           that to 1.0E12s, effectively forever.  A cached connection whose
+           peer died without invalidating it (isValid still YES) would
+           otherwise wedge the whole menu bar here indefinitely. */
         [connection setRequestTimeout:0.3];
+        [connection setReplyTimeout:0.3];
         id proxy = [connection rootProxy];
         if (proxy) {
             [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
