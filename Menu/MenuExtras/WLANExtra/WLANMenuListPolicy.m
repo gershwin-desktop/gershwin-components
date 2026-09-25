@@ -12,10 +12,11 @@
                                 cachedList:(NSArray<WLAN *> *)cachedList
                                  connected:(BOOL)connected
 {
-    /* TODO: never let an empty scan wipe out the cached list. */
-    (void)cachedList;
-    (void)connected;
-    return scanResult ?: @[];
+    (void)connected;   /* connection state does not license discarding the cache */
+    if ([scanResult count] > 0) {
+        return scanResult;
+    }
+    return cachedList ?: @[];
 }
 
 @end
