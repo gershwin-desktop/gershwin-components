@@ -75,10 +75,54 @@ static NSString *CityNameFromTimeZoneName(NSString *timeZoneName)
 + (NSArray<WorldClockEntry *> *)worldClockEntriesForDate:(NSDate *)date
                                              userTimeZone:(NSTimeZone *)userTimeZone
 {
-    /* TODO: dedup by offset, add the user's own zone, sort relative to it. */
-    (void)date;
-    (void)userTimeZone;
-    return @[];
+    NSInteger userOffset = [userTimeZone secondsFromGMTForDate:date];
+    NSString *userCityName = CityNameFromTimeZoneName([userTimeZone name]);
+
+    /* Keyed by offset so only one representative survives per distinct
+     * UTC offset, per the menu's scannability requirement. */
+    NSMutableDictionary<NSNumber *, WorldClockEntry *> *byOffset = [NSMutableDictionary dictionary];
+
+    for (NSArray<NSString *> *candidate in WorldClockCandidateCities()) {
+        NSString *cityName = candidate[0];
+        NSString *tzName = candidate[1];
+        NSTimeZone *tz = [NSTimeZone timeZoneWithName:tzName];
+        if (!tz) continue;
+
+        NSInteger offset = [tz secondsFromGMTForDate:date];
+        NSNumber *key = @(offset);
+        if (byOffset[key] != nil) continue;   /* first candidate at this offset wins */
+
+        NSString *abbreviation = [tz abbreviationForDate:date] ?: @"";
+        BOOL isUserZone = (offset == userOffset);
+        WorldClockEntry *entry = [[WorldClockEntry alloc] initWithCityName:cityName
+                                                                timeZoneName:tzName
+                                                                abbreviation:abbreviation
+                                                               offsetSeconds:offset
+                                                                  isUserZone:isUserZone];
+        byOffset[key] = entry;
+    }
+
+    /* The user's own zone always appears, under its own name - replacing a
+     * curated city that happens to share its offset rather than sitting
+     * alongside it as a confusing duplicate. */
+    {
+        NSString *userAbbreviation = [userTimeZone abbreviationForDate:date] ?: @"";
+        WorldClockEntry *userEntry = [[WorldClockEntry alloc] initWithCityName:userCityName
+                                                                    timeZoneName:[userTimeZone name]
+                                                                    abbreviation:userAbbreviation
+                                                                   offsetSeconds:userOffset
+                                                                      isUserZone:YES];
+        byOffset[@(userOffset)] = userEntry;
+    }
+
+    NSArray<WorldClockEntry *> *entries = [byOffset allValues];
+    return [entries sortedArrayUsingComparator:^NSComparisonResult(WorldClockEntry *a, WorldClockEntry *b) {
+        NSInteger da = a.offsetSeconds - userOffset;
+        NSInteger db = b.offsetSeconds - userOffset;
+        if (da < db) return NSOrderedAscending;
+        if (da > db) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
 }
 
 @end
