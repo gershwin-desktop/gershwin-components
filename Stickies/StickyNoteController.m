@@ -106,6 +106,13 @@
         }
     }
 
+    // The text just went in, so the layout manager already knows the
+    // document's full height; restore where the note was scrolled to before
+    // the scroll view's own frame is possibly still its initial size.
+    NSScrollView *restoredScrollView = [[noteView textView] enclosingScrollView];
+    [[restoredScrollView contentView] scrollToPoint:document.scrollPosition];
+    [restoredScrollView reflectScrolledClipView:[restoredScrollView contentView]];
+
     [noteWindow setContentView:noteView];
 
     // A saved note may lie under the menu bar or off a screen that has
@@ -138,6 +145,7 @@
     document.translucent = translucent;
     document.collapsed = collapsed;
     document.modificationDate = modificationDate;
+    document.scrollPosition = [[[[noteView textView] enclosingScrollView] contentView] bounds].origin;
 }
 
 // A manual save (Cmd-S) writes everything now instead of waiting for the
