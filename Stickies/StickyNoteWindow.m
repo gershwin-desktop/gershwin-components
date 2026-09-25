@@ -165,6 +165,19 @@
     return [super performKeyEquivalent:event];
 }
 
+// Multiple notes share one window level (NSFloatingWindowLevel), so their
+// relative z-order is ours to manage; nothing else raises the one the user
+// just clicked. -sendEvent: is the single choke point every mouse-down
+// passes through before AppKit hit-tests it to a subview (title bar, resize
+// grip, or straight into the text view), so it covers all of them.
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSLeftMouseDown) {
+        [self makeKeyAndOrderFront:self];
+    }
+    [super sendEvent:event];
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
     StickyNoteView *cv = (StickyNoteView *)[self contentView];
