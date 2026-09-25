@@ -5,6 +5,8 @@
  */
 
 #import "BatteryExtra.h"
+#import "CPUGovernorBackend.h"
+#import <dispatch/dispatch.h>
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
@@ -363,6 +365,12 @@ static const BOOL kShowTextInMenuBar = NO;
         }
     }
 
+    NSMenuItem *governorItem = [self governorMenuItem];
+    if (governorItem) {
+        [m addItem:[NSMenuItem separatorItem]];
+        [m addItem:governorItem];
+    }
+
     [m addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *prefs = [[NSMenuItem alloc] initWithTitle:@"Preferences"
@@ -372,6 +380,57 @@ static const BOOL kShowTextInMenuBar = NO;
     [m addItem:prefs];
 
     return m;
+}
+
+#pragma mark - Power governor
+
+/* Built fresh on every menu open (like the rest of -menu), so the check
+   mark always reflects the governor actually in effect - including a
+   change made from the Energy prefPane while this menu was closed. */
+- (NSMenuItem *)governorMenuItem
+{
+    NSArray<NSString *> *governors = [CPUGovernorBackend availableGovernors];
+    if ([governors count] == 0) return nil;
+
+    NSString *current = [CPUGovernorBackend currentGovernor];
+    NSUInteger currentIndex = [CPUGovernorBackend indexOfGovernor:current inList:governors];
+
+    NSMenu *submenu = [[NSMenu alloc] initWithTitle:
+        NSLocalizedString(@"Power Mode", @"Battery extra: CPU governor submenu title")];
+    NSUInteger i = 0;
+    for (NSString *governor in governors) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:governor
+                                                       action:@selector(selectGovernor:)
+                                                keyEquivalent:@""];
+        [item setTarget:self];
+        [item setRepresentedObject:governor];
+        if (i == currentIndex) {
+            [item setState:NSOnState];
+        }
+        [submenu addItem:item];
+        i++;
+    }
+
+    NSMenuItem *governorItem = [[NSMenuItem alloc] initWithTitle:
+        NSLocalizedString(@"Power Mode", @"Battery extra: CPU governor menu item")
+                                                            action:NULL
+                                                     keyEquivalent:@""];
+    [governorItem setSubmenu:submenu];
+    return governorItem;
+}
+
+- (void)selectGovernor:(id)sender
+{
+    NSString *governor = [sender representedObject];
+    if ([governor length] == 0) return;
+    /* CPUGovernorBackend shells out (sudo tee on Linux, sysctl on the BSDs)
+       to apply the change; keep that off the main thread so choosing a
+       governor never freezes the menu bar while it runs. The check mark
+       picks up the new governor the next time the menu is opened, same as
+       the rest of this menu's state. */
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [CPUGovernorBackend setGovernor:governor];
+    });
 }
 
 - (NSImage *)image

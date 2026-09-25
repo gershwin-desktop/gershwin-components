@@ -6,6 +6,7 @@
 
 #import "EnergyController.h"
 #import "AppearanceMetrics.h"
+#import "CPUGovernorBackend.h"
 #import <dispatch/dispatch.h>
 
 static NSString *const kEnergyDomain = @"EnergyPreferences";
@@ -773,78 +774,24 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         status, @"status", nil];
 }
 
+/* The governor list/read/write logic lives in CPUGovernorBackend.m in this
+ * directory, built as libCPUGovernorBackend (Libraries/CPUGovernorBackend)
+ * and linked by both this pane and the Battery menu extra, so the two never
+ * show a different list or use a different privilege path for the same
+ * setting. */
 - (NSString *)readGovernor
 {
-#if defined(__linux__)
-    return [self readFile:@"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"];
-#elif defined(__FreeBSD__)
-    return [self runCommand:@"/sbin/sysctl" args:[NSArray arrayWithObjects:@"-n", @"dev.cpu.0.freq", nil]];
-#elif defined(__OpenBSD__)
-    return [self runCommand:@"/sbin/sysctl" args:[NSArray arrayWithObjects:@"-n", @"hw.setperf", nil]];
-#elif defined(__NetBSD__)
-    return [self runCommand:@"/sbin/sysctl" args:[NSArray arrayWithObjects:@"-n", @"machdep.cpu.frequency.current", nil]];
-#else
-    return @"";
-#endif
+    return [CPUGovernorBackend currentGovernor];
 }
 
 - (NSArray *)availableGovernors
 {
-#if defined(__linux__)
-    NSString *raw = [self readFile:@"/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors"];
-    if ([raw length] == 0) {
-        return [NSArray arrayWithObjects:@"powersave", @"performance", nil];
-    }
-    return [raw componentsSeparatedByCharactersInSet:
-        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-#elif defined(__FreeBSD__)
-    /* FreeBSD cpufreq: report common frequencies as "governors" */
-    return [NSArray arrayWithObjects:@"Auto", @"Maximum", @"Minimum", nil];
-#elif defined(__OpenBSD__)
-    /* OpenBSD hw.setperf: 0..100 */
-    return [NSArray arrayWithObjects:@"Power Save", @"Auto", @"Performance", nil];
-#elif defined(__NetBSD__)
-    return [NSArray arrayWithObjects:@"Auto", @"Maximum", @"Minimum", nil];
-#else
-    return [NSArray arrayWithObjects:@"Auto", nil];
-#endif
+    return [CPUGovernorBackend availableGovernors];
 }
 
 - (BOOL)writeGovernor:(NSString *)gov
 {
-#if defined(__linux__)
-    NSString *path = @"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor";
-    BOOL ok = [self writeSysfs:path value:gov];
-    /* Apply to all online CPUs */
-    [self runCommand:@"/bin/sh"
-                args:[NSArray arrayWithObjects:@"-c",
-                      @"for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do "
-                       "printf '%s' \"$1\" | sudo tee \"$cpu\" > /dev/null; done",
-                      @"sh", gov, nil]];
-    return ok;
-#elif defined(__FreeBSD__)
-    int freq = 0;
-    if ([gov isEqualToString:@"Maximum"]) freq = 100000;
-    else if ([gov isEqualToString:@"Minimum"]) freq = 0;
-    else freq = -1; /* Auto: let the system decide */
-    if (freq >= 0) {
-        [self runCommand:@"/sbin/sysctl"
-                    args:[NSArray arrayWithObjects:@"dev.cpu.0.freq", [NSString stringWithFormat:@"%d", freq], nil]];
-    }
-    return YES;
-#elif defined(__OpenBSD__)
-    int perf = 50;
-    if ([gov isEqualToString:@"Performance"]) perf = 100;
-    else if ([gov isEqualToString:@"Power Save"]) perf = 0;
-    [self runCommand:@"/sbin/sysctl"
-                args:[NSArray arrayWithObjects:@"hw.setperf", [NSString stringWithFormat:@"%d", perf], nil]];
-    return YES;
-#elif defined(__NetBSD__)
-    /* NetBSD: mostly read-only; just return YES */
-    return YES;
-#else
-    return YES;
-#endif
+    return [CPUGovernorBackend setGovernor:gov];
 }
 
 - (int)readBrightnessPercent

@@ -5,7 +5,7 @@ BUNDLE_NAME = Clock
 BUNDLE_EXTENSION = .gsmenuextra
 
 Clock_PRINCIPAL_CLASS = ClockExtra
-Clock_OBJC_FILES = ClockExtra.m
+Clock_OBJC_FILES = ClockExtra.m WorldClockList.m
 
 # Built with ARC like the rest of the desktop: these bundles hand out
 # objects they created, such as the menu they build on demand, and

@@ -10,6 +10,7 @@
 #import "NetworkBackend.h"
 #import "CaptivePortalDetector.h"
 #import "GSMenuExtraContext.h"
+#import "WLANMenuListPolicy.h"
 
 #import "AppearanceMetrics.h"
 #include <sys/utsname.h>
@@ -175,9 +176,13 @@ static NSString *findTool(NSString *name)
         _signalStrength = 0;
         _networkList = @[];
     } else {
-        _networkList = [_backend scanForWLANs];
         _connectedWLAN = [_backend connectedWLAN];
         _signalStrength = _connectedWLAN ? [_connectedWLAN signalStrength] : 0;
+        /* A scan that comes back empty (common right after connecting - see
+           WLANMenuListPolicy) must not erase whatever the last scan found. */
+        _networkList = [WLANMenuListPolicy networkListAfterScan:[_backend scanForWLANs]
+                                                       cachedList:_networkList
+                                                        connected:(_connectedWLAN != nil)];
     }
 
     if (wasEnabled != _wlanEnabled ||
@@ -320,17 +325,11 @@ static NSString *findTool(NSString *name)
 - (NSMenu *)menu
 {
     BOOL wlanOn = _wlanEnabled;
-    if (wlanOn && _backendAvailable) {
-        NSArray *nets = [_backend scanForWLANs] ?: @[];
-        WLAN *connected = [_backend connectedWLAN];
-        int signal = [connected signalStrength];
-        if ([nets count] > 0 || connected) {
-            _networkList = nets;
-            _connectedWLAN = connected;
-            _signalStrength = signal;
-        }
-    }
-
+    /* Renders the last known state only - no scan here. Scanning is a
+       real NSTask exec (nmcli/ifconfig) that can take a second or more,
+       and this method runs on the main thread while the menu bar is about
+       to display; -menuExtraWillOpenMenu already kicked a background
+       refresh that lands via invalidatePresentation when it completes. */
     NSArray *nets = _networkList ?: @[];
     WLAN *connected = _connectedWLAN;
     int signal = _signalStrength;
@@ -497,56 +496,80 @@ static NSString *findTool(NSString *name)
     }
 }
 
-- (void)menuExtraWillOpenMenu
+/* Scans and, if that missed the live connection, falls back to a direct
+   nmcli query - both real process execs - off the main thread, then
+   applies WLANMenuListPolicy and hands the result back for display. Never
+   called periodically: only from -menuExtraWillOpenMenu (once per menu
+   open) and never from -refreshTimerFired: (which intentionally skips a
+   full scan while connected - see its own comment - to avoid the cost and
+   possible link disruption of an active scan nobody is looking at). */
+- (void)refreshWLANStateInBackground
 {
-    _backendAvailable = [_backend isAvailable];
-    if (_backendAvailable) {
-        _wlanEnabled = [_backend isWLANEnabled];
-        if (_wlanEnabled) {
-            NSArray *nets = [_backend scanForWLANs];
-            WLAN *connected = [_backend connectedWLAN];
-            int signal = [connected signalStrength];
-            // Only update cached values if backend returned valid data.
-            // A failing scan (nil/empty) should not erase a known connection.
-            if ([nets count] > 0 || connected) {
-                _networkList = nets;
-                _connectedWLAN = connected;
-                _signalStrength = signal;
-            }
-            // If the scan cache missed the connected network (empty scan,
-            // backend just started, etc.), try a live nmcli query (bypasses
-            // the privileged path that uses sudo/askpass and may hang).
-            if (!_connectedWLAN) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            NSArray<WLAN *> *scanResult = [self->_backend scanForWLANs] ?: @[];
+            WLAN *connected = [self->_backend connectedWLAN];
+            if (!connected) {
                 NSString *liveSSID = [self _activeWLANSsidFromNMCLI];
                 if (liveSSID) {
                     WLAN *live = [[WLAN alloc] init];
                     [live setSsid:liveSSID];
                     [live setIsConnected:YES];
                     [live setSignalStrength:0];
-                    _connectedWLAN = live;
-                    _signalStrength = 0;
+                    connected = live;
                 }
             }
-            // Re-check internet / captive portal status when menu opens
-            // Use force-check to bypass the 60s rate limiter - the user
-            // explicitly asked for fresh data by opening the menu.
-            if ([_connectedWLAN ssid]) {
-                _hasInternetAccess = NO;
-                NSString *menuOpenSSID = [_connectedWLAN ssid];
-                [CaptivePortalDetector checkForCaptivePortalForceWithCompletion:^(BOOL isCaptive, NSString *redirectURL) {
-                    _hasInternetAccess = !isCaptive;
-                    if (isCaptive && redirectURL
-                        && ![_captivePortalAlertShownSSID isEqualToString:menuOpenSSID]) {
-                        _captivePortalAlertShownSSID = menuOpenSSID;
-                        [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                                                 selector:@selector(showCaptivePortalAlert:)
-                                                                   object:nil];
-                        [self performSelector:@selector(showCaptivePortalAlert:)
-                                 withObject:redirectURL
-                                 afterDelay:0];
-                    }
-                }];
-            }
+            WLAN *connectedForBlock = connected;
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!self->_running) return;
+                self->_networkList = [WLANMenuListPolicy networkListAfterScan:scanResult
+                                                                     cachedList:self->_networkList
+                                                                      connected:(connectedForBlock != nil)];
+                self->_connectedWLAN = connectedForBlock;
+                self->_signalStrength = connectedForBlock ? [connectedForBlock signalStrength] : 0;
+                [self->_context invalidatePresentation];
+
+                // Re-check internet / captive portal status when menu opens.
+                // Force-check bypasses the 60s rate limiter - the user
+                // explicitly asked for fresh data by opening the menu.
+                if ([connectedForBlock ssid]) {
+                    self->_hasInternetAccess = NO;
+                    NSString *menuOpenSSID = [connectedForBlock ssid];
+                    [CaptivePortalDetector checkForCaptivePortalForceWithCompletion:^(BOOL isCaptive, NSString *redirectURL) {
+                        self->_hasInternetAccess = !isCaptive;
+                        if (isCaptive && redirectURL
+                            && ![self->_captivePortalAlertShownSSID isEqualToString:menuOpenSSID]) {
+                            self->_captivePortalAlertShownSSID = menuOpenSSID;
+                            [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                                     selector:@selector(showCaptivePortalAlert:)
+                                                                       object:nil];
+                            [self performSelector:@selector(showCaptivePortalAlert:)
+                                     withObject:redirectURL
+                                     afterDelay:0];
+                        }
+                    }];
+                }
+            });
+        }
+    });
+}
+
+- (void)menuExtraWillOpenMenu
+{
+    /* isAvailable:/isWLANEnabled: are cheap local state reads (no process
+       exec), so they stay synchronous - the menu needs them immediately to
+       decide which of the early-return states in -menu applies. Scanning is
+       the expensive part (a real nmcli/ifconfig exec) and moves to a
+       background queue below, so opening the dropdown never blocks on it;
+       -menu meanwhile renders whatever was already cached (the last known
+       list), and invalidatePresentation refreshes it in place once this
+       scan lands - "refresh on menu open" without a synchronous stall. */
+    _backendAvailable = [_backend isAvailable];
+    if (_backendAvailable) {
+        _wlanEnabled = [_backend isWLANEnabled];
+        if (_wlanEnabled) {
+            [self refreshWLANStateInBackground];
         } else {
             _networkList = @[];
             _connectedWLAN = nil;
@@ -620,16 +643,19 @@ static NSString *findTool(NSString *name)
                         }
                     });
                 } else {
+                    /* Only reached while disconnected - periodically scanning
+                       to find networks to join is the normal, expected cost
+                       here, unlike scanning on a timer while connected. */
                     nets = [_backend scanForWLANs];
                     connected = [_backend connectedWLAN];
                     int signal = connected ? [connected signalStrength] : 0;
                     dispatch_async(dispatch_get_main_queue(), ^{
                         _backendAvailable = YES;
-                        if ([nets count] > 0 || connected) {
-                            _networkList = nets;
-                            _connectedWLAN = connected;
-                            _signalStrength = signal;
-                        }
+                        _networkList = [WLANMenuListPolicy networkListAfterScan:nets
+                                                                       cachedList:_networkList
+                                                                        connected:(connected != nil)];
+                        _connectedWLAN = connected;
+                        _signalStrength = signal;
                         if (oldSignal != _signalStrength || oldCount != [_networkList count] ||
                             (!oldConnected && _connectedWLAN) || (oldConnected && !_connectedWLAN)) {
                             [_context invalidatePresentation];
