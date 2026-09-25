@@ -68,17 +68,22 @@ static BOOL CPUGovBackendWriteSysfs(NSString *path, NSString *value)
 
 + (NSArray<NSString *> *)parseAvailableGovernorsFromSysfsList:(NSString *)raw
 {
-    /* TODO: parse the whitespace-separated sysfs list. */
-    (void)raw;
-    return @[];
+    if ([raw length] == 0) {
+        return @[@"powersave", @"performance"];
+    }
+    NSArray *parts = [raw componentsSeparatedByCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray *governors = [NSMutableArray arrayWithCapacity:[parts count]];
+    for (NSString *part in parts) {
+        if ([part length] > 0) [governors addObject:part];
+    }
+    return governors;
 }
 
 + (NSUInteger)indexOfGovernor:(NSString *)governor inList:(NSArray<NSString *> *)governors
 {
-    /* TODO: find the check-marked governor. */
-    (void)governor;
-    (void)governors;
-    return NSNotFound;
+    if ([governor length] == 0) return NSNotFound;
+    return [governors indexOfObject:governor];
 }
 
 + (NSArray<NSString *> *)availableGovernors

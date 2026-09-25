@@ -13,10 +13,13 @@ t_TintedMenuItemCell_TOOL_LIBS += -lgnustep-gui
 
 t_ShortcutReregistration_OBJC_FILES = t_ShortcutReregistration.m
 
-t_CPUGovernorBackend_OBJC_FILES = t_CPUGovernorBackend.m ../../CPUGovernorBackend.m
-# CPUGovernorBackend.m is shared with Energy (a non-ARC target); force ARC
-# for it here too so this one source behaves the same in every target that
-# compiles it, same as Menu.app's own ADDITIONAL_OBJCFLAGS does.
-../../CPUGovernorBackend.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+# CPUGovernorBackend.h/.m live in Energy/ (Libraries/CPUGovernorBackend
+# packages the same source as libCPUGovernorBackend for Energy and the
+# Battery extra); link the source directly here rather than the library so
+# the test needs nothing installed.
+t_CPUGovernorBackend_OBJC_FILES = t_CPUGovernorBackend.m ../../../Energy/CPUGovernorBackend.m
+t_CPUGovernorBackend_OBJCFLAGS += -I../../../Energy
+# It is built ARC in both real targets; match that here too.
+../../../Energy/CPUGovernorBackend.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make
