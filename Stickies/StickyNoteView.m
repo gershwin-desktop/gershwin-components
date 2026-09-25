@@ -114,15 +114,62 @@
     return (point.y >= 0 && point.y < TITLE_BAR_HEIGHT);
 }
 
+- (NSRect)resizeHandleRect
+{
+    NSRect bounds = [self bounds];
+    return NSMakeRect(bounds.size.width - RESIZE_HANDLE_SIZE,
+                       bounds.size.height - RESIZE_HANDLE_SIZE,
+                       RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
+}
+
 - (BOOL)isInResizeHandle:(NSPoint)point
 {
     // A rolled-up note is only its title bar; the corner there belongs to it.
     if ([(StickyNoteWindow *)[self window] isCollapsed]) return NO;
-    NSRect bounds = [self bounds];
-    NSRect handle = NSMakeRect(bounds.size.width - RESIZE_HANDLE_SIZE,
-                               bounds.size.height - RESIZE_HANDLE_SIZE,
-                               RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
-    return NSPointInRect(point, handle);
+    return NSPointInRect(point, [self resizeHandleRect]);
+}
+
+// The scroll view's text view fills the same corner and establishes its own
+// I-beam cursor rect there (-[NSTextView resetCursorRects] covers its whole
+// visible rect); because it is the deepest view, its rect always wins over
+// one added here. A tracking rect fires -mouseEntered:/-mouseExited:
+// independently of that resolution order and even while the window is not
+// key (unlike cursor rects, gated to the key window), so it reliably shows
+// the arrow over the grip.
+- (void)updateResizeCursorTracking
+{
+    if (resizeCursorTag != 0) {
+        [self removeTrackingRect:resizeCursorTag];
+        resizeCursorTag = 0;
+    }
+    if ([self window] != nil && ![(StickyNoteWindow *)[self window] isCollapsed]) {
+        resizeCursorTag = [self addTrackingRect:[self resizeHandleRect]
+                                           owner:self
+                                        userData:NULL
+                                    assumeInside:NO];
+    }
+}
+
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    [self updateResizeCursorTracking];
+}
+
+- (void)setFrameSize:(NSSize)size
+{
+    [super setFrameSize:size];
+    [self updateResizeCursorTracking];
+}
+
+- (void)mouseEntered:(NSEvent *)event
+{
+    [[NSCursor arrowCursor] set];
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    [[NSCursor IBeamCursor] set];
 }
 
 - (NSView *)hitTest:(NSPoint)aPoint
@@ -221,6 +268,12 @@
 
 - (void)dealloc
 {
+    // -addTrackingRect:owner:userData:assumeInside: does not retain its
+    // owner; a rect left registered past this point would reference a
+    // freed view.
+    if (resizeCursorTag != 0) {
+        [self removeTrackingRect:resizeCursorTag];
+    }
     [backgroundColor release];
     [super dealloc];
 }
