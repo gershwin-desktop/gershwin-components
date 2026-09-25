@@ -1,0 +1,11 @@
+# gnustep-tests regenerates GNUmakefile in this directory, so everything the
+# suite needs beyond the generated defaults lives here: the app sources the
+# tests exercise are linked in as collaborators (see gnustep-red-green-tdd).
+ADDITIONAL_INCLUDE_DIRS += -I../..
+ADDITIONAL_OBJCFLAGS += -Wall
+
+t_StickyNoteViewCursor_OBJC_FILES += ../../StickyNoteView.m
+t_StickyNoteViewCursor_TOOL_LIBS += -lgnustep-gui
+
+t_StickyNoteDocumentScrollPosition_OBJC_FILES += ../../StickyNoteDocument.m ../../StickyNoteColors.m
+t_StickyNoteDocumentScrollPosition_TOOL_LIBS += -lgnustep-gui

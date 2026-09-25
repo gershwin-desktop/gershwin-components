@@ -1,21 +1,36 @@
+# __GENERATED__ makefile marker
 #
-# Headless unit tests for Stickies. Build with "gmake", then run each
-# ./obj/t_* tool.
-#
-include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_StickyNoteViewCursor t_StickyNoteDocumentScrollPosition
+include $(GNUSTEP_MAKEFILES)/common.make
+-include ../GNUmakefile.super
+
+GNUSTEP_OBJ_DIR=./obj
+
+TEST_TOOL_NAME =  t_StickyNoteDocumentScrollPosition t_StickyNoteViewCursor
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
-ADDITIONAL_INCLUDE_DIRS += -I../..
-ADDITIONAL_OBJCFLAGS += -Wall
 
-t_StickyNoteViewCursor_OBJC_FILES = t_StickyNoteViewCursor.m \
-	../../StickyNoteView.m
-t_StickyNoteViewCursor_TOOL_LIBS += -lgnustep-gui
+ifeq ($(gcov),yes)
+ADDITIONAL_OBJCFLAGS += -ftest-coverage -fprofile-arcs
+ADDITIONAL_OBJCCFLAGS += -ftest-coverage -fprofile-arcs
+ADDITIONAL_LDFLAGS += -ftest-coverage -fprofile-arcs
+ADDITIONAL_TOOL_LIBS+=-lgcov
+endif
 
-t_StickyNoteDocumentScrollPosition_OBJC_FILES = t_StickyNoteDocumentScrollPosition.m \
-	../../StickyNoteDocument.m ../../StickyNoteColors.m
-t_StickyNoteDocumentScrollPosition_TOOL_LIBS += -lgnustep-gui
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated
+ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 
+
+t_StickyNoteDocumentScrollPosition_OBJC_FILES=t_StickyNoteDocumentScrollPosition.m
+t_StickyNoteViewCursor_OBJC_FILES=t_StickyNoteViewCursor.m
+
+-include GNUmakefile.preamble
+-include make-check.mak
 include $(GNUSTEP_MAKEFILES)/test-tool.make
+-include GNUmakefile.postamble
+
+after-clean::
+	rm -f core core.* *.core \
+	test_*.out test_*.err \
+	tests.log tests.sum oldtests.log oldtests.sum
+
