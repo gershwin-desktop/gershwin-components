@@ -7,6 +7,7 @@
 #import "MouseBackend.h"
 
 #include <fcntl.h>
+#include <math.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #if defined(__linux__)
@@ -15,189 +16,125 @@
 #include <dev/evdev/input.h>
 #endif
 
-static NSString *const kNaturalScrollingProperty = @"libinput Natural Scrolling Enabled";
-static NSString *const kLeftHandedProperty = @"libinput Left Handed Enabled";
-static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
+/* libinput's own scroll distance and the range xf86-input-libinput takes. */
+static const double kDefaultScrollPixelDistance = 15.0;
+static const int kMinScrollPixelDistance = 10;
+static const int kMaxScrollPixelDistance = 1000;
+/* The slow end of the pane's scroll speed slider. */
+static const double kMinScrollSpeed = 0.25;
 
 @interface MouseBackend ()
 @property (nonatomic, readwrite, copy) NSString *xinputPath;
-@property (nonatomic, readwrite, copy) NSString *touchpadName;
-@property (nonatomic, readwrite, copy) NSString *mouseName;
-@property (nonatomic, readwrite, copy) NSString *trackpointName;
+@property (nonatomic, readwrite, copy) NSArray *devices;
 @end
 
 @implementation MouseBackend
 
+/* The pane itself only loads when xinput is on PATH (MousePane
+   +isCompatible), so PATH comes first; the fixed locations cover a login
+   script started with a minimal PATH. */
 + (NSString *)findXinput
 {
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *candidates = @[
+    NSString *pathEnv = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"];
+    NSMutableArray *candidates = [NSMutableArray array];
+    for (NSString *dir in [pathEnv componentsSeparatedByString:@":"]) {
+        if ([dir length] > 0) {
+            [candidates addObject:[dir stringByAppendingPathComponent:@"xinput"]];
+        }
+    }
+    [candidates addObjectsFromArray:@[
         @"/usr/bin/xinput",
         @"/usr/local/bin/xinput",
-        @"/opt/local/bin/xinput",
-        @"/opt/bin/xinput",
-        @"/usr/pkg/bin/xinput",
         @"/usr/X11R6/bin/xinput",
-    ];
+        @"/usr/pkg/bin/xinput",
+    ]];
     for (NSString *path in candidates) {
         if ([fm isExecutableFileAtPath:path]) {
             return path;
         }
     }
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:@[@"xinput"]];
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task launch];
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSString *trim = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([trim length] > 0 && [fm isExecutableFileAtPath:trim]) {
-        return trim;
-    }
     return nil;
 }
 
-- (NSString *)runXinput:(NSArray *)args
+- (instancetype)init
+{
+    return [self initWithXinputPath:[[self class] findXinput]];
+}
+
+- (instancetype)initWithXinputPath:(NSString *)path
+{
+    self = [super init];
+    if (self) {
+        _xinputPath = [path copy];
+        _devices = @[];
+    }
+    return self;
+}
+
+- (NSTask *)xinputTask:(NSArray *)args
 {
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:self.xinputPath];
     [task setArguments:args];
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-
-    // Force C locale for consistent tool output
+    /* The C locale keeps number formats in xinput's output parseable. */
     NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
     [env setObject:@"C" forKey:@"LC_ALL"];
     [task setEnvironment:env];
+    return task;
+}
 
+- (NSString *)runXinput:(NSArray *)args
+{
+    NSTask *task = [self xinputTask:args];
+    NSPipe *pipe = [NSPipe pipe];
+    [task setStandardOutput:pipe];
     [task launch];
     NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
     [task waitUntilExit];
     return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 }
 
-- (BOOL)matchesAny:(NSString *)name patterns:(NSArray *)patterns
-{
-    for (NSString *p in patterns) {
-        if ([name rangeOfString:p].location != NSNotFound) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-- (NSArray *)xinputDeviceNamesMatching:(NSString *)pattern
-{
-    if (!self.xinputPath) {
-        return @[];
-    }
-    NSString *output = [self runXinput:@[@"list", @"--name-only"]];
-    NSMutableArray *result = [NSMutableArray array];
-    NSArray *lines = [output componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-    for (NSString *line in lines) {
-        if ([line rangeOfString:pattern].location != NSNotFound) {
-            [result addObject:[line copy]];
-        }
-    }
-    return result;
-}
-
 - (void)refresh
 {
     if (!self.xinputPath) {
-        self.xinputPath = [[self class] findXinput];
+        self.devices = @[];
+        return;
     }
-    self.touchpadName = nil;
-    self.mouseName = nil;
-    self.trackpointName = nil;
-
-    // Check for touchpad using multiple patterns
-    NSArray *tpNames = [self xinputDeviceNamesMatching:@"Touchpad"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"Synaptics"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"ELAN"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"Alps"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"bcm5974"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"appletouch"];
-    if ([tpNames count] > 0) {
-        self.touchpadName = [tpNames objectAtIndex:0];
-    }
-
-    // TrackPoint
-    NSArray *tppNames = [self xinputDeviceNamesMatching:@"TrackPoint"];
-    if ([tppNames count] == 0) tppNames = [self xinputDeviceNamesMatching:@"Trackpoint"];
-    if ([tppNames count] > 0) {
-        self.trackpointName = [tppNames objectAtIndex:0];
-    }
-
-    // Mouse: first non-excluded name that isn't already classified
-    NSArray *all = [self xinputDeviceNamesMatching:@""];
-    for (NSString *name in all) {
-        if ([self matchesAny:name patterns:@[
-            @"XTEST", @"Virtual", @"virtual",
-            @"keyboard", @"Keyboard", @"Button",
-            @"HID ", @"HID/", @"Power Button",
-            @"Sleep Button", @"Lid Switch", @"Video Bus",
-            @"ums", @"wsmouse", @"sysmouse", @"pms",
-        ]]) {
+    NSMutableArray *devices = [NSMutableArray array];
+    for (NSDictionary *pointer in [PointerDevice slavePointersInXinputList:[self runXinput:@[@"list"]]]) {
+        NSString *deviceID = [pointer objectForKey:@"id"];
+        NSString *name = [pointer objectForKey:@"name"];
+        NSDictionary *props = [PointerDevice propertiesFromXinputListProps:
+            [self runXinput:@[@"list-props", deviceID]]];
+        PointerDeviceKind kind = [PointerDevice kindForName:name properties:props];
+        if (kind == PointerDeviceKindNone) {
             continue;
         }
-        if (self.touchpadName && [name isEqualToString:self.touchpadName]) continue;
-        if (self.trackpointName && [name isEqualToString:self.trackpointName]) continue;
-        if (self.mouseName == nil) {
-            self.mouseName = name;
-        }
+        [devices addObject:[[PointerDevice alloc] initWithID:deviceID name:name kind:kind
+            properties:props unitsPerMM:[[self class] unitsPerMMForKind:kind properties:props]]];
     }
+    self.devices = devices;
 }
 
-- (NSDictionary *)propertiesForDevice:(NSString *)device
+- (NSArray *)devicesOfKind:(PointerDeviceKind)kind
 {
-    if (!self.xinputPath || !device) {
-        return @{};
-    }
-    NSString *output = [self runXinput:@[@"list-props", device]];
-    // xinput list-props output format:
-    //   libprop Name (ID): value...
-    NSMutableDictionary *result = [NSMutableDictionary dictionary];
-    NSArray *lines = [output componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-    for (NSString *line in lines) {
-        NSScanner *scanner = [NSScanner scannerWithString:line];
-        NSString *propName = nil;
-        if (![scanner scanUpToString:@"(" intoString:&propName]) {
-            continue;
-        }
-        propName = [propName stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if ([propName length] == 0) {
-            continue;
-        }
-        // skip the parenthesized ID
-        [scanner scanUpToString:@"):" intoString:nil];
-        if (![scanner scanString:@"):" intoString:nil]) {
-            continue;
-        }
-        NSString *value = nil;
-        [scanner scanUpToString:@"\n" intoString:&value];
-        if (value) {
-            value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        }
-        if ([value length] > 0) {
-            [result setObject:value forKey:propName];
+    NSMutableArray *result = [NSMutableArray array];
+    for (PointerDevice *d in self.devices) {
+        if (d.kind == kind) {
+            [result addObject:d];
         }
     }
     return result;
 }
 
-+ (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name
++ (double)unitsPerMMForKind:(PointerDeviceKind)kind properties:(NSDictionary *)properties
 {
-    return [props objectForKey:[@"libinput " stringByAppendingString:name]];
-}
-
-+ (double)unitsPerMMForProperties:(NSDictionary *)props
-{
+    if (kind != PointerDeviceKindTouchpad) {
+        return AccelerationMouseUnitsPerMM;
+    }
 #if defined(__linux__) || defined(__FreeBSD__)
-    NSString *node = [[props objectForKey:@"Device Node"]
+    NSString *node = [[properties objectForKey:@"Device Node"]
         stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\""]];
     if ([node length] == 0) {
         return 0.0;
@@ -211,138 +148,118 @@ static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
     close(fd);
     return (rc == 0 && abs.resolution > 0) ? abs.resolution : 0.0;
 #else
-    (void)props;
+    (void)properties;
     return 0.0;
 #endif
 }
 
-/* A device class this machine does not have is not a failure: the setting
- * simply has nothing to act on. */
-- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device values:(NSArray *)values
+#pragma mark - Setting properties
+
+- (BOOL)setProperty:(NSString *)prop onDevice:(PointerDevice *)device values:(NSArray *)values
 {
-    if (!device) {
-        return YES;
+    NSTask *task = [self xinputTask:[@[@"set-prop", device.deviceID, prop]
+                                        arrayByAddingObjectsFromArray:values]];
+    [task launch];
+    [task waitUntilExit];
+    if ([task terminationStatus] != 0) {
+        NSLog(@"MouseBackend: xinput set-prop %@ '%@' %@ failed", device.deviceID, prop,
+              [values componentsJoinedByString:@" "]);
+        return NO;
     }
+    return YES;
+}
+
+/* Each device is set even if an earlier one failed, so one broken device
+   does not hold back the others.  A device where want() is NO is skipped;
+   no xinput is a failure, an absent class is not. */
+- (BOOL)forDevicesOfKind:(PointerDeviceKind)kind
+                    want:(BOOL (^)(PointerDevice *device))want
+                     set:(BOOL (^)(PointerDevice *device))set
+{
     if (!self.xinputPath) {
         return NO;
     }
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:self.xinputPath];
-    [task setArguments:[@[@"set-prop", device, prop] arrayByAddingObjectsFromArray:values]];
-    [task launch];
-    [task waitUntilExit];
-    return [task terminationStatus] == 0;
-}
-
-- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value
-{
-    return [self setProperty:prop forDevice:device values:@[value]];
-}
-
-- (BOOL)setBoolProperty:(NSString *)prop forDevice:(NSString *)device value:(BOOL)value
-{
-    return [self setProperty:prop forDevice:device value:(value ? @"1" : @"0")];
-}
-
-/* Each xinput call runs even if an earlier one failed, so one broken device
- * does not hold back the others. */
-- (BOOL)setBoolPropertyOnAllDevices:(NSString *)prop value:(BOOL)value
-{
-    BOOL ok = [self setBoolProperty:prop forDevice:self.touchpadName value:value];
-    ok = [self setBoolProperty:prop forDevice:self.mouseName value:value] && ok;
-    ok = [self setBoolProperty:prop forDevice:self.trackpointName value:value] && ok;
-    return ok && self.xinputPath != nil;
-}
-
-- (NSString *)speedString:(float)speed
-{
-    return [NSString stringWithFormat:@"%.3f", speed];
-}
-
-- (BOOL)applyNaturalScrolling:(BOOL)enabled
-{
-    return [self setBoolPropertyOnAllDevices:kNaturalScrollingProperty value:enabled];
-}
-
-- (BOOL)applyLeftHanded:(BOOL)enabled
-{
-    return [self setBoolPropertyOnAllDevices:kLeftHandedProperty value:enabled];
-}
-
-/* The touchpad has its own speed, and libinput ignores it anyway while the
- * custom acceleration profile is on. */
-- (BOOL)applyMouseSpeed:(float)speed
-{
-    return [self setProperty:kAccelSpeedProperty forDevice:self.mouseName
-                       value:[self speedString:speed]] && self.xinputPath != nil;
-}
-
-- (BOOL)applyTrackpadSpeed:(float)speed
-{
-    return [self setProperty:kAccelSpeedProperty forDevice:self.touchpadName
-                       value:[self speedString:speed]] && self.xinputPath != nil;
-}
-
-- (BOOL)applyTrackpointSpeed:(float)speed
-{
-    return [self setProperty:kAccelSpeedProperty forDevice:self.trackpointName
-                       value:[self speedString:speed]] && self.xinputPath != nil;
-}
-
-- (BOOL)applyTapToClick:(BOOL)enabled
-{
-    return [self setBoolProperty:@"libinput Tapping Enabled"
-                       forDevice:self.touchpadName value:enabled] && self.xinputPath != nil;
-}
-
-- (BOOL)applyTwoFingerRightClick:(BOOL)twoFinger threeFingerMiddleClick:(BOOL)threeFinger
-{
-    if (!self.touchpadName) {
-        return self.xinputPath != nil;
+    BOOL ok = YES;
+    for (PointerDevice *d in [self devicesOfKind:kind]) {
+        if (want == nil || want(d)) {
+            ok = set(d) && ok;
+        }
     }
-    /* libinput's tap mapping only chooses between left-right-middle (1, 0)
-       and left-middle-right (0, 0); three-finger middle click on its own is
-       the one combination that needs the second. */
-    NSString *mapVal = (threeFinger && !twoFinger) ? @"0, 0" : @"1, 0";
-    BOOL ok = [self setProperty:@"libinput Tapping Button Mapping"
-                      forDevice:self.touchpadName value:mapVal];
-    ok = [self setProperty:@"libinput Clickfinger Button Mapping"
-                 forDevice:self.touchpadName value:@"1, 0"] && ok;
     return ok;
 }
 
-- (BOOL)applyDisableWhileTyping:(BOOL)enabled
+- (BOOL)setProperty:(NSString *)prop values:(NSArray *)values toKind:(PointerDeviceKind)kind
 {
-    return [self setBoolProperty:@"libinput Disable While Typing Enabled"
-                       forDevice:self.touchpadName value:enabled] && self.xinputPath != nil;
+    return [self forDevicesOfKind:kind want:nil set:^BOOL(PointerDevice *d) {
+        return [self setProperty:prop onDevice:d values:values];
+    }];
 }
 
-
-- (BOOL)applyTrackpadAccelProfile:(NSString *)profile
-                     customPoints:(NSArray *)points
-                             step:(double)step
+static NSArray *BoolValue(BOOL value)
 {
-    if (!self.touchpadName) {
-        return self.xinputPath != nil;
+    return @[value ? @"1" : @"0"];
+}
+
+- (BOOL)applySpeed:(float)speed toKind:(PointerDeviceKind)kind
+{
+    return [self setProperty:@"libinput Accel Speed"
+                      values:@[[NSString stringWithFormat:@"%.3f", speed]] toKind:kind];
+}
+
+- (BOOL)applyNaturalScrolling:(BOOL)enabled toKind:(PointerDeviceKind)kind
+{
+    return [self setProperty:@"libinput Natural Scrolling Enabled" values:BoolValue(enabled) toKind:kind];
+}
+
+- (BOOL)applyLeftHanded:(BOOL)enabled toKind:(PointerDeviceKind)kind
+{
+    return [self setProperty:@"libinput Left Handed Enabled" values:BoolValue(enabled) toKind:kind];
+}
+
+- (BOOL)applyScrollSpeed:(double)speed toKind:(PointerDeviceKind)kind
+{
+    NSString *prop = @"libinput Scrolling Pixel Distance";
+    NSArray *values = @[[NSString stringWithFormat:@"%d", [[self class] scrollPixelDistanceForSpeed:speed]]];
+    return [self forDevicesOfKind:kind
+                             want:^BOOL(PointerDevice *d) { return [d.properties objectForKey:prop] != nil; }
+                              set:^BOOL(PointerDevice *d) { return [self setProperty:prop onDevice:d values:values]; }];
+}
+
++ (int)scrollPixelDistanceForSpeed:(double)speed
+{
+    if (speed <= 0.0) {
+        return kMaxScrollPixelDistance;
     }
-    /* Indexed like libinput's "Accel Profile Enabled" flags: adaptive, flat,
-       custom. */
+    long distance = lround(kDefaultScrollPixelDistance / speed);
+    return (int)MAX(kMinScrollPixelDistance, MIN(kMaxScrollPixelDistance, distance));
+}
+
++ (double)scrollSpeedForPixelDistance:(int)distance
+{
+    return kDefaultScrollPixelDistance / MAX(kMinScrollPixelDistance, distance);
+}
+
++ (double)minimumScrollSpeed
+{
+    return kMinScrollSpeed;
+}
+
++ (double)maximumScrollSpeed
+{
+    return kDefaultScrollPixelDistance / kMinScrollPixelDistance;
+}
+
+- (BOOL)applyAccelProfile:(NSString *)profile
+                    curve:(AccelerationCurve)curve
+                   toKind:(PointerDeviceKind)kind
+{
+    /* Indexed like libinput's "Accel Profile Enabled" flags: adaptive,
+       flat, custom. */
     NSArray *flags;
+    BOOL custom = NO;
     if ([profile isEqualToString:@"custom"]) {
-        NSMutableArray *values = [NSMutableArray array];
-        for (NSNumber *point in points) {
-            [values addObject:[NSString stringWithFormat:@"%.4f", [point doubleValue]]];
-        }
-        /* The points go first so that enabling the profile never runs on
-           stale ones. */
-        if (![self setProperty:@"libinput Accel Custom Motion Points"
-                     forDevice:self.touchpadName values:values]
-            || ![self setProperty:@"libinput Accel Custom Motion Step"
-                        forDevice:self.touchpadName
-                            value:[NSString stringWithFormat:@"%.4f", step]]) {
-            return NO;
-        }
         flags = @[@"0", @"0", @"1"];
+        custom = YES;
     } else if ([profile isEqualToString:@"flat"]) {
         flags = @[@"0", @"1", @"0"];
     } else if ([profile isEqualToString:@"system"]) {
@@ -350,8 +267,59 @@ static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
     } else {
         return NO;
     }
-    return [self setProperty:@"libinput Accel Profile Enabled"
-                   forDevice:self.touchpadName values:flags];
+    return [self forDevicesOfKind:kind want:nil set:^BOOL(PointerDevice *d) {
+        if (custom) {
+            if (d.unitsPerMM <= 0.0) {
+                NSLog(@"MouseBackend: no resolution for %@, custom acceleration refused", d.name);
+                return NO;
+            }
+            NSMutableArray *points = [NSMutableArray array];
+            for (NSNumber *p in AccelerationCurvePoints(kind, curve, d.unitsPerMM)) {
+                [points addObject:[NSString stringWithFormat:@"%.6f", [p doubleValue]]];
+            }
+            NSString *step = [NSString stringWithFormat:@"%.6f",
+                AccelerationCurvePointStep(kind, d.unitsPerMM)];
+            /* The points go first so that enabling the profile never runs
+               on stale ones. */
+            if (![self setProperty:@"libinput Accel Custom Motion Points" onDevice:d values:points]
+                || ![self setProperty:@"libinput Accel Custom Motion Step" onDevice:d values:@[step]]) {
+                return NO;
+            }
+        }
+        return [self setProperty:@"libinput Accel Profile Enabled" onDevice:d values:flags];
+    }];
+}
+
+#pragma mark - Touchpad only
+
+- (BOOL)applyTapToClick:(BOOL)enabled
+{
+    return [self setProperty:@"libinput Tapping Enabled" values:BoolValue(enabled)
+                      toKind:PointerDeviceKindTouchpad];
+}
+
+- (BOOL)applyTwoFingerRightClick:(BOOL)twoFinger threeFingerMiddleClick:(BOOL)threeFinger
+{
+    /* libinput has exactly two finger-to-button maps, left-right-middle
+       (1, 0) and left-middle-right (0, 1); two-finger right click and
+       three-finger middle click are both the first, so the second only
+       follows when both are off.  Clicking with fingers on a clickpad
+       follows the same map where the driver has it. */
+    NSArray *map = (twoFinger || threeFinger) ? @[@"1", @"0"] : @[@"0", @"1"];
+    NSString *clickfinger = @"libinput Clickfinger Button Mapping Enabled";
+    return [self forDevicesOfKind:PointerDeviceKindTouchpad want:nil set:^BOOL(PointerDevice *d) {
+        BOOL ok = [self setProperty:@"libinput Tapping Button Mapping Enabled" onDevice:d values:map];
+        if ([d.properties objectForKey:clickfinger] != nil) {
+            ok = [self setProperty:clickfinger onDevice:d values:map] && ok;
+        }
+        return ok;
+    }];
+}
+
+- (BOOL)applyDisableWhileTyping:(BOOL)enabled
+{
+    return [self setProperty:@"libinput Disable While Typing Enabled" values:BoolValue(enabled)
+                      toKind:PointerDeviceKindTouchpad];
 }
 
 @end

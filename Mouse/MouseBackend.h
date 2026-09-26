@@ -5,6 +5,8 @@
  */
 
 #import <Foundation/Foundation.h>
+#import "PointerDevice.h"
+#import "AccelerationCurve.h"
 
 /* The xinput side of the Mouse preference pane, shared with
  * gershwin-apply-settings so the login-time re-apply drives exactly the
@@ -12,49 +14,59 @@
  * (Libraries/MouseBackend) under ARC; everything handed out is autoreleased
  * from the caller's point of view.
  *
+ * Settings are made per device class and go to every device of that class,
+ * because they are stored per class and re-applied per class at login.
  * The apply methods return NO when xinput is missing or any xinput call for
- * a detected device failed; a device class that is not present is skipped
- * and does not count as a failure. */
+ * a detected device failed; a class with no device present is skipped and
+ * does not count as a failure. */
 @interface MouseBackend : NSObject
 
 @property (nonatomic, readonly, copy) NSString *xinputPath;
-@property (nonatomic, readonly, copy) NSString *touchpadName;
-@property (nonatomic, readonly, copy) NSString *mouseName;
-@property (nonatomic, readonly, copy) NSString *trackpointName;
+/* Every classified pointer found by the last -refresh. */
+@property (nonatomic, readonly, copy) NSArray *devices;
 
-/* Looks xinput up again if it was not found yet, then re-reads the device
- * list, because pointing devices come and go (USB, Bluetooth). */
+/* Uses the xinput found on PATH (then the usual install locations). */
+- (instancetype)init;
+/* path nil means there is no xinput. */
+- (instancetype)initWithXinputPath:(NSString *)path;
+
+/* Re-reads and re-classifies the device list, because pointing devices
+ * come and go (USB, Bluetooth).  Runs one xinput call per slave pointer and
+ * reads the touchpads' evdev nodes, so the pane calls it off the main
+ * thread. */
 - (void)refresh;
 
-- (NSDictionary *)propertiesForDevice:(NSString *)device;
+- (NSArray *)devicesOfKind:(PointerDeviceKind)kind;
 
-/* Takes the name without the "libinput " prefix, e.g. "Accel Speed".  The
- * match is exact because a fragment also matches the driver's read-only
- * "<name> Default" twin and would report the default, not the current
- * value. */
-+ (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name;
+- (BOOL)applySpeed:(float)speed toKind:(PointerDeviceKind)kind;
+- (BOOL)applyNaturalScrolling:(BOOL)enabled toKind:(PointerDeviceKind)kind;
+- (BOOL)applyLeftHanded:(BOOL)enabled toKind:(PointerDeviceKind)kind;
+/* Only devices with a scroll distance (two-finger and button scrolling)
+ * take it; a wheel scrolls in detents libinput does not scale. */
+- (BOOL)applyScrollSpeed:(double)speed toKind:(PointerDeviceKind)kind;
+/* profile is "system" (libinput's adaptive profile), "flat" or "custom";
+ * the curve only matters for "custom" and is converted for each device
+ * with its own resolution. */
+- (BOOL)applyAccelProfile:(NSString *)profile
+                    curve:(AccelerationCurve)curve
+                   toKind:(PointerDeviceKind)kind;
 
-/* libinput feeds the custom acceleration profile raw touchpad units, and X
- * does not expose the resolution needed to convert a curve to them; only the
- * evdev node named in the touchpad's "Device Node" property does.  Returns 0
- * where it cannot be read. */
-+ (double)unitsPerMMForProperties:(NSDictionary *)props;
-
-- (BOOL)applyNaturalScrolling:(BOOL)enabled;
-- (BOOL)applyLeftHanded:(BOOL)enabled;
-- (BOOL)applyMouseSpeed:(float)speed;
-- (BOOL)applyTrackpadSpeed:(float)speed;
-- (BOOL)applyTrackpointSpeed:(float)speed;
 - (BOOL)applyTapToClick:(BOOL)enabled;
 - (BOOL)applyTwoFingerRightClick:(BOOL)twoFinger threeFingerMiddleClick:(BOOL)threeFinger;
 - (BOOL)applyDisableWhileTyping:(BOOL)enabled;
 
-/* profile is one of the curveProfile values the pane stores: "system"
- * (libinput's adaptive profile), "flat" or "custom".  points and step only
- * matter for "custom"; they are in the touchpad's own units (see
- * +unitsPerMMForProperties:). */
-- (BOOL)applyTrackpadAccelProfile:(NSString *)profile
-                     customPoints:(NSArray *)points
-                             step:(double)step;
+/* Scrolling speed as the pane shows it (1 = libinput's 15 px per scroll
+ * unit, larger is faster) to and from "libinput Scrolling Pixel Distance",
+ * clamped to the 10..1000 px the driver accepts. */
++ (int)scrollPixelDistanceForSpeed:(double)speed;
++ (double)scrollSpeedForPixelDistance:(int)distance;
++ (double)minimumScrollSpeed;
++ (double)maximumScrollSpeed;
+
+/* libinput feeds the custom acceleration profile raw device units, and X
+ * does not expose a touchpad's resolution; only the evdev node named in its
+ * "Device Node" property does.  Mice use AccelerationMouseUnitsPerMM.
+ * Returns 0 where it cannot be read. */
++ (double)unitsPerMMForKind:(PointerDeviceKind)kind properties:(NSDictionary *)properties;
 
 @end

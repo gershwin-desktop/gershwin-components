@@ -7,8 +7,10 @@ ADDITIONAL_INCLUDE_DIRS += -I..
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
 
 MB_LIBDIR = $(CURDIR)/../../Libraries/MouseBackend/obj
-ADDITIONAL_LIB_DIRS += -L$(MB_LIBDIR)
-# GNUstep.sh puts the installed libraries on LD_LIBRARY_PATH, which beats a
-# DT_RUNPATH but not a DT_RPATH, so the old tag keeps the tests on this tree.
-ADDITIONAL_LDFLAGS += -Wl,--disable-new-dtags -Wl,-rpath,$(MB_LIBDIR)
+# gnustep-make puts the installed library directory ahead of
+# ADDITIONAL_LIB_DIRS, so an installed older libMouseBackend would win; the
+# flags here come first.  GNUstep.sh puts the installed libraries on
+# LD_LIBRARY_PATH, which beats a DT_RUNPATH but not a DT_RPATH, so the old
+# tag keeps the tests on this tree at run time too.
+ADDITIONAL_LDFLAGS += -L$(MB_LIBDIR) -Wl,--disable-new-dtags -Wl,-rpath,$(MB_LIBDIR)
 ADDITIONAL_TOOL_LIBS += -lMouseBackend
