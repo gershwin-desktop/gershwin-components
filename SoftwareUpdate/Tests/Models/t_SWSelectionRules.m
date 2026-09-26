@@ -35,6 +35,33 @@ int main(void)
          "an unreachable repository is blocked even with a passed build");
   }
 
+  /* --- force (Control-click) override of a refused Install checkbox --- */
+  {
+    SWRepository *running = makeRepo(SWBuildStatusRunning, YES);
+    SWRepository *failed = makeRepo(SWBuildStatusFailed, YES);
+    SWRepository *unreachable = makeRepo(SWBuildStatusPassed, NO);
+    SWRepository *passed = makeRepo(SWBuildStatusPassed, YES);
+    SWRepository *pinned = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"x", @"URL": @"u", @"Pin": @"abc1234"}];
+
+    PASS(![SWSelectionRules canToggleRepository:running force:NO],
+         "a running build refuses a plain click");
+    PASS([SWSelectionRules canToggleRepository:running force:YES],
+         "force toggles a repository whose build is still in progress");
+    PASS([SWSelectionRules canToggleRepository:failed force:YES],
+         "force toggles a repository whose build failed");
+    PASS([SWSelectionRules canToggleRepository:unreachable force:YES],
+         "force toggles an unreachable repository");
+    PASS([SWSelectionRules canToggleRepository:passed force:NO],
+         "a passed build toggles without force");
+    PASS([SWSelectionRules canToggleRepository:passed force:YES],
+         "force changes nothing for an unblocked repository");
+    PASS(![SWSelectionRules canToggleRepository:pinned force:NO],
+         "a pinned repository refuses a plain click");
+    PASS(![SWSelectionRules canToggleRepository:pinned force:YES],
+         "force does not release a pin from gershwin-developer");
+  }
+
   /* --- applying default selection across a list --- */
   {
     SWRepository *passed = makeRepo(SWBuildStatusPassed, YES);

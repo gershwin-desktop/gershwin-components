@@ -33,4 +33,15 @@
   }
 }
 
++ (BOOL)canToggleRepository:(SWRepository *)repository force:(BOOL)force
+{
+  if ([repository isPinned]) {
+    return NO;
+  }
+  if (force) {
+    return YES;
+  }
+  return [self blockedReasonForRepository:repository] == nil;
+}
+
 @end

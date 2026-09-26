@@ -36,6 +36,39 @@ static const float kBottomBarHeight =
   NSButton *_quitButton;
   NSButton *_updateButton;
 }
+- (void)forceToggleInstallForRow:(NSInteger)row;
+@end
+
+// Table view that lets Control-click force the Install checkbox of a row the
+// selection rules normally refuse. A disabled checkbox cell - which is what a
+// blocked row gets from -tableView:willDisplayCell:... - never tracks and
+// never sends its action, so the forced path below would be unreachable from
+// the UI for exactly the rows it exists for. Control-click therefore never
+// reaches NSTableView's own -mouseDown:, cell tracking and row selection
+// included; the controller re-selects the row itself when it toggles.
+@interface SWForceToggleTableView : NSTableView
+@property (nonatomic, weak) SWMainWindowController *toggleController;
+@end
+
+@implementation SWForceToggleTableView
+
+- (void)mouseDown:(NSEvent *)event
+{
+  if ([event modifierFlags] & NSControlKeyMask) {
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSInteger column = [self columnAtPoint:point];
+    if (column >= 0 && column < (NSInteger)[[self tableColumns] count]
+        && [[[[self tableColumns] objectAtIndex:column] identifier] isEqualToString:@"install"]) {
+      NSInteger row = [self rowAtPoint:point];
+      if (row >= 0) {
+        [_toggleController forceToggleInstallForRow:row];
+        return;
+      }
+    }
+  }
+  [super mouseDown:event];
+}
+
 @end
 
 @implementation SWMainWindowController
@@ -217,7 +250,8 @@ static const float kBottomBarHeight =
   [tableScroll setBorderType:NSBezelBorder];
   [tableScroll setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
 
-  _tableView = [[NSTableView alloc] initWithFrame:[[tableScroll contentView] bounds]];
+  _tableView = [[SWForceToggleTableView alloc] initWithFrame:[[tableScroll contentView] bounds]];
+  [(SWForceToggleTableView *)_tableView setToggleController:self];
   [_tableView setDataSource:self];
   [_tableView setDelegate:self];
   [_tableView setUsesAlternatingRowBackgroundColors:YES];
@@ -355,17 +389,31 @@ static const float kBottomBarHeight =
 
 - (void)installCheckboxClicked:(id)sender
 {
-  NSInteger row = [_tableView clickedRow];
-  if (row < 0 || (NSUInteger)row >= [_repositories count]) return;
-  SWRepository *repo = [_repositories objectAtIndex:row];
-  if ([SWSelectionRules blockedReasonForRepository:repo] != nil) {
-    [_tableView reloadData];
-    return;
-  }
+  [self toggleInstallForRow:[_tableView clickedRow] force:NO];
+}
 
-  if ([repo isPinned]) {
-    // Pinned libraries mirror gershwin-developer's own row and cannot be
-    // toggled independently - the pins belong to that version of it.
+// Entry point from -[SWForceToggleTableView mouseDown:], the Control-click
+// override for rows the selection rules refuse.
+- (void)forceToggleInstallForRow:(NSInteger)row
+{
+  if (row < 0 || (NSUInteger)row >= [_repositories count]) return;
+  // Mirror a plain click's own row selection, so the details pane shows the
+  // warning the user is about to override.
+  if ([_tableView selectedRow] != row) {
+    [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+            byExtendingSelection:NO];
+  }
+  [self toggleInstallForRow:row force:YES];
+}
+
+- (void)toggleInstallForRow:(NSInteger)row force:(BOOL)force
+{
+  if (row < 0 || (NSUInteger)row >= [_repositories count]) return;
+  SWRepository *repo = [_repositories objectAtIndex:(NSUInteger)row];
+
+  if (![SWSelectionRules canToggleRepository:repo force:force]) {
+    // Refused: a plain click on a blocked (build running/failed, unchecked)
+    // or pinned row. Put the cell back the way the rules say it must be.
     [_tableView reloadData];
     return;
   }
