@@ -28,18 +28,33 @@
 
 - (NSDictionary *)propertiesForDevice:(NSString *)device;
 
-/* xinput list-props names carry the driver prefix and the property id, so
- * callers match on a fragment such as "Accel Speed". */
+/* Takes the name without the "libinput " prefix, e.g. "Accel Speed".  The
+ * match is exact because a fragment also matches the driver's read-only
+ * "<name> Default" twin and would report the default, not the current
+ * value. */
 + (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name;
+
+/* libinput feeds the custom acceleration profile raw touchpad units, and X
+ * does not expose the resolution needed to convert a curve to them; only the
+ * evdev node named in the touchpad's "Device Node" property does.  Returns 0
+ * where it cannot be read. */
++ (double)unitsPerMMForProperties:(NSDictionary *)props;
 
 - (BOOL)applyNaturalScrolling:(BOOL)enabled;
 - (BOOL)applyLeftHanded:(BOOL)enabled;
-/* The mouse slider drives the touchpad too, as the pane always has. */
 - (BOOL)applyMouseSpeed:(float)speed;
 - (BOOL)applyTrackpadSpeed:(float)speed;
 - (BOOL)applyTrackpointSpeed:(float)speed;
 - (BOOL)applyTapToClick:(BOOL)enabled;
 - (BOOL)applyTwoFingerRightClick:(BOOL)twoFinger threeFingerMiddleClick:(BOOL)threeFinger;
 - (BOOL)applyDisableWhileTyping:(BOOL)enabled;
+
+/* profile is one of the curveProfile values the pane stores: "system"
+ * (libinput's adaptive profile), "flat" or "custom".  points and step only
+ * matter for "custom"; they are in the touchpad's own units (see
+ * +unitsPerMMForProperties:). */
+- (BOOL)applyTrackpadAccelProfile:(NSString *)profile
+                     customPoints:(NSArray *)points
+                             step:(double)step;
 
 @end

@@ -6,6 +6,15 @@
 
 #import "MouseBackend.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#if defined(__linux__)
+#include <linux/input.h>
+#elif defined(__FreeBSD__)
+#include <dev/evdev/input.h>
+#endif
+
 static NSString *const kNaturalScrollingProperty = @"libinput Natural Scrolling Enabled";
 static NSString *const kLeftHandedProperty = @"libinput Left Handed Enabled";
 static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
@@ -182,17 +191,34 @@ static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
 
 + (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name
 {
-    for (NSString *key in props) {
-        if ([key rangeOfString:name].location != NSNotFound) {
-            return [props objectForKey:key];
-        }
+    return [props objectForKey:[@"libinput " stringByAppendingString:name]];
+}
+
++ (double)unitsPerMMForProperties:(NSDictionary *)props
+{
+#if defined(__linux__) || defined(__FreeBSD__)
+    NSString *node = [[props objectForKey:@"Device Node"]
+        stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\""]];
+    if ([node length] == 0) {
+        return 0.0;
     }
-    return nil;
+    struct input_absinfo abs;
+    int fd = open([node fileSystemRepresentation], O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
+        return 0.0;
+    }
+    int rc = ioctl(fd, EVIOCGABS(ABS_X), &abs);
+    close(fd);
+    return (rc == 0 && abs.resolution > 0) ? abs.resolution : 0.0;
+#else
+    (void)props;
+    return 0.0;
+#endif
 }
 
 /* A device class this machine does not have is not a failure: the setting
  * simply has nothing to act on. */
-- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value
+- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device values:(NSArray *)values
 {
     if (!device) {
         return YES;
@@ -202,10 +228,15 @@ static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
     }
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:self.xinputPath];
-    [task setArguments:@[@"set-prop", device, prop, value]];
+    [task setArguments:[@[@"set-prop", device, prop] arrayByAddingObjectsFromArray:values]];
     [task launch];
     [task waitUntilExit];
     return [task terminationStatus] == 0;
+}
+
+- (BOOL)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value
+{
+    return [self setProperty:prop forDevice:device values:@[value]];
 }
 
 - (BOOL)setBoolProperty:(NSString *)prop forDevice:(NSString *)device value:(BOOL)value
@@ -238,13 +269,12 @@ static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
     return [self setBoolPropertyOnAllDevices:kLeftHandedProperty value:enabled];
 }
 
+/* The touchpad has its own speed, and libinput ignores it anyway while the
+ * custom acceleration profile is on. */
 - (BOOL)applyMouseSpeed:(float)speed
 {
-    BOOL ok = [self setProperty:kAccelSpeedProperty forDevice:self.touchpadName
-                          value:[self speedString:speed]];
-    ok = [self setProperty:kAccelSpeedProperty forDevice:self.mouseName
-                     value:[self speedString:speed]] && ok;
-    return ok && self.xinputPath != nil;
+    return [self setProperty:kAccelSpeedProperty forDevice:self.mouseName
+                       value:[self speedString:speed]] && self.xinputPath != nil;
 }
 
 - (BOOL)applyTrackpadSpeed:(float)speed
@@ -285,6 +315,43 @@ static NSString *const kAccelSpeedProperty = @"libinput Accel Speed";
 {
     return [self setBoolProperty:@"libinput Disable While Typing Enabled"
                        forDevice:self.touchpadName value:enabled] && self.xinputPath != nil;
+}
+
+
+- (BOOL)applyTrackpadAccelProfile:(NSString *)profile
+                     customPoints:(NSArray *)points
+                             step:(double)step
+{
+    if (!self.touchpadName) {
+        return self.xinputPath != nil;
+    }
+    /* Indexed like libinput's "Accel Profile Enabled" flags: adaptive, flat,
+       custom. */
+    NSArray *flags;
+    if ([profile isEqualToString:@"custom"]) {
+        NSMutableArray *values = [NSMutableArray array];
+        for (NSNumber *point in points) {
+            [values addObject:[NSString stringWithFormat:@"%.4f", [point doubleValue]]];
+        }
+        /* The points go first so that enabling the profile never runs on
+           stale ones. */
+        if (![self setProperty:@"libinput Accel Custom Motion Points"
+                     forDevice:self.touchpadName values:values]
+            || ![self setProperty:@"libinput Accel Custom Motion Step"
+                        forDevice:self.touchpadName
+                            value:[NSString stringWithFormat:@"%.4f", step]]) {
+            return NO;
+        }
+        flags = @[@"0", @"0", @"1"];
+    } else if ([profile isEqualToString:@"flat"]) {
+        flags = @[@"0", @"1", @"0"];
+    } else if ([profile isEqualToString:@"system"]) {
+        flags = @[@"1", @"0", @"0"];
+    } else {
+        return NO;
+    }
+    return [self setProperty:@"libinput Accel Profile Enabled"
+                   forDevice:self.touchpadName values:flags];
 }
 
 @end
