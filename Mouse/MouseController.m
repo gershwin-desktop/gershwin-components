@@ -5,19 +5,13 @@
  */
 
 #import "MouseController.h"
+#import "MouseBackend.h"
 #import "AppearanceMetrics.h"
 #import <dispatch/dispatch.h>
 
 static NSString *const kMouseDomain = @"MousePreferences";
 
 @interface MouseController ()
-- (NSString *)findXinput;
-- (NSArray *)xinputDeviceNamesMatching:(NSString *)pattern;
-- (void)enumerateDevices;
-- (NSDictionary *)getPropertiesForDevice:(NSString *)device;
-- (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name;
-- (void)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value;
-- (void)setBoolProperty:(NSString *)prop forDevice:(NSString *)device value:(BOOL)value;
 - (void)applyAllSettings;
 - (void)updateStatus:(NSString *)message;
 
@@ -73,10 +67,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
     self = [super init];
     if (self) {
         isRefreshing = YES;
-        xinputPath = nil;
-        touchpadName = nil;
-        mouseName = nil;
-        trackpointName = nil;
+        backend = [[MouseBackend alloc] init];
     }
     return self;
 }
@@ -100,215 +91,8 @@ static NSString *const kMouseDomain = @"MousePreferences";
     [disableWhileTypingCheckbox release];
     [leftHandedCheckbox release];
     [statusLabel release];
-    [xinputPath release];
-    [touchpadName release];
-    [mouseName release];
-    [trackpointName release];
+    [backend release];
     [super dealloc];
-}
-
-- (NSString *)findXinput
-{
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *candidates = [NSArray arrayWithObjects:
-        @"/usr/bin/xinput",
-        @"/usr/local/bin/xinput",
-        @"/opt/local/bin/xinput",
-        @"/opt/bin/xinput",
-        @"/usr/pkg/bin/xinput",
-        @"/usr/X11R6/bin/xinput",
-        nil];
-    for (NSString *path in candidates) {
-        if ([fm isExecutableFileAtPath:path]) {
-            return path;
-        }
-    }
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:[NSArray arrayWithObject:@"xinput"]];
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task launch];
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
-    [task release];
-    NSString *trim = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([trim length] > 0 && [fm isExecutableFileAtPath:trim]) {
-        return trim;
-    }
-    return nil;
-}
-
-- (BOOL)matchesAny:(NSString *)name patterns:(NSArray *)patterns
-{
-    for (NSString *p in patterns) {
-        if ([name rangeOfString:p].location != NSNotFound) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-- (NSArray *)xinputDeviceNamesMatching:(NSString *)pattern
-{
-    if (!xinputPath) {
-        return [NSArray array];
-    }
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:xinputPath];
-    [task setArguments:[NSArray arrayWithObjects:@"list", @"--name-only", nil]];
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-
-    // Force C locale for consistent tool output
-    NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
-    [env setObject:@"C" forKey:@"LC_ALL"];
-    [task setEnvironment:env];
-    [env release];
-
-    [task launch];
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
-    [task release];
-    NSMutableArray *result = [NSMutableArray array];
-    NSArray *lines = [output componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-    for (NSString *line in lines) {
-        if ([line rangeOfString:pattern].location != NSNotFound) {
-            [result addObject:[[line copy] autorelease]];
-        }
-    }
-    return result;
-}
-
-- (void)enumerateDevices
-{
-    [touchpadName release];
-    [mouseName release];
-    [trackpointName release];
-    touchpadName = nil;
-    mouseName = nil;
-    trackpointName = nil;
-
-    // Check for touchpad using multiple patterns
-    NSArray *tpNames = [self xinputDeviceNamesMatching:@"Touchpad"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"Synaptics"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"ELAN"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"Alps"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"bcm5974"];
-    if ([tpNames count] == 0) tpNames = [self xinputDeviceNamesMatching:@"appletouch"];
-    if ([tpNames count] > 0) {
-        touchpadName = [[tpNames objectAtIndex:0] copy];
-    }
-
-    // TrackPoint
-    NSArray *tppNames = [self xinputDeviceNamesMatching:@"TrackPoint"];
-    if ([tppNames count] == 0) tppNames = [self xinputDeviceNamesMatching:@"Trackpoint"];
-    if ([tppNames count] > 0) {
-        trackpointName = [[tppNames objectAtIndex:0] copy];
-    }
-
-    // Mouse: first non-excluded name that isn't already classified
-    NSArray *all = [self xinputDeviceNamesMatching:@""];
-    for (NSString *name in all) {
-        if ([self matchesAny:name patterns:@[
-            @"XTEST", @"Virtual", @"virtual",
-            @"keyboard", @"Keyboard", @"Button",
-            @"HID ", @"HID/", @"Power Button",
-            @"Sleep Button", @"Lid Switch", @"Video Bus",
-            @"ums", @"wsmouse", @"sysmouse", @"pms",
-        ]]) {
-            continue;
-        }
-        if (touchpadName && [name isEqualToString:touchpadName]) continue;
-        if (trackpointName && [name isEqualToString:trackpointName]) continue;
-        if (mouseName == nil) {
-            mouseName = [name copy];
-        }
-    }
-}
-
-- (NSDictionary *)getPropertiesForDevice:(NSString *)device
-{
-    if (!xinputPath || !device) {
-        return [NSDictionary dictionary];
-    }
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:xinputPath];
-    [task setArguments:[NSArray arrayWithObjects:@"list-props", device, nil]];
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-
-    // Force C locale for consistent tool output
-    NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
-    [env setObject:@"C" forKey:@"LC_ALL"];
-    [task setEnvironment:env];
-    [env release];
-
-    [task launch];
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
-    [task release];
-    // xinput list-props output format:
-    //   libprop Name (ID): value...
-    NSMutableDictionary *result = [NSMutableDictionary dictionary];
-    NSArray *lines = [output componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-    for (NSString *line in lines) {
-        NSScanner *scanner = [NSScanner scannerWithString:line];
-        NSString *propName = nil;
-        if (![scanner scanUpToString:@"(" intoString:&propName]) {
-            continue;
-        }
-        propName = [propName stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if ([propName length] == 0) {
-            continue;
-        }
-        // skip the parenthesized ID
-        [scanner scanUpToString:@"):" intoString:nil];
-        if (![scanner scanString:@"):" intoString:nil]) {
-            continue;
-        }
-        NSString *value = nil;
-        [scanner scanUpToString:@"\n" intoString:&value];
-        if (value) {
-            value = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        }
-        if ([value length] > 0) {
-            [result setObject:value forKey:propName];
-        }
-    }
-    return result;
-}
-
-- (NSString *)propertyValue:(NSDictionary *)props name:(NSString *)name
-{
-    for (NSString *key in props) {
-        if ([key rangeOfString:name].location != NSNotFound) {
-            return [props objectForKey:key];
-        }
-    }
-    return nil;
-}
-
-- (void)setProperty:(NSString *)prop forDevice:(NSString *)device value:(NSString *)value
-{
-    if (!xinputPath || !device || !prop) {
-        return;
-    }
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:xinputPath];
-    [task setArguments:[NSArray arrayWithObjects:
-        @"set-prop", device, prop, value, nil]];
-    [task launch];
-    [task waitUntilExit];
-    [task release];
-}
-
-- (void)setBoolProperty:(NSString *)prop forDevice:(NSString *)device value:(BOOL)value
-{
-    [self setProperty:prop forDevice:device value:(value ? @"1" : @"0")];
 }
 
 - (NSView *)createMainView
@@ -600,7 +384,7 @@ static NSString *const kMouseDomain = @"MousePreferences";
 
 - (void)updateSectionTitles
 {
-    BOOL hasTrackpoint = ([trackpointName length] > 0);
+    BOOL hasTrackpoint = ([[backend trackpointName] length] > 0);
     [trackpointSpeedSlider setEnabled:hasTrackpoint];
 }
 
@@ -618,108 +402,37 @@ static NSString *const kMouseDomain = @"MousePreferences";
     if (isRefreshing) {
         return;
     }
-    // -- Natural Scrolling --
-    BOOL natural = ([naturalScrollingCheckbox state] == NSOnState);
-    if (touchpadName) {
-        [self setBoolProperty:@"libinput Natural Scrolling Enabled"
-                    forDevice:touchpadName value:natural];
-    }
-    if (mouseName) {
-        [self setBoolProperty:@"libinput Natural Scrolling Enabled"
-                    forDevice:mouseName value:natural];
-    }
-    if (trackpointName) {
-        [self setBoolProperty:@"libinput Natural Scrolling Enabled"
-                    forDevice:trackpointName value:natural];
-    }
-    // -- Left Handed --
-    BOOL lefty = ([leftHandedCheckbox state] == NSOnState);
-    if (touchpadName) {
-        [self setBoolProperty:@"libinput Left Handed Enabled"
-                    forDevice:touchpadName value:lefty];
-    }
-    if (mouseName) {
-        [self setBoolProperty:@"libinput Left Handed Enabled"
-                    forDevice:mouseName value:lefty];
-    }
-    if (trackpointName) {
-        [self setBoolProperty:@"libinput Left Handed Enabled"
-                    forDevice:trackpointName value:lefty];
-    }
-    // -- Mouse Speed --
+    [backend applyNaturalScrolling:([naturalScrollingCheckbox state] == NSOnState)];
+    [backend applyLeftHanded:([leftHandedCheckbox state] == NSOnState)];
+
     float mSpeed = [mouseSpeedSlider floatValue];
     [mouseSpeedLabel setFloatValue:mSpeed];
-    if (touchpadName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:touchpadName
-                    value:[NSString stringWithFormat:@"%.3f", mSpeed]];
-    }
-    if (mouseName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:mouseName
-                    value:[NSString stringWithFormat:@"%.3f", mSpeed]];
-    }
-    // -- Trackpad Speed --
+    [backend applyMouseSpeed:mSpeed];
+
     float tSpeed = [trackpadSpeedSlider floatValue];
     [trackpadSpeedLabel setFloatValue:tSpeed];
-    if (touchpadName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:touchpadName
-                    value:[NSString stringWithFormat:@"%.3f", tSpeed]];
-    }
-    // -- TrackPoint Speed --
+    [backend applyTrackpadSpeed:tSpeed];
+
     float tpSpeed = [trackpointSpeedSlider floatValue];
     [trackpointSpeedLabel setFloatValue:tpSpeed];
-    if (trackpointName) {
-        [self setProperty:@"libinput Accel Speed" forDevice:trackpointName
-                    value:[NSString stringWithFormat:@"%.3f", tpSpeed]];
-    }
-    // -- Tap to Click --
-    BOOL tap = ([tapToClickCheckbox state] == NSOnState);
-    if (touchpadName) {
-        [self setBoolProperty:@"libinput Tapping Enabled"
-                    forDevice:touchpadName value:tap];
-    }
-    // -- Tap Button Mapping --
-    if (touchpadName) {
-        BOOL twoFingerRC = ([twoFingerRightClickCheckbox state] == NSOnState);
-        BOOL threeFingerMC = ([threeFingerMiddleClickCheckbox state] == NSOnState);
-        NSString *mapVal = @"1, 0";
-        if (threeFingerMC && !twoFingerRC) {
-            mapVal = @"0, 0";
-        } else if (twoFingerRC && !threeFingerMC) {
-            mapVal = @"1, 0";
-        } else if (twoFingerRC && threeFingerMC) {
-            mapVal = @"1, 0";
-        }
-        [self setProperty:@"libinput Tapping Button Mapping"
-                forDevice:touchpadName value:mapVal];
-        if (threeFingerMC) {
-            [self setProperty:@"libinput Clickfinger Button Mapping"
-                    forDevice:touchpadName value:@"1, 0"];
-        } else {
-            [self setProperty:@"libinput Clickfinger Button Mapping"
-                    forDevice:touchpadName value:@"1, 0"];
-        }
-    }
-    // -- Disable While Typing --
-    BOOL dwts = ([disableWhileTypingCheckbox state] == NSOnState);
-    if (touchpadName) {
-        [self setBoolProperty:@"libinput Disable While Typing Enabled"
-                    forDevice:touchpadName value:dwts];
-    }
-    // -- Persist --
+    [backend applyTrackpointSpeed:tpSpeed];
+
+    [backend applyTapToClick:([tapToClickCheckbox state] == NSOnState)];
+    [backend applyTwoFingerRightClick:([twoFingerRightClickCheckbox state] == NSOnState)
+               threeFingerMiddleClick:([threeFingerMiddleClickCheckbox state] == NSOnState)];
+    [backend applyDisableWhileTyping:([disableWhileTypingCheckbox state] == NSOnState)];
+
     [self persistSettings];
 }
 
 - (void)refreshFromSystem
 {
     isRefreshing = YES;
-    if (!xinputPath) {
-        xinputPath = [[self findXinput] retain];
-    }
     /* Enumerate even without xinput so the device-dependent controls show
        that no device is available instead of keeping their built state. */
-    [self enumerateDevices];
+    [backend refresh];
     [self updateSectionTitles];
-    if (!xinputPath) {
+    if (![backend xinputPath]) {
         [self updateStatus:@"xinput not found. Install xinput package."];
         isRefreshing = NO;
         return;
@@ -728,26 +441,26 @@ static NSString *const kMouseDomain = @"MousePreferences";
         NSDictionary *tpProps = nil;
         NSDictionary *mProps = nil;
         NSDictionary *tppProps = nil;
-        if (touchpadName) {
-            tpProps = [self getPropertiesForDevice:touchpadName];
+        if ([backend touchpadName]) {
+            tpProps = [backend propertiesForDevice:[backend touchpadName]];
         }
-        if (mouseName) {
-            mProps = [self getPropertiesForDevice:mouseName];
+        if ([backend mouseName]) {
+            mProps = [backend propertiesForDevice:[backend mouseName]];
         }
-        if (trackpointName) {
-            tppProps = [self getPropertiesForDevice:trackpointName];
+        if ([backend trackpointName]) {
+            tppProps = [backend propertiesForDevice:[backend trackpointName]];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            NSString *tpSpeedStr = [self propertyValue:tpProps name:@"Accel Speed"];
-            NSString *mSpeedStr = [self propertyValue:mProps name:@"Accel Speed"];
-            NSString *tppSpeedStr = [self propertyValue:tppProps name:@"Accel Speed"];
-            NSString *tpTapStr = [self propertyValue:tpProps name:@"Tapping Enabled"];
-            NSString *tpNaturalStr = [self propertyValue:tpProps name:@"Natural Scrolling Enabled"];
-            NSString *mNaturalStr = [self propertyValue:mProps name:@"Natural Scrolling Enabled"];
-            NSString *tpLeftStr = [self propertyValue:tpProps name:@"Left Handed Enabled"];
-            NSString *mLeftStr = [self propertyValue:mProps name:@"Left Handed Enabled"];
-            NSString *tpDwtStr = [self propertyValue:tpProps name:@"Disable While Typing Enabled"];
-            NSString *tpBtnMapStr = [self propertyValue:tpProps name:@"Tapping Button Mapping"];
+            NSString *tpSpeedStr = [MouseBackend propertyValue:tpProps name:@"Accel Speed"];
+            NSString *mSpeedStr = [MouseBackend propertyValue:mProps name:@"Accel Speed"];
+            NSString *tppSpeedStr = [MouseBackend propertyValue:tppProps name:@"Accel Speed"];
+            NSString *tpTapStr = [MouseBackend propertyValue:tpProps name:@"Tapping Enabled"];
+            NSString *tpNaturalStr = [MouseBackend propertyValue:tpProps name:@"Natural Scrolling Enabled"];
+            NSString *mNaturalStr = [MouseBackend propertyValue:mProps name:@"Natural Scrolling Enabled"];
+            NSString *tpLeftStr = [MouseBackend propertyValue:tpProps name:@"Left Handed Enabled"];
+            NSString *mLeftStr = [MouseBackend propertyValue:mProps name:@"Left Handed Enabled"];
+            NSString *tpDwtStr = [MouseBackend propertyValue:tpProps name:@"Disable While Typing Enabled"];
+            NSString *tpBtnMapStr = [MouseBackend propertyValue:tpProps name:@"Tapping Button Mapping"];
             // Set mouse speed (affects both touchpad and mouse via same slider)
             if (mSpeedStr) {
                 [mouseSpeedSlider setFloatValue:[mSpeedStr floatValue]];
@@ -849,14 +562,14 @@ static NSString *const kMouseDomain = @"MousePreferences";
             isRefreshing = NO;
             // Status message
             NSMutableString *status = [NSMutableString stringWithFormat:@"Applied"];
-            if (touchpadName) {
-                [status appendFormat:@" | Trackpad: %@", touchpadName];
+            if ([backend touchpadName]) {
+                [status appendFormat:@" | Trackpad: %@", [backend touchpadName]];
             }
-            if (mouseName) {
-                [status appendFormat:@" | Mouse: %@", mouseName];
+            if ([backend mouseName]) {
+                [status appendFormat:@" | Mouse: %@", [backend mouseName]];
             }
-            if (trackpointName) {
-                [status appendFormat:@" | TrackPoint: %@", trackpointName];
+            if ([backend trackpointName]) {
+                [status appendFormat:@" | TrackPoint: %@", [backend trackpointName]];
             }
             [self updateStatus:status];
         });

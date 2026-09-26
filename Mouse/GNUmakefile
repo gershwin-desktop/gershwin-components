@@ -6,7 +6,12 @@ Mouse_OBJCFLAGS += -Wall -Wextra -Werror -O2
 BUNDLE_NAME = Mouse
 Mouse_OBJC_FILES = MousePane.m MouseController.m
 Mouse_RESOURCE_FILES = Mouse.png
-Mouse_BUNDLE_LIBS = -lPreferencePanes
+# The xinput logic lives in libMouseBackend (Libraries/MouseBackend, sources
+# in this directory), shared with gershwin-apply-settings, which re-applies
+# these settings at login.  The build-tree directory comes first so an
+# uninstalled build links the library it was built with.
+Mouse_BUNDLE_LIBS = -lPreferencePanes -lMouseBackend
+ADDITIONAL_LIB_DIRS += -L../Libraries/MouseBackend/obj
 Mouse_PRINCIPAL_CLASS = MousePane
 PREF_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Bundles
 BUNDLE_EXTENSION = .prefPane

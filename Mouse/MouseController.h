@@ -6,6 +6,8 @@
 
 #import <AppKit/AppKit.h>
 
+@class MouseBackend;
+
 @interface MouseController : NSObject
 {
     NSView *mainView;
@@ -31,10 +33,7 @@
 
     NSTextField *statusLabel;
 
-    NSString *xinputPath;
-    NSString *touchpadName;
-    NSString *mouseName;
-    NSString *trackpointName;
+    MouseBackend *backend;
 
     BOOL isRefreshing;
 }
