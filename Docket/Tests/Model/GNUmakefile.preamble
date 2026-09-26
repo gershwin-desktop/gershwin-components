@@ -1,0 +1,5 @@
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated
+
+# t_DKMarkdownCodec includes DKMarkdownCodec.m in-process and needs its two
+# collaborators (DKList, DKTask) linked as separate objects.
+t_DKMarkdownCodec_OBJC_FILES += ../../DKList.m ../../DKTask.m
