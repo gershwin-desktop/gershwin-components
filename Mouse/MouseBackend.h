@@ -31,10 +31,15 @@
 - (instancetype)initWithXinputPath:(NSString *)path;
 
 /* Re-reads and re-classifies the device list, because pointing devices
- * come and go (USB, Bluetooth).  Runs one xinput call per slave pointer and
- * reads the touchpads' evdev nodes, so the pane calls it off the main
- * thread. */
+ * come and go (USB, Bluetooth): -useDevices: with -scanDevices. */
 - (void)refresh;
+
+/* Lists and classifies the pointers.  It runs one xinput call per slave
+ * pointer and reads the touchpads' evdev nodes, and changes nothing, so the
+ * pane runs it on another thread while the backend keeps applying to the
+ * devices it has. */
+- (NSArray *)scanDevices;
+- (void)useDevices:(NSArray *)devices;
 
 - (NSArray *)devicesOfKind:(PointerDeviceKind)kind;
 

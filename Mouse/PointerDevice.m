@@ -81,8 +81,10 @@ static NSArray *Flags(NSString *value)
 {
     /* xinput draws the device tree with Unicode glyphs, or with ~ and >
        where it does not; neither is part of a name. */
-    NSCharacterSet *tree = [NSCharacterSet characterSetWithCharactersInString:
-        @" \t~>⎡⎜⎣↳"];
+    static const unichar glyphs[] = { 0x23A1, 0x239C, 0x23A3, 0x21B3 };
+    NSMutableCharacterSet *tree = [NSMutableCharacterSet characterSetWithCharactersInString:@" \t~>"];
+    [tree addCharactersInString:[NSString stringWithCharacters:glyphs
+                                                        length:sizeof(glyphs) / sizeof(glyphs[0])]];
     NSMutableArray *result = [NSMutableArray array];
     for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
         NSArray *fields = [line componentsSeparatedByString:@"\t"];

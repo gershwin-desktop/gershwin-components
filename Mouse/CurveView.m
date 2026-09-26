@@ -7,134 +7,6 @@
 #import "CurveView.h"
 #include <math.h>
 
-/* Default curve parameters */
-static const double kDefaultPrecision = 0.30;
-static const double kDefaultStart     = 0.20;
-static const double kDefaultEnd       = 0.70;
-static const double kDefaultFast      = 1.60;
-
-AccelerationCurve AccelerationCurveDefaults(void)
-{
-    AccelerationCurve c;
-    c.precision = kDefaultPrecision;
-    c.start     = kDefaultStart;
-    c.end       = kDefaultEnd;
-    c.fast      = kDefaultFast;
-    return c;
-}
-
-double AccelerationCurveGain(AccelerationCurve curve, double speed)
-{
-    double t;
-    if (curve.end <= curve.start) {
-        t = (speed <= curve.start) ? 0.0 : 1.0;
-    } else {
-        t = (speed - curve.start) / (curve.end - curve.start);
-    }
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    /* Hermite interpolation for smooth S-curve */
-    return curve.precision + (curve.fast - curve.precision) * t * t * (3.0 - 2.0 * t);
-}
-
-BOOL AccelerationCurveEqualToCurve(AccelerationCurve a, AccelerationCurve b)
-{
-    return a.precision == b.precision && a.start == b.start
-        && a.end == b.end && a.fast == b.fast;
-}
-
-/* 750 mm/s puts the default start and end (20% and 70%) at 150 and 525 mm/s,
-   close to where libinput's own adaptive touchpad profile starts (130 mm/s)
-   and stops (4 x 130 mm/s) accelerating, so the default curve feels like the
-   system default. */
-const double AccelerationCurveMaxSpeed = 750.0;
-/* The most points libinput accepts; more samples follow the curve closer. */
-const NSUInteger AccelerationCurvePointCount = 64;
-
-/* The pointer moves one pixel per 1000 dpi unit; libinput normalizes the
-   built-in profiles to this unit, so gains everywhere in the pane use it. */
-static const double kNormalizedUnitsPerMM = 1000.0 / 25.4;
-
-/* Sampling a quarter beyond the graph keeps the last two points in the
-   constant-gain part of the curve, so libinput's linear extrapolation for
-   faster motion stays exact. */
-static const double kSampledRange = 1.25;
-
-/* libinput's touchpad profiles (filter-touchpad.c and filter-touchpad-flat.c
-   in libinput 1.28), mirrored so the pane can show what System and Flat do. */
-static const double kTouchpadMagicSlowdown = 0.2968;
-static const double kAdaptiveThreshold = 130.0;      /* mm/s */
-static const double kAdaptiveBaseline = 0.9;
-
-double AccelerationCurvePointStep(double unitsPerMM)
-{
-    return AccelerationCurveMaxSpeed * kSampledRange * unitsPerMM / 1000.0
-        / (AccelerationCurvePointCount - 1);
-}
-
-NSArray *AccelerationCurvePoints(AccelerationCurve curve, double unitsPerMM)
-{
-    NSMutableArray *out = [NSMutableArray arrayWithCapacity:AccelerationCurvePointCount];
-    double step = AccelerationCurvePointStep(unitsPerMM);
-    double maxUnits = AccelerationCurveMaxSpeed * unitsPerMM / 1000.0;
-    /* The custom profile takes raw touchpad units but its output is used as
-       1000 dpi units, so the gain is rescaled to mean the same as in the
-       built-in profiles on a touchpad of any resolution. */
-    double scale = kNormalizedUnitsPerMM / unitsPerMM;
-    for (NSUInteger i = 0; i < AccelerationCurvePointCount; i++) {
-        double speed = i * step;
-        double gain = AccelerationCurveGain(curve, speed / maxUnits);
-        [out addObject:[NSNumber numberWithDouble:speed * gain * scale]];
-    }
-    return out;
-}
-
-static double AdaptiveSpeedFactor(double speedSetting)
-{
-    return pow(speedSetting + 1.0, 2.38) * 0.95 + 0.05;
-}
-
-static double AdaptiveGainAtSpeed(double speedSetting, double mmPerSecond)
-{
-    double factor;
-    if (mmPerSecond < 7.0) {
-        factor = MIN(kAdaptiveBaseline, 0.1 * mmPerSecond + 0.3);
-    } else if (mmPerSecond < kAdaptiveThreshold) {
-        factor = kAdaptiveBaseline;
-    } else {
-        double v = MIN(mmPerSecond, 4.0 * kAdaptiveThreshold);
-        factor = 0.0025 * (v / kAdaptiveThreshold) * (v - kAdaptiveThreshold)
-            + kAdaptiveBaseline;
-    }
-    return factor * AdaptiveSpeedFactor(speedSetting) * kTouchpadMagicSlowdown;
-}
-
-AccelerationCurve AccelerationAdaptiveCurve(double speedSetting)
-{
-    AccelerationCurve c;
-    c.precision = AdaptiveGainAtSpeed(speedSetting, kAdaptiveThreshold / 2.0);
-    c.start     = kAdaptiveThreshold / AccelerationCurveMaxSpeed;
-    c.end       = 4.0 * kAdaptiveThreshold / AccelerationCurveMaxSpeed;
-    c.fast      = AdaptiveGainAtSpeed(speedSetting, 4.0 * kAdaptiveThreshold);
-    return c;
-}
-
-NSArray *AccelerationAdaptiveGains(double speedSetting, NSUInteger count)
-{
-    NSMutableArray *out = [NSMutableArray arrayWithCapacity:count];
-    for (NSUInteger i = 0; i < count; i++) {
-        double position = (double)i / (count - 1);
-        [out addObject:[NSNumber numberWithDouble:
-            AdaptiveGainAtSpeed(speedSetting, position * AccelerationCurveMaxSpeed)]];
-    }
-    return out;
-}
-
-double AccelerationFlatGain(double speedSetting)
-{
-    return MAX(0.005, 1.0 + speedSetting) * kTouchpadMagicSlowdown;
-}
-
 /* Handle radius in points */
 static const double kHandleRadius = 6.0;
 
@@ -148,6 +20,7 @@ static const double kGraphPaddingBottom = 22.0;
 
 @synthesize curve = _curve;
 @synthesize maximum = _maximum;
+@synthesize maxSpeed = _maxSpeed;
 @synthesize delegate = _delegate;
 @synthesize curveEnabled = _curveEnabled;
 @synthesize displayedGains = _displayedGains;
@@ -157,8 +30,9 @@ static const double kGraphPaddingBottom = 22.0;
 {
     self = [super initWithFrame:frame];
     if (self) {
-        _curve = AccelerationCurveDefaults();
-        _maximum = 2.0;
+        _curve = AccelerationCurveDefaults(PointerDeviceKindTouchpad);
+        _maximum = AccelerationCurveMaxGain(PointerDeviceKindTouchpad);
+        _maxSpeed = AccelerationCurveMaxSpeed(PointerDeviceKindTouchpad);
         _dragHandle = -1;
         _curveEnabled = YES;
         _showsRange = YES;
@@ -316,8 +190,8 @@ static const double kGraphPaddingBottom = 22.0;
     /* X-axis labels in finger speed, the unit the Start and End values use */
     NSString *xLabels[3];
     xLabels[0] = @"0";
-    xLabels[1] = [NSString stringWithFormat:@"%.0f", AccelerationCurveMaxSpeed / 2.0];
-    xLabels[2] = [NSString stringWithFormat:@"%.0f mm/s", AccelerationCurveMaxSpeed];
+    xLabels[1] = [NSString stringWithFormat:@"%.0f", _maxSpeed / 2.0];
+    xLabels[2] = [NSString stringWithFormat:@"%.0f mm/s", _maxSpeed];
     for (int i = 0; i < 3; i++) {
         CGFloat x = g.origin.x + g.size.width * i / 2.0;
         NSSize sz = [xLabels[i] sizeWithAttributes:labelAttrs];
@@ -482,6 +356,12 @@ static const double kGraphPaddingBottom = 22.0;
 - (void)setMaximum:(double)maximum
 {
     _maximum = maximum;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setMaxSpeed:(double)maxSpeed
+{
+    _maxSpeed = maxSpeed;
     [self setNeedsDisplay:YES];
 }
 

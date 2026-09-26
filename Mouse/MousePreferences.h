@@ -48,8 +48,8 @@ extern NSString *const MousePreferencesCurveFast;
 
 /* The user's domain, migrated. */
 + (NSDictionary *)currentDomain;
-/* Writes one key into the user's domain (migrating it on the way) and
+/* Writes these keys into the user's domain (migrating it on the way) and
  * leaves every other key as it is. */
-+ (void)setObject:(id)value forKey:(NSString *)key;
++ (void)storeValues:(NSDictionary *)values;
 
 @end

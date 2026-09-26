@@ -6,24 +6,7 @@
 
 #import <AppKit/AppKit.h>
 
-typedef struct {
-    double precision;  /* gain at slow finger speeds (0.01 .. 2.0) */
-    double start;      /* acceleration start, fraction of max speed (0.0 .. <end) */
-    double end;        /* acceleration end, fraction of max speed (>start .. 1.0) */
-    double fast;       /* gain at fast finger speeds (>=precision .. 2.0) */
-} AccelerationCurve;
-
-extern const double AccelerationCurveMaxSpeed;        /* mm/s */
-extern const NSUInteger AccelerationCurvePointCount;
-
-AccelerationCurve AccelerationCurveDefaults(void);
-BOOL AccelerationCurveEqualToCurve(AccelerationCurve a, AccelerationCurve b);
-double AccelerationCurveGain(AccelerationCurve curve, double speed);
-double AccelerationCurvePointStep(double unitsPerMM);
-NSArray *AccelerationCurvePoints(AccelerationCurve curve, double unitsPerMM);
-AccelerationCurve AccelerationAdaptiveCurve(double speedSetting);
-NSArray *AccelerationAdaptiveGains(double speedSetting, NSUInteger count);
-double AccelerationFlatGain(double speedSetting);
+#import "AccelerationCurve.h"
 
 @class CurveView;
 
@@ -36,6 +19,7 @@ double AccelerationFlatGain(double speedSetting);
 {
     AccelerationCurve _curve;
     double _maximum;
+    double _maxSpeed;
     NSInteger _dragHandle;     /* -1 = none, 0 = precision, 1 = start, 2 = end, 3 = fast */
     NSPoint _dragStart;
     id<CurveViewDelegate> _delegate;
@@ -43,6 +27,8 @@ double AccelerationFlatGain(double speedSetting);
 
 @property (nonatomic) AccelerationCurve curve;
 @property (nonatomic) double maximum;
+/* The speed at the right edge of the graph, in mm/s, for the axis labels. */
+@property (nonatomic) double maxSpeed;
 @property (nonatomic, assign) id<CurveViewDelegate> delegate;
 @property (nonatomic) BOOL curveEnabled;
 /* A built-in profile's curve cannot be expressed by the four parameters, so

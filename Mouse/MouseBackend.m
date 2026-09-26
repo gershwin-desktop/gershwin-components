@@ -97,9 +97,18 @@ static const double kMinScrollSpeed = 0.25;
 
 - (void)refresh
 {
+    [self useDevices:[self scanDevices]];
+}
+
+- (void)useDevices:(NSArray *)devices
+{
+    self.devices = devices;
+}
+
+- (NSArray *)scanDevices
+{
     if (!self.xinputPath) {
-        self.devices = @[];
-        return;
+        return @[];
     }
     NSMutableArray *devices = [NSMutableArray array];
     for (NSDictionary *pointer in [PointerDevice slavePointersInXinputList:[self runXinput:@[@"list"]]]) {
@@ -114,7 +123,7 @@ static const double kMinScrollSpeed = 0.25;
         [devices addObject:[[PointerDevice alloc] initWithID:deviceID name:name kind:kind
             properties:props unitsPerMM:[[self class] unitsPerMMForKind:kind properties:props]]];
     }
-    self.devices = devices;
+    return devices;
 }
 
 - (NSArray *)devicesOfKind:(PointerDeviceKind)kind

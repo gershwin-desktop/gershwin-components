@@ -129,10 +129,10 @@ static BOOL NumberIn(NSDictionary *domain, NSString *key, double *out)
     return [self migratedDomain:(domain ? domain : @{})];
 }
 
-+ (void)setObject:(id)value forKey:(NSString *)key
++ (void)storeValues:(NSDictionary *)values
 {
     NSMutableDictionary *domain = [[self currentDomain] mutableCopy];
-    [domain setObject:value forKey:key];
+    [domain addEntriesFromDictionary:values];
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setPersistentDomain:domain forName:MousePreferencesDomain];
     [defaults synchronize];
