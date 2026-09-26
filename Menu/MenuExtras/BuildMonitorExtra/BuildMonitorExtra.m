@@ -1,21 +1,19 @@
 #import "BuildMonitorExtra.h"
 #import "GSMenuExtraContext.h"
 
-#import <objc/runtime.h>
-
-static const char kRepoKey;
-static const char kDataKey;
-static const char kStatusCodeKey;
-
-#define POLL_INTERVAL 60.0
 #define CONFIG_PREFIX @"BuildMonitor."
+
+/* GitHub's hourly API limits; every poll costs one request per repository. */
+static const double kRequestsPerHourWithoutToken = 60.0;
+static const double kRequestsPerHourWithToken = 5000.0;
+static const NSTimeInterval kMinimumPollInterval = 60.0;
 
 static NSString *ConfigKey(NSString *key)
 {
     return [CONFIG_PREFIX stringByAppendingString: key];
 }
 
-@interface BuildMonitorExtra () <NSWindowDelegate, NSURLConnectionDelegate>
+@interface BuildMonitorExtra () <NSWindowDelegate>
 {
     GSMenuExtraContext *_context;
 
@@ -35,7 +33,9 @@ static NSString *ConfigKey(NSString *key)
     NSTextView *_reposTextView;
     NSSecureTextField *_tokenField;
 
-    NSMutableDictionary *_pendingRepos;
+    NSTimer *_pollTimer;
+    BOOL _polling;
+    BOOL _pollAgain;
     BOOL _running;
 }
 @end
@@ -77,6 +77,15 @@ static NSString *ConfigKey(NSString *key)
 {
     @try {
         if (!_running) return;
+
+        /* A poll still in flight fetched the old repository list; let it
+           finish and start over with the current one instead of running two
+           fetches whose results would interleave. */
+        if (_polling) {
+            _pollAgain = YES;
+            return;
+        }
+
         _hasAnyFailure = NO;
         _hasAnyRunning = NO;
         _fetchError = NO;
@@ -89,58 +98,94 @@ static NSString *ConfigKey(NSString *key)
         }
 
         if (!_repoStatuses) _repoStatuses = [NSMutableDictionary dictionary];
-        if (!_pendingRepos) _pendingRepos = [NSMutableDictionary dictionary];
 
-        [_pendingRepos removeAllObjects];
+        NSArray *repos = [_repos copy];
+        NSString *token = [_token copy];
+        _polling = YES;
 
-        for (NSString *repoStr in _repos) {
+        /* NSURLConnection resolves the host, including a slow reverse lookup
+           of every address, synchronously in the calling thread. On the main
+           thread that froze the whole menu bar for up to a minute per poll,
+           so the fetch runs on its own thread and only the results come back
+           to the main thread. */
+        [NSThread detachNewThreadWithBlock: ^{
+            NSDictionary *results = [BuildMonitorExtra fetchRunsForRepos: repos
+                                                                   token: token];
+            [self performSelectorOnMainThread: @selector(applyPollResults:)
+                                   withObject: results
+                                waitUntilDone: NO];
+        }];
+    } @catch (NSException *e) {
+        NSLog(@"BuildMonitorExtra: exception in pollGitHub: %@", e);
+        _polling = NO;
+    }
+}
+
+/* Runs on the fetch thread, so it touches no instance state. A result
+   without "data" means the request itself failed. */
++ (NSDictionary *)fetchRunsForRepos:(NSArray *)repos token:(NSString *)token
+{
+    NSMutableDictionary *results = [NSMutableDictionary dictionary];
+
+    for (NSString *repoStr in repos) {
+        @autoreleasepool {
             NSArray *parts = [repoStr componentsSeparatedByString: @"/"];
             if ([parts count] != 2) continue;
-            [_pendingRepos setObject: repoStr forKey: repoStr];
 
             NSString *urlStr = [NSString stringWithFormat: @"https://api.github.com/repos/%@/%@/actions/runs?per_page=5",
                                  parts[0], parts[1]];
 
             NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL: [NSURL URLWithString: urlStr]];
-            if ([_token length] > 0) {
-                [req setValue: [NSString stringWithFormat: @"token %@", _token] forHTTPHeaderField: @"Authorization"];
+            if ([token length] > 0) {
+                [req setValue: [NSString stringWithFormat: @"token %@", token] forHTTPHeaderField: @"Authorization"];
             }
             [req setValue: @"BuildMonitorExtra/1.0" forHTTPHeaderField: @"User-Agent"];
 
-            NSURLConnection *conn = [NSURLConnection connectionWithRequest: req delegate: self];
-            objc_setAssociatedObject(conn, &kRepoKey, repoStr, OBJC_ASSOCIATION_RETAIN);
-            objc_setAssociatedObject(conn, &kDataKey, [NSMutableData data], OBJC_ASSOCIATION_RETAIN);
+            NSURLResponse *response = nil;
+            NSError *error = nil;
+            NSData *data = [NSURLConnection sendSynchronousRequest: req
+                                                 returningResponse: &response
+                                                             error: &error];
+            NSInteger statusCode = 0;
+            if ([response isKindOfClass: [NSHTTPURLResponse class]]) {
+                statusCode = [(NSHTTPURLResponse *)response statusCode];
+            }
+
+            NSMutableDictionary *result = [NSMutableDictionary dictionary];
+            [result setObject: @(statusCode) forKey: @"statusCode"];
+            if (data && !error) [result setObject: data forKey: @"data"];
+            [results setObject: result forKey: repoStr];
         }
-    } @catch (NSException *e) {
-        NSLog(@"BuildMonitorExtra: exception in pollGitHub: %@", e);
     }
+    return results;
 }
 
-- (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response
+- (void)applyPollResults:(NSDictionary *)results
 {
-    NSMutableData *data = objc_getAssociatedObject(connection, &kDataKey);
-    [data setLength: 0];
-    NSInteger statusCode = 0;
-    if ([response isKindOfClass: [NSHTTPURLResponse class]]) {
-        statusCode = [(NSHTTPURLResponse *)response statusCode];
+    _polling = NO;
+    if (!_running) return;
+
+    if (_pollAgain) {
+        _pollAgain = NO;
+        [self pollGitHub];
+        return;
     }
-    objc_setAssociatedObject(connection, &kStatusCodeKey, @(statusCode), OBJC_ASSOCIATION_RETAIN);
+
+    for (NSString *repoStr in _repos) {
+        NSDictionary *result = [results objectForKey: repoStr];
+        if (!result) continue;  // not in owner/repo form, never fetched
+        [self applyResponseData: [result objectForKey: @"data"]
+                     statusCode: [[result objectForKey: @"statusCode"] integerValue]
+                        forRepo: repoStr];
+    }
+    [self finishPoll];
 }
 
-- (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data
+- (void)applyResponseData:(NSData *)data
+               statusCode:(NSInteger)statusCode
+                  forRepo:(NSString *)repoStr
 {
-    NSMutableData *existing = objc_getAssociatedObject(connection, &kDataKey);
-    [existing appendData: data];
-}
-
-- (void)connectionDidFinishLoading:(NSURLConnection *)connection
-{
-    NSString *repoStr = objc_getAssociatedObject(connection, &kRepoKey);
-    NSMutableData *responseData = objc_getAssociatedObject(connection, &kDataKey);
-    NSString *json = [[NSString alloc] initWithData: responseData encoding: NSUTF8StringEncoding];
-
-    if (json) {
-        NSData *data = [json dataUsingEncoding: NSUTF8StringEncoding];
+    if (data) {
         NSError *err = nil;
         NSDictionary *dict = [NSJSONSerialization JSONObjectWithData: data options: 0 error: &err];
         if (dict && [dict isKindOfClass: [NSDictionary class]]) {
@@ -200,20 +245,9 @@ static NSString *ConfigKey(NSString *key)
                 } else {
                     [_lastFailures removeObjectForKey: repoStr];
                 }
-
-                [_pendingRepos removeObjectForKey: repoStr];
-                if ([_pendingRepos count] == 0) {
-                    /* NSURLConnection may deliver its delegate callbacks on a
-                       background thread; the alert (runModal) must run on the
-                       main thread or its buttons never become clickable. */
-                    [self performSelectorOnMainThread: @selector(finishPoll)
-                                           withObject: nil waitUntilDone: NO];
-                }
                 return;
             }
 
-            NSNumber *statusCodeNum = objc_getAssociatedObject(connection, &kStatusCodeKey);
-            NSInteger statusCode = [statusCodeNum integerValue];
             if ((statusCode == 403 || statusCode == 429) &&
                 [[dict objectForKey: @"message"] rangeOfString: @"rate limit"].location != NSNotFound) {
                 _rateLimited = YES;
@@ -223,26 +257,6 @@ static NSString *ConfigKey(NSString *key)
 
     [_repoStatuses setObject: @"error" forKey: repoStr];
     _fetchError = YES;
-    [_pendingRepos removeObjectForKey: repoStr];
-    if ([_pendingRepos count] == 0) {
-        /* Hop to the main thread: the alert's runModal needs the main event
-           loop (see connection:didReceiveData:). */
-        [self performSelectorOnMainThread: @selector(finishPoll)
-                               withObject: nil waitUntilDone: NO];
-    }
-}
-
-- (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
-{
-    NSString *repoStr = objc_getAssociatedObject(connection, &kRepoKey);
-    [_repoStatuses setObject: @"error" forKey: repoStr];
-    _fetchError = YES;
-
-    [_pendingRepos removeObjectForKey: repoStr];
-    if ([_pendingRepos count] == 0) {
-        [self performSelectorOnMainThread: @selector(finishPoll)
-                               withObject: nil waitUntilDone: NO];
-    }
 }
 
 - (void)finishPoll
@@ -464,6 +478,7 @@ static NSString *ConfigKey(NSString *key)
     _hasAnyRunning = NO;
     _fetchError = NO;
 
+    [self schedulePollTimer];
     [self pollGitHub];
 }
 
@@ -511,6 +526,7 @@ static NSString *ConfigKey(NSString *key)
         if ([_repos count] > 0) {
             [self pollGitHub];
         }
+        [self schedulePollTimer];
     } @catch (NSException *e) {
         NSLog(@"BuildMonitorExtra: exception in menuExtraDidLoad: %@", e);
         _running = NO;
@@ -520,16 +536,37 @@ static NSString *ConfigKey(NSString *key)
         _token = nil;
         _lastFailures = nil;
         _repoStatuses = nil;
-        _pendingRepos = nil;
         _configPanel = nil;
         _reposTextView = nil;
         _tokenField = nil;
     }
 }
 
+/* Polling faster than the hourly request limit allows only earns rate-limit
+   errors, and without a token that limit is small enough to matter. */
+- (NSTimeInterval)pollInterval
+{
+    double perHour = [_token length] > 0 ? kRequestsPerHourWithToken
+                                         : kRequestsPerHourWithoutToken;
+    return MAX(kMinimumPollInterval, _repoCount * 3600.0 / perHour);
+}
+
+- (void)schedulePollTimer
+{
+    [_pollTimer invalidate];
+    _pollTimer = [NSTimer scheduledTimerWithTimeInterval: [self pollInterval]
+                                                  target: self
+                                                selector: @selector(pollGitHub)
+                                                userInfo: nil
+                                                 repeats: YES];
+}
+
 - (void)menuExtraWillUnload
 {
     _running = NO;
+    /* The timer retains its target, so it must go before the extra can. */
+    [_pollTimer invalidate];
+    _pollTimer = nil;
 }
 
 - (NSMenu *)menu

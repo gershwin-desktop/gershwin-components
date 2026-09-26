@@ -133,57 +133,6 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 @end
 
-/* ── NSMenuItem swizzle: preserve custom action after setSubmenu: ── */
-
-/*
- * GNUstep's -[NSMenuItem setSubmenu:] calls [self setAction:@selector(submenuAction:)]
- * (NSMenuItem.m:244), overwriting any action set before it.  submenuAction: is a
- * no-op (NSMenu.m:851), so our openFolderInWorkspace: was silently lost.
- *
- * We swizzle setSubmenu: to save the action/target before the call and restore
- * them afterwards - but only when a non-nil, non-submenuAction: action was
- * already set.  This allows items with both a submenu and a custom action to
- * work: the submenu opens on hover (handled by NSMenuView's tracking loop,
- * which checks [item submenu], not the action), and the custom action fires
- * on click.
- */
-
-#import <objc/runtime.h>
-
-@interface NSMenuItem (GWSwizzle)
-@end
-
-@implementation NSMenuItem (GWSwizzle)
-
-+ (void)load
-{
-    static BOOL swizzled = NO;
-    if (swizzled) return;
-    swizzled = YES;
-
-    Method original = class_getInstanceMethod(self, @selector(setSubmenu:));
-    Method swizzledM = class_getInstanceMethod(self, @selector(gw_setSubmenu:));
-    method_exchangeImplementations(original, swizzledM);
-}
-
-- (void)gw_setSubmenu:(NSMenu *)submenu
-{
-    SEL savedAction = [self action];
-    id savedTarget = [self target];
-
-    /* Call the original setSubmenu: (now gw_setSubmenu: after swizzle). */
-    [self gw_setSubmenu:submenu];
-
-    /* Restore action/target only if a custom action was explicitly set. */
-    if (savedAction && savedAction != @selector(submenuAction:))
-    {
-        [self setAction:savedAction];
-        [self setTarget:savedTarget];
-    }
-}
-
-@end
-
 /* ── Private interface ───────────────────────────────────────────── */
 
 @interface AppMenuWidget ()
@@ -1625,10 +1574,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     }
 
     NSDictionary *appTree;
+    BOOL treeChanged = NO;
     if (cacheValid) {
         appTree = self.cachedAppBundleTree;
     } else {
         appTree = [self scanApplicationBundleTree];
+        /* The scan goes stale on a timer, but the applications installed on
+           a machine hardly ever change. Rebuilding the menu only when they
+           actually did saves tearing down and building up hundreds of items
+           and their icons every half minute. */
+        treeChanged = ![appTree isEqualToDictionary:
+                        (NSDictionary *)self.cachedAppBundleTree];
         self.cachedAppBundleTree = appTree;
         self.cachedAppBundleTreeTime = now;
     }
@@ -1641,11 +1597,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        tree down again via NSMenu/NSMenuItem dealloc - a multi-hundred-object
        cascade that showed up as the bulk of Menu's CPU. */
     NSMenu *appsSubmenu = self.cachedAppsSubmenu;
-    if (!appsSubmenu || !cacheValid) {
+    if (!appsSubmenu || treeChanged) {
         appsSubmenu = [[NSMenu alloc] initWithTitle:NSLocalizedString(@"Applications", nil)];
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: Scanning app tree with %ld root keys", (long)[[appTree allKeys] count]);
         [self addMenuItemsFromTree:appTree toMenu:appsSubmenu];
         self.cachedAppsSubmenu = appsSubmenu;
+        /* Decoding every application's icon is the biggest burst of
+           allocations Menu ever makes (first at launch); what it freed is
+           given back once the current autorelease pool has been drained. */
+        [MenuUtils performSelector:@selector(releaseFreedHeapMemory)
+                        withObject:nil
+                        afterDelay:0];
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: (Re)built persistent apps submenu with %ld items", (long)[appsSubmenu numberOfItems]);
         if ([appsSubmenu numberOfItems] == 0) {
             NSMenuItem *none = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"No applications found", nil)
@@ -1864,6 +1826,122 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     return item;
 }
 
+/* An application's icon is stored at up to 1024x1024 - four megabytes once
+   decoded - and the menu draws it at the height of a line of text. Keeping
+   the icon as it came would hold all of that for every installed
+   application, so it is scaled down once and only the small copy is kept.
+   36 pixels is enough for the largest scale factor a menu is drawn at.
+
+   The pixels are averaged by hand rather than drawn through a graphics
+   context: drawing into a bitmap context produced empty images here, and
+   -lockFocus would open a window on the display server for every icon. An
+   icon that cannot be read this way is handed back untouched, so a menu
+   never loses its picture over this. */
+static NSImage *MenuSizedIcon(NSImage *icon)
+{
+    const NSInteger side = 36;
+    NSBitmapImageRep *source = nil;
+    NSBitmapImageRep *small;
+    const unsigned char *src;
+    unsigned char *dst;
+    NSInteger sourceWidth, sourceHeight, samples, sourceRow, smallRow;
+    NSInteger x, y;
+    int wide, hasAlpha, colour;
+
+    if (icon == nil)
+        return nil;
+
+    for (NSImageRep *rep in [icon representations]) {
+        if ([rep isKindOfClass:[NSBitmapImageRep class]]) {
+            NSBitmapImageRep *bitmap = (NSBitmapImageRep *)rep;
+            /* The biggest one scales down best. */
+            if (source == nil || [bitmap pixelsWide] > [source pixelsWide])
+                source = bitmap;
+        }
+    }
+    if (source == nil || [source isPlanar]
+        || ([source bitsPerSample] != 8 && [source bitsPerSample] != 16))
+        return icon;
+
+    sourceWidth = [source pixelsWide];
+    sourceHeight = [source pixelsHigh];
+    samples = [source samplesPerPixel];
+    sourceRow = [source bytesPerRow];
+    src = [source bitmapData];
+    /* Icons come in several shapes: grey or colour, with or without a
+       transparency channel, one or two bytes per sample. */
+    wide = ([source bitsPerSample] == 16);
+    hasAlpha = [source hasAlpha] ? 1 : 0;
+    colour = (samples - hasAlpha) >= 3;
+    if (src == NULL || sourceWidth <= 0 || sourceHeight <= 0)
+        return icon;
+    if (sourceWidth <= side && sourceHeight <= side)
+        return icon;
+
+    small = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                    pixelsWide:side
+                                                    pixelsHigh:side
+                                                 bitsPerSample:8
+                                               samplesPerPixel:4
+                                                      hasAlpha:YES
+                                                      isPlanar:NO
+                                                colorSpaceName:NSDeviceRGBColorSpace
+                                                   bytesPerRow:0
+                                                  bitsPerPixel:0];
+    dst = [small bitmapData];
+    if (dst == NULL)
+        return icon;
+    smallRow = [small bytesPerRow];
+
+    for (y = 0; y < side; y++) {
+        NSInteger firstRow = y * sourceHeight / side;
+        NSInteger lastRow = MAX(firstRow + 1, (y + 1) * sourceHeight / side);
+
+        for (x = 0; x < side; x++) {
+            NSInteger firstColumn = x * sourceWidth / side;
+            NSInteger lastColumn = MAX(firstColumn + 1,
+                                       (x + 1) * sourceWidth / side);
+            unsigned long red = 0, green = 0, blue = 0, alpha = 0, taken = 0;
+            NSInteger sy, sx;
+            unsigned char *out;
+
+            for (sy = firstRow; sy < lastRow; sy++) {
+                const unsigned char *row = src + sy * sourceRow;
+                for (sx = firstColumn; sx < lastColumn; sx++) {
+                    const unsigned char *pixel =
+                        row + sx * samples * (wide ? 2 : 1);
+                    unsigned value[4];
+                    NSInteger sample;
+
+                    for (sample = 0; sample < samples && sample < 4; sample++)
+                        value[sample] = wide
+                            ? (unsigned)(((const unsigned short *)pixel)[sample] >> 8)
+                            : (unsigned)pixel[sample];
+
+                    red += value[0];
+                    green += colour ? value[1] : value[0];
+                    blue += colour ? value[2] : value[0];
+                    alpha += hasAlpha ? value[samples - 1] : 255;
+                    taken++;
+                }
+            }
+            if (taken == 0)
+                taken = 1;
+
+            out = dst + y * smallRow + x * 4;
+            out[0] = (unsigned char)(red / taken);
+            out[1] = (unsigned char)(green / taken);
+            out[2] = (unsigned char)(blue / taken);
+            out[3] = (unsigned char)(alpha / taken);
+        }
+    }
+
+    [small setSize:NSMakeSize(side, side)];
+    NSImage *scaled = [[NSImage alloc] initWithSize:NSMakeSize(side, side)];
+    [scaled addRepresentation:small];
+    return scaled;
+}
+
 - (void)addMenuItemsFromTree:(NSDictionary *)tree toMenu:(NSMenu *)menu
 {
     /* Collect both subdirectory submenus and app items, then interleave
@@ -1909,8 +1987,27 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             [item setTarget:self];
             [item setRepresentedObject:entry[@"_path"]];
             /* Show the application's icon in the menu (Eau renders it at a
-               fixed size in the image column). */
-            NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:entry[@"_path"]];
+               fixed size in the image column). The icon is kept: asking the
+               workspace for it reads and decodes the bundle's PNG every
+               time, and this menu is rebuilt whenever the scan of the
+               installed applications has gone stale. */
+            NSString *bundlePath = entry[@"_path"];
+            NSImage *icon = bundlePath ? [self.appIconCache objectForKey:bundlePath] : nil;
+            if (icon == nil && bundlePath != nil) {
+                /* The full-size icon comes back autoreleased: without a
+                   pool of its own, every decoded icon of the whole menu
+                   stays alive until the menu is built (54 MB at once), and
+                   the heap keeps that high-water mark afterwards. */
+                @autoreleasepool {
+                    icon = MenuSizedIcon([[NSWorkspace sharedWorkspace]
+                                          iconForFile:bundlePath]);
+                }
+                if (icon != nil) {
+                    if (self.appIconCache == nil)
+                        self.appIconCache = [NSMutableDictionary dictionary];
+                    [self.appIconCache setObject:icon forKey:bundlePath];
+                }
+            }
             if (icon) {
                 [item setImage:icon];
             }
@@ -2128,10 +2225,15 @@ static int handleX11Error(Display *display, XErrorEvent *event)
                                         representedObject:pane[@"name"]
                                                   submenu:nil
                                                    toMenu:submenu];
-        /* Show the pane's icon (Eau renders it at a fixed size). */
+        /* Show the pane's icon (Eau renders it at a fixed size).  Some
+           panes ship 500x500 icons; like application icons they are kept
+           only at the size a menu draws them (4 MB less for all panes). */
         NSString *iconPath = pane[@"icon"];
         if (iconPath && [iconPath length] > 0) {
-            NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+            NSImage *icon = nil;
+            @autoreleasepool {
+                icon = MenuSizedIcon([[NSImage alloc] initWithContentsOfFile:iconPath]);
+            }
             if (icon) {
                 [item setImage:icon];
             }

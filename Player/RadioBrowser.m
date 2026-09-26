@@ -5,6 +5,7 @@
  */
 
 #import "RadioBrowser.h"
+#import "PlayerAsync.h"
 #import "RadioStation.h"
 
 @interface RadioBrowser ()
@@ -19,10 +20,11 @@
 + (instancetype)sharedBrowser
 {
     static RadioBrowser *shared = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        shared = [[self alloc] init];
-    });
+    @synchronized(self) {
+        if (shared == nil) {
+            shared = [[self alloc] init];
+        }
+    }
     return shared;
 }
 
@@ -174,10 +176,10 @@
     NSURL *url = [NSURL URLWithString:urlString];
     NSLog(@"[RadioBrowser] Request: %@", url);
 
-    // In MRC: copy the completion block; it is released after use inside the dispatch
+    // In MRC: copy the completion block; it is released once it has run
     __block void(^savedCompletion)(id, NSError*) = [completion copy];
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    PlayerRunInBackground(^{
         @autoreleasepool {
             NSURLRequest *request = [NSURLRequest requestWithURL:url
                                                      cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
@@ -188,7 +190,7 @@
                                                  returningResponse:&response
                                                              error:&connectionError];
 
-            dispatch_async(dispatch_get_main_queue(), ^{
+            PlayerRunOnMainThread(^{
                 @autoreleasepool {
                     if (connectionError) {
                         if (savedCompletion) {
@@ -278,8 +280,7 @@
         }
 
         // Wait for subrequests, then return foundId
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
+        PlayerRunOnMainThreadAfter(1.5, ^{
             if (completion) completion(foundId);
             [foundId release];
         });

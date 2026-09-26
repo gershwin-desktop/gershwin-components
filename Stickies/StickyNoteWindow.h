@@ -22,8 +22,14 @@
 - (void)collapse;
 - (void)expand;
 - (void)toggleCollapse;
+- (NSRect)uncollapsedFrame;
+- (NSRect)frameBelowReservedTopArea:(NSRect)frameRect;
+- (NSRect)frameFittingScreen:(NSRect)frameRect;
 - (void)mouseDown:(NSEvent *)event;
 - (void)mouseDragged:(NSEvent *)event;
 - (void)mouseUp:(NSEvent *)event;
+- (void)sendEvent:(NSEvent *)event;
+/* Cmd-S saves now; the shortcut deliberately has no menu item. */
+- (BOOL)performKeyEquivalent:(NSEvent *)event;
 
 @end

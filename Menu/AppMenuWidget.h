@@ -51,6 +51,10 @@
    (which used to cascade through NSMenu/NSMenuItem dealloc and re-stat every
    .app bundle for its icon).  Only rebuilt when the underlying tree changes. */
 @property (nonatomic, strong) NSMenu *cachedAppsSubmenu;
+/* One icon per application bundle, kept for as long as the widget lives.
+   Asking the workspace again decodes the bundle's PNG all over, which for a
+   full Applications menu is tens of megabytes per rebuild. */
+@property (nonatomic, strong) NSMutableDictionary *appIconCache;
 @property (nonatomic, assign) NSTimeInterval lastSystemMenuUpdateTime;
 
 /* Coalescing timer for window focus changes */

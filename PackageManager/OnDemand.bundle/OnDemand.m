@@ -9,14 +9,13 @@
  */
 
 #import "OnDemand.h"
+#import <PackageManager/GWPackageInstallSpec.h>
 #import <PackageManager/ODProgressWindow.h>
 
 @interface OnDemand ()
 + (void)_appDidFinishLaunch:(NSNotification *)n;
-+ (NSArray *)_packagesFromPlistAtPath:(NSString *)plistPath
-                             osOverride:(NSString *)os;
 + (NSArray *)_missingPackagesFromArray:(NSArray *)packages;
-+ (BOOL)_commandExists:(NSString *)command;
++ (BOOL)_packageInstalled:(NSString *)package;
 + (void)_showErrorAlert:(NSString *)title detail:(NSString *)detail;
 + (void)_runInstallWithPackages:(NSArray *)packages;
 @end
@@ -58,18 +57,20 @@ static ODProgressWindow *_progressWin = nil;
 
   NSString *appName = [[bundlePath lastPathComponent] stringByDeletingPathExtension];
 
-  NSString *os = nil;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-  os = @"freebsd";
-#elif defined(__OpenBSD__)
-  os = @"openbsd";
-#elif defined(__NetBSD__)
-  os = @"netbsd";
-#elif defined(__linux__)
-  os = @"linux";
-#endif
-
-  NSArray *packages = [self _packagesFromPlistAtPath:depsPlist osOverride:os];
+  /* The framework resolves the plist: the packages are named per
+     distribution, so the entry is picked by what this machine really is,
+     not by what it was compiled on. */
+  NSError *specError = nil;
+  GWPackageInstallSpec *spec =
+    [[GWPackageInstallSpec alloc] initWithPlistAtPath:depsPlist
+                                             specType:GWPackageInstallSpecTypeInstall
+                                                error:&specError];
+  if (!spec)
+    {
+      NSLog(@"OnDemand bundle: cannot read %@: %@", depsPlist, specError);
+      return;
+    }
+  NSArray *packages = [spec packages];
 
   if (!packages || [packages count] == 0)
     {
@@ -235,33 +236,6 @@ static ODProgressWindow *_progressWin = nil;
   [alert runModal];
 }
 
-+ (NSArray *)_packagesFromPlistAtPath:(NSString *)plistPath
-                             osOverride:(NSString *)os
-{
-  NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:plistPath];
-  if (!plist) return nil;
-
-  NSMutableArray *packages = [NSMutableArray array];
-
-  NSArray *basePackages = [plist objectForKey:@"packages"];
-  if ([basePackages isKindOfClass:[NSArray class]])
-    [packages addObjectsFromArray:basePackages];
-
-  NSDictionary *osOverrides = [plist objectForKey:@"os_overrides"];
-  if ([osOverrides isKindOfClass:[NSDictionary class]] && os)
-    {
-      NSDictionary *override = [osOverrides objectForKey:os];
-      if ([override isKindOfClass:[NSDictionary class]])
-        {
-          NSArray *overridePackages = [override objectForKey:@"packages"];
-          if ([overridePackages isKindOfClass:[NSArray class]])
-            [packages addObjectsFromArray:overridePackages];
-        }
-    }
-
-  return packages;
-}
-
 + (NSArray *)_missingPackagesFromArray:(NSArray *)packages
 {
   NSMutableArray *missing = [NSMutableArray array];
@@ -275,22 +249,45 @@ static ODProgressWindow *_progressWin = nil;
 
 + (BOOL)_packageInstalled:(NSString *)package
 {
+  NSString *pmBin = nil;
+  NSArray *pmArgs = nil;
+
+  if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/dpkg"])
+    {
+      pmBin = @"/usr/bin/dpkg";
+      pmArgs = @[@"-s", package];
+    }
+  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/sbin/pkg"])
+    {
+      pmBin = @"/usr/sbin/pkg";
+      pmArgs = @[@"info", package];
+    }
+  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/pacman"])
+    {
+      pmBin = @"/usr/bin/pacman";
+      pmArgs = @[@"-Qi", package];
+    }
+  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/rpm"])
+    {
+      pmBin = @"/usr/bin/rpm";
+      pmArgs = @[@"-q", package];
+    }
+  else
+    {
+      return NO;
+    }
+
   NSTask *t = [[NSTask alloc] init];
-  [t setLaunchPath:@"/usr/bin/dpkg"];
-  [t setArguments:@[@"-s", package]];
+  [t setLaunchPath:pmBin];
+  [t setArguments:pmArgs];
   NSPipe *p = [NSPipe pipe];
   [t setStandardOutput:p];
-  NSPipe *ep = [NSPipe pipe];
-  [t setStandardError:ep];
+  [t setStandardError:[NSPipe pipe]];
   @try
     {
       [t launch];
       [t waitUntilExit];
-      if ([t terminationStatus] != 0)
-        return NO;
-      NSData *outData = [[p fileHandleForReading] readDataToEndOfFile];
-      NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding];
-      return [outStr rangeOfString:@"Status: install ok installed"].location != NSNotFound;
+      return ([t terminationStatus] == 0);
     }
   @catch (NSException *e)
     {

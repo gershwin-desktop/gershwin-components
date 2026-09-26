@@ -5,6 +5,7 @@
  */
 
 #import "WhisperController.h"
+#import "GSMediaPlayer2.h"
 #import "AppearanceMetrics.h"
 #import "WAudioLoader.h"
 #import "WCapture.h"
@@ -274,6 +275,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
         currentFilePath = nil;
         downloadingModel = nil;
         captureHandle = NULL;
+        playerPausedForRecording = NO;
         currentLangCode = nil;
         recordTimer = nil;
         streamTimer = nil;
@@ -298,6 +300,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 
 - (void)dealloc
 {
+    [self resumePlayerIfPaused];
     [self unloadModel];
     [segments release];
     [availableModels release];
@@ -420,6 +423,8 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
+    // Never leave Player silent because of us (MediaRemote/PROTOCOL.md)
+    [self resumePlayerIfPaused];
     [self unloadModel];
     if (downloadTask && [downloadTask isRunning]) {
         [downloadTask terminate];
@@ -953,6 +958,9 @@ static const unsigned long long modelMinSizes[] = {
 - (void)transcriptionProgress:(NSNumber *)progress
 {
     int p = [progress intValue];
+    if (p > 0) {
+        [progressBar setHidden:NO];
+    }
     [progressBar setDoubleValue:(double)p];
     if (p < 100) {
         NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate]
@@ -966,6 +974,7 @@ static const unsigned long long modelMinSizes[] = {
 - (void)transcriptionFinished:(NSString *)result
 {
     [progressBar setDoubleValue:100.0];
+    [progressBar setHidden:YES];
     [self setState:WhisperStateDone];
     [statusLabel setStringValue:@"Done"];
 
@@ -995,6 +1004,7 @@ static const unsigned long long modelMinSizes[] = {
 
 - (void)transcriptionFailed:(NSString *)error
 {
+    [progressBar setHidden:YES];
     [self setState:WhisperStateError];
     [statusLabel setStringValue:error];
 }
@@ -1015,6 +1025,7 @@ static const unsigned long long modelMinSizes[] = {
 
     if (isRecording) {
         [recordSpinner startAnimation:nil];
+        [progressBar setHidden:NO];
         [progressBar setIndeterminate:YES];
         [progressBar startAnimation:nil];
     } else {
@@ -1023,6 +1034,7 @@ static const unsigned long long modelMinSizes[] = {
         [progressBar setIndeterminate:NO];
         if (!isWorking) {
             [progressBar setDoubleValue:0.0];
+            [progressBar setHidden:YES];
         }
     }
 
@@ -1063,6 +1075,27 @@ static const unsigned long long modelMinSizes[] = {
 }
 
 #pragma mark - Actions
+
+/* Ask Player to fall silent for us before the microphone opens, and
+   remember that it did, so -resumePlayerIfPaused can tell our pause apart
+   from one the user asked for in Player directly.  A Player that is not
+   running, is busy or is already paused does not pause; recording goes
+   ahead either way. */
+- (void)pausePlayerForRecording
+{
+    playerPausedForRecording = [GSMediaPlayer2Client pausePlayer];
+}
+
+/* Undo -pausePlayerForRecording: Player plays again if it can.  A pause
+   the user took themselves, or one Player already dropped because it moved
+   on, is not ours to give back, and the Player side says so. */
+- (void)resumePlayerIfPaused
+{
+    if (!playerPausedForRecording)
+        return;
+    playerPausedForRecording = NO;
+    [GSMediaPlayer2Client resumePlayer];
+}
 
 - (IBAction)recordAudio:(id)sender
 {
@@ -1134,6 +1167,10 @@ static const unsigned long long modelMinSizes[] = {
         return;
     }
 
+    /* The microphone is really open now: from here the recording can
+       produce audio, so Player has to be quiet from here on. */
+    [self pausePlayerForRecording];
+
     // Ensure model is loaded before recording
     if (!whisperCtx) {
         NSLog(@"recordAudio: no model loaded, loading now...");
@@ -1143,6 +1180,7 @@ static const unsigned long long modelMinSizes[] = {
             NSLog(@"recordAudio: no model selected, canceling capture");
             wcapture_cancel(captureHandle);
             captureHandle = NULL;
+            [self resumePlayerIfPaused];
             [statusLabel setStringValue:@"Please select a model from the Whisper menu"];
             return;
         }
@@ -1151,6 +1189,8 @@ static const unsigned long long modelMinSizes[] = {
             NSLog(@"recordAudio: model '%@' not downloaded", selectedName);
             wcapture_cancel(captureHandle);
             captureHandle = NULL;
+            // Player comes back while the user decides about downloading
+            [self resumePlayerIfPaused];
 
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"Model not downloaded"];
@@ -1170,6 +1210,7 @@ static const unsigned long long modelMinSizes[] = {
             NSLog(@"recordAudio: model loading failed, canceling capture");
             wcapture_cancel(captureHandle);
             captureHandle = NULL;
+            [self resumePlayerIfPaused];
             return;
         }
     }
@@ -1241,6 +1282,10 @@ static const unsigned long long modelMinSizes[] = {
     WCaptureData *capData = wcapture_stop(captureHandle);
     captureHandle = NULL;
     [self playSubmarineSound];
+
+    /* The cue has sounded on its own: let Player carry on again if it
+       was us who paused it. */
+    [self resumePlayerIfPaused];
 
     if (!capData || capData->n_samples == 0) {
         NSLog(@"stopRecording: no audio captured");
@@ -1464,7 +1509,6 @@ static const unsigned long long modelMinSizes[] = {
     [self rebuildTextView];
     NSLog(@"appendStreamingResult: rebuilt text view (%lu segments)",
           (unsigned long)[segments count]);
-    [self updateUIForState];
 }
 
 // Transcribe raw PCM data and append only new segments to the UI.
@@ -2116,6 +2160,7 @@ static const unsigned long long modelMinSizes[] = {
     [progressBar setMinValue:0.0];
     [progressBar setMaxValue:100.0];
     [progressBar setDoubleValue:0.0];
+    [progressBar setHidden:YES];
     [contentView addSubview:progressBar];
 
     statusLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];

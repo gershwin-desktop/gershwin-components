@@ -1,22 +1,57 @@
 #!/usr/bin/env run_uitest
-# Player: the media player must start, show its window and its playback
-# controls, then quit with the standard Cmd+Q shortcut.
+# Player: without anything loaded the window says so and offers no transport
+# commands; every playback command has a shortcut of its own; File > Open
+# URL... plays what it is given.  The app quits with Cmd+Q.
 #
-# Leaves the computer as it was found: the app is quit at the end.
+# Leaves the computer as it was found: the fixture is removed and the app is
+# quit at the end.
 #
 # Run with: run_uitest Player/Tests/player.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
+# Player reopens in Internet radio mode, or with its last list, as it was quit
+shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
+shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Url Tone' /tmp/player-uitest-${home}/tone.mp3"
+
 launch application "Player"
 wait until window "Player" timeout 15s
-assert window "Player"
+wait until menu bar "Player" timeout 10s
 assert text contains "No file loaded"
 assert button "Mute"
-assert button "Open..."
+assert menu item "Playback/Play" disabled
+assert menu item "Playback/Stop" disabled
+assert menu item "Playback/Next Track" disabled
+assert menu item "Playback/Previous Track" disabled
+
+# One shortcut, one command (Cmd+. once stopped, skipped and stopped the
+# radio at the same time)
 assert menu item "Player/Quit Player" shortcut "Cmd+Q"
-assert menu item "File/Open File..." shortcut "Cmd+O"
+assert menu item "Player/Preferences..." shortcut "Cmd+,"
+assert menu item "File/Open..." shortcut "Cmd+O"
+assert menu item "File/Open URL..." shortcut "Cmd+U"
+assert menu item "File/Close Window" shortcut "Cmd+W"
+assert menu item "Playback/Stop" shortcut "Cmd+."
+assert menu item "View/Enter Full Screen" shortcut "Cmd+F"
 assert menu item "Edit/Copy" shortcut "Cmd+C"
+assert not exists menu item "Radio/Stop Radio"
+assert not exists menu item "Radio/Open Radio Stream..."
+
+# Open URL plays addresses of media files directly
+select menu "File/Open URL..."
+wait until textfield "https://" timeout 5s
+click textfield "https://"
+type "/tmp/player-uitest-${home}/tone.mp3"
+press key "Return"
+wait until window "Player - Url Tone" timeout 10s
+wait until button "Pause" timeout 5s
+assert menu item "Playback/Stop" enabled
+
 activate application "Player"
 wait until menu bar "Player" timeout 10s
 press "Alt+Q"
-wait until not exists window "Player" timeout 5s
-assert not exists application "Player"
-log "Player starts, shows its controls and quits"
+wait until not exists window "Player - Url Tone" timeout 5s
+# Sound fades out for a second before the app goes
+wait until not exists application "Player" timeout 5s
+shell "rm -rf /tmp/player-uitest-${home}"
+log "Player starts empty, has distinct shortcuts, plays a URL and quits"

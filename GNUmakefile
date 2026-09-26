@@ -26,7 +26,7 @@ all: build
 # installs Libraries first, then builds and installs these consumers.
 # Build links the PackageManager framework and thus has the same constraint.
 ifneq ($(filter Libraries,$(SUBDIRS)),)
-LIBRARY_CONSUMERS := $(filter Menu Network Sound Whisper Build,$(SUBDIRS))
+LIBRARY_CONSUMERS := $(filter Menu Network Sound Whisper Build Energy Mouse Keyboard Color SettingsApply,$(SUBDIRS))
 else
 LIBRARY_CONSUMERS :=
 endif

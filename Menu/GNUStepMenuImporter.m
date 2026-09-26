@@ -125,6 +125,23 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
 @property (nonatomic) dispatch_queue_t menuScanQueue;
 @end
 
+/* What a rebuild of the menu bar shows: titles, separators, shortcuts and
+   submenus.  Enabled and check states are left out; they are applied to the
+   displayed menu in place. */
+static id _menuStructure(NSDictionary *menuData)
+{
+    NSMutableArray *structure = [NSMutableArray array];
+    for (NSDictionary *item in [menuData objectForKey:@"items"]) {
+        NSDictionary *submenu = [item objectForKey:@"submenu"];
+        [structure addObject:@[[item objectForKey:@"title"] ?: @"",
+                               [item objectForKey:@"isSeparator"] ?: @NO,
+                               [item objectForKey:@"keyEquivalent"] ?: @"",
+                               [item objectForKey:@"keyEquivalentModifierMask"] ?: @0,
+                               submenu ? _menuStructure(submenu) : (id)[NSNull null]]];
+    }
+    return structure;
+}
+
 @implementation GNUStepMenuImporter
 
 static GNUStepMenuImporter *sSharedImporter = nil;
@@ -272,7 +289,14 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     NSTimeInterval delay = MIN(30.0, pow(2.0, attempt));
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        [self attemptRegisterRetry:attempt];
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased in the block is held
+           until the process ends. Asking another application for its menu
+           does that a hundred times over, once per window that appears. */
+        @autoreleasepool {
+            [self attemptRegisterRetry:attempt];
+        }
     });
 }
 
@@ -626,44 +650,46 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
         // Use background queue to avoid blocking main thread during window switch
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            @try {
-                NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
-                if (connection && [connection isValid]) {
-                    /* Cache the connection so the main-thread state refresh can
-                       use it without a blocking name lookup (which would wedge
-                       the menu bar if this client is stalled). */
-                    [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
-                    id proxy = [connection rootProxy];
-                    if (proxy) {
-                        // Log success if we connect
-                        static unsigned long lastConnectedWindow = 0;
-                        if (lastConnectedWindow != windowId) {
-                             NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Connected to %@ for window %lu", clientName, windowId);
-                             lastConnectedWindow = windowId;
-                        }
+            @autoreleasepool {
+                @try {
+                    NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
+                    if (connection && [connection isValid]) {
+                        /* Cache the connection so the main-thread state refresh can
+                           use it without a blocking name lookup (which would wedge
+                           the menu bar if this client is stalled). */
+                        [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
+                        id proxy = [connection rootProxy];
+                        if (proxy) {
+                            // Log success if we connect
+                            static unsigned long lastConnectedWindow = 0;
+                            if (lastConnectedWindow != windowId) {
+                                 NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Connected to %@ for window %lu", clientName, windowId);
+                                 lastConnectedWindow = windowId;
+                            }
 
-                        @try {
-                            [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
-                        } @catch (NSException *e) {
-                            // Protocol might not be known or needed depending on runtime
-                        }
+                            @try {
+                                [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
+                            } @catch (NSException *e) {
+                                // Protocol might not be known or needed depending on runtime
+                            }
                         
-                        // Request update
-                        [(id)proxy requestMenuUpdateForWindow:@(windowId)];
+                            // Request update
+                            [(id)proxy requestMenuUpdateForWindow:@(windowId)];
+                        } else {
+                            NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to get root proxy for client %@", clientName);
+                        }
                     } else {
-                        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to get root proxy for client %@", clientName);
+                        // Only log connection failure once per window to avoid spam
+                        // (Scanning logic might retry, so we want to see it at least once)
+                         static unsigned long lastFailedWindow = 0;
+                         if (lastFailedWindow != windowId) {
+                              NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to connect to client name %@", clientName);
+                              lastFailedWindow = windowId;
+                         }
                     }
-                } else {
-                    // Only log connection failure once per window to avoid spam
-                    // (Scanning logic might retry, so we want to see it at least once)
-                     static unsigned long lastFailedWindow = 0;
-                     if (lastFailedWindow != windowId) {
-                          NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to connect to client name %@", clientName);
-                          lastFailedWindow = windowId;
-                     }
+                } @catch (NSException *e) {
+                    NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Exception probing client %@: %@", clientName, e);
                 }
-            } @catch (NSException *e) {
-                NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Exception probing client %@: %@", clientName, e);
             }
         });
     } else {
@@ -735,43 +761,45 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
         probesDispatched++;
         dispatch_async(self.menuScanQueue, ^{
-            // Try to determine PID for the window
-            pid_t pid = [MenuUtils getWindowPID:windowId];
-            if (pid == 0) {
-                // Not all windows provide PID - skip
-                return;
-            }
+            @autoreleasepool {
+                // Try to determine PID for the window
+                pid_t pid = [MenuUtils getWindowPID:windowId];
+                if (pid == 0) {
+                    // Not all windows provide PID - skip
+                    return;
+                }
 
-            NSString *clientName = [self _clientNameForPID:pid];
-            NSDebugLog(@"GNUStepMenuImporter: Found window %@ (pid: %d) - probing client %@", windowNum, pid, clientName);
+                NSString *clientName = [self _clientNameForPID:pid];
+                NSDebugLog(@"GNUStepMenuImporter: Found window %@ (pid: %d) - probing client %@", windowNum, pid, clientName);
 
-            @try {
-                NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
-                if (connection && [connection isValid]) {
-                    /* Cache for the main-thread refresh path (avoids a blocking
-                       DO name lookup if this client stalls later). */
-                    [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
-                    id proxy = [connection rootProxy];
-                    if (proxy) {
-                        // Tell the proxy which protocol it implements so selectors are known
-                        @try {
-                            [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
-                        } @catch (NSException *e) {
-                            NSDebugLog(@"GNUStepMenuImporter: Failed to set protocol for proxy of %@: %@", clientName, e);
-                        }
+                @try {
+                    NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
+                    if (connection && [connection isValid]) {
+                        /* Cache for the main-thread refresh path (avoids a blocking
+                           DO name lookup if this client stalls later). */
+                        [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
+                        id proxy = [connection rootProxy];
+                        if (proxy) {
+                            // Tell the proxy which protocol it implements so selectors are known
+                            @try {
+                                [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
+                            } @catch (NSException *e) {
+                                NSDebugLog(@"GNUStepMenuImporter: Failed to set protocol for proxy of %@: %@", clientName, e);
+                            }
 
-                        // Ask client to send its menu for this window
-                        @try {
-                            NSDebugLog(@"GNUStepMenuImporter: Requesting menu update from client %@ for window %lu", clientName, windowId);
-                            [(id)proxy requestMenuUpdateForWindow:@(windowId)];
-                        } @catch (NSException *e) {
-                            NSDebugLog(@"GNUStepMenuImporter: Exception requesting menu update from %@: %@", clientName, e);
+                            // Ask client to send its menu for this window
+                            @try {
+                                NSDebugLog(@"GNUStepMenuImporter: Requesting menu update from client %@ for window %lu", clientName, windowId);
+                                [(id)proxy requestMenuUpdateForWindow:@(windowId)];
+                            } @catch (NSException *e) {
+                                NSDebugLog(@"GNUStepMenuImporter: Exception requesting menu update from %@: %@", clientName, e);
+                            }
                         }
                     }
                 }
-            }
-            @catch (NSException *ex) {
-                NSDebugLog(@"GNUStepMenuImporter: Exception probing client %@: %@", clientName, ex);
+                @catch (NSException *ex) {
+                    NSDebugLog(@"GNUStepMenuImporter: Exception probing client %@: %@", clientName, ex);
+                }
             }
         });
     }
@@ -970,10 +998,26 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     // NSLog(@"GNUStepMenuImporter: Successfully built menu with %ld top-level items", (long)[menu numberOfItems]);
     NSString *oldClient = [self.clientNamesByWindow objectForKey:windowId];
+    NSMenu *oldMenu = [self.menusByWindow objectForKey:windowId];
+    NSDictionary *oldData = [self.lastMenuDataByWindow objectForKey:windowId];
+    BOOL structureChanged = (oldData == nil
+        || ![_menuStructure(oldData) isEqual:_menuStructure(menuData)]);
     self.menusByWindow[windowId] = menu;
     self.clientNamesByWindow[windowId] = clientName;
     self.lastMenuDataByWindow[windowId] = [menuData copy];
     self.lastMenuUpdateTimeByWindow[windowId] = @(now);
+
+    /* findCachedMenuForWindow: files the menu under the top-level window's ID
+       as well; that copy must follow, or the menu bar keeps showing the
+       window's first menu (e.g. without the items an app adds later). */
+    if (oldMenu) {
+        for (NSNumber *key in [self.menusByWindow allKeys]) {
+            if ([self.menusByWindow objectForKey:key] == oldMenu) {
+                self.menusByWindow[key] = menu;
+                self.clientNamesByWindow[key] = clientName;
+            }
+        }
+    }
 
     /* If the client (app instance) changed for a window that is currently
        displayed, the visible menu still carries menu items bound to the OLD
@@ -985,6 +1029,20 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         && self.appMenuWidget
         && self.appMenuWidget.currentWindowId == windowValue) {
         [self.appMenuWidget loadMenu:menu forWindow:windowValue];
+    }
+
+    /* Shown in the menu bar (possibly through the top-level window's ID):
+       rebuild it when items were added, removed or renamed.  loadMenu:forWindow:
+       would keep the old menu while the top-level titles are unchanged, so
+       it is told to forget it first. */
+    AppMenuWidget *shownIn = self.appMenuWidget;
+    if (oldMenu && shownIn && shownIn.currentMenu == oldMenu) {
+        if (structureChanged) {
+            shownIn.currentMenu = nil;
+            [shownIn loadMenu:menu forWindow:shownIn.currentWindowId];
+        } else {
+            [self applyEnabledStatesFromData:menuData toMenu:shownIn.currentMenu depth:0];
+        }
     }
 
     // If this window is currently displayed, apply the fresh enabled/state values
@@ -1517,7 +1575,13 @@ static GNUStepMenuImporter *sSharedImporter = nil;
        offer, so fall through to the stale-state path instead of blocking. */
     NSConnection *connection = [GNUStepMenuActionHandler existingConnectionForClient:clientName];
     if (connection && [connection isValid]) {
+        /* -rootProxy waits on the REPLY timeout, not the request timeout
+           (it has no request of its own to bound yet) - GNUstep defaults
+           that to 1.0E12s, effectively forever.  A cached connection whose
+           peer died without invalidating it (isValid still YES) would
+           otherwise wedge the whole menu bar here indefinitely. */
         [connection setRequestTimeout:0.3];
+        [connection setReplyTimeout:0.3];
         id proxy = [connection rootProxy];
         if (proxy) {
             [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];

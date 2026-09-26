@@ -2,13 +2,78 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout
 
-ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
+ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
 ADDITIONAL_OBJCFLAGS += -fobjc-runtime=gnustep-2.0 -Wno-unused-parameter
+ADDITIONAL_INCLUDE_DIRS += -I../.. -I../../MenuExtras/BatteryExtra
 
 t_TintedMenuItemCell_OBJC_FILES = t_TintedMenuItemCell.m
 t_TintedMenuItemCell_TOOL_LIBS += -lgnustep-gui
+
+t_ShortcutReregistration_OBJC_FILES = t_ShortcutReregistration.m
+
+# The extra and the context it repaints through are ARC in Menu; the test
+# tool itself stays non-ARC.  Per-file flags are keyed by the path exactly as
+# listed above, or they are silently ignored.
+ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
+t_BatteryRefresh_OBJC_FILES = t_BatteryRefresh.m \
+	../../GSMenuExtraContext.m \
+	../../MenuExtras/BatteryExtra/BatteryExtra.m
+../../GSMenuExtraContext.m_FILE_FLAGS += $(ARCFLAGS)
+../../MenuExtras/BatteryExtra/BatteryExtra.m_FILE_FLAGS += $(ARCFLAGS)
+t_BatteryRefresh_TOOL_LIBS += -lgnustep-gui
+# The extra's Power Mode submenu calls CPUGovernorBackend on a dispatch
+# queue; link the backend source rather than the library so the test
+# needs nothing installed.
+t_BatteryRefresh_OBJC_FILES += ../../../Energy/CPUGovernorBackend.m
+t_BatteryRefresh_OBJCFLAGS += -I../../../Energy
+t_BatteryRefresh_TOOL_LIBS += -ldispatch
+
+# CPUGovernorBackend.h/.m live in Energy/ (Libraries/CPUGovernorBackend
+# packages the same source as libCPUGovernorBackend for Energy and the
+# Battery extra); link the source directly here rather than the library so
+# the test needs nothing installed.
+t_CPUGovernorBackend_OBJC_FILES = t_CPUGovernorBackend.m ../../../Energy/CPUGovernorBackend.m
+t_CPUGovernorBackend_OBJCFLAGS += -I../../../Energy
+# It is built ARC in both real targets; match that here too.
+../../../Energy/CPUGovernorBackend.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+t_WorldClockList_OBJC_FILES = t_WorldClockList.m ../../MenuExtras/ClockExtra/WorldClockList.m
+t_WorldClockList_OBJCFLAGS += -I../../MenuExtras/ClockExtra
+../../MenuExtras/ClockExtra/WorldClockList.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+# The Clock extra's own -menu, so the test can replay the manager's build
+# order against it: the extra (ARC, like the bundle) plus GSMenuExtraContext,
+# which it calls back through.  GSMenuExtraContext.m and WorldClockList.m
+# already carry the ARC flags with their targets above - the flags are keyed
+# by the path - so only the extra itself needs them here.
+t_ClockMenu_OBJC_FILES = t_ClockMenu.m \
+	../../GSMenuExtraContext.m \
+	../../MenuExtras/ClockExtra/ClockExtra.m \
+	../../MenuExtras/ClockExtra/WorldClockList.m
+t_ClockMenu_OBJCFLAGS += -I../../MenuExtras/ClockExtra
+../../MenuExtras/ClockExtra/ClockExtra.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+t_ClockMenu_TOOL_LIBS += -lgnustep-gui
+
+# WLANMenuListPolicy only needs the WLAN model (NetworkModels.m), not the
+# nmcli/BSD backends, so link that one collaborator rather than the whole
+# NetworkBackend library.
+t_WLANMenuListPolicy_OBJC_FILES = t_WLANMenuListPolicy.m \
+	../../MenuExtras/WLANExtra/WLANMenuListPolicy.m \
+	../../../Network/NetworkModels.m
+t_WLANMenuListPolicy_OBJCFLAGS += -I../../MenuExtras/WLANExtra -I../../../Network
+t_WLANMenuListPolicy_TOOL_LIBS += -lgnustep-gui
+# WLANMenuListPolicy is built ARC in its real target (the WLAN extra bundle);
+# match that here. NetworkModels.m (the WLAN model) is MRC in its own
+# library and stays that way - forcing ARC on it would conflict with its
+# explicit -release calls.
+../../MenuExtras/WLANExtra/WLANMenuListPolicy.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+# DBusMenuLayout is Foundation-only and ARC in Menu; the test scripts its
+# one D-Bus call, so nothing else of Menu is linked.
+t_DBusMenuLayout_OBJC_FILES = t_DBusMenuLayout.m ../../DBusMenuLayout.m
+../../DBusMenuLayout.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

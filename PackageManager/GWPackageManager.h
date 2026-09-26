@@ -64,6 +64,10 @@ typedef NS_ENUM(NSInteger, GWPackageManagerError) {
                 progress:(nullable id<GWInstallProgressHandler>)progressHandler
                    error:(NSError **)error;
 
+// --- Installed queries ---
+- (BOOL)isPackageInstalled:(NSString *)packageName;
+- (NSArray<NSString *> *)missingPackagesFrom:(NSArray<NSString *> *)packageNames;
+
 // --- Files / ownership queries ---
 - (NSArray<NSString *> *)filesForPackage:(NSString *)packageName error:(NSError **)error;
 - (NSString *)packageOwningFile:(NSString *)filePath error:(NSError **)error;

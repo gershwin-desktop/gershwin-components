@@ -20,72 +20,10 @@
 #import "WindowMonitor.h"
 #import "AppMenuImporter.h"
 #import "MenuProfiler.h"
-#import "BacklightBackend.h"
-#import "BrightnessKeySource.h"
-#import "SysfsBacklightBackend.h"
-#import "EvdevBrightnessKeySource.h"
-#import "ALSABackend.h"
 #import "SystemActions.h"
 #import "ForceQuitPanel.h"
+#import "MediaKeyController.h"
 
-@interface GSVolumeControl : NSObject
-+ (void)increaseVolume;
-+ (void)decreaseVolume;
-+ (void)toggleMute;
-+ (void)toggleMicMute;
-@end
-
-@implementation GSVolumeControl
-
-/* Serial queue for volume/mixer work.  The ALSA path shells out to amixer
- * (an NSTask with waitUntilExit); running that on the main thread froze the
- * whole menu bar for the duration of every volume-key press. */
-+ (dispatch_queue_t)volumeQueue
-{
-    static dispatch_queue_t q = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        q = dispatch_queue_create("io.github.gershwin-desktop.Menu.volume", DISPATCH_QUEUE_SERIAL);
-    });
-    return q;
-}
-
-+ (ALSABackend *)sharedBackend
-{
-    static ALSABackend *b = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        b = [[ALSABackend alloc] init];
-    });
-    return b;
-}
-+ (void)increaseVolume
-{
-    ALSABackend *b = [self sharedBackend];
-    float vol = [b outputVolume];
-    vol += 0.05f;
-    if (vol > 1.0f) vol = 1.0f;
-    [b setOutputVolume:vol];
-}
-+ (void)decreaseVolume
-{
-    ALSABackend *b = [self sharedBackend];
-    float vol = [b outputVolume];
-    vol -= 0.05f;
-    if (vol < 0.0f) vol = 0.0f;
-    [b setOutputVolume:vol];
-}
-+ (void)toggleMute
-{
-    ALSABackend *b = [self sharedBackend];
-    [b setOutputMuted:![b isOutputMuted]];
-}
-+ (void)toggleMicMute
-{
-    ALSABackend *b = [self sharedBackend];
-    [b setInputMuted:![b isInputMuted]];
-}
-@end
 #import "GNUstepGUI/GSTheme.h"
 #include <GNUstepGUI/GSDisplayServer.h>
 #import <X11/Xlib.h>
@@ -104,11 +42,6 @@
 #import <linux/input.h>
 #endif
 #import <dispatch/dispatch.h>
-
-// Shared debounce timestamp for brightness adjustments.
-// Both the evdev handler and XF86 key handler can fire for the same
-// physical keypress; we skip if either path handled within 200 ms.
-static NSTimeInterval _lastBrightnessAdjust = 0;
 
 @interface TimeMenuView : NSMenuView
 @end
@@ -134,12 +67,7 @@ static NSTimeInterval _lastBrightnessAdjust = 0;
 
 @interface MenuController ()
 {
-    id<BacklightBackend> _backlightBackend;
-    id<BrightnessKeySource> _brightnessKeySource;
-    NSThread *_micMuteThread;
-    volatile BOOL _micMuteMonitorRunning;
-    int _micMuteFDs[16];
-    int _micMuteFDCount;
+    MediaKeyController *_mediaKeyController;
     NSThread *_powerKeyThread;
     volatile BOOL _powerKeyMonitorRunning;
     int _powerKeyFDs[16];
@@ -772,7 +700,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     NSDebugLLog(@"gwcomp", @"MenuController: Application did finish launching");
     
     [self.menuBar orderFront:self];
-    [self setupBacklightControl];
     [self setupWindowMonitoring];
     
     NSDebugLLog(@"gwcomp", @"MenuController: Application setup complete");
@@ -899,97 +826,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
 }
 
-- (void)setupBacklightControl
-{
-    NSDebugLLog(@"gwcomp", @"MenuController: Setting up backlight control...");
-
-    _backlightBackend = [[SysfsBacklightBackend alloc] init];
-    _brightnessKeySource = [[EvdevBrightnessKeySource alloc] init];
-
-    if (![_backlightBackend respondsToSelector:@selector(current)] ||
-        ![_brightnessKeySource respondsToSelector:@selector(start:)]) {
-        NSDebugLLog(@"gwcomp", @"MenuController: Backlight control not available on this platform");
-        _backlightBackend = nil;
-        _brightnessKeySource = nil;
-        return;
-    }
-
-    int maxBrightness = [_backlightBackend maximum];
-    if (maxBrightness <= 0) {
-        NSDebugLLog(@"gwcomp", @"MenuController: No backlight device found, disabling backlight control");
-        _backlightBackend = nil;
-        _brightnessKeySource = nil;
-        return;
-    }
-
-    // Shared debounce: both evdev and XF86 key paths can fire for the same
-    // physical keypress.  The evdev path fires first (low-level input event),
-    // then XF86 fires later (X11 keysym).  We skip if either path handled the
-    // same event within 200 ms.
-    static dispatch_once_t debounceOnce;
-    dispatch_once(&debounceOnce, ^{ _lastBrightnessAdjust = 0; });
-    NSTimeInterval debounceInterval = 0.2;
-
-    __weak id<BacklightBackend> weakBackend = _backlightBackend;
-    int step = maxBrightness / 20; // 5% per step
-
-    [_brightnessKeySource start:^(int delta) {
-        id<BacklightBackend> backend = weakBackend;
-        if (!backend) return;
-
-        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-        if (now - _lastBrightnessAdjust < debounceInterval) return;
-        _lastBrightnessAdjust = now;
-
-        int cur = [backend current];
-        int max = [backend maximum];
-        int next = cur + delta * step;
-
-        if (next < 0) next = 0;
-        if (next > max) next = max;
-
-        [backend set:next];
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"BrightnessChanged" object:nil];
-    }];
-
-    // Also register XF86 brightness keys - forwarded via notification to BrightnessExtra.
-    X11ShortcutManager *mgr = [X11ShortcutManager sharedManager];
-    if (mgr) {
-        [mgr registerXF86Key:XF86XK_MonBrightnessUp target:self action:@selector(_xf86BrightnessUp)];
-        [mgr registerXF86Key:XF86XK_MonBrightnessDown target:self action:@selector(_xf86BrightnessDown)];
-    }
-
-    NSDebugLLog(@"gwcomp", @"MenuController: Backlight control started (max=%d, step=%d)",
-          maxBrightness, step);
-}
-
-#pragma mark - XF86 multimedia key forwarding
-
-- (void)_xf86VolumeUp
-{
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraVolumeUp" object:nil];
-}
-
-- (void)_xf86VolumeDown
-{
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraVolumeDown" object:nil];
-}
-
-- (void)_xf86Mute
-{
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraMute" object:nil];
-}
-
-- (void)_xf86BrightnessUp
-{
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraBrightnessUp" object:nil];
-}
-
-- (void)_xf86BrightnessDown
-{
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraBrightnessDown" object:nil];
-}
-
 #pragma mark - Power key (short/long press)
 
 /* Long-press threshold for the hardware power key. */
@@ -1078,165 +914,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
 }
 
-#pragma mark - Mic mute (evdev, to preserve hardware LED)
-
-- (void)startMicMuteMonitor
-{
-#ifdef __linux__
-    _micMuteFDCount = 0;
-    memset(_micMuteFDs, -1, sizeof(_micMuteFDs));
-
-    // Scan /proc/bus/input/devices for devices with KEY_MICMUTE
-    FILE *fp = fopen("/proc/bus/input/devices", "r");
-    if (!fp) return;
-    char line[512];
-    BOOL hasMicMute = NO;
-    int eventNum = -1;
-    while (fgets(line, sizeof(line), fp)) {
-        if (strncmp(line, "N: Name=", 8) == 0) {
-            hasMicMute = NO;
-            eventNum = -1;
-        } else if (strncmp(line, "B: KEY=", 7) == 0) {
-            // Check for KEY_MICMUTE (248) in the key bitmap
-            unsigned long bits[8] = {0};
-            char *p = line + 7;
-            for (int i = 0; i < 8 && *p; i++) {
-                bits[i] = strtoul(p, &p, 16);
-            }
-            unsigned long word = bits[248 / (sizeof(long) * 8)];
-            unsigned long bit = 1UL << (248 % (sizeof(long) * 8));
-            if (word & bit) {
-                hasMicMute = YES;
-            }
-        } else if (strncmp(line, "H: Handlers=", 12) == 0) {
-            char *h = line + 12;
-            char *tok = strtok(h, " \t\n");
-            while (tok) {
-                if (strncmp(tok, "event", 5) == 0) {
-                    eventNum = atoi(tok + 5);
-                }
-                tok = strtok(NULL, " \t\n");
-            }
-        } else if (line[0] == '\n' && hasMicMute && eventNum >= 0) {
-            // Found a device with mic mute key
-            char path[64];
-            snprintf(path, sizeof(path), "/dev/input/event%d", eventNum);
-            /* O_NONBLOCK: the drain loop below must return EAGAIN when the
-             * event queue is empty instead of blocking in read() forever -
-             * a blocking fd keeps the thread stuck in read() so the 1s poll
-             * timeout and the _micMuteMonitorRunning flag never get a chance
-             * to run, and the thread + fd leak after stop. */
-            int fd = open(path, O_RDONLY | O_NONBLOCK);
-            if (fd >= 0) {
-                _micMuteFDs[_micMuteFDCount++] = fd;
-            }
-            hasMicMute = NO;
-            eventNum = -1;
-            if (_micMuteFDCount >= 16) break;
-        }
-    }
-    fclose(fp);
-
-    if (_micMuteFDCount == 0) return;
-
-    _micMuteMonitorRunning = YES;
-    _micMuteThread = [[NSThread alloc] initWithTarget:self
-                                             selector:@selector(_micMuteMonitorThread)
-                                               object:nil];
-    [_micMuteThread start];
-#else
-    NSDebugLLog(@"gwcomp", @"MenuController: Mic mute evdev monitor not available on this platform");
-#endif
-}
-
-- (void)_micMuteMonitorThread
-{
-#ifdef __linux__
-    @autoreleasepool {
-        struct pollfd fds[16];
-        int nfds = 0;
-        for (int i = 0; i < _micMuteFDCount; i++) {
-            fds[nfds].fd = _micMuteFDs[i];
-            fds[nfds].events = POLLIN;
-            fds[nfds].revents = 0;
-            nfds++;
-        }
-
-        /* If no devices are available, exit immediately - poll() with nfds=0
-         * returns 0 immediately, spinning the loop forever at 100% CPU. */
-        if (nfds == 0) {
-            NSDebugLLog(@"gwcomp", @"MenuController: No mic-mute evdev devices - not starting monitor");
-            return;
-        }
-
-        while (_micMuteMonitorRunning) {
-            int ret = poll(fds, nfds, 1000);
-            if (ret < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-            if (ret == 0) continue;
-
-            BOOL anyValidFD = NO;
-            for (int i = 0; i < nfds; i++) {
-                if (fds[i].fd < 0) continue;
-                anyValidFD = YES;
-                /* A deleted/replaced input device leaves its fd permanently
-                 * readable with POLLHUP/POLLERR, so poll() returns immediately
-                 * and the loop busy-spins at 100% CPU.  Close the dead fd and
-                 * stop polling the slot (poll() ignores entries with fd < 0). */
-                if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-                    close(fds[i].fd);
-                    _micMuteFDs[i] = -1;
-                    fds[i].fd = -1;
-                    continue;
-                }
-                if (fds[i].revents & POLLIN) {
-                    struct input_event ev;
-                    /* fd is O_NONBLOCK: drain until EAGAIN.  Never spin on
-                     * error - a non-EAGAIN failure just ends the drain and
-                     * the next poll() iteration reports HUP/ERR. */
-                    while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
-                        if (ev.type == EV_KEY && ev.code == KEY_MICMUTE && ev.value == 1) {
-                            dispatch_async([GSVolumeControl volumeQueue], ^{
-                                [GSVolumeControl toggleMicMute];
-                            });
-                        }
-                    }
-                }
-            }
-            /* All monitored fds are dead (POLLHUP/POLLERR closed them all).
-             * Calling poll() with all -1 fds returns 0 immediately, spinning
-             * the CPU at 100%.  Detect this and exit the thread cleanly. */
-            if (!anyValidFD) {
-                NSDebugLLog(@"gwcomp", @"MenuController: All mic-mute evdev fds dead - stopping monitor");
-                break;
-            }
-        }
-
-        // Cleanup FDs
-        for (int i = 0; i < _micMuteFDCount; i++) {
-            if (_micMuteFDs[i] >= 0) {
-                close(_micMuteFDs[i]);
-                _micMuteFDs[i] = -1;
-            }
-        }
-    }
-#endif
-}
-
-- (void)_stopMicMuteMonitor
-{
-    _micMuteMonitorRunning = NO;
-    _micMuteThread = nil;
-}
-
 #pragma mark - Power key (evdev)
 
 /* The X server does not reliably deliver the physical power button to the
  * root window grab (the keycode/keysym mapping differs per input device), so
- * read KEY_POWER directly from the kernel input devices instead.  This is the
- * same approach used for the mic-mute LED key. */
+ * read KEY_POWER directly from the kernel input devices instead. */
 - (void)startPowerKeyMonitor
 {
 #ifdef __linux__
@@ -1278,7 +960,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
             // Found a device with the power key
             char path[64];
             snprintf(path, sizeof(path), "/dev/input/event%d", eventNum);
-            /* O_NONBLOCK: see the mic-mute monitor for why the drain loop
+            /* O_NONBLOCK: the drain loop below reads until EAGAIN and
              * must never block in read(). */
             int fd = open(path, O_RDONLY | O_NONBLOCK);
             if (fd >= 0) {
@@ -1324,69 +1006,75 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         }
 
         while (_powerKeyMonitorRunning) {
-            int ret = poll(fds, nfds, 1000);
-            if (ret < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-            if (ret == 0) continue;
+            /* One pool per pass: the loop only ends with the session, so a
+               pool around it would never be drained. */
+            @autoreleasepool {
+                int ret = poll(fds, nfds, 1000);
+                if (ret < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if (ret == 0) continue;
 
-            BOOL anyValidFD = NO;
-            for (int i = 0; i < nfds; i++) {
-                if (fds[i].fd < 0) continue;
-                anyValidFD = YES;
-                /* A deleted/replaced input device leaves its fd permanently
-                 * readable with POLLHUP/POLLERR, so poll() returns immediately
-                 * and the loop busy-spins at 100% CPU.  Drain any pending
-                 * events first (a power-key RELEASE may still be queued - if
-                 * it is lost while the long-press timer runs, the timer fires
-                 * and shuts the machine down without asking), then close the
-                 * dead fd and stop polling the slot (poll() ignores entries
-                 * with fd < 0). */
-                if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-                    if (fds[i].revents & POLLIN) {
-                        struct input_event ev;
-                        while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
-                            if (ev.type == EV_KEY && ev.code == KEY_POWER) {
-                                if (ev.value == 1) {
-                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                        [self _xf86PowerKeyPressed];
-                                    });
-                                } else if (ev.value == 0) {
-                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                        [self _xf86PowerKeyReleased];
-                                    });
+                BOOL anyValidFD = NO;
+                for (int i = 0; i < nfds; i++) {
+                    if (fds[i].fd < 0) continue;
+                    anyValidFD = YES;
+                    /* A deleted/replaced input device leaves its fd permanently
+                     * readable with POLLHUP/POLLERR, so poll() returns immediately
+                     * and the loop busy-spins at 100% CPU.  Drain any pending
+                     * events first (a power-key RELEASE may still be queued - if
+                     * it is lost while the long-press timer runs, the timer fires
+                     * and shuts the machine down without asking), then close the
+                     * dead fd and stop polling the slot (poll() ignores entries
+                     * with fd < 0). */
+                    if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                        if (fds[i].revents & POLLIN) {
+                            struct input_event ev;
+                            while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
+                                if (ev.type == EV_KEY && ev.code == KEY_POWER) {
+                                    if (ev.value == 1) {
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self _xf86PowerKeyPressed];
+                                        });
+                                    } else if (ev.value == 0) {
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self _xf86PowerKeyReleased];
+                                        });
+                                    }
                                 }
                             }
                         }
+                        close(fds[i].fd);
+                        _powerKeyFDs[i] = -1;
+                        fds[i].fd = -1;
+                        continue;
                     }
-                    close(fds[i].fd);
-                    _powerKeyFDs[i] = -1;
-                    fds[i].fd = -1;
-                    continue;
-                }
-                if (fds[i].revents & POLLIN) {
-                    struct input_event ev;
-                    /* fd is O_NONBLOCK: drain until EAGAIN (see mic-mute). */
-                    while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
-                        if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 1) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self _xf86PowerKeyPressed];
-                            });
-                        } else if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 0) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [self _xf86PowerKeyReleased];
-                            });
+                    if (fds[i].revents & POLLIN) {
+                        struct input_event ev;
+                        /* fd is O_NONBLOCK: drain until EAGAIN.  Never spin on
+                         * error - a non-EAGAIN failure just ends the drain and
+                         * the next poll() iteration reports HUP/ERR. */
+                        while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev)) {
+                            if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 1) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    [self _xf86PowerKeyPressed];
+                                });
+                            } else if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 0) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    [self _xf86PowerKeyReleased];
+                                });
+                            }
                         }
                     }
                 }
-            }
-            /* All monitored fds are dead (POLLHUP/POLLERR closed them all).
-             * Calling poll() with all -1 fds returns 0 immediately, spinning
-             * the CPU at 100%.  Detect this and exit the thread cleanly. */
-            if (!anyValidFD) {
-                NSDebugLLog(@"gwcomp", @"MenuController: All power-key evdev fds dead - stopping monitor");
-                break;
+                /* All monitored fds are dead (POLLHUP/POLLERR closed them all).
+                 * Calling poll() with all -1 fds returns 0 immediately, spinning
+                 * the CPU at 100%.  Detect this and exit the thread cleanly. */
+                if (!anyValidFD) {
+                    NSDebugLLog(@"gwcomp", @"MenuController: All power-key evdev fds dead - stopping monitor");
+                    break;
+                }
             }
         }
 
@@ -1421,17 +1109,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         self.menuExtraManager = nil;
     }
     
-    // Stop backlight control
-    NSDebugLLog(@"gwcomp", @"MenuController: Stopping backlight control...");
-    if ([_brightnessKeySource respondsToSelector:@selector(stop)]) {
-        [_brightnessKeySource stop];
-    }
-    _brightnessKeySource = nil;
-    _backlightBackend = nil;
-
-    // Stop mic mute evdev monitor
-    [self _stopMicMuteMonitor];
-
     // Stop the power key evdev monitor
     [self _stopPowerKeyMonitor];
 
@@ -1611,14 +1288,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                           target:[ForceQuitPanelController sharedController]
                           action:@selector(showPanel:)];
 
-    // Register XF86Audio volume keys - forwarded via notification to SoundExtra.
-    X11ShortcutManager *volMgr = [X11ShortcutManager sharedManager];
-    if (volMgr) {
-        [volMgr registerXF86Key:XF86XK_AudioRaiseVolume target:self action:@selector(_xf86VolumeUp)];
-        [volMgr registerXF86Key:XF86XK_AudioLowerVolume target:self action:@selector(_xf86VolumeDown)];
-        [volMgr registerXF86Key:XF86XK_AudioMute target:self action:@selector(_xf86Mute)];
-        NSDebugLLog(@"gwcomp", @"MenuController: Registered XF86Audio volume keys via notifications");
-    }
+    _mediaKeyController = [[MediaKeyController alloc] initWithShortcutManager:[X11ShortcutManager sharedManager]];
 
     // Register the hardware power key (XF86PowerOff).  A short press shows the
     // shutdown confirmation; a long press (> POWER_KEY_LONG_PRESS) shuts down
@@ -1637,9 +1307,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     // every machine, so also monitor it directly via evdev (KEY_POWER).  The
     // X11 registration above stays as a secondary path.
     [self startPowerKeyMonitor];
-
-    // Mic mute uses evdev (not XGrabKey) so the system mic-mute LED still works.
-    [self startMicMuteMonitor];
 
     // Animate menu sliding in using NSTimer instead of dispatch_async for better GNUstep/FreeBSD compatibility
     // FIXME: GCD dispatch_async may not execute reliably with GNUstep run loop on some platforms
@@ -1866,32 +1533,21 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                                                 userInfo:nil
                                                                  repeats:YES];
 
-    // Fallback poll for the active window.  The WindowMonitor is event-driven
-    // via a dispatch source on its own X connection; that source has been
-    // observed to stop firing after a while (GCD read-source on an Xlib fd),
-    // which leaves the menu stuck on the previously active app.  Polling every
-    // 100ms on a fresh connection keeps the menu tracking responsive (the menu
-    // must follow an app switch within ~100ms).
-    self.activeWindowPollTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
-                                                                  target:self
-                                                                selector:@selector(activeWindowPollTick:)
-                                                                userInfo:nil
-                                                                 repeats:YES];
+    /* The widget follows every viewable active window, including those the
+       filtered notification above keeps back; the menu must follow an app
+       switch at once. */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(viewableActiveWindowNotification:)
+                                                 name:WindowMonitorViewableActiveWindowNotification
+                                               object:nil];
     
     NSDebugLLog(@"gwcomp", @"MenuController: Window monitoring setup complete");
 }
 
-- (void)activeWindowPollTick:(NSTimer *)timer
+- (void)viewableActiveWindowNotification:(NSNotification *)notification
 {
     @try {
-        /* Read the active window live via MenuUtils' shared X connection.
-           Do NOT use the WindowMonitor's cached value: its event loop is
-           known to stall (see the monitor setup comment), so the cache goes
-           stale and Menu would miss or lag active-app switches.  Do NOT open
-           a fresh X connection per tick either - that churns ~36000 connects
-           per hour and accumulated CPU on long-running sessions.  The shared
-           persistent connection gives a fresh read with no per-tick cost. */
-        unsigned long activeWindow = [MenuUtils getActiveWindow];
+        unsigned long activeWindow = [notification.userInfo[@"windowId"] unsignedLongValue];
 
         if (activeWindow == 0 || activeWindow == self.lastProcessedWindowId) {
             return;
@@ -1903,7 +1559,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         self.lastProcessedTime = [[NSDate date] timeIntervalSince1970];
     }
     @catch (NSException *ex) {
-        NSDebugLLog(@"gwcomp", @"MenuController: Exception in activeWindowPollTick: %@", ex);
+        NSDebugLLog(@"gwcomp", @"MenuController: Exception in viewableActiveWindowNotification: %@", ex);
     }
 }
 

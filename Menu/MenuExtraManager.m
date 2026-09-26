@@ -624,6 +624,12 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 NSLog(@"GSMenuExtra: exception in menu for %@: %@", ident, e);
             }
             if (submenu) {
+                /* Same as the other two build paths: without the delegate the
+                   submenu never gets menuNeedsUpdate:/menuWillOpen again, so
+                   this extra's menu would stop refreshing on open (and lose
+                   its Customize... item) the moment the user toggles anything
+                   in the preferences panel. */
+                [self configureSubmenu:submenu forIdentifier:ident];
                 [item setSubmenu:submenu];
             }
         }
@@ -822,7 +828,13 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 {
     @try {
         objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
-        NSArray *items = [timer userInfo];
+        /* The list is taken live, not from the timer's userInfo: enabling or
+           disabling an extra from the preferences panel replaces _menuExtras,
+           and the snapshot taken when the timer started would leave every
+           newly enabled extra unticked (its readings frozen at load, exactly
+           the bug this shared timer exists to prevent) while removed ones
+           kept ticking forever. */
+        NSArray *items = [_menuExtras copy];
         for (GSMenuExtraInstance * item in items) {
             @try {
                 [item tick];
@@ -875,28 +887,22 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 if ([provider respondsToSelector:@selector(icon)]) {
                     [self showIconOfExtra:provider inItem:menuItem];
                     if (_extrasMenuView) {
+                        /* Every extra ticks in the same timer pass, and each
+                           queued redraw of the whole bar ran on its own. */
+                        [NSObject cancelPreviousPerformRequestsWithTarget:_extrasMenuView
+                                                                 selector:@selector(display)
+                                                                   object:nil];
                         [_extrasMenuView performSelector:@selector(display)
                                              withObject:nil
                                              afterDelay:0];
                     }
                 }
-                if ([provider respondsToSelector:@selector(menu)]
-                    && ![self isMenuOnScreen:[menuItem submenu]]) {
-                    if ([provider respondsToSelector:@selector(menuWillOpen)]) {
-                        [provider menuWillOpen];
-                    }
-                    NSMenu *freshSubmenu = [provider menu];
-                    if (freshSubmenu) {
-                        NSMenu *existingSubmenu = [menuItem submenu];
-                        if (existingSubmenu) {
-                            [self configureSubmenu:existingSubmenu forIdentifier:identifier];
-                            [self replaceMenu:existingSubmenu withMenu:freshSubmenu];
-                        } else {
-                            [self configureSubmenu:freshSubmenu forIdentifier:identifier];
-                            [menuItem setSubmenu:freshSubmenu];
-                        }
-                    }
-                }
+                /* The submenu is deliberately left alone here. An extra
+                   reports a new value every second, and building its menu
+                   again means a whole menu with two windows of its own for
+                   something nobody is looking at. What is on screen is the
+                   title and the icon above, and the submenu is built afresh
+                   in menuNeedsUpdate: at the moment it is opened. */
             } @catch (NSException *e) {
                 NSLog(@"GSMenuExtra: exception refreshing %@: %@", identifier, e);
             }

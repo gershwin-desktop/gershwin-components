@@ -47,7 +47,34 @@
 
 - (BOOL)xcalibAvailable
 {
+    return [[self class] xcalibAvailable];
+}
+
++ (BOOL)xcalibAvailable
+{
     return [[NSFileManager defaultManager] isExecutableFileAtPath:@"/usr/bin/xcalib"];
+}
+
++ (BOOL)loadProfile:(NSString *)profilePath forOutput:(NSString *)displayName
+{
+    if (!profilePath || !displayName || ![self xcalibAvailable]) return NO;
+
+    NSTask *task = [[NSTask alloc] init];
+    NSPipe *errPipe = [NSPipe pipe];
+    [task setLaunchPath:@"/usr/bin/xcalib"];
+    [task setArguments:@[@"-output", displayName, @"-load", profilePath]];
+    [task setStandardError:errPipe];
+
+    BOOL ok = NO;
+    @try {
+        [task launch];
+        [task waitUntilExit];
+        ok = ([task terminationStatus] == 0);
+    } @catch (NSException *e) {
+        ok = NO;
+    }
+    [task release];
+    return ok;
 }
 
 - (BOOL)applyProfile:(NSString *)profilePath forDisplay:(NSString *)displayName
@@ -63,28 +90,12 @@
 
 - (BOOL)applyViaXcalib:(NSString *)profilePath display:(NSString *)displayName
 {
-    NSTask *task = [[NSTask alloc] init];
-    NSPipe *errPipe = [NSPipe pipe];
-    [task setLaunchPath:@"/usr/bin/xcalib"];
-    [task setArguments:@[@"-output", displayName, @"-load", profilePath]];
-    [task setStandardError:errPipe];
-
-    @try {
-        [task launch];
-        [task waitUntilExit];
-        if ([task terminationStatus] == 0) {
-            [_activeProfiles setObject:profilePath forKey:displayName];
-            [self saveActiveProfiles];
-            [task release];
-            return YES;
-        }
-    } @catch (NSException *e) {
-        [task release];
+    if (![[self class] loadProfile:profilePath forOutput:displayName]) {
         return NO;
     }
-
-    [task release];
-    return NO;
+    [_activeProfiles setObject:profilePath forKey:displayName];
+    [self saveActiveProfiles];
+    return YES;
 }
 
 - (BOOL)applyViaXrandrGamma:(NSString *)profilePath display:(NSString *)displayName

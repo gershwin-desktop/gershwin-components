@@ -1223,7 +1223,11 @@ static const CGFloat kSpace16 = 16.0;
     } else if (status == 0) {
         NSLog(@"buildFinished: OK");
         [self setProjectLabel:GWBuildFileLabelYellow];
-        [self cleanupTempDir];
+        NSString *revealed = [self revealBuiltProduct];
+        /* Deleting the temp copy would empty the viewer we just opened. */
+        if (!(revealed && _objDir && [revealed hasPrefix:_objDir])) {
+            [self cleanupTempDir];
+        }
         [self quitCleanly];
     } else if (status != 0 && button == NSAlertSecondButtonReturn) {
         NSLog(@"buildFinished: Show Build Log");
@@ -1442,6 +1446,54 @@ static const CGFloat kSpace16 = 16.0;
 
     [self cleanupTempDir];
     [self quitCleanly];
+}
+
+/* Path of the product this build just produced.  It sits next to the
+   GNUmakefile, or in the subproject directory that declares it; tools are
+   linked into obj/ instead of a bundle. */
+- (NSString *)builtProductPath
+{
+    NSString *name = [self productNameFromMakefile];
+    NSString *ext = [self productExtensionFromMakefile];
+    if ([name length] == 0 || [ext length] == 0) return nil;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [makefilePath stringByDeletingLastPathComponent];
+
+    if ([ext isEqualToString:@"tool"]) {
+        NSString *tool = [[dir stringByAppendingPathComponent:@"obj"]
+            stringByAppendingPathComponent:name];
+        return [fm fileExistsAtPath:tool] ? tool : nil;
+    }
+
+    NSString *leaf = [name stringByAppendingPathExtension:ext];
+    NSString *product = [dir stringByAppendingPathComponent:leaf];
+    if ([fm fileExistsAtPath:product]) return product;
+
+    for (NSString *entry in [fm contentsOfDirectoryAtPath:dir error:NULL]) {
+        NSString *nested = [[dir stringByAppendingPathComponent:entry]
+            stringByAppendingPathComponent:leaf];
+        if ([fm fileExistsAtPath:nested]) return nested;
+    }
+    return nil;
+}
+
+/* OK ends the session without installing, so the only thing left to do with
+   the result is to find it: select it in Workspace, like "Show In File
+   Viewer" does.  Returns the revealed path, or nil if there was none. */
+- (NSString *)revealBuiltProduct
+{
+    NSString *product = [self builtProductPath];
+    if (!product) {
+        NSLog(@"revealBuiltProduct: no product found for %@", makefilePath);
+        return nil;
+    }
+    if (![[NSWorkspace sharedWorkspace]
+            selectFile:product
+            inFileViewerRootedAtPath:[product stringByDeletingLastPathComponent]]) {
+        NSLog(@"revealBuiltProduct: Workspace did not show %@", product);
+    }
+    return product;
 }
 
 /* After `gmake install` the product sits in one of the standard Applications

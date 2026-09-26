@@ -194,6 +194,32 @@ static GWPackageManager *sharedManager = nil;
   return result;
 }
 
+#pragma mark - Installed Queries
+
+- (BOOL)isPackageInstalled:(NSString *)packageName
+{
+  if (!_backend)
+    {
+      NSLog(@"GWPackageManager [FAIL] isPackageInstalled: no backend available");
+      return NO;
+    }
+
+  BOOL result = [_backend isPackageInstalled:packageName];
+  NSLog(@"GWPackageManager <- isPackageInstalled: %@ -> %d", packageName, result);
+  return result;
+}
+
+- (NSArray<NSString *> *)missingPackagesFrom:(NSArray<NSString *> *)packageNames
+{
+  NSMutableArray *missing = [NSMutableArray array];
+  for (NSString *packageName in packageNames)
+    {
+      if (![self isPackageInstalled:packageName])
+        [missing addObject:packageName];
+    }
+  return [missing copy];
+}
+
 #pragma mark - File / Ownership Queries
 
 - (NSArray<NSString *> *)filesForPackage:(NSString *)packageName

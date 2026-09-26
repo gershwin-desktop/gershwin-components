@@ -10,6 +10,9 @@
 #import <X11/Xutil.h>
 #import <X11/Xatom.h>
 #import <dispatch/dispatch.h>
+#ifdef __GLIBC__
+#import <malloc.h>
+#endif
 
 @interface MenuUtils (Private)
 + (NSString *)_getApplicationNameForWindow:(unsigned long)windowId display:(Display *)display;
@@ -38,6 +41,17 @@ static dispatch_once_t _sharedDisplayOnce;
         XCloseDisplay(_sharedDisplay);
         _sharedDisplay = NULL;
     }
+}
+
++ (void)releaseFreedHeapMemory
+{
+#ifdef __GLIBC__
+    /* glibc gives memory back only from the top of the heap.  After a burst
+       of short-lived allocations the freed pages below a surviving object
+       stay resident for the life of the process.  The allocators of the
+       BSDs return such pages on their own. */
+    malloc_trim(0);
+#endif
 }
 
 + (Display *)openDisplay
@@ -72,42 +86,6 @@ static dispatch_once_t _sharedDisplayOnce;
         XFree(prop);
     }
     XCloseDisplay(display);
-    return activeWindow;
-}
-
-+ (unsigned long)getActiveWindow
-{
-    Display *display = [self sharedDisplay];
-    if (!display) return 0;
-
-    Atom actualType;
-    int actualFormat;
-    unsigned long nitems, bytesAfter;
-    unsigned char *prop = NULL;
-    unsigned long activeWindow = 0;
-
-    Atom atom = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
-    if (XGetWindowProperty(display, DefaultRootWindow(display), atom,
-                          0, 1, False, XA_WINDOW,
-                          &actualType, &actualFormat, &nitems, &bytesAfter,
-                          &prop) == 0 && prop) {
-        if (nitems > 0) {
-            activeWindow = *(Window*)prop;
-        }
-        XFree(prop);
-    }
-
-    // Systematic fix: If the active window ID is reported but the window is NO LONGER VALID
-    // or NOT MAPPED, then it's effectively NOT the active window anymore.
-    if (activeWindow != 0) {
-        XWindowAttributes attrs;
-        // XGetWindowAttributes returns non-zero on success
-        if (XGetWindowAttributes(display, (Window)activeWindow, &attrs) == 0 ||
-            attrs.map_state != IsViewable) {
-            activeWindow = 0;
-        }
-    }
-
     return activeWindow;
 }
 
@@ -284,12 +262,9 @@ static dispatch_once_t _sharedDisplayOnce;
     return mapped;
 }
 
-+ (BOOL)isRealApplicationWindow:(unsigned long)windowId
++ (BOOL)isRealApplicationWindow:(unsigned long)windowId onDisplay:(Display *)display
 {
-    if (windowId == 0) return NO;
-
-    Display *display = [self openDisplay];
-    if (!display) return NO;
+    if (windowId == 0 || !display) return NO;
 
     XWindowAttributes attrs;
     BOOL real = NO;
@@ -350,7 +325,6 @@ static dispatch_once_t _sharedDisplayOnce;
         }
     }
 
-    [self closeDisplay:display];
     return real;
 }
 
@@ -365,7 +339,18 @@ static dispatch_once_t _sharedDisplayOnce;
     if (!display) {
         return NO;
     }
-    
+
+    BOOL isDesktop = [self isDesktopWindow:windowId onDisplay:display];
+    XCloseDisplay(display);
+    return isDesktop;
+}
+
++ (BOOL)isDesktopWindow:(unsigned long)windowId onDisplay:(Display *)display
+{
+    if (windowId == 0 || !display) {
+        return NO;
+    }
+
     // Check if window has _NET_WM_WINDOW_TYPE_DESKTOP
     Atom actualType;
     int actualFormat;
@@ -389,8 +374,7 @@ static dispatch_once_t _sharedDisplayOnce;
         }
         XFree(prop);
     }
-    
-    XCloseDisplay(display);
+
     return isDesktop;
 }
 

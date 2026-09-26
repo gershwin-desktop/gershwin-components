@@ -83,9 +83,15 @@
     MENU_PROFILE_BEGIN(AppMenuActiveWindowChanged);
 
     dispatch_async(_menuQueue, ^{
-        self->_currentXID = windowId;
-        [self _invalidateMenus];
-        [self _scheduleImportForXID:windowId];
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased while doing this menu
+           lookup is held until the process ends. */
+        @autoreleasepool {
+            self->_currentXID = windowId;
+            [self _invalidateMenus];
+            [self _scheduleImportForXID:windowId];
+        }
     });
 
     MENU_PROFILE_END(AppMenuActiveWindowChanged);
@@ -176,27 +182,29 @@
     }
     
     dispatch_async(self->_menuQueue, ^{
-        if (windowId != self->_currentXID) {
-            NSDebugLLog(@"gwcomp", @"AppMenuImporter: XID %lu became stale during Canonical query", windowId);
-            return;
-        }
-        
-        if (reply && reply.count >= 2) {
-            NSString *service = reply[0];
-            NSString *path = reply[1];
-            
-            if (![service isKindOfClass:[NSString class]] || [service length] == 0 ||
-                ![path isKindOfClass:[NSString class]] || [path length] == 0) {
-                NSDebugLLog(@"gwcomp", @"AppMenuImporter: Canonical returned empty service/path, trying GTK fallback");
-                [self _fallbackToGTKPropertiesForXID:windowId];
+        @autoreleasepool {
+            if (windowId != self->_currentXID) {
+                NSDebugLLog(@"gwcomp", @"AppMenuImporter: XID %lu became stale during Canonical query", windowId);
                 return;
             }
+        
+            if (reply && reply.count >= 2) {
+                NSString *service = reply[0];
+                NSString *path = reply[1];
             
-            NSDebugLLog(@"gwcomp", @"AppMenuImporter: Canonical AppMenu found - service: %@, path: %@", service, path);
-            [self _importGTKMenusWithService:service path:path forXID:windowId];
-        } else {
-            NSDebugLLog(@"gwcomp", @"AppMenuImporter: Canonical AppMenu not available, trying GTK fallback");
-            [self _fallbackToGTKPropertiesForXID:windowId];
+                if (![service isKindOfClass:[NSString class]] || [service length] == 0 ||
+                    ![path isKindOfClass:[NSString class]] || [path length] == 0) {
+                    NSDebugLLog(@"gwcomp", @"AppMenuImporter: Canonical returned empty service/path, trying GTK fallback");
+                    [self _fallbackToGTKPropertiesForXID:windowId];
+                    return;
+                }
+            
+                NSDebugLLog(@"gwcomp", @"AppMenuImporter: Canonical AppMenu found - service: %@, path: %@", service, path);
+                [self _importGTKMenusWithService:service path:path forXID:windowId];
+            } else {
+                NSDebugLLog(@"gwcomp", @"AppMenuImporter: Canonical AppMenu not available, trying GTK fallback");
+                [self _fallbackToGTKPropertiesForXID:windowId];
+            }
         }
     });
 
@@ -251,40 +259,42 @@
                                             arguments:@[@(0), @(3), @[]]];
     
     dispatch_async(self->_menuQueue, ^{
-        if (windowId != self->_currentXID) {
-            NSDebugLLog(@"gwcomp", @"AppMenuImporter: XID %lu became stale during layout fetch", windowId);
-            return;
-        }
-        
-        if (!reply) {
-            NSDebugLLog(@"gwcomp", @"AppMenuImporter: Failed to get menu layout");
-            return;
-        }
-        
-        NSDebugLLog(@"gwcomp", @"AppMenuImporter: Received menu layout, building NSMenu");
-        
-        // Build NSMenu from GTK layout on main queue
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSMenu *menu = [self _buildNSMenuFromGTKLayout:reply];
-            
-            if (menu) {
-                NSDebugLLog(@"gwcomp", @"AppMenuImporter: Menu built successfully with %ld items", [menu numberOfItems]);
-                
-                // Cache the menu
-                self->_menuCache[@(windowId)] = menu;
-                
-                // Notify that menu is ready
-                NSDictionary *userInfo = @{
-                    @"windowId": @(windowId),
-                    @"menu": menu
-                };
-                [[NSNotificationCenter defaultCenter] postNotificationName:@"AppMenuReady" 
-                                                                  object:nil 
-                                                                userInfo:userInfo];
-            } else {
-                NSDebugLLog(@"gwcomp", @"AppMenuImporter: Failed to build menu from layout");
+        @autoreleasepool {
+            if (windowId != self->_currentXID) {
+                NSDebugLLog(@"gwcomp", @"AppMenuImporter: XID %lu became stale during layout fetch", windowId);
+                return;
             }
-        });
+        
+            if (!reply) {
+                NSDebugLLog(@"gwcomp", @"AppMenuImporter: Failed to get menu layout");
+                return;
+            }
+        
+            NSDebugLLog(@"gwcomp", @"AppMenuImporter: Received menu layout, building NSMenu");
+        
+            // Build NSMenu from GTK layout on main queue
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSMenu *menu = [self _buildNSMenuFromGTKLayout:reply];
+            
+                if (menu) {
+                    NSDebugLLog(@"gwcomp", @"AppMenuImporter: Menu built successfully with %ld items", [menu numberOfItems]);
+                
+                    // Cache the menu
+                    self->_menuCache[@(windowId)] = menu;
+                
+                    // Notify that menu is ready
+                    NSDictionary *userInfo = @{
+                        @"windowId": @(windowId),
+                        @"menu": menu
+                    };
+                    [[NSNotificationCenter defaultCenter] postNotificationName:@"AppMenuReady" 
+                                                                      object:nil 
+                                                                    userInfo:userInfo];
+                } else {
+                    NSDebugLLog(@"gwcomp", @"AppMenuImporter: Failed to build menu from layout");
+                }
+            });
+        }
     });
     
     // Subscribe to layout updates
@@ -395,27 +405,29 @@
     
     // Import async
     dispatch_async(_menuQueue, ^{
-        self->_currentXID = windowId;
-        [self _scheduleImportForXID:windowId];
+        @autoreleasepool {
+            self->_currentXID = windowId;
+            [self _scheduleImportForXID:windowId];
         
-        // Wait for import to complete or timeout
-        dispatch_after(
-            dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
-            dispatch_get_main_queue(),
-            ^{
-                NSMenu *menu = self->_menuCache[@(windowId)];
-                if (completion) {
-                    if (menu) {
-                        completion(menu, nil);
-                    } else {
-                        NSError *error = [NSError errorWithDomain:@"AppMenuImporter"
-                                                             code:1
-                                                         userInfo:@{NSLocalizedDescriptionKey: @"Timeout importing menu"}];
-                        completion(nil, error);
+            // Wait for import to complete or timeout
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+                dispatch_get_main_queue(),
+                ^{
+                    NSMenu *menu = self->_menuCache[@(windowId)];
+                    if (completion) {
+                        if (menu) {
+                            completion(menu, nil);
+                        } else {
+                            NSError *error = [NSError errorWithDomain:@"AppMenuImporter"
+                                                                 code:1
+                                                             userInfo:@{NSLocalizedDescriptionKey: @"Timeout importing menu"}];
+                            completion(nil, error);
+                        }
                     }
                 }
-            }
-        );
+            );
+        }
     });
 
     MENU_PROFILE_END(importMenuForWindow);

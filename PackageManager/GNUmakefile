@@ -19,7 +19,8 @@ PackageManager_OBJC_FILES = \
   GWPackageManager.m \
   GWSudoHelper.m \
   GWAppImageDownloader.m \
-  ODProgressWindow.m
+  ODProgressWindow.m \
+  ODLogWindowController.m
 
 PackageManager_HEADER_FILES = \
   GWSystemCommandExecutor.h \
@@ -34,7 +35,8 @@ PackageManager_HEADER_FILES = \
   GWPackageManager.h \
   GWSudoHelper.h \
   GWAppImageDownloader.h \
-  ODProgressWindow.h
+  ODProgressWindow.h \
+  ODLogWindowController.h
 
 PackageManager_HEADER_FILES_INSTALL_DIR = PackageManager
 

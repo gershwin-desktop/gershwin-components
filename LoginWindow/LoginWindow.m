@@ -272,7 +272,7 @@ void signalHandler(int sig) {
     // layout before any NSLocalizedString call is made.
     [self applyDetectedLanguage];
 
-    [self createLogWindow];
+    // Log window is created lazily on Cmd+L (showKeyboardLayoutLog:)
     [self createLoginWindow];
 
     // Apply localized strings to the already-created UI elements.
@@ -874,8 +874,69 @@ static NSDictionary *parseStringsFile(NSString *path)
     NSLog(@"[LoginWindow] Desktop background: done");
 }
 
+- (void)releaseLoginUI
+{
+    NSDebugLLog(@"gwcomp", @"[DEBUG] Releasing login UI to free memory");
+
+    [loginWindow orderOut:nil];
+    [loginWindow release];
+    loginWindow = nil;
+
+    [usernameField release];
+    usernameField = nil;
+    [passwordField release];
+    passwordField = nil;
+    [usernameLabel release];
+    usernameLabel = nil;
+    [passwordLabel release];
+    passwordLabel = nil;
+    [loginButton release];
+    loginButton = nil;
+    [shutdownButton release];
+    shutdownButton = nil;
+    [restartButton release];
+    restartButton = nil;
+    [statusLabel release];
+    statusLabel = nil;
+    [sessionDropdown release];
+    sessionDropdown = nil;
+    [languageDropdown release];
+    languageDropdown = nil;
+    [keyboardDropdown release];
+    keyboardDropdown = nil;
+
+    [_logWindow release];
+    _logWindow = nil;
+    [_logTextView release];
+    _logTextView = nil;
+
+    [availableSessions release];
+    availableSessions = nil;
+    [availableSessionExecs release];
+    availableSessionExecs = nil;
+    selectedSessionExec = nil;
+
+    [pamAuth clearCredentials];
+
+    [_keyboardManager clearTransientData];
+}
+
 - (void)dealloc
 {
+    [loginWindow release];
+    [usernameField release];
+    [passwordField release];
+    [usernameLabel release];
+    [passwordLabel release];
+    [loginButton release];
+    [shutdownButton release];
+    [restartButton release];
+    [statusLabel release];
+    [sessionDropdown release];
+    [languageDropdown release];
+    [keyboardDropdown release];
+    [availableSessions release];
+    [availableSessionExecs release];
     [_keyboardManager release];
     [_logWindow release];
     [_logTextView release];
@@ -1746,8 +1807,8 @@ static NSDictionary *parseStringsFile(NSString *path)
         sessionGid = pwd->pw_gid;
         sessionStartTime = [[NSDate date] retain];
         
-        // Hide the login window
-        [loginWindow orderOut:nil];
+        // Hide the login window and release UI to free memory
+        [self releaseLoginUI];
         
         NSDebugLLog(@"gwcomp", @"[DEBUG] LoginWindow hidden, monitoring session PID %d", pid);
         
@@ -2685,6 +2746,13 @@ static bool isDetachedDaemon(const char *comm)
     sessionPid = 0;
     sessionUid = 0;
     sessionGid = 0;
+    
+    // Recreate UI if it was released after a previous login
+    if (!loginWindow) {
+        [self createLogWindow];
+        [self createLoginWindow];
+        [self updateLocalizedStrings];
+    }
     
     // Clear input fields
     [passwordField setStringValue:@""];

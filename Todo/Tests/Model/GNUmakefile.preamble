@@ -1,0 +1,5 @@
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated
+
+# t_TDMarkdownCodec includes TDMarkdownCodec.m in-process and needs its two
+# collaborators (TDList, TDTask) linked as separate objects.
+t_TDMarkdownCodec_OBJC_FILES += ../../TDList.m ../../TDTask.m

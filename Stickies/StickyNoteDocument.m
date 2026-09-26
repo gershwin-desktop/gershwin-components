@@ -21,6 +21,7 @@
 @synthesize creationDate;
 @synthesize modificationDate;
 @synthesize useAsDefault;
+@synthesize scrollPosition;
 
 - (id)initWithText:(NSString *)aText color:(NSColor *)aColor frame:(NSRect)aFrame font:(NSFont *)aFont floatOnTop:(BOOL)aFloatOnTop translucent:(BOOL)aTranslucent collapsed:(BOOL)aCollapsed creationDate:(NSDate *)aCreationDate modificationDate:(NSDate *)aModificationDate
 {
@@ -40,6 +41,7 @@
         self.creationDate = aCreationDate ? aCreationDate : [NSDate date];
         self.modificationDate = aModificationDate ? aModificationDate : [NSDate date];
         self.useAsDefault = NO;
+        self.scrollPosition = NSZeroPoint;
     }
     return self;
 }
@@ -68,6 +70,8 @@
     [dict setObject:[NSNumber numberWithBool:floatOnTop] forKey:@"floatOnTop"];
     [dict setObject:[NSNumber numberWithBool:translucent] forKey:@"translucent"];
     [dict setObject:[NSNumber numberWithBool:collapsed] forKey:@"collapsed"];
+    [dict setObject:[NSNumber numberWithFloat:scrollPosition.x] forKey:@"scrollX"];
+    [dict setObject:[NSNumber numberWithFloat:scrollPosition.y] forKey:@"scrollY"];
     if (creationDate) {
         [dict setObject:creationDate forKey:@"creationDate"];
     }
@@ -116,6 +120,10 @@
         floatOnTop = [[dict objectForKey:@"floatOnTop"] boolValue];
         translucent = [[dict objectForKey:@"translucent"] boolValue];
         collapsed = [[dict objectForKey:@"collapsed"] boolValue];
+        // Missing in a database written before scroll position was tracked;
+        // NSNumber's floatValue on a nil key is 0, matching the top of the note.
+        scrollPosition.x = [[dict objectForKey:@"scrollX"] floatValue];
+        scrollPosition.y = [[dict objectForKey:@"scrollY"] floatValue];
         id dateObj = [dict objectForKey:@"creationDate"];
         if ([dateObj isKindOfClass:[NSDate class]]) {
             creationDate = [dateObj copy];

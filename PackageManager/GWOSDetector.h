@@ -20,6 +20,14 @@
 // e.g. @[@"debian", @"ubuntu"] for Ubuntu when ID=ubuntu ID_LIKE=debian
 + (NSArray<NSString *> *)osSearchOrder;
 
+// Returns the key order in which the os_overrides section of a
+// Dependencies.plist is searched: the osSearchOrder (ID, then ID_LIKE),
+// then the package-manager family, then the kernel this was built for
+// ("linux", "freebsd", "openbsd", "netbsd"), without duplicates.  A plist can
+// therefore name packages per distribution (Arch calls the profiler "perf",
+// Debian calls it "linux-perf") and still share one entry for a whole family.
++ (NSArray<NSString *> *)dependencySearchOrder;
+
 // Returns the package-manager family of the current OS:
 //   "debian" (debian/ubuntu/devuan/kali/linuxmint/raspbian/pop/elementary/zorin)
 //   "arch"   (arch/manjaro/endeavouros/arcolinux)

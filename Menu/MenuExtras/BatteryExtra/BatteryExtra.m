@@ -5,6 +5,9 @@
  */
 
 #import "BatteryExtra.h"
+#import "GSMenuExtraContext.h"
+#import "CPUGovernorBackend.h"
+#import <dispatch/dispatch.h>
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
@@ -15,6 +18,17 @@
 
 static const BOOL kShowTextInMenuBar = NO;
 
+/* The manager ticks every extra every 2 seconds.  Reading the battery is a
+   handful of file reads on Linux but spawns a few helper processes on the
+   BSDs, so the periodic read is asked for only every fifth tick (10 s) on
+   Linux and every fifteenth (30 s) elsewhere.  Opening the menu always reads
+   afresh regardless of this counter, so nobody ever looks at a stale number. */
+#if defined(__linux__)
+static const int kBatteryRefreshTicks = 5;
+#else
+static const int kBatteryRefreshTicks = 15;
+#endif
+
 @implementation BatteryExtra
 {
     int _percent;
@@ -22,6 +36,25 @@ static const BOOL kShowTextInMenuBar = NO;
     char _source[64];
     int _timeRemainingMinutes;
     BOOL _running;
+    GSMenuExtraContext *_context;
+    int _ticksSinceRefresh;
+}
+
+/* Nothing has been read yet: -1 makes menu and image report "unknown" instead
+   of a plausible-looking 0% battery. */
+- (instancetype)init
+{
+    self = [super init];
+    if (self) {
+        _percent = -1;
+        _timeRemainingMinutes = -1;
+    }
+    return self;
+}
+
+- (void)setContext:(GSMenuExtraContext *)context
+{
+    _context = context;
 }
 
 - (void)dealloc
@@ -237,6 +270,62 @@ static const BOOL kShowTextInMenuBar = NO;
     }
 }
 
+#pragma mark - Refresh
+
+/* The name of the icon the menu bar draws, nil while nothing is known.
+   Keeping this separate from -image is what lets a refresh decide cheaply
+   whether the menu bar needs redrawing at all. */
+- (NSString *)iconName
+{
+    if (_percent < 0) return nil;
+    if (_source[0] == '\0' || _status[0] == '\0') return nil;
+    if (strcmp(_source, "AC") == 0) {
+        return (strcmp(_status, "Charging") == 0)
+            ? @"battery-charging" : @"battery-charged";
+    }
+    if (_percent >= 90) return @"battery";
+    if (_percent >= 40) return @"battery-medium";
+    return @"battery-low";
+}
+
+/* Read the battery and tell the manager when the drawn icon changed.  The
+   comparison is on the icon name rather than on the readings, so a percent
+   that moved or a time estimate that ticked over costs nothing - only
+   unplugging, plugging in, charging/not charging or crossing 90/40 percent
+   makes the menu bar redraw. */
+- (void)refreshBattery
+{
+    if (!_running) return;
+    NSString *oldIcon = [self iconName];
+    [self updateBattery];
+    NSString *newIcon = [self iconName];
+    if (oldIcon == newIcon) return;
+    if (oldIcon && newIcon && [oldIcon isEqualToString:newIcon]) return;
+    [_context invalidatePresentation];
+}
+
+- (void)tick
+{
+    @try {
+        if (!_running) return;
+        if (++_ticksSinceRefresh < kBatteryRefreshTicks) return;
+        _ticksSinceRefresh = 0;
+        [self refreshBattery];
+    } @catch (NSException *e) {
+        NSLog(@"BatteryExtra: exception in tick: %@", e);
+    }
+}
+
+- (void)menuExtraWillOpenMenu
+{
+    @try {
+        _ticksSinceRefresh = 0;
+        [self refreshBattery];
+    } @catch (NSException *e) {
+        NSLog(@"BatteryExtra: exception in menuExtraWillOpenMenu: %@", e);
+    }
+}
+
 - (void)openBatteryPrefs:(id)sender
 {
     (void)sender;
@@ -363,6 +452,12 @@ static const BOOL kShowTextInMenuBar = NO;
         }
     }
 
+    NSMenuItem *governorItem = [self governorMenuItem];
+    if (governorItem) {
+        [m addItem:[NSMenuItem separatorItem]];
+        [m addItem:governorItem];
+    }
+
     [m addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *prefs = [[NSMenuItem alloc] initWithTitle:@"Preferences"
@@ -374,22 +469,61 @@ static const BOOL kShowTextInMenuBar = NO;
     return m;
 }
 
+#pragma mark - Power governor
+
+/* Built fresh on every menu open (like the rest of -menu), so the check
+   mark always reflects the governor actually in effect - including a
+   change made from the Energy prefPane while this menu was closed. */
+- (NSMenuItem *)governorMenuItem
+{
+    NSArray<NSString *> *governors = [CPUGovernorBackend availableGovernors];
+    if ([governors count] == 0) return nil;
+
+    NSString *current = [CPUGovernorBackend currentGovernor];
+    NSUInteger currentIndex = [CPUGovernorBackend indexOfGovernor:current inList:governors];
+
+    NSMenu *submenu = [[NSMenu alloc] initWithTitle:
+        NSLocalizedString(@"Power Mode", @"Battery extra: CPU governor submenu title")];
+    NSUInteger i = 0;
+    for (NSString *governor in governors) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:governor
+                                                       action:@selector(selectGovernor:)
+                                                keyEquivalent:@""];
+        [item setTarget:self];
+        [item setRepresentedObject:governor];
+        if (i == currentIndex) {
+            [item setState:NSOnState];
+        }
+        [submenu addItem:item];
+        i++;
+    }
+
+    NSMenuItem *governorItem = [[NSMenuItem alloc] initWithTitle:
+        NSLocalizedString(@"Power Mode", @"Battery extra: CPU governor menu item")
+                                                            action:NULL
+                                                     keyEquivalent:@""];
+    [governorItem setSubmenu:submenu];
+    return governorItem;
+}
+
+- (void)selectGovernor:(id)sender
+{
+    NSString *governor = [sender representedObject];
+    if ([governor length] == 0) return;
+    /* CPUGovernorBackend shells out (sudo tee on Linux, sysctl on the BSDs)
+       to apply the change; keep that off the main thread so choosing a
+       governor never freezes the menu bar while it runs. The check mark
+       picks up the new governor the next time the menu is opened, same as
+       the rest of this menu's state. */
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [CPUGovernorBackend setGovernor:governor];
+    });
+}
+
 - (NSImage *)image
 {
-    if (_percent < 0) return nil;
-    if (_source[0] == '\0' || _status[0] == '\0') return nil;
-    NSString *name;
-    if (strcmp(_source, "AC") == 0) {
-        name = (strcmp(_status, "Charging") == 0)
-            ? @"battery-charging" : @"battery-charged";
-    } else if (_percent >= 90) {
-        name = @"battery";
-    } else if (_percent >= 40) {
-        name = @"battery-medium";
-    } else {
-        name = @"battery-low";
-    }
-    return [NSImage imageNamed:name];
+    NSString *name = [self iconName];
+    return name ? [NSImage imageNamed:name] : nil;
 }
 
 - (NSString *)title
@@ -403,7 +537,7 @@ static const BOOL kShowTextInMenuBar = NO;
 {
     @try {
         _running = YES;
-        [self updateBattery];
+        [self refreshBattery];
     } @catch (NSException *e) {
         NSLog(@"BatteryExtra: exception in menuExtraDidLoad: %@", e);
         _running = NO;
