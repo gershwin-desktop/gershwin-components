@@ -70,7 +70,14 @@ int main(int argc, const char *argv[])
         SASettingsApplier *applier = [[SASettingsApplier alloc] init];
         int failures = 0;
         for (SAPlannedApply *p in plan) {
-            BOOL ok = [applier apply:p];
+            /* One backend raising must not cost the user every setting after
+               it in the list; it is reported as a failure like any other. */
+            BOOL ok = NO;
+            @try {
+                ok = [applier apply:p];
+            } @catch (NSException *e) {
+                Print([NSString stringWithFormat:@"%@: %@", [e name], [e reason]]);
+            }
             Print([NSString stringWithFormat:@"%@: %@", [p reportLine], ok ? @"ok" : @"FAILED"]);
             if (!ok) {
                 failures++;

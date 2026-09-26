@@ -34,6 +34,13 @@
 
 + (NSString *)runCommand:(NSString *)cmd args:(NSArray *)args
 {
+    /* hdparm, ethtool, xbacklight and friends are optional packages; NSTask
+       raises for a missing binary, which would take down the pane or the
+       login-time re-apply instead of just this one reading. */
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:cmd]) {
+        NSLog(@"EnergyBackend: %@ is not installed", cmd);
+        return @"";
+    }
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:cmd];
     [task setArguments:args];
