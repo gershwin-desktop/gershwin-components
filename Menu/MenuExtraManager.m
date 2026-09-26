@@ -624,6 +624,12 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 NSLog(@"GSMenuExtra: exception in menu for %@: %@", ident, e);
             }
             if (submenu) {
+                /* Same as the other two build paths: without the delegate the
+                   submenu never gets menuNeedsUpdate:/menuWillOpen again, so
+                   this extra's menu would stop refreshing on open (and lose
+                   its Customize... item) the moment the user toggles anything
+                   in the preferences panel. */
+                [self configureSubmenu:submenu forIdentifier:ident];
                 [item setSubmenu:submenu];
             }
         }
@@ -822,7 +828,13 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 {
     @try {
         objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
-        NSArray *items = [timer userInfo];
+        /* The list is taken live, not from the timer's userInfo: enabling or
+           disabling an extra from the preferences panel replaces _menuExtras,
+           and the snapshot taken when the timer started would leave every
+           newly enabled extra unticked (its readings frozen at load, exactly
+           the bug this shared timer exists to prevent) while removed ones
+           kept ticking forever. */
+        NSArray *items = [_menuExtras copy];
         for (GSMenuExtraInstance * item in items) {
             @try {
                 [item tick];

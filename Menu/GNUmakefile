@@ -207,13 +207,18 @@ icons:
 	  rm -f $$tiff.1x.png $$tiff.2x.png; \
 	done
 
-# Build standalone .gsmenuextra bundles after main app is compiled
+# Build standalone .gsmenuextra bundles after main app is compiled.
+# This runs inside Menu's own nested build, whose GNUSTEP_TYPE/INSTANCE/
+# OPERATION overrides ride along in MAKEFLAGS.  Handed to an extra's makefile
+# they say "you are building the Menu application", so it defines no `all`
+# target and every extra was skipped - invisibly, because stderr was thrown
+# away.  MAKEFLAGS= gives each sub-make a clean slate.
 after-Menu-all::
 	@echo "Building standalone menu extra bundles..."
 	@for d in ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra; do \
-		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) $(AS_NEEDED_FLAG) all 2>/dev/null) || echo "  ($$d skipped)"; \
+		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) $(AS_NEEDED_FLAG) all) || echo "  ($$d skipped - see the errors above)"; \
 	done
-	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) all 2>/dev/null || echo "  (wlanauth skipped)")
+	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) all || echo "  (wlanauth skipped)")
 	@cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth Resources/ 2>/dev/null || true
 	@echo "Done building bundles."
 

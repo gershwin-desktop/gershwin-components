@@ -87,7 +87,12 @@ int main(void)
        "an imported item deep in a submenu is registered again");
   PASS(![found containsObject: revert],
        "an imported item without a shortcut is skipped");
-  PASS([found count] == 2, "nothing else is picked (%lu)", (unsigned long)[found count]);
+  /* suiteName must really be used: with the gnustep-2.0 ABI every other
+     literal here is a short tagged string, and a string the compiler can
+     drop leaves this file without an __objc_constant_string section, which
+     the final link needs at least one of. */
+  PASS([found count] == 2, "%s: nothing else is picked (%lu)",
+       [suiteName UTF8String], (unsigned long)[found count]);
   PASS([forceQuitItem target] == forceQuit,
        "walking the menu does not change any item");
 
