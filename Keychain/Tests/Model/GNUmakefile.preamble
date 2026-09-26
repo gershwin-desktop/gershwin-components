@@ -17,5 +17,8 @@ $(foreach t,$(TEST_TOOL_NAME),$(eval $(t)_OBJC_FILES += $(KC_SOURCES)))
 $(foreach f,$(KC_SOURCES),$(eval $(f)_FILE_FLAGS += $(KC_ARCFLAGS)))
 
 ADDITIONAL_INCLUDE_DIRS += -I../../Model -I../../DBus
-ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags dbus-1 libcrypto)
-ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs dbus-1 libcrypto)
+# One call per module: a missing module must not drop the other's flags too.
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags dbus-1)
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags libcrypto)
+ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs dbus-1)
+ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs libcrypto)

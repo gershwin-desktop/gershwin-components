@@ -30,8 +30,11 @@ Keychain_RESOURCE_FILES = \
 
 ADDITIONAL_OBJCFLAGS += -fobjc-arc -fobjc-arc-exceptions -Wall
 ADDITIONAL_INCLUDE_DIRS += -IModel -IDBus -IUI
-ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags dbus-1 libcrypto)
-ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs dbus-1 libcrypto)
+# One call per module: a missing module must not drop the other's flags too.
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags dbus-1)
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags libcrypto)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs dbus-1)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libcrypto)
 
 include $(GNUSTEP_MAKEFILES)/application.make
 
