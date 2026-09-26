@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_CPUGovernorBackend t_WorldClockList t_WLANMenuListPolicy t_DBusMenuLayout
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -39,6 +39,19 @@ t_WLANMenuListPolicy_TOOL_LIBS += -lgnustep-gui
 # library and stays that way - forcing ARC on it would conflict with its
 # explicit -release calls.
 ../../MenuExtras/WLANExtra/WLANMenuListPolicy.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+# The Clock extra's own -menu, so the test can replay the manager's build
+# order against it: the extra (ARC, like the bundle) plus GSMenuExtraContext,
+# which it calls back through.  GSMenuExtraContext.m and WorldClockList.m
+# already carry the ARC flags with their targets above - the flags are keyed
+# by the path - so only the extra itself needs them here.
+t_ClockMenu_OBJC_FILES = t_ClockMenu.m \
+	../../GSMenuExtraContext.m \
+	../../MenuExtras/ClockExtra/ClockExtra.m \
+	../../MenuExtras/ClockExtra/WorldClockList.m
+t_ClockMenu_OBJCFLAGS += -I../../MenuExtras/ClockExtra
+../../MenuExtras/ClockExtra/ClockExtra.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+t_ClockMenu_TOOL_LIBS += -lgnustep-gui
 
 # DBusMenuLayout is Foundation-only and ARC in Menu; the test scripts its
 # one D-Bus call, so nothing else of Menu is linked.

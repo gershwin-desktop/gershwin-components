@@ -30,6 +30,7 @@ Menu_OBJC_FILES = \
 	GTKMenuImporter.m \
 	DBusMenuParser.m \
 	DBusMenuLayout.m \
+	MenuItemSubmenuSwizzle.m \
 	GTKMenuParser.m \
 	DBusMenuShortcutParser.m \
 	MenuShortcutItems.m \

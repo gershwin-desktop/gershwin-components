@@ -17,7 +17,7 @@
     NSDateFormatter *_dateFormatter;
     NSDateFormatter *_worldClockTimeFormatter;
     NSMenuItem *_dateItem;
-    NSMenu *_globalSubmenu;
+    NSMenu *_openGlobalSubmenu;
     NSTimer *_globalRefreshTimer;
     GSMenuExtraContext *_context;
     BOOL _running;
@@ -42,21 +42,30 @@
 
     [m addItem:[NSMenuItem separatorItem]];
 
-    if (!_globalSubmenu) {
-        _globalSubmenu = [[NSMenu alloc] initWithTitle:
-            NSLocalizedString(@"Global", @"Clock extra: world clock submenu title")];
-        /* Not declared <NSMenuDelegate> in the header: this GNUstep's
-           NSMenuDelegate protocol methods are all implicitly required (no
-           @optional marker), and this class only needs the three below -
-           same workaround MenuExtraManager uses for its own submenus. */
-        [_globalSubmenu setDelegate:(id<NSMenuDelegate>)self];
-    }
-    [self rebuildGlobalSubmenuItems];
+    /* A new Global submenu for every build.  MenuExtraManager hangs each
+       menu it gets off a new menu bar item and, on menuNeedsUpdate:, asks
+       for the next one while the previous one is still attached.  One
+       submenu shared by all builds cannot serve that: NSMenuItem refuses a
+       submenu that already has a supermenu, and detaching it from the
+       previous item first makes the previous menu update, which re-enters
+       this method through the manager and frees the previous items under
+       the build still using them (Menu crashed at startup, on the second
+       build).  The delegate methods below therefore work on the menu they
+       are handed instead of on a remembered one. */
+    NSMenu *globalSubmenu = [[NSMenu alloc] initWithTitle:
+        NSLocalizedString(@"Global", @"Clock extra: world clock submenu title")];
+    /* Not declared <NSMenuDelegate> in the header: this GNUstep's
+       NSMenuDelegate protocol methods are all implicitly required (no
+       @optional marker), and this class only needs the three below -
+       same workaround MenuExtraManager uses for its own submenus. */
+    [globalSubmenu setDelegate:(id<NSMenuDelegate>)self];
+    [self rebuildGlobalSubmenuItems:globalSubmenu];
+
     NSMenuItem *globalItem = [[NSMenuItem alloc] initWithTitle:
         NSLocalizedString(@"Global", @"Clock extra: world clock menu item")
                                                           action:NULL
                                                    keyEquivalent:@""];
-    [globalItem setSubmenu:_globalSubmenu];
+    [globalItem setSubmenu:globalSubmenu];
     [m addItem:globalItem];
 
     return m;
@@ -70,16 +79,16 @@
    be shown and, while it stays open, once a minute - a world clock that
    only knew the time at the moment you opened it would already be stale a
    minute later. */
-- (void)rebuildGlobalSubmenuItems
+- (void)rebuildGlobalSubmenuItems:(NSMenu *)submenu
 {
-    if (!_globalSubmenu) return;
+    if (!submenu) return;
 
     NSDate *now = [NSDate date];
     NSTimeZone *userZone = [NSTimeZone localTimeZone];
     NSArray<WorldClockEntry *> *entries =
         [WorldClockList worldClockEntriesForDate:now userTimeZone:userZone];
 
-    [_globalSubmenu removeAllItems];
+    [submenu removeAllItems];
     for (WorldClockEntry *entry in entries) {
         [_worldClockTimeFormatter setTimeZone:[NSTimeZone timeZoneWithName:[entry timeZoneName]]];
         NSString *time = [_worldClockTimeFormatter stringFromDate:now];
@@ -90,21 +99,20 @@
         if ([entry isUserZone]) {
             [item setState:NSOnState];
         }
-        [_globalSubmenu addItem:item];
+        [submenu addItem:item];
     }
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu
 {
-    if (menu == _globalSubmenu) {
-        [self rebuildGlobalSubmenuItems];
-    }
+    [self rebuildGlobalSubmenuItems:menu];
 }
 
 - (void)menuWillOpen:(NSMenu *)menu
 {
-    if (menu != _globalSubmenu) return;
-    [self rebuildGlobalSubmenuItems];
+    /* The one the minute timer keeps current while it stays open. */
+    _openGlobalSubmenu = menu;
+    [self rebuildGlobalSubmenuItems:menu];
     [_globalRefreshTimer invalidate];
     _globalRefreshTimer = [NSTimer timerWithTimeInterval:60.0
                                                     target:self
@@ -120,16 +128,17 @@
 
 - (void)menuDidClose:(NSMenu *)menu
 {
-    if (menu != _globalSubmenu) return;
+    if (menu != _openGlobalSubmenu) return;
     [_globalRefreshTimer invalidate];
     _globalRefreshTimer = nil;
+    _openGlobalSubmenu = nil;
 }
 
 - (void)globalSubmenuTick:(NSTimer *)timer
 {
     (void)timer;
     if (!_running) return;
-    [self rebuildGlobalSubmenuItems];
+    [self rebuildGlobalSubmenuItems:_openGlobalSubmenu];
 }
 
 - (NSImage *)image
