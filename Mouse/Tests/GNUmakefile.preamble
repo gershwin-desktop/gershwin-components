@@ -1,0 +1,14 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+# The units under test live in libMouseBackend (ARC); the test tools stay
+# MRC because the ObjectTesting macros retain and release explicitly, so
+# they link the library built in this tree instead of compiling its sources.
+ADDITIONAL_INCLUDE_DIRS += -I..
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
+
+MB_LIBDIR = $(CURDIR)/../../Libraries/MouseBackend/obj
+ADDITIONAL_LIB_DIRS += -L$(MB_LIBDIR)
+# GNUstep.sh puts the installed libraries on LD_LIBRARY_PATH, which beats a
+# DT_RUNPATH but not a DT_RPATH, so the old tag keeps the tests on this tree.
+ADDITIONAL_LDFLAGS += -Wl,--disable-new-dtags -Wl,-rpath,$(MB_LIBDIR)
+ADDITIONAL_TOOL_LIBS += -lMouseBackend
