@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_CPUGovernorBackend t_WorldClockList t_WLANMenuListPolicy
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_CPUGovernorBackend t_WorldClockList t_WLANMenuListPolicy t_DBusMenuLayout
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -39,5 +39,10 @@ t_WLANMenuListPolicy_TOOL_LIBS += -lgnustep-gui
 # library and stays that way - forcing ARC on it would conflict with its
 # explicit -release calls.
 ../../MenuExtras/WLANExtra/WLANMenuListPolicy.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+# DBusMenuLayout is Foundation-only and ARC in Menu; the test scripts its
+# one D-Bus call, so nothing else of Menu is linked.
+t_DBusMenuLayout_OBJC_FILES = t_DBusMenuLayout.m ../../DBusMenuLayout.m
+../../DBusMenuLayout.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

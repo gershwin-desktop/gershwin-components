@@ -8,6 +8,7 @@
 #import "DBusMenuImporter.h"
 #import "DBusMenuShortcutParser.h"
 #import "DBusMenuParser.h"
+#import "DBusMenuLayout.h"
 #import "DBusMenuActionHandler.h"
 #import "MenuShortcutItems.h"
 #import "DBusSubmenuManager.h"
@@ -446,6 +447,17 @@
         }
     }
     
+    /* Electron creates a submenu's children only on AboutToShow, so the tree
+       just read has empty top-level menus.  Fill them now, before parsing,
+       so the items and their shortcuts are registered like any other app's. */
+    if ([result isKindOfClass:[NSArray class]] && [result count] >= 2) {
+        id filledLayout = [DBusMenuLayout layoutItem:[result objectAtIndex:1]
+                   withLazySubmenusFilledFromService:serviceName
+                                          objectPath:objectPath
+                                          connection:self.dbusConnection];
+        result = [NSArray arrayWithObjects:[result objectAtIndex:0], filledLayout, nil];
+    }
+
     // Parse the menu structure and create NSMenu
     // The result should be a structure containing menu items with their properties
     NSMenu *menu = [DBusMenuParser parseMenuFromDBusResult:result 
