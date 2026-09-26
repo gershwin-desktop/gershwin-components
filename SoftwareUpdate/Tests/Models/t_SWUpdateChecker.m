@@ -108,6 +108,8 @@ int main(void)
 
   PASS(progressCalls == 3, "progress is reported once per repository");
   PASS(reachableResult, "at least one repository was reachable");
+  PASS([checker localFailureReason] == nil,
+       "a check that reached its remotes reports no local failure");
   PASS(result != nil, "completion received a result array");
   PASS([result count] == 2, "gershwin-developer has nothing to install; the other two do");
 

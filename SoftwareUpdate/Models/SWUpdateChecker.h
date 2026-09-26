@@ -37,6 +37,13 @@
                   progress:(void (^)(SWRepository *repository, NSUInteger index, NSUInteger total))progress
                 completion:(void (^)(NSArray<SWRepository *> *repositoriesWithUpdates, BOOL anyReachable))completion;
 
+// Non-nil when the last check could not run git at all: the repositories are
+// not this user's to use and the administrator permission to run them anyway
+// was not granted. Read it after the completion above, so such a failure is
+// reported as what it is instead of looking like a network problem. Nil
+// after any check that got as far as talking to a remote.
+@property (nonatomic, copy, readonly) NSString *localFailureReason;
+
 // Toggling "Use Development branch" needs no network: both branches were
 // already fetched by -checkRepositories:..., so this just re-reads the
 // already-local origin/<target> refs for the new target and re-applies

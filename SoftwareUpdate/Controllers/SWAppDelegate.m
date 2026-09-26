@@ -216,9 +216,18 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   }
 
   if (!anyReachable) {
+    // A check that never got to talk to a remote because git was not allowed
+    // to work in /Developer at all has nothing to do with GitHub - blaming
+    // the network would send the user off to debug the wrong thing.
+    NSString *localFailure = [_checker localFailureReason];
     NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:@"Software Update can't reach GitHub."];
-    [alert setInformativeText:@"Check your network connection and try again."];
+    if (localFailure) {
+      [alert setMessageText:@"Software Update needs administrator permission."];
+      [alert setInformativeText:localFailure];
+    } else {
+      [alert setMessageText:@"Software Update can't reach GitHub."];
+      [alert setInformativeText:@"Check your network connection and try again."];
+    }
     [alert runModal];
     [NSApp terminate:nil];
     return;

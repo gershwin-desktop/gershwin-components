@@ -30,6 +30,31 @@ typedef void (^SWGitLogLine)(NSString *line);
 
 - (instancetype)initWithRepositoryPath:(NSString *)path;
 
+// /Developer is meant to be shared between users, so its checkouts regularly
+// belong to somebody other than whoever runs Software Update - and git either
+// refuses to work in a repository it does not own at all ("detected dubious
+// ownership") or cannot write the results of a fetch into it. Such a
+// repository is run through sudo instead, with an explicit safe.directory
+// exemption for that one path, since root does not own it either.
+
+// YES when git could not work in a repository at path as the current user:
+// somebody else owns it (or its .git directory), or this user may not write
+// to it - so it has to be run with elevated privileges. NO when this process
+// is already root, when the repository is ours to use, or when it does not
+// exist (git then reports the real problem itself).
++ (BOOL)needsElevationForPath:(NSString *)path;
+
+// Asks sudo - once, before the first git runs - for the permission every
+// elevated call in this process runs under, so the user is prompted at most
+// once per check instead of once per repository, and never in parallel with
+// itself. Returns YES when git may run (none of the paths needs elevation,
+// or it was granted); otherwise *outReason, if given, receives the message
+// to show the user. Never prompts when no path needs elevation. The command
+// and its output go to logHandler, like every git invocation's do.
++ (BOOL)prepareElevationForPaths:(NSArray<NSString *> *)paths
+                      logHandler:(SWGitLogLine)logHandler
+                          reason:(NSString **)outReason;
+
 // Runs `git -C <path> fetch --prune origin`. Returns NO (and logs stderr) if
 // the remote could not be reached at all.
 - (BOOL)fetchPruneOrigin;

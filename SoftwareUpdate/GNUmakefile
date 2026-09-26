@@ -59,6 +59,13 @@ ADDITIONAL_LDFLAGS += -Wl,-rpath,/System/Library/Frameworks/PackageManager.frame
 SoftwareUpdate_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 ADDITIONAL_LDFLAGS += -ldispatch
 
+# Software Update belongs in /System/Applications/Utilities, like the other
+# system tools - and nowhere else. Without this the plain install target
+# (and so AGENTS' `gmake install`) puts a second copy in /System/Applications,
+# which make_services then reports as a duplicate app, leaving it to the
+# search order to decide which one actually launches.
+SoftwareUpdate_INSTALL_DIR = /System/Applications/Utilities
+
 include $(GNUSTEP_MAKEFILES)/application.make
 
 SUDO := $(shell if [ "$$(id -u)" = "0" ]; then echo ""; \

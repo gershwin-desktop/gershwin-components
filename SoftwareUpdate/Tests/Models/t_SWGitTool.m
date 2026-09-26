@@ -134,6 +134,35 @@ int main(void)
     PASS([git modifiedFileCount] == 0, "the tree is clean after discarding");
   }
 
+  /* --- elevation: only repositories this user may not use go through sudo --- */
+  {
+    PASS(![SWGitTool needsElevationForPath:work],
+         "a repository this user owns and can write needs no elevation");
+
+    PASS(![SWGitTool needsElevationForPath:
+             [gBaseDir stringByAppendingPathComponent:@"no-such-repository"]],
+         "a path git cannot find at all is left to git to report");
+
+    PASS([SWGitTool prepareElevationForPaths:@[work]
+                                  logHandler:NULL
+                                      reason:NULL],
+         "no permission is asked for when every repository is already ours");
+
+    // Ownership cannot be forged without root, but a repository git may not
+    // write is the other half of the same decision, and is testable here.
+    NSString *locked = [gBaseDir stringByAppendingPathComponent:@"locked"];
+    runShell([NSString stringWithFormat:@"mkdir -p %@/.git", locked]);
+    if (geteuid() == 0) {
+      PASS(![SWGitTool needsElevationForPath:locked],
+           "root needs no elevation for any repository");
+    } else {
+      runShell([NSString stringWithFormat:@"chmod 0555 %@/.git", locked]);
+      PASS([SWGitTool needsElevationForPath:locked],
+           "a repository git may not write is run with sudo");
+      runShell([NSString stringWithFormat:@"chmod 0755 %@/.git", locked]);
+    }
+  }
+
   runShell([NSString stringWithFormat:@"rm -rf %@", gBaseDir]);
   [arp release];
   return 0;

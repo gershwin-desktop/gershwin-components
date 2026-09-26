@@ -5,6 +5,87 @@
  */
 
 #import "SWGitTool.h"
+#import <PackageManager/GWSudoHelper.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+// The same askpass the privileged update run uses (SWAppDelegate): every
+// elevated git call runs without a terminal of its own, so sudo's password
+// has to come from a helper that can show a window.
+static NSString *const kSudoAskPassPath = @"/System/Library/Tools/SudoAskPass";
+static NSString *const kAskpassRequester = @"Software Update";
+
+// Gives a task the environment sudo needs to ask for a password without a
+// terminal. Only elevated runs get it; plain git keeps the environment it
+// has today.
+static void SWUseSudoEnvironment(NSTask *task)
+{
+  NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
+  [env setObject:kSudoAskPassPath forKey:@"SUDO_ASKPASS"];
+  [env setObject:kAskpassRequester forKey:@"ASKPASS_REQUESTER"];
+  [task setEnvironment:env];
+}
+
+// Runs `sudo` with exactly these arguments (the caller assembles the flags
+// it needs - sudo does not accept every flag next to every action),
+// stdout+stderr combined. Returns the exit status, or -1 when sudo itself
+// could not be started.
+static int SWRunSudo(NSArray<NSString *> *args, NSString **outOutput)
+{
+  NSTask *task = [[NSTask alloc] init];
+  [task setLaunchPath:GWSudoPath()];
+  [task setArguments:args];
+  SWUseSudoEnvironment(task);
+
+  NSPipe *pipe = [NSPipe pipe];
+  [task setStandardOutput:pipe];
+  [task setStandardError:pipe];
+
+  @try {
+    [task launch];
+  } @catch (NSException *exception) {
+    if (outOutput) {
+      *outOutput = [NSString stringWithFormat:@"sudo could not be started: %@",
+        [exception reason] ?: @"unknown error"];
+    }
+    return -1;
+  }
+
+  NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+  [task waitUntilExit];
+  if (outOutput) {
+    *outOutput = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+  }
+  return [task terminationStatus];
+}
+
+// YES when path exists and belongs to somebody other than runAs - the exact
+// condition git's ownership check fails on, judged with lstat like git does.
+static BOOL SWOwnedByOtherUser(NSString *path, uid_t runAs)
+{
+  if ([path length] == 0) return NO;
+  struct stat st;
+  return lstat([path fileSystemRepresentation], &st) == 0 &&
+         (uid_t)st.st_uid != runAs;
+}
+
+// YES when git's own checks would refuse this path: it belongs to another
+// user, or this user may not write to it. Judged with lstat and access on
+// the worktree and its .git directory, which is what git itself inspects -
+// and it has to write both to record a fetch, a checkout or a stash.
+// Absent paths are not escalated for: git states the real problem itself.
+static BOOL SWPathNeedsElevation(NSString *path)
+{
+  if ([path length] == 0) return NO;
+  for (NSString *candidate in @[path, [path stringByAppendingPathComponent:@".git"]]) {
+    const char *fsPath = [candidate fileSystemRepresentation];
+    struct stat st;
+    if (lstat(fsPath, &st) != 0) continue;
+    if ((uid_t)st.st_uid != geteuid()) return YES;
+    if (access(fsPath, W_OK) != 0) return YES;
+  }
+  return NO;
+}
 
 @implementation SWGitCommit
 @synthesize sha = _sha, subject = _subject, date = _date;
@@ -21,6 +102,68 @@
 
 @synthesize logHandler = _logHandler;
 
++ (BOOL)needsElevationForPath:(NSString *)path
+{
+  if (geteuid() == 0) return NO; // already privileged: the update run
+  return SWPathNeedsElevation(path);
+}
+
++ (BOOL)prepareElevationForPaths:(NSArray<NSString *> *)paths
+                      logHandler:(SWGitLogLine)logHandler
+                          reason:(NSString **)outReason
+{
+  // The ordinary case (this user owns /Developer): nothing to ask for, so a
+  // normal launch never shows a password prompt just for checking.
+  NSString *blocked = nil;
+  for (NSString *path in paths) {
+    if ([self needsElevationForPath:path]) { blocked = path; break; }
+  }
+  if (!blocked) return YES;
+
+  // One `sudo -v` for the whole process: it both asks for the password once
+  // and leaves a validated timestamp every later sudo'd git call reuses, so
+  // the six parallel fetches cannot race each other into six prompts. -v
+  // takes no command, and sudo rejects -E ("preserve the environment")
+  // without one, so only the askpass flag travels with it.
+  NSMutableArray<NSString *> *validate = [NSMutableArray array];
+  for (NSString *flag in GWSudoArgPrefix()) {
+    if (![flag isEqualToString:@"-E"]) [validate addObject:flag];
+  }
+  [validate addObject:@"-v"];
+
+  if (logHandler) {
+    logHandler([NSString stringWithFormat:@"$ %@ %@", GWSudoPath(),
+      [validate componentsJoinedByString:@" "]]);
+  }
+  NSString *output = nil;
+  int status = SWRunSudo(validate, &output);
+  if (logHandler) {
+    for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
+      if ([line length] > 0) logHandler(line);
+    }
+  }
+  if (status == 0) return YES;
+
+  if (outReason) {
+    // Only the first line: sudo's own diagnostics (no askpass program, no
+    // password provided, not in sudoers) land there, in whatever language
+    // the system speaks - never parsed, only quoted back to the user.
+    NSString *detail = nil;
+    for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
+      NSString *trimmed = [line stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+      if ([trimmed length] > 0) { detail = trimmed; break; }
+    }
+    NSMutableString *reason = [NSMutableString stringWithFormat:
+      @"Software Update can't update %@ with your own permissions, so it has to run git "
+       "there as administrator. That permission was not granted.", blocked];
+    if ([detail length] > 0) [reason appendFormat:@" (%@)", detail];
+    [reason appendString:@" Try again and enter your administrator password when asked."];
+    *outReason = [reason copy];
+  }
+  return NO;
+}
+
 - (instancetype)initWithRepositoryPath:(NSString *)path
 {
   self = [super init];
@@ -33,19 +176,58 @@
 
 // Runs `git <args>` synchronously, feeding the command line and every output
 // line to -logHandler. Returns the exit status; stdout/stderr are combined,
-// in arrival order, and handed back so callers can parse them.
+// in arrival order, and handed back so callers can parse them. Repositories
+// this user may not use are run through sudo, and git's ownership check is
+// answered for that one path (root does not own it either).
 - (int)runGit:(NSArray<NSString *> *)args output:(NSString **)outOutput
 {
-  NSMutableArray *fullArgs = [NSMutableArray arrayWithObjects:@"-C", _path, nil];
+  BOOL escalate = [[self class] needsElevationForPath:_path];
+
+  // git refuses a repository owned by somebody else - and once the command
+  // runs as root, that somebody is still not us, so the exemption has to be
+  // stated rather than assumed. Command-line config counts as protected
+  // configuration, which is exactly what git insists on for safe.directory,
+  // so the exemption is honoured even from root.
+  uid_t runAs = escalate ? 0 : geteuid();
+  BOOL ownershipRefused = SWOwnedByOtherUser(_path, runAs);
+
+  NSMutableArray *fullArgs = [NSMutableArray array];
+  if (ownershipRefused) {
+    [fullArgs addObjectsFromArray:@[@"-c",
+      [NSString stringWithFormat:@"safe.directory=%@", _path]]];
+  }
+  [fullArgs addObject:@"-C"];
+  [fullArgs addObject:_path];
   [fullArgs addObjectsFromArray:args];
 
+  // argv as it actually runs: through sudo when the repository is not ours,
+  // otherwise straight through env so "git" is still found on PATH (the same
+  // shape as before, on Linux and on the BSDs alike).
+  NSArray<NSString *> *sudoPrefix = escalate ? GWSudoArgPrefix() : @[];
+  NSMutableArray *argv = [NSMutableArray array];
+  NSString *launchPath;
+  if ([sudoPrefix count] > 0) {
+    launchPath = GWSudoPath();
+    [argv addObjectsFromArray:sudoPrefix];
+  } else {
+    launchPath = @"/usr/bin/env"; // NSTask resolves "git" through PATH
+  }
+  [argv addObject:@"git"];
+  [argv addObjectsFromArray:fullArgs];
+
+  // The Log window gets that command line too, sudo flags included, so a
+  // run that needed permission says so ("$" for a user-level invocation).
   if (_logHandler) {
-    _logHandler([NSString stringWithFormat:@"$ git %@", [fullArgs componentsJoinedByString:@" "]]);
+    NSMutableArray *display = [NSMutableArray array];
+    if ([sudoPrefix count] > 0) [display addObject:launchPath];
+    [display addObjectsFromArray:argv];
+    _logHandler([NSString stringWithFormat:@"$ %@", [display componentsJoinedByString:@" "]]);
   }
 
   NSTask *task = [[NSTask alloc] init];
-  [task setLaunchPath:@"/usr/bin/env"];
-  [task setArguments:[@[@"git"] arrayByAddingObjectsFromArray:fullArgs]];
+  [task setLaunchPath:launchPath];
+  [task setArguments:argv];
+  if ([sudoPrefix count] > 0) SWUseSudoEnvironment(task);
 
   NSPipe *pipe = [NSPipe pipe];
   [task setStandardOutput:pipe];

@@ -1,5 +1,11 @@
 ADDITIONAL_INCLUDE_DIRS += -I../../Models
 
+# SWGitTool resolves the privilege-escalation command through PackageManager's
+# GWSudoHelper, so every test tool that links it needs the framework too -
+# like t_SWPrerequisitesInstaller, which uses the framework directly.
+PACKAGE_MANAGER_LIBS = \
+  -L/System/Library/Frameworks/PackageManager.framework/Versions/1 -lPackageManager
+
 ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
 ../../Models/SWRepository.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Models/SWRepositoryList.m_FILE_FLAGS += $(ARCFLAGS)
@@ -15,6 +21,7 @@ t_SWRepositoryList_OBJC_FILES += \
 
 t_SWGitTool_OBJC_FILES += \
   ../../Models/SWGitTool.m
+t_SWGitTool_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 
 t_SWSelectionRules_OBJC_FILES += \
   ../../Models/SWRepository.m \
@@ -33,17 +40,18 @@ t_SWUpdateChecker_OBJC_FILES += \
   ../../Models/SWUpdateChecker.m
 # The parallel check uses dispatch_group/dispatch_semaphore.
 t_SWUpdateChecker_TOOL_LIBS += -ldispatch
+t_SWUpdateChecker_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 
 t_SWRepositoryUpdater_OBJC_FILES += \
   ../../Models/SWRepository.m \
   ../../Models/SWGitTool.m \
   ../../Models/SWRepositoryUpdater.m
+t_SWRepositoryUpdater_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 
 ../../Models/SWPrerequisitesInstaller.m_FILE_FLAGS += $(ARCFLAGS)
 t_SWPrerequisitesInstaller_OBJC_FILES += \
   ../../Models/SWPrerequisitesInstaller.m
 # Needs PackageManager (installed system-wide by gmake install in
 # PackageManager/) for GWPackageManager/GWOSDetector.
-t_SWPrerequisitesInstaller_TOOL_LIBS += \
-  -L/System/Library/Frameworks/PackageManager.framework/Versions/1 -lPackageManager
+t_SWPrerequisitesInstaller_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 ADDITIONAL_LDFLAGS += -Wl,-rpath,/System/Library/Frameworks/PackageManager.framework/Versions/1

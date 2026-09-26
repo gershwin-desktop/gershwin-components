@@ -17,10 +17,14 @@
   SWGitLogLine _logHandler;
   NSString *_incomingRepositoriesPlistTarget; // the branch its pins were read from, so we only read it once
   NSDictionary<NSString *, NSString *> *_incomingPins; // Name -> Pin, from the incoming gershwin-developer
+  NSString *_localFailureReason;
 }
+@property (nonatomic, copy, readwrite) NSString *localFailureReason;
 @end
 
 @implementation SWUpdateChecker
+
+@synthesize localFailureReason = _localFailureReason;
 
 - (instancetype)initWithSourcesDirectory:(NSString *)sourcesDirectory
                              useDevBranch:(BOOL)useDevBranch
@@ -39,9 +43,14 @@
   return self;
 }
 
+- (NSString *)pathForRepository:(SWRepository *)repository
+{
+  return [_sourcesDirectory stringByAppendingPathComponent:[repository name]];
+}
+
 - (SWGitTool *)gitToolForRepository:(SWRepository *)repository
 {
-  NSString *path = [_sourcesDirectory stringByAppendingPathComponent:[repository name]];
+  NSString *path = [self pathForRepository:repository];
   SWGitTool *tool = _gitToolFactory ? _gitToolFactory(path) : [[SWGitTool alloc] initWithRepositoryPath:path];
   [tool setLogHandler:_logHandler];
   return tool;
@@ -61,6 +70,31 @@
 {
   static const NSUInteger kMaxConcurrentFetches = 6;
   NSUInteger total = [repositories count];
+
+  // /Developer is meant to be shared between users, so its checkouts often
+  // belong to somebody other than whoever runs this app - git then refuses
+  // to touch them at all, which used to read back to the user as "can't
+  // reach GitHub". Ask sudo for the permission once, before the first git
+  // runs: one prompt for the whole check instead of one per repository (the
+  // fetches below run in parallel), nothing at all when the checkouts are
+  // this user's own, and a declined prompt reported as what it is rather
+  // than as a check that ran and failed.
+  self.localFailureReason = nil;
+  NSMutableArray<NSString *> *repositoryPaths = [NSMutableArray array];
+  for (SWRepository *repo in repositories) {
+    [repositoryPaths addObject:[self pathForRepository:repo]];
+  }
+  NSString *elevationReason = nil;
+  if (![SWGitTool prepareElevationForPaths:repositoryPaths
+                                logHandler:_logHandler
+                                    reason:&elevationReason]) {
+    self.localFailureReason = elevationReason;
+    for (SWRepository *repo in repositories) {
+      [repo setUnreachableReason:@"Couldn't get permission to run git"];
+    }
+    if (completion) completion(@[], NO);
+    return;
+  }
 
   NSMutableArray<SWRepository *> *remaining = [repositories mutableCopy];
   __block NSUInteger completedCount = 0;
