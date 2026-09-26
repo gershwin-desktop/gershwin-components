@@ -5,36 +5,63 @@
  */
 
 #import <AppKit/AppKit.h>
+#import "CurveView.h"
 
 @class MouseBackend;
 
-@interface MouseController : NSObject
+@interface MouseController : NSObject <CurveViewDelegate>
 {
     NSView *mainView;
     NSBox *mouseBox;
     NSBox *trackpadBox;
-    NSBox *trackpointBox;
 
-    NSSlider *mouseSpeedSlider;
-    NSTextField *mouseSpeedLabel;
+    /* Tabs inside the trackpad box */
+    NSTabView *trackpadTabView;
 
+    /* General tab controls */
     NSSlider *trackpadSpeedSlider;
     NSTextField *trackpadSpeedLabel;
-
-    NSSlider *trackpointSpeedSlider;
-    NSTextField *trackpointSpeedLabel;
-
     NSButton *naturalScrollingCheckbox;
     NSButton *tapToClickCheckbox;
     NSButton *twoFingerRightClickCheckbox;
     NSButton *threeFingerMiddleClickCheckbox;
     NSButton *disableWhileTypingCheckbox;
+
+    /* Acceleration Curve tab controls */
+    CurveView *curveView;
+    NSPopUpButton *curveProfilePopup;
+    NSTextField *precisionLabel;
+    NSTextField *precisionValue;
+    NSSlider *precisionSlider;
+    NSTextField *startLabel;
+    NSTextField *startValue;
+    NSSlider *startSlider;
+    NSTextField *endLabel;
+    NSTextField *endValue;
+    NSSlider *endSlider;
+    NSTextField *fastLabel;
+    NSTextField *fastValue;
+    NSSlider *fastSlider;
+    NSButton *applyCurveButton;
+    NSButton *restoreCurveButton;
+
+    /* Mouse controls */
+    NSSlider *mouseSpeedSlider;
+    NSTextField *mouseSpeedLabel;
     NSButton *leftHandedCheckbox;
+
+    /* TrackPoint controls */
+    NSSlider *trackpointSpeedSlider;
+    NSTextField *trackpointSpeedLabel;
 
     NSTextField *statusLabel;
 
     MouseBackend *backend;
+    double touchpadUnitsPerMM;
 
+    NSString *currentCurveProfile;
+    AccelerationCurve pendingCurve;
+    AccelerationCurve savedCurve;
     BOOL isRefreshing;
 }
 
@@ -42,5 +69,8 @@
 - (void)relayoutWithWidth:(CGFloat)width;
 - (void)refreshFromSystem;
 - (IBAction)settingChanged:(id)sender;
+- (IBAction)curveProfileChanged:(id)sender;
+- (IBAction)applyCurve:(id)sender;
+- (IBAction)restoreCurve:(id)sender;
 
 @end
