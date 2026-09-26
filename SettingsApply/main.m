@@ -50,7 +50,8 @@ int main(int argc, const char *argv[])
         }
 
         NSArray *settings = [SASettingsRegistry settings];
-        NSArray *plan = [SASettingsRegistry planForSettings:settings domains:domains];
+        NSArray *plan = [SASettingsRegistry planForSettings:settings
+                                                    domains:[SASettingsRegistry domainsByMigrating:domains]];
 
         if (dryRun) {
             NSMutableSet *planned = [NSMutableSet set];

@@ -18,11 +18,14 @@
 - (BOOL)applyKeyboardLayout:(NSDictionary *)values;
 - (BOOL)applyAppleISOKeySwap:(NSDictionary *)values;
 
-- (BOOL)applyNaturalScrolling:(NSDictionary *)values;
-- (BOOL)applyLeftHanded:(NSDictionary *)values;
-- (BOOL)applyMouseSpeed:(NSDictionary *)values;
-- (BOOL)applyTrackpadSpeed:(NSDictionary *)values;
-- (BOOL)applyTrackpointSpeed:(NSDictionary *)values;
+/* The pointer settings take one key of any device class (mouseSpeed,
+ * trackpadSpeed, ...); the class comes from the key's prefix. */
+- (BOOL)applyPointerSpeed:(NSDictionary *)values;
+- (BOOL)applyPointerNaturalScrolling:(NSDictionary *)values;
+- (BOOL)applyPointerLeftHanded:(NSDictionary *)values;
+- (BOOL)applyPointerScrollSpeed:(NSDictionary *)values;
+/* The five curve keys of one class. */
+- (BOOL)applyPointerCurve:(NSDictionary *)values;
 - (BOOL)applyTapToClick:(NSDictionary *)values;
 - (BOOL)applyTapButtonMapping:(NSDictionary *)values;
 - (BOOL)applyDisableWhileTyping:(NSDictionary *)values;

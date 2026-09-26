@@ -20,6 +20,12 @@
 /* The defaults domains the settings live in, each once. */
 + (NSArray<NSString *> *)domains;
 
+/* The Mouse pane once stored scrolling, handedness and the trackpad curve
+ * under shared keys; those are moved to the per-class keys (see
+ * MousePreferences) so a user who has not opened the pane since still gets
+ * them back. */
++ (NSDictionary<NSString *, NSDictionary *> *)domainsByMigrating:(NSDictionary<NSString *, NSDictionary *> *)domains;
+
 /* domains maps a domain name to its persistent domain dictionary; a domain
  * or key that is missing means the user never set it, so that setting is
  * skipped rather than applied with some default value. */

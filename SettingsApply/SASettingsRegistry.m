@@ -5,9 +5,9 @@
  */
 
 #import "SASettingsRegistry.h"
+#import "MousePreferences.h"
 
 static NSString *const kKeyboardDomain = @"KeyboardPreferences";
-static NSString *const kMouseDomain = @"MousePreferences";
 static NSString *const kEnergyDomain = @"EnergyPreferences";
 /* The Color pane keeps its profiles in the domain of the application that
  * hosts it rather than a domain of its own. */
@@ -17,6 +17,32 @@ static SASetting *S(NSString *domain, NSArray *keys, NSString *backend, NSString
 {
     return [SASetting settingWithDomain:domain keys:keys optionalKeys:@[]
                                 backend:backend applierSelector:selector];
+}
+
+/* The settings every pointer class has; the applier finds the class from
+ * the key's prefix.  Trackpoints get no curve: libinput scales their motion
+ * before any profile, so a curve in device units would mean nothing. */
+static NSArray *MouseSettings(PointerDeviceKind kind)
+{
+    NSString *(^key)(NSString *) = ^(NSString *setting) {
+        return [MousePreferences key:setting forKind:kind];
+    };
+    NSMutableArray *list = [NSMutableArray arrayWithObject:
+        S(MousePreferencesDomain, @[key(MousePreferencesSpeed)],
+          @"MouseBackend -applySpeed:toKind:", @"applyPointerSpeed:")];
+    if (kind != PointerDeviceKindTrackpoint) {
+        [list addObject:S(MousePreferencesDomain, [MousePreferences curveKeysForKind:kind],
+                          @"MouseBackend -applyAccelProfile:curve:toKind:", @"applyPointerCurve:")];
+    }
+    [list addObjectsFromArray:@[
+        S(MousePreferencesDomain, @[key(MousePreferencesNaturalScrolling)],
+          @"MouseBackend -applyNaturalScrolling:toKind:", @"applyPointerNaturalScrolling:"),
+        S(MousePreferencesDomain, @[key(MousePreferencesLeftHanded)],
+          @"MouseBackend -applyLeftHanded:toKind:", @"applyPointerLeftHanded:"),
+        S(MousePreferencesDomain, @[key(MousePreferencesScrollSpeed)],
+          @"MouseBackend -applyScrollSpeed:toKind:", @"applyPointerScrollSpeed:"),
+    ]];
+    return list;
 }
 
 @implementation SASettingsRegistry
@@ -40,7 +66,8 @@ static SASetting *S(NSString *domain, NSArray *keys, NSString *backend, NSString
 {
     static NSArray *settings;
     if (settings == nil) {
-        settings = @[
+        NSMutableArray *list = [NSMutableArray array];
+        [list addObjectsFromArray:@[
             [SASetting settingWithDomain:kKeyboardDomain
                                     keys:@[@"layout"]
                             optionalKeys:@[@"variant", @"options"]
@@ -49,23 +76,21 @@ static SASetting *S(NSString *domain, NSArray *keys, NSString *backend, NSString
             S(kKeyboardDomain, @[@"isApple", @"keyboardType"],
               @"KeyboardBackend +applyAppleISOKeySwap", @"applyAppleISOKeySwap:"),
 
-            S(kMouseDomain, @[@"naturalScrolling"],
-              @"MouseBackend -applyNaturalScrolling:", @"applyNaturalScrolling:"),
-            S(kMouseDomain, @[@"leftHanded"],
-              @"MouseBackend -applyLeftHanded:", @"applyLeftHanded:"),
-            S(kMouseDomain, @[@"mouseSpeed"],
-              @"MouseBackend -applyMouseSpeed:", @"applyMouseSpeed:"),
-            S(kMouseDomain, @[@"trackpadSpeed"],
-              @"MouseBackend -applyTrackpadSpeed:", @"applyTrackpadSpeed:"),
-            S(kMouseDomain, @[@"trackpointSpeed"],
-              @"MouseBackend -applyTrackpointSpeed:", @"applyTrackpointSpeed:"),
-            S(kMouseDomain, @[@"tapToClick"],
+        ]];
+        /* Per device class, speed before the curve: the System and Flat
+           profiles scale with the speed, and a custom curve replaces it. */
+        [list addObjectsFromArray:MouseSettings(PointerDeviceKindMouse)];
+        [list addObjectsFromArray:MouseSettings(PointerDeviceKindTouchpad)];
+        [list addObjectsFromArray:@[
+            S(MousePreferencesDomain, @[@"tapToClick"],
               @"MouseBackend -applyTapToClick:", @"applyTapToClick:"),
-            S(kMouseDomain, @[@"twoFingerRightClick", @"threeFingerMiddleClick"],
+            S(MousePreferencesDomain, @[@"twoFingerRightClick", @"threeFingerMiddleClick"],
               @"MouseBackend -applyTwoFingerRightClick:threeFingerMiddleClick:", @"applyTapButtonMapping:"),
-            S(kMouseDomain, @[@"disableWhileTyping"],
+            S(MousePreferencesDomain, @[@"disableWhileTyping"],
               @"MouseBackend -applyDisableWhileTyping:", @"applyDisableWhileTyping:"),
-
+        ]];
+        [list addObjectsFromArray:MouseSettings(PointerDeviceKindTrackpoint)];
+        [list addObjectsFromArray:@[
             S(kEnergyDomain, @[@"governor"],
               @"CPUGovernorBackend +setGovernor:", @"applyGovernor:"),
             S(kEnergyDomain, @[@"brightness"],
@@ -79,7 +104,8 @@ static SASetting *S(NSString *domain, NSArray *keys, NSString *backend, NSString
 
             S(kColorDomain, @[@"ColorActiveProfiles"],
               @"ProfileApplier +loadProfile:forOutput:", @"applyColorProfiles:"),
-        ];
+        ]];
+        settings = [list copy];
     }
     return settings;
 }
@@ -93,6 +119,17 @@ static SASetting *S(NSString *domain, NSArray *keys, NSString *backend, NSString
         }
     }
     return domains;
+}
+
++ (NSDictionary<NSString *, NSDictionary *> *)domainsByMigrating:(NSDictionary<NSString *, NSDictionary *> *)domains
+{
+    NSDictionary *mouse = [domains objectForKey:MousePreferencesDomain];
+    if (mouse == nil) {
+        return domains;
+    }
+    NSMutableDictionary *out = [domains mutableCopy];
+    [out setObject:[MousePreferences migratedDomain:mouse] forKey:MousePreferencesDomain];
+    return out;
 }
 
 + (NSArray<SAPlannedApply *> *)planForSettings:(NSArray<SASetting *> *)settings

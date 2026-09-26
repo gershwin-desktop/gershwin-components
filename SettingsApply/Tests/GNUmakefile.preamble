@@ -13,7 +13,7 @@ ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
 # The applier links every pane backend; the build-tree libraries win over
 # anything installed, so the test checks the code in this tree.
 SA_LIBDIRS = MouseBackend KeyboardBackend EnergyBackend CPUGovernorBackend ColorProfileBackend
-ADDITIONAL_LIB_DIRS += $(foreach l,$(SA_LIBDIRS),-L$(CURDIR)/../../Libraries/$(l)/obj)
+ADDITIONAL_LDFLAGS += $(foreach l,$(SA_LIBDIRS),-L$(CURDIR)/../../Libraries/$(l)/obj)
 ADDITIONAL_LDFLAGS += -Wl,--disable-new-dtags \
 	$(foreach l,$(SA_LIBDIRS),-Wl,-rpath,$(CURDIR)/../../Libraries/$(l)/obj)
 t_SettingsRegistry_TOOL_LIBS += -lMouseBackend -lKeyboardBackend -lEnergyBackend \

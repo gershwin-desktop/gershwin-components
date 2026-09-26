@@ -19,8 +19,9 @@ ADDITIONAL_INCLUDE_DIRS += -I../Mouse -I../Keyboard -I../Energy -I../Color
 
 SA_BACKENDS = MouseBackend KeyboardBackend EnergyBackend CPUGovernorBackend ColorProfileBackend
 gershwin-apply-settings_TOOL_LIBS += $(foreach l,$(SA_BACKENDS),-l$(l))
-# The build-tree directories come first so an uninstalled build links the
-# libraries it was built with.
-ADDITIONAL_LIB_DIRS += $(foreach l,$(SA_BACKENDS),-L../Libraries/$(l)/obj)
+# The build-tree directories must come first so an uninstalled build links
+# the libraries it was built with; gnustep-make puts the installed library
+# directory ahead of ADDITIONAL_LIB_DIRS, so they go into the linker flags.
+ADDITIONAL_LDFLAGS += $(foreach l,$(SA_BACKENDS),-L../Libraries/$(l)/obj)
 
 include $(GNUSTEP_MAKEFILES)/tool.make

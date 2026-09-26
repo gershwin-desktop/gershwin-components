@@ -7,6 +7,7 @@
 #import "SASettingsApplier.h"
 #import "KeyboardBackend.h"
 #import "MouseBackend.h"
+#import "MousePreferences.h"
 #import "EnergyBackend.h"
 #import "CPUGovernorBackend.h"
 #import "ProfileApplier.h"
@@ -122,39 +123,86 @@ static void Refuse(NSString *key, id value)
     return _mouse;
 }
 
-- (BOOL)applyNaturalScrolling:(NSDictionary *)values
+/* The device class whose key for setting is among the values, and that
+ * key; the registry hands each pointer setting exactly one class's keys. */
+static PointerDeviceKind KindForSetting(NSDictionary *values, NSString *setting, NSString **keyOut)
 {
-    id v;
-    return [self scalar:@"naturalScrolling" in:values into:&v]
-        && [[self mouse] applyNaturalScrolling:[v boolValue]];
+    const PointerDeviceKind kinds[] = {
+        PointerDeviceKindMouse, PointerDeviceKindTouchpad, PointerDeviceKindTrackpoint,
+    };
+    for (NSUInteger i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        NSString *key = [MousePreferences key:setting forKind:kinds[i]];
+        if ([values objectForKey:key] != nil) {
+            *keyOut = key;
+            return kinds[i];
+        }
+    }
+    NSLog(@"gershwin-apply-settings: no pointer class for %@ in %@", setting, values);
+    return PointerDeviceKindNone;
 }
 
-- (BOOL)applyLeftHanded:(NSDictionary *)values
+- (BOOL)pointerSetting:(NSString *)setting in:(NSDictionary *)values
+                  into:(id *)value kind:(PointerDeviceKind *)kind
 {
-    id v;
-    return [self scalar:@"leftHanded" in:values into:&v]
-        && [[self mouse] applyLeftHanded:[v boolValue]];
+    NSString *key = nil;
+    *kind = KindForSetting(values, setting, &key);
+    return *kind != PointerDeviceKindNone && [self scalar:key in:values into:value];
 }
 
-- (BOOL)applyMouseSpeed:(NSDictionary *)values
+- (BOOL)applyPointerSpeed:(NSDictionary *)values
 {
     id v;
-    return [self scalar:@"mouseSpeed" in:values into:&v]
-        && [[self mouse] applyMouseSpeed:[v floatValue]];
+    PointerDeviceKind kind;
+    return [self pointerSetting:MousePreferencesSpeed in:values into:&v kind:&kind]
+        && [[self mouse] applySpeed:[v floatValue] toKind:kind];
 }
 
-- (BOOL)applyTrackpadSpeed:(NSDictionary *)values
+- (BOOL)applyPointerNaturalScrolling:(NSDictionary *)values
 {
     id v;
-    return [self scalar:@"trackpadSpeed" in:values into:&v]
-        && [[self mouse] applyTrackpadSpeed:[v floatValue]];
+    PointerDeviceKind kind;
+    return [self pointerSetting:MousePreferencesNaturalScrolling in:values into:&v kind:&kind]
+        && [[self mouse] applyNaturalScrolling:[v boolValue] toKind:kind];
 }
 
-- (BOOL)applyTrackpointSpeed:(NSDictionary *)values
+- (BOOL)applyPointerLeftHanded:(NSDictionary *)values
 {
     id v;
-    return [self scalar:@"trackpointSpeed" in:values into:&v]
-        && [[self mouse] applyTrackpointSpeed:[v floatValue]];
+    PointerDeviceKind kind;
+    return [self pointerSetting:MousePreferencesLeftHanded in:values into:&v kind:&kind]
+        && [[self mouse] applyLeftHanded:[v boolValue] toKind:kind];
+}
+
+- (BOOL)applyPointerScrollSpeed:(NSDictionary *)values
+{
+    id v;
+    PointerDeviceKind kind;
+    return [self pointerSetting:MousePreferencesScrollSpeed in:values into:&v kind:&kind]
+        && [[self mouse] applyScrollSpeed:[v doubleValue] toKind:kind];
+}
+
+- (BOOL)applyPointerCurve:(NSDictionary *)values
+{
+    NSString *profileKey = nil;
+    PointerDeviceKind kind = KindForSetting(values, MousePreferencesCurveProfile, &profileKey);
+    if (kind == PointerDeviceKindNone) {
+        return NO;
+    }
+    NSString *profile = nil;
+    if (![self string:profileKey in:values into:&profile]) {
+        return NO;
+    }
+    for (NSString *key in [MousePreferences curveKeysForKind:kind]) {
+        id v;
+        if (![key isEqualToString:profileKey] && ![self scalar:key in:values into:&v]) {
+            return NO;
+        }
+    }
+    AccelerationCurve curve;
+    if (![MousePreferences curve:&curve forKind:kind inDomain:values]) {
+        return NO;
+    }
+    return [[self mouse] applyAccelProfile:profile curve:curve toKind:kind];
 }
 
 - (BOOL)applyTapToClick:(NSDictionary *)values
