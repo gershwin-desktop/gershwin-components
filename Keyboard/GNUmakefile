@@ -9,7 +9,13 @@ Keyboard_OBJCFLAGS += -Wall -Wextra -Werror -O2
 BUNDLE_NAME = Keyboard
 Keyboard_OBJC_FILES = KeyboardPane.m KeyboardController.m
 Keyboard_RESOURCE_FILES = Keyboard.png
-Keyboard_BUNDLE_LIBS = -lPreferencePanes
+# Loading a layout into the X server lives in libKeyboardBackend
+# (Libraries/KeyboardBackend, sources in this directory), shared with
+# gershwin-apply-settings, which loads the saved layout again at login.  The
+# build-tree directory comes first so an uninstalled build links the library
+# it was built with.
+Keyboard_BUNDLE_LIBS = -lPreferencePanes -lKeyboardBackend
+ADDITIONAL_LIB_DIRS += -L../Libraries/KeyboardBackend/obj
 Keyboard_PRINCIPAL_CLASS = KeyboardPane
 PREF_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Bundles
 BUNDLE_EXTENSION = .prefPane
