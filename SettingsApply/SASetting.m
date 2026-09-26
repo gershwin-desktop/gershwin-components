@@ -35,9 +35,34 @@
     return p;
 }
 
+/* Values are shown on one line so each setting stays one line of the log,
+ * even a dictionary of display profiles. */
+static NSString *OneLine(id value)
+{
+    NSString *d = [value description];
+    NSArray *parts = [d componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
+    NSMutableArray *trimmed = [NSMutableArray array];
+    for (NSString *part in parts) {
+        NSString *t = [part stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([t length] > 0) {
+            [trimmed addObject:t];
+        }
+    }
+    return [trimmed componentsJoinedByString:@" "];
+}
+
 - (NSString *)reportLine
 {
-    return @"";
+    NSMutableString *line = [NSMutableString stringWithString:self.setting.domain];
+    NSArray *ordered = [self.setting.keys arrayByAddingObjectsFromArray:self.setting.optionalKeys];
+    for (NSString *key in ordered) {
+        id value = [self.values objectForKey:key];
+        if (value != nil) {
+            [line appendFormat:@" %@=%@", key, OneLine(value)];
+        }
+    }
+    [line appendFormat:@" -> %@", self.setting.backend];
+    return line;
 }
 
 @end
