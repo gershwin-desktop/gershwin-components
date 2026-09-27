@@ -93,6 +93,15 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     BOOL _needsReload;
     NSTimer *_reloadTimer;
     NSArray *_pendingIdentifiers;
+
+    /* The single leading item currently standing in for whatever extras
+       are folded away, or nil when nothing is folded. */
+    NSMenuItem *_extrasOverflowItem;
+
+    /* How many leading entries of _menuExtras are currently folded behind
+       _extrasOverflowItem.  Lets setCollapsedExtraCount: no-op on a repeat
+       call with the same count. */
+    NSUInteger _currentCollapsedExtraCount;
 }
 @end
 
@@ -410,6 +419,15 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         NSLog(@"GSMenuExtra: created new _extrasMenu");
     }
 
+    /* The incremental add/remove logic below walks _extrasMenu's top-level
+       items by identifier; an active collapse hides some of them inside
+       the overflow item's submenu instead, where this method would not see
+       them.  Restore to unfolded first so it always edits a consistent,
+       fully-expanded menu. */
+    if (_extrasOverflowItem) {
+        [self setCollapsedExtraCount:0];
+    }
+
     /* Remove items no longer wanted */
     NSMutableArray *identsToRemove = [NSMutableArray array];
     for (NSString *ident in _extrasMenuItems) {
@@ -638,6 +656,16 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         [_extrasMenuItems setObject:item forKey:ident];
     }
 
+    /* Every item above is freshly created and placed at top level, so any
+       collapse that was applied before this rebuild no longer describes
+       reality - the overflow item it made is gone (detached above) and its
+       submenu's items were never re-created.  Without this,
+       setCollapsedExtraCount: would see the same count requested again
+       right after this and treat it as already applied, leaving every
+       extra shown uncollapsed. */
+    _extrasOverflowItem = nil;
+    _currentCollapsedExtraCount = 0;
+
     if (_extrasMenuView) {
         [_extrasMenuView setFrameSize:NSMakeSize(0, _menuBarHeight)];
         [_extrasMenuView sizeToFit];
@@ -810,6 +838,90 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 - (CGFloat)extrasMenuWidth
 {
     return [self extrasMenuWidthForView:_extrasMenuView menu:_extrasMenu];
+}
+
+#pragma mark - Menu bar layout (extras collapse)
+
+- (NSArray<NSNumber *> *)naturalExtraWidthsLeastImportantFirst
+{
+    NSUInteger total = [_menuExtras count];
+    if (total == 0) return @[];
+
+    /* Measure against the fully unfolded state, then restore whatever fold
+       was in effect - the caller is expected to immediately apply the
+       fresh layout decision anyway, but leaving the view in a half-measured
+       state if it does not would be a foot-gun. */
+    NSUInteger savedCollapse = _currentCollapsedExtraCount;
+    [self setCollapsedExtraCount:0];
+
+    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
+    [_extrasMenuView sizeToFit];
+
+    NSMutableArray *widths = [NSMutableArray arrayWithCapacity:total];
+    for (NSUInteger i = 0; i < total; i++) {
+        NSRect r = [_extrasMenuView rectOfItemAtIndex:i];
+        [widths addObject:@(NSWidth(r))];
+    }
+
+    [self setCollapsedExtraCount:savedCollapse];
+    return widths;
+}
+
+- (void)setCollapsedExtraCount:(NSUInteger)count
+{
+    NSUInteger total = [_menuExtras count];
+    if (count > total) count = total;
+    if (count == _currentCollapsedExtraCount) return;
+    if (!_extrasMenu) return;
+
+    /* Detach the current overflow wrapper (if any) so its submenu's items
+       are free to be redistributed below; the NSMenuItem objects themselves
+       are never rebuilt here (they stay in _extrasMenuItems by identity),
+       so a title update by identifier (the periodic tick) keeps working
+       whichever slot an extra currently occupies. */
+    if (_extrasOverflowItem) {
+        [_extrasOverflowItem setSubmenu:nil];
+        _extrasOverflowItem = nil;
+    }
+    while ([_extrasMenu numberOfItems] > 0) {
+        [_extrasMenu removeItemAtIndex:0];
+    }
+
+    NSUInteger idx = 0;
+    if (count > 0) {
+        NSMenu *overflowMenu = [[NSMenu alloc] initWithTitle:@"More"];
+        [overflowMenu setAutoenablesItems:NO];
+        for (; idx < count; idx++) {
+            NSMenuItem *item = [_extrasMenuItems objectForKey:[_menuExtras[idx] identifier]];
+            if (item) [overflowMenu addItem:item];
+        }
+        /* A left-pointing chevron: this sits at the LEFT of the extras
+           cluster (nearest the app's own titles), the opposite end from
+           the app menu's own trailing ">>" overflow, so the two are never
+           mistaken for each other. */
+        NSMenuItem *overflow = [[NSMenuItem alloc] initWithTitle:@"«" action:NULL keyEquivalent:@""];
+        [overflow setSubmenu:overflowMenu];
+        [_extrasMenu addItem:overflow];
+        _extrasOverflowItem = overflow;
+    }
+    for (; idx < total; idx++) {
+        NSMenuItem *item = [_extrasMenuItems objectForKey:[_menuExtras[idx] identifier]];
+        if (item) [_extrasMenu addItem:item];
+    }
+
+    _currentCollapsedExtraCount = count;
+
+    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
+    [_extrasMenuView sizeToFit];
+    CGFloat width = [self extrasMenuWidth];
+    NSView *superview = [_extrasMenuView superview];
+    if (superview) {
+        CGFloat menuBarW = NSWidth([superview bounds]);
+        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - 8, 0, width, _menuBarHeight)];
+        [superview setNeedsDisplay:YES];
+    } else {
+        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
+    }
 }
 
 #pragma mark - Update timers

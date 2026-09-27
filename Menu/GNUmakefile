@@ -41,6 +41,7 @@ Menu_OBJC_FILES = \
 	GTKSubmenuManager.m \
 	DBusConnection.m \
 	MenuUtils.m \
+	MenuBarLayout.m \
 	X11ShortcutManager.m \
 	RoundedCornersView.m \
 	ActionSearch.m \

@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -117,5 +117,9 @@ ifeq ($(LIDBACKEND_UNAME_S),Linux)
 t_BatteryLidMenuItem_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
 t_BatteryLidMenuItem_TOOL_LIBS += -ldbus-1
 endif
+
+# MenuBarLayout is Foundation-only (no display needed): the pure geometry
+# that decides which titles/extras a bar of a given width can show.
+t_MenuBarLayout_OBJC_FILES = t_MenuBarLayout.m ../../MenuBarLayout.m
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

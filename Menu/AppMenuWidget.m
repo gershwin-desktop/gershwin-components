@@ -67,6 +67,8 @@ static int x11_error_code = 0;
 static AppMenuWidget *currentWidget = nil;
 static NSMutableSet *invalidWindows = nil;
 
+NSString * const AppMenuWidgetDidRebuildMenuNotification = @"AppMenuWidgetDidRebuildMenuNotification";
+
 static int handleX11Error(Display *display, XErrorEvent *event)
 {
     (void)display;
@@ -136,6 +138,28 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 /* ── Private interface ───────────────────────────────────────────── */
 
 @interface AppMenuWidget ()
+{
+    /* The full, unfolded top-level items of the menu currently displayed,
+       in display order - captured fresh every time setupMenuViewWithMenu:
+       builds a menu.  This is the source of truth setVisibleTopLevelItemCount:
+       folds items out of and restores them into, so the result never
+       depends on whatever fold happened to be applied before. */
+    NSArray<NSMenuItem *> *_unfoldedTopLevelItems;
+
+    /* Natural (unclipped) width of each entry in _unfoldedTopLevelItems,
+       measured once right after the menu is built. */
+    NSArray<NSNumber *> *_naturalTopLevelItemWidths;
+
+    /* The single trailing ">>" item currently standing in for whatever
+       titles are folded away, or nil when nothing is folded. */
+    NSMenuItem *_overflowTitleItem;
+
+    /* How many leading items of _unfoldedTopLevelItems are currently drawn
+       directly (the rest, if any, live inside _overflowTitleItem's
+       submenu).  Lets setVisibleTopLevelItemCount: no-op on a repeat call
+       with the same count. */
+    NSUInteger _currentVisibleTopLevelItemCount;
+}
 
 /* YES while the system (Command) menu or any of its submenus is being
    tracked/shown.  populateSystemMenu mutates self.systemMenu in place
@@ -1220,7 +1244,28 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             }
         }
 
+        /* Capture the freshly-built, still-unfolded top level (this window's
+           menu changed, so the widths the menu bar's layout decision was
+           based on are now stale) and measure each item's natural width
+           before anything ever folds it away. */
+        _unfoldedTopLevelItems = [items copy];
+        _overflowTitleItem = nil;
+        _currentVisibleTopLevelItemCount = [_unfoldedTopLevelItems count];
+        [view sizeToFit];
+        NSMutableArray *widths = [NSMutableArray arrayWithCapacity:[_unfoldedTopLevelItems count]];
+        for (NSUInteger i = 0; i < [_unfoldedTopLevelItems count]; i++) {
+            NSRect r = [view rectOfItemAtIndex:i];
+            [widths addObject:@(NSWidth(r))];
+        }
+        _naturalTopLevelItemWidths = [widths copy];
+
         [self setNeedsDisplay:YES];
+
+        /* Let the menu bar's layout re-decide how many titles/extras fit
+           now that the title widths may have changed (a different active
+           window can have a wildly different number/length of menus). */
+        [[NSNotificationCenter defaultCenter] postNotificationName:AppMenuWidgetDidRebuildMenuNotification
+                                                            object:self];
 
         /* Diagnostic log - gated so the string building itself (a walk of all
            top-level item titles on EVERY menu-bar rebuild) only happens when
@@ -1248,6 +1293,60 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         }
         MENU_PROFILE_END(setupMenuViewWithMenu);
     }
+}
+
+#pragma mark - Menu bar layout (title overflow)
+
+- (NSArray<NSNumber *> *)topLevelItemWidths
+{
+    return _naturalTopLevelItemWidths ?: @[];
+}
+
+- (void)setVisibleTopLevelItemCount:(NSUInteger)count
+{
+    NSUInteger total = [_unfoldedTopLevelItems count];
+    if (total == 0) return;
+    if (count > total) count = total;
+    if (count == _currentVisibleTopLevelItemCount) return;
+
+    NSMenu *menu = self.currentMenu;
+    if (!menu) return;
+
+    /* Rebuild the top level from the cached, unfolded list every time
+       rather than patching whatever fold is currently applied - the result
+       then never depends on the previous state.  The moved items keep
+       their own submenu/target/action; only which slot they occupy
+       changes. */
+    if (_overflowTitleItem) {
+        [_overflowTitleItem setSubmenu:nil];
+        _overflowTitleItem = nil;
+    }
+    while ([menu numberOfItems] > 0) {
+        [menu removeItemAtIndex:0];
+    }
+
+    for (NSUInteger i = 0; i < count; i++) {
+        [menu addItem:_unfoldedTopLevelItems[i]];
+    }
+    if (count < total) {
+        /* ">>" is the conventional stand-in for menu titles that do not
+           fit, understood without reading any language - it must never be
+           what gives way, since it is what keeps the app's own titles from
+           being silently clipped when nothing else is left to collapse. */
+        NSMenu *overflowMenu = [[NSMenu alloc] initWithTitle:@">>"];
+        [overflowMenu setAutoenablesItems:NO];
+        for (NSUInteger i = count; i < total; i++) {
+            [overflowMenu addItem:_unfoldedTopLevelItems[i]];
+        }
+        NSMenuItem *overflow = [[NSMenuItem alloc] initWithTitle:@">>" action:NULL keyEquivalent:@""];
+        [overflow setSubmenu:overflowMenu];
+        [menu addItem:overflow];
+        _overflowTitleItem = overflow;
+    }
+
+    _currentVisibleTopLevelItemCount = count;
+    [self.menuView sizeToFit];
+    [self setNeedsDisplay:YES];
 }
 
 #pragma mark - Menu comparison (lightweight, top-level only)

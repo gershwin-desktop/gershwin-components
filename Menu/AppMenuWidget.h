@@ -16,6 +16,12 @@
 @class MenuProtocolManager;
 @class WindowSwitchContext;
 
+/* Posted whenever setupMenuViewWithMenu: finishes building a fresh top-level
+   menu (window switch, application switch, or falling back to the system-
+   only menu) - the moment the set of title widths the menu bar's layout
+   depends on may have changed.  object is the AppMenuWidget itself. */
+extern NSString * const AppMenuWidgetDidRebuildMenuNotification;
+
 @interface AppMenuWidget : NSView <NSMenuDelegate>
 
 @property (nonatomic, weak) MenuProtocolManager *protocolManager;
@@ -87,6 +93,21 @@
 - (BOOL)isPlaceholderMenu:(NSMenu *)menu;
 - (void)closeActiveWindow:(NSMenuItem *)sender;
 - (void)sendAltF4ToWindow:(unsigned long)windowId;
+
+/* ── Menu bar layout (title overflow) ──────────────────────────── */
+
+/* Natural (unclipped) width of each top-level item of the menu currently
+   built, in display order - measured fresh every time setupMenuViewWithMenu:
+   builds a menu, before any overflow folding is applied.  Feed this to
+   +[MenuBarLayout layoutForBarWidth:...] to decide how many fit. */
+- (NSArray<NSNumber *> *)topLevelItemWidths;
+
+/* Show exactly the first `count` top-level items directly; any items beyond
+   that are moved (not copied - their own submenu, target and action travel
+   with them) into a single trailing overflow item's submenu instead of
+   being pushed off-screen.  Passing the full item count restores normal
+   display.  Idempotent: a no-op if the fold already matches. */
+- (void)setVisibleTopLevelItemCount:(NSUInteger)count;
 
 /* System submenu actions */
 - (void)openSystemPreferences:(NSMenuItem *)sender;

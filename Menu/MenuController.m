@@ -17,6 +17,7 @@
 #import "ActionSearch.h"
 #import "MenuUtils.h"
 #import "MenuExtraManager.h"
+#import "MenuBarLayout.h"
 #import "WindowMonitor.h"
 #import "AppMenuImporter.h"
 #import "MenuProfiler.h"
@@ -557,10 +558,70 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
 
 - (void)extrasEnabledSetDidChange:(NSNotification *)notification
 {
+    /* The set of enabled extras changed (a preferences toggle, or a
+       reload) - their total width did too, so the title/extras split may
+       need to change with it. */
+    [self recomputeMenuBarLayout];
+}
+
+- (void)appMenuWidgetDidRebuildMenu:(NSNotification *)notification
+{
+    /* The active window/application switched, so the app's own menu
+       titles changed too - re-run the same decision. */
+    [self recomputeMenuBarLayout];
+}
+
+/* Decide, and apply, how many of the active application's own menu titles
+ * and how many menu extras the bar can show directly at its current width -
+ * the app's own titles keep priority; see +[MenuBarLayout
+ * layoutForBarWidth:...] for the rule.  Called whenever either side of that
+ * decision can have changed: the bar was resized (screenParametersChanged),
+ * the enabled extras changed (extrasEnabledSetDidChange:), or the active
+ * window's menu was rebuilt (appMenuWidgetDidRebuildMenu:). */
+- (void)recomputeMenuBarLayout
+{
+    if (!self.appMenuWidget || !self.menuExtraManager || !self.menuBarView) return;
+
+    /* A chevron standing in for whatever gets folded away is sized like an
+       ordinary short title/extra rather than measured itself, to avoid a
+       chicken-and-egg dependency on the very layout being decided. */
+    const CGFloat kOverflowItemWidth = 28.0;
+    const CGFloat kEdgeMargin = 8.0;
+
+    CGFloat barWidth = NSWidth([self.menuBarView bounds]);
+    NSArray<NSNumber *> *titleWidths = [self.appMenuWidget topLevelItemWidths];
+    NSArray<NSNumber *> *extraWidths = [self.menuExtraManager naturalExtraWidthsLeastImportantFirst];
+
+    NSUInteger visibleTitleCount = [titleWidths count];
+    NSUInteger collapsedExtraCount = 0;
+    [MenuBarLayout layoutForBarWidth:barWidth
+                            edgeMargin:kEdgeMargin
+                           titleWidths:titleWidths
+                    titleOverflowWidth:kOverflowItemWidth
+                           extraWidths:extraWidths
+                    extraOverflowWidth:kOverflowItemWidth
+                     visibleTitleCount:&visibleTitleCount
+                   collapsedExtraCount:&collapsedExtraCount];
+
+    [self.appMenuWidget setVisibleTopLevelItemCount:visibleTitleCount];
+    [self.menuExtraManager setCollapsedExtraCount:collapsedExtraCount];
+
     CGFloat extrasWidth = [self.menuExtraManager extrasMenuWidth];
-    CGFloat menuBarW = NSWidth([self.menuBarView bounds]);
-    CGFloat widgetWidth = menuBarW - extrasWidth - 8;
-    [self.appMenuWidget setFrameSize:NSMakeSize(widgetWidth, NSHeight([self.appMenuWidget frame]))];
+    NSView *extrasMenuView = nil;
+    for (NSView *subview in [self.menuBarView subviews]) {
+        if ([subview isKindOfClass:[NSMenuView class]]) {
+            extrasMenuView = subview;
+            break;
+        }
+    }
+    CGFloat barHeight = NSHeight([self.menuBarView bounds]);
+    if (extrasMenuView) {
+        [extrasMenuView setFrame:NSMakeRect(barWidth - extrasWidth - kEdgeMargin, 0,
+                                            extrasWidth, barHeight)];
+    }
+
+    CGFloat widgetWidth = barWidth - extrasWidth - kEdgeMargin;
+    [self.appMenuWidget setFrame:NSMakeRect(0, 0, widgetWidth, barHeight)];
     [self.menuBarView setNeedsDisplay:YES];
 }
 
@@ -622,27 +683,15 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     // Resize the background view
     [self.menuBarView setFrame:NSMakeRect(0, 0, contentW, contentH)];
 
-    // Reposition menu extras at the right edge
-    NSView *extrasMenuView = nil;
-    for (NSView *subview in [self.menuBarView subviews]) {
-        if ([subview isKindOfClass:[NSMenuView class]]) {
-            extrasMenuView = subview;
-            break;
-        }
-    }
-
-    CGFloat extrasMenuWidth = [self.menuExtraManager extrasMenuWidth];
-    if (extrasMenuView) {
-        [extrasMenuView setFrame:NSMakeRect(contentW - extrasMenuWidth - 8, 0,
-                                            extrasMenuWidth, contentH)];
-    }
-
-    // Resize app menu widget to fill remaining space
-    CGFloat menuWidgetWidth = contentW - extrasMenuWidth - 8;
-    [self.appMenuWidget setFrame:NSMakeRect(0, 0, menuWidgetWidth, contentH)];
+    // Re-run the title/extras layout decision for the new width, and
+    // reposition the extras view and the app menu widget accordingly - the
+    // app's own titles keep priority; extras collapse first when the bar
+    // is too narrow for both (see +[MenuBarLayout layoutForBarWidth:...]).
+    [self recomputeMenuBarLayout];
 
     // Re-layout the menu items so they reflow to the new bar width/height
-    // (fonts/images scale with GSScaleFactor, changing item widths).
+    // (fonts/images scale with GSScaleFactor, changing item widths) even
+    // when the fold decision above did not itself change.
     [self.appMenuWidget.menuView sizeToFit];
     [self.appMenuWidget setNeedsDisplay:YES];
 
@@ -1217,6 +1266,16 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                              selector:@selector(extrasEnabledSetDidChange:)
                                                  name:@"GSMenuExtraEnabledSetDidChange"
                                                object:self.menuExtraManager];
+
+    // Re-run the title/extras layout decision whenever the active window's
+    // menu changes - a different application can have a very different
+    // number and length of top-level menus. object:nil because
+    // AppMenuWidget does not exist yet at this point in setup; only one
+    // instance is ever created.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(appMenuWidgetDidRebuildMenu:)
+                                                 name:AppMenuWidgetDidRebuildMenuNotification
+                                               object:nil];
 
     // Give the app menu widget the remaining space
     CGFloat menuWidgetWidth = self.screenSize.width - extrasMenuWidth - 8;
