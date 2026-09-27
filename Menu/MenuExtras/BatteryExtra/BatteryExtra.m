@@ -480,7 +480,7 @@ static const int kBatteryRefreshTicks = 15;
 #pragma mark - Stay awake at lid close
 
 /* Factored out so a test can inject an armer built from fakes instead of
- * the real D-Bus/systemd-inhibit backend, by overriding this one method. */
+ * the real D-Bus/logind backend, by overriding this one method. */
 - (EnergyLidCloseOnceArmer *)createLidArmerWithUnsupportedReason:(NSString **)reason
 {
     return [EnergyLidBackend createArmerWithUnsupportedReason:reason];

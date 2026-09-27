@@ -12,7 +12,7 @@
 
 /* Builds the armer behind "Stay awake at lid close"; overridable so a test
  * can hand back one built from fake collaborators instead of the real
- * D-Bus/systemd-inhibit backend (EnergyLidBackend). */
+ * D-Bus/logind backend (EnergyLidBackend). */
 - (EnergyLidCloseOnceArmer *)createLidArmerWithUnsupportedReason:(NSString **)reason;
 
 /* The "Stay awake at lid close" menu item's action; declared here (rather

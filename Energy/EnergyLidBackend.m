@@ -9,24 +9,7 @@
 #if defined(__linux__)
 #import <dbus/dbus.h>
 #import <string.h>
-
-/* Returns the first executable path that exists, or nil.  Shared by the
- * capability probe and the inhibitor so they never disagree about where
- * systemd-inhibit lives.  Only Linux calls this today (the only platform
- * with a lock this backend can take at all), so it stays inside the same
- * guard rather than sitting unused - with -Werror on this library - on
- * every other platform. */
-static NSString *EnergyLidFindExecutable(NSArray<NSString *> *candidates)
-{
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *path in candidates) {
-        if ([fm isExecutableFileAtPath:path]) {
-            return path;
-        }
-    }
-    return nil;
-}
-
+#import <unistd.h>
 
 /* Watches logind's LidClosed property over the system bus.  A private
  * connection and its own thread exist only between -start and -stop, i.e.
@@ -190,91 +173,139 @@ static DBusHandlerResult EnergyLidPropertiesChangedFilter(DBusConnection *connec
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
-/* A logind "handle-lid-switch" block-mode lock: while held, logind performs
- * no action at all for a lid-close event (it does not suspend now, and it
- * does not queue the suspend for when the lock is released later), so the
- * lock only needs to be held at the moment the event arrives - see
+/* The polkit action this call is gated behind, named in every error this
+ * class reports so a denial tells the user exactly what to allow. */
+static NSString *const kEnergyLidPolkitAction = @"org.freedesktop.login1.inhibit-handle-lid-switch";
+
+/* A logind "handle-lid-switch" block-mode lock, taken through the Manager's
+ * own Inhibit() D-Bus method rather than the systemd-inhibit binary: that
+ * method is logind's actual API (systemd-inhibit is just a thin wrapper
+ * around it), so this works identically against systemd-logind and against
+ * elogind, and needs no external executable at all - only whichever of the
+ * two provides org.freedesktop.login1 on the system bus.
+ *
+ * Inhibit() returns a pipe file descriptor; holding it open is the lock,
+ * closing it (or the process dying, which closes every fd) releases it -
+ * so, same as the old systemd-inhibit child process, a Menu that dies
+ * without calling -stopInhibiting still releases the lock on its own.
+ *
+ * While held, logind performs no action at all for a lid-close event (it
+ * does not suspend now, and it does not queue the suspend for later), so
+ * the lock only needs to be held at the moment the event arrives - see
  * EnergyLidCloseOnceArmer's rationale for releasing it right after. */
-@interface EnergySystemdLidInhibitor : NSObject <EnergySleepInhibitor>
+@interface EnergyLogindLidInhibitor : NSObject <EnergySleepInhibitor>
 @end
 
-@implementation EnergySystemdLidInhibitor
+@implementation EnergyLogindLidInhibitor
 {
-    NSTask *_task;
+    int _fd;
+}
+
+- (instancetype)init
+{
+    self = [super init];
+    if (self) {
+        _fd = -1;
+    }
+    return self;
 }
 
 - (BOOL)startInhibitingLidHandlingWhy:(NSString *)why error:(NSError **)error
 {
-    if (_task != nil && [_task isRunning]) {
+    if (_fd >= 0) {
         return YES;
     }
-    [self cleanupTask];
 
-    NSString *bin = EnergyLidFindExecutable(@[@"/usr/bin/systemd-inhibit", @"/bin/systemd-inhibit"]);
-    if (bin == nil) {
+    DBusError err;
+    dbus_error_init(&err);
+    DBusConnection *conn = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
+    if (conn == NULL) {
         if (error) {
             *error = [NSError errorWithDomain:EnergyLidCloseOnceErrorDomain
                                           code:2
                                       userInfo:@{NSLocalizedDescriptionKey:
-                                          @"systemd-inhibit is not installed"}];
+                                          [NSString stringWithFormat:@"no D-Bus system bus: %s",
+                                              err.message ? err.message : "unknown error"]}];
         }
+        dbus_error_free(&err);
         return NO;
     }
 
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:bin];
-    /* --mode=block: logind must not act on the lid close at all (the screen
-     * may still turn off on its own idle timeout - that is a separate,
-     * unrelated inhibitor this feature does not touch). --mode=delay would
-     * only postpone the suspend, which is not what "stay awake" asked for. */
-    [task setArguments:[NSArray arrayWithObjects:
-        @"--what=handle-lid-switch", @"--mode=block", @"--who=Battery",
-        [NSString stringWithFormat:@"--why=%@", why], @"cat", nil]];
-    /* The lock lives exactly as long as this command. cat blocks on a pipe
-     * whose only writer is this process; NSTask closes inherited descriptors
-     * in the child other than the ones it set up, so if Menu dies without
-     * running -stopInhibiting, cat sees EOF on its own and the lock is
-     * still released - the same mechanism EnergyController uses for its
-     * --what=sleep lock. */
-    [task setStandardInput:[NSPipe pipe]];
-    [task setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
-    [task setStandardError:[NSFileHandle fileHandleWithNullDevice]];
-    @try {
-        [task launch];
-    } @catch (NSException *exception) {
+    DBusMessage *msg = dbus_message_new_method_call("org.freedesktop.login1",
+                                                     "/org/freedesktop/login1",
+                                                     "org.freedesktop.login1.Manager",
+                                                     "Inhibit");
+    const char *what = "handle-lid-switch";
+    const char *who = "Gershwin";
+    const char *whyUTF8 = [why UTF8String];
+    const char *mode = "block";
+    dbus_message_append_args(msg,
+                              DBUS_TYPE_STRING, &what,
+                              DBUS_TYPE_STRING, &who,
+                              DBUS_TYPE_STRING, &whyUTF8,
+                              DBUS_TYPE_STRING, &mode,
+                              DBUS_TYPE_INVALID);
+
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(conn, msg, -1, &err);
+    dbus_message_unref(msg);
+    dbus_connection_unref(conn);
+
+    if (reply == NULL) {
+        /* The expected denial while nothing is actively using this: polkit's
+         * org.freedesktop.login1.inhibit-handle-lid-switch only grants this
+         * to the active session, so a call from outside one (or before the
+         * user has allowed it) is refused here, not silently ignored. */
         if (error) {
             *error = [NSError errorWithDomain:EnergyLidCloseOnceErrorDomain
                                           code:3
                                       userInfo:@{NSLocalizedDescriptionKey:
                                           [NSString stringWithFormat:
-                                              @"systemd-inhibit failed to launch: %@",
-                                              [exception reason]]}];
+                                              @"logind refused the lid-close lock (%s: %s) - "
+                                              @"needs the polkit action %@ allowed for this session",
+                                              err.name ? err.name : "error",
+                                              err.message ? err.message : "no details",
+                                              kEnergyLidPolkitAction]}];
         }
+        dbus_error_free(&err);
         return NO;
     }
-    _task = task;
+
+    int fd = -1;
+    if (!dbus_message_get_args(reply, &err, DBUS_TYPE_UNIX_FD, &fd, DBUS_TYPE_INVALID) || fd < 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:EnergyLidCloseOnceErrorDomain
+                                          code:4
+                                      userInfo:@{NSLocalizedDescriptionKey:
+                                          [NSString stringWithFormat:
+                                              @"logind did not hand back a lock: %s",
+                                              dbus_error_is_set(&err) ? err.message : "no file descriptor"]}];
+        }
+        dbus_error_free(&err);
+        dbus_message_unref(reply);
+        return NO;
+    }
+    dbus_message_unref(reply);
+
+    _fd = fd;
     return YES;
 }
 
 - (void)stopInhibiting
 {
-    [self cleanupTask];
-}
-
-- (void)cleanupTask
-{
-    if (_task == nil) {
-        return;
+    if (_fd >= 0) {
+        close(_fd);
+        _fd = -1;
     }
-    if ([_task isRunning]) {
-        [_task terminate];
-    }
-    _task = nil;
 }
 
 - (BOOL)isInhibiting
 {
-    return _task != nil && [_task isRunning];
+    return _fd >= 0;
+}
+
+- (void)dealloc
+{
+    [self stopInhibiting];
 }
 
 @end
@@ -292,13 +323,6 @@ static DBusHandlerResult EnergyLidPropertiesChangedFilter(DBusConnection *connec
  * opens for itself in -threadMain:. */
 + (BOOL)linuxSupportedWithReason:(NSString **)reason
 {
-    if (EnergyLidFindExecutable(@[@"/usr/bin/systemd-inhibit", @"/bin/systemd-inhibit"]) == nil) {
-        if (reason) {
-            *reason = @"systemd-inhibit is not installed; cannot hold a lid-handling lock";
-        }
-        return NO;
-    }
-
     DBusError err;
     dbus_error_init(&err);
     DBusConnection *conn = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
@@ -322,7 +346,7 @@ static DBusHandlerResult EnergyLidPropertiesChangedFilter(DBusConnection *connec
     }
     if (!hasOwner) {
         if (reason) {
-            *reason = @"systemd-logind is not running on this system";
+            *reason = @"no logind on this system (neither systemd-logind nor elogind is running)";
         }
         return NO;
     }
@@ -339,7 +363,7 @@ static DBusHandlerResult EnergyLidPropertiesChangedFilter(DBusConnection *connec
         return nil;
     }
     id<EnergyLidEventSource> source = [[EnergyLidEventSourceLinuxDBus alloc] init];
-    id<EnergySleepInhibitor> inhibitor = [[EnergySystemdLidInhibitor alloc] init];
+    id<EnergySleepInhibitor> inhibitor = [[EnergyLogindLidInhibitor alloc] init];
     return [[EnergyLidCloseOnceArmer alloc] initWithLidEventSource:source inhibitor:inhibitor];
 }
 
@@ -355,7 +379,8 @@ static DBusHandlerResult EnergyLidPropertiesChangedFilter(DBusConnection *connec
 + (EnergyLidCloseOnceArmer *)createArmerWithUnsupportedReason:(NSString **)reason
 {
     if (reason) {
-        *reason = @"stay-awake-at-lid-close needs systemd-logind, which this platform does not have";
+        *reason = @"stay-awake-at-lid-close needs a logind D-Bus API "
+                  @"(systemd-logind or elogind), which this platform does not have";
     }
     return nil;
 }

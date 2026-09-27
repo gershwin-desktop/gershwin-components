@@ -9,7 +9,7 @@
  *
  * TestBattery overrides -createLidArmerWithUnsupportedReason: (the one seam
  * BatteryExtra exposes for this) to hand back an armer built from fakes
- * instead of the real D-Bus/systemd-inhibit backend.
+ * instead of the real D-Bus/logind backend.
  *
  * Headless: needs a DISPLAY only because NSMenu/NSMenuItem are AppKit
  * classes; nothing here draws.
