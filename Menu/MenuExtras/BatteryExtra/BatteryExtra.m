@@ -7,6 +7,8 @@
 #import "BatteryExtra.h"
 #import "GSMenuExtraContext.h"
 #import "CPUGovernorBackend.h"
+#import "EnergyLidCloseOnce.h"
+#import "EnergyLidBackend.h"
 #import <dispatch/dispatch.h>
 #import <stdio.h>
 #import <stdlib.h>
@@ -38,6 +40,9 @@ static const int kBatteryRefreshTicks = 15;
     BOOL _running;
     GSMenuExtraContext *_context;
     int _ticksSinceRefresh;
+    EnergyLidCloseOnceArmer *_lidArmer;
+    NSString *_lidUnsupportedReason;
+    BOOL _loggedLidUnsupportedReason;
 }
 
 /* Nothing has been read yet: -1 makes menu and image report "unknown" instead
@@ -459,6 +464,9 @@ static const int kBatteryRefreshTicks = 15;
     }
 
     [m addItem:[NSMenuItem separatorItem]];
+    [m addItem:[self stayAwakeAtLidCloseMenuItem]];
+
+    [m addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *prefs = [[NSMenuItem alloc] initWithTitle:@"Preferences"
                                                     action:@selector(openBatteryPrefs:)
@@ -467,6 +475,77 @@ static const int kBatteryRefreshTicks = 15;
     [m addItem:prefs];
 
     return m;
+}
+
+#pragma mark - Stay awake at lid close
+
+/* Factored out so a test can inject an armer built from fakes instead of
+ * the real D-Bus/systemd-inhibit backend, by overriding this one method. */
+- (EnergyLidCloseOnceArmer *)createLidArmerWithUnsupportedReason:(NSString **)reason
+{
+    return [EnergyLidBackend createArmerWithUnsupportedReason:reason];
+}
+
+- (NSMenuItem *)stayAwakeAtLidCloseMenuItem
+{
+    if (_lidArmer == nil && _lidUnsupportedReason == nil) {
+        /* ARC cannot write back through &_ivar directly; go through a
+         * local first. */
+        NSString *reason = nil;
+        _lidArmer = [self createLidArmerWithUnsupportedReason:&reason];
+        _lidUnsupportedReason = reason;
+    }
+
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:
+        NSLocalizedString(@"Stay awake at lid close", @"Battery extra: one-shot lid inhibit menu item")
+                                                   action:@selector(toggleStayAwakeAtLidClose:)
+                                            keyEquivalent:@""];
+    [item setTarget:self];
+    [item setEnabled:(_lidArmer != nil)];
+    [item setState:([_lidArmer isArmed] ? NSOnState : NSOffState)];
+    if (_lidArmer == nil && !_loggedLidUnsupportedReason) {
+        /* Once, not every menu open: this is a fixed platform fact, not
+         * something that will change while Menu keeps running. */
+        _loggedLidUnsupportedReason = YES;
+        NSLog(@"BatteryExtra: stay-awake-at-lid-close disabled: %@", _lidUnsupportedReason);
+    }
+    return item;
+}
+
+- (void)toggleStayAwakeAtLidClose:(id)sender
+{
+    (void)sender;
+    if (_lidArmer == nil) {
+        /* The item is disabled whenever this is true, so a real click never
+         * reaches here; this only guards a scripted/forced -performClick:. */
+        NSLog(@"BatteryExtra: stay-awake-at-lid-close is not available: %@", _lidUnsupportedReason);
+        return;
+    }
+    if ([_lidArmer isArmed]) {
+        [_lidArmer disarm];
+        return;
+    }
+    NSError *error = nil;
+    if (![_lidArmer armWithError:&error]) {
+        /* Fail hard: tell the user rather than leave the check mark off
+         * with no explanation for why arming did nothing. */
+        NSLog(@"BatteryExtra: could not arm stay-awake-at-lid-close: %@",
+              [error localizedDescription]);
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:NSLocalizedString(@"Could Not Stay Awake",
+            @"Battery extra: lid inhibit failure alert title")];
+        [alert setInformativeText:[error localizedDescription]];
+        [alert runModal];
+    }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if ([item action] == @selector(toggleStayAwakeAtLidClose:)) {
+        [item setState:([_lidArmer isArmed] ? NSOnState : NSOffState)];
+        return _lidArmer != nil;
+    }
+    return YES;
 }
 
 #pragma mark - Power governor
@@ -549,6 +628,9 @@ static const int kBatteryRefreshTicks = 15;
 - (void)menuExtraWillUnload
 {
     _running = NO;
+    /* A bundle unload (Menu quitting, or a dev reload) must not leave a
+     * lid-handling lock held forever with nothing left to release it. */
+    [_lidArmer disarm];
 }
 
 @end

@@ -2,12 +2,20 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
 ADDITIONAL_OBJCFLAGS += -fobjc-runtime=gnustep-2.0 -Wno-unused-parameter
 ADDITIONAL_INCLUDE_DIRS += -I../.. -I../../MenuExtras/BatteryExtra
+
+# BatteryExtra.m's default -createLidArmerWithUnsupportedReason: references
+# EnergyLidBackend, so any tool linking the real BatteryExtra.m needs it too
+# even when a test subclass overrides that one method and never calls it -
+# the class reference is still an undefined symbol at link time otherwise.
+# EnergyLidBackend.m's dbus_* calls are behind #if defined(__linux__); only
+# that platform needs libdbus to link this test tool.
+LIDBACKEND_UNAME_S := $(shell uname -s)
 
 t_TintedMenuItemCell_OBJC_FILES = t_TintedMenuItemCell.m
 t_TintedMenuItemCell_TOOL_LIBS += -lgnustep-gui
@@ -30,6 +38,12 @@ t_BatteryRefresh_TOOL_LIBS += -lgnustep-gui
 t_BatteryRefresh_OBJC_FILES += ../../../Energy/CPUGovernorBackend.m
 t_BatteryRefresh_OBJCFLAGS += -I../../../Energy
 t_BatteryRefresh_TOOL_LIBS += -ldispatch
+t_BatteryRefresh_OBJC_FILES += ../../../Energy/EnergyLidCloseOnce.m ../../../Energy/EnergyLidBackend.m
+../../../Energy/EnergyLidBackend.m_FILE_FLAGS += $(ARCFLAGS)
+ifeq ($(LIDBACKEND_UNAME_S),Linux)
+t_BatteryRefresh_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
+t_BatteryRefresh_TOOL_LIBS += -ldbus-1
+endif
 
 # CPUGovernorBackend.h/.m live in Energy/ (Libraries/CPUGovernorBackend
 # packages the same source as libCPUGovernorBackend for Energy and the
@@ -75,5 +89,33 @@ t_WLANMenuListPolicy_TOOL_LIBS += -lgnustep-gui
 # one D-Bus call, so nothing else of Menu is linked.
 t_DBusMenuLayout_OBJC_FILES = t_DBusMenuLayout.m ../../DBusMenuLayout.m
 ../../DBusMenuLayout.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+# EnergyLidCloseOnceArmer is Foundation-only and ships ARC (Libraries/
+# EnergyBackend builds it that way); Testing.h is not ARC-safe, so link the
+# unit as a separate object (per-file ARC flag below) rather than #include
+# it into this test's own (non-ARC) translation unit.
+t_LidCloseOnce_OBJC_FILES = t_LidCloseOnce.m ../../../Energy/EnergyLidCloseOnce.m
+t_LidCloseOnce_OBJCFLAGS += -I../../../Energy
+../../../Energy/EnergyLidCloseOnce.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+# The "Stay awake at lid close" menu item's check mark, driven through the
+# extra's real -menu/-validateMenuItem: with a fake armer injected via a
+# TestHooks category - proves the UI reflects EnergyLidCloseOnceArmer's
+# state, not just that the state machine itself is correct in isolation.
+t_BatteryLidMenuItem_OBJC_FILES = t_BatteryLidMenuItem.m \
+	../../GSMenuExtraContext.m \
+	../../MenuExtras/BatteryExtra/BatteryExtra.m \
+	../../../Energy/EnergyLidCloseOnce.m \
+	../../../Energy/EnergyLidBackend.m
+../../GSMenuExtraContext.m_FILE_FLAGS += $(ARCFLAGS)
+../../MenuExtras/BatteryExtra/BatteryExtra.m_FILE_FLAGS += $(ARCFLAGS)
+t_BatteryLidMenuItem_TOOL_LIBS += -lgnustep-gui
+t_BatteryLidMenuItem_OBJC_FILES += ../../../Energy/CPUGovernorBackend.m
+t_BatteryLidMenuItem_OBJCFLAGS += -I../../../Energy
+t_BatteryLidMenuItem_TOOL_LIBS += -ldispatch
+ifeq ($(LIDBACKEND_UNAME_S),Linux)
+t_BatteryLidMenuItem_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
+t_BatteryLidMenuItem_TOOL_LIBS += -ldbus-1
+endif
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make
