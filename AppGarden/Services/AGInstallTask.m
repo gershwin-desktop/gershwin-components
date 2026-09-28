@@ -20,16 +20,46 @@
 @end
 
 /*
- * The downloader's failure text names the step that failed ("GitHub release
- * lookup failed for owner/repo") but never why, and a 403 from the release
- * API is indistinguishable from a network fault in it. The evidence that it
- * was a rate limit lives in curl's output, which reaches this task through
- * installDidOutputLine: - the one channel that carries raw tool output - or,
- * when the failure text itself already says so, in the text. Either way the
- * rewrite happens here so the framework itself stays untouched (section 8 of
- * the brief).
+ * The downloader's failure text names the step that failed and now usually the
+ * reason as well ("No release of owner/repo has an AppImage", "The newest
+ * release of owner/repo has several AppImages and none of them is clearly the
+ * right one for this machine: ..."), but a refusal by GitHub is still
+ * indistinguishable from a network fault in it. The evidence lives in curl's
+ * own output, which reaches this task through installDidOutputLine: - the one
+ * channel that carries raw tool output - or, when the failure text itself
+ * already says so, in the text. Either way the rewrite happens here so the
+ * framework itself stays untouched (section 8 of the brief).
+ *
+ * curl is run with -f, so the server's own words ("API rate limit exceeded")
+ * never reach us: on a refused response curl writes only the status line.
+ * That status is the evidence that does arrive, and GitHub answers an
+ * unauthenticated client that has used its quota with 403 (429 for a burst),
+ * so a status line from curl together with a failure the text already pins on
+ * GitHub is the same fact the phrase would have told us.
  */
-static NSError *AGRewrittenRateLimitError(NSError *error, BOOL outputSaidRateLimit)
+static BOOL AGOutputSaidRateLimitPhrase(NSString *line)
+{
+  return [line rangeOfString:@"rate limit"
+                     options:NSCaseInsensitiveSearch].location != NSNotFound;
+}
+
+static BOOL AGOutputSaidRefusal(NSString *line)
+{
+  /* curl's own wording for an HTTP error with -f: "The requested URL
+   * returned error: 403", newer versions appending the reason name.
+   * Matched with the words around the number so a "403" in a URL or a byte
+   * count cannot read as a refusal. */
+  NSRange hit = [line rangeOfString:@"returned error: 403"
+                           options:NSCaseInsensitiveSearch];
+  if (hit.location == NSNotFound)
+    hit = [line rangeOfString:@"returned error: 429"
+                      options:NSCaseInsensitiveSearch];
+  return hit.location != NSNotFound;
+}
+
+static NSError *AGRewrittenRateLimitError(NSError *error,
+                                          BOOL outputSaidRateLimit,
+                                          BOOL outputSaidRefusal)
 {
   if (error == nil)
     return nil;
@@ -42,7 +72,15 @@ static NSError *AGRewrittenRateLimitError(NSError *error, BOOL outputSaidRateLim
       [original rangeOfString:@"rate limit"
                       options:NSCaseInsensitiveSearch].location != NSNotFound;
   if (!textSaysRateLimit && !outputSaidRateLimit)
-    return error;
+    {
+      /* The refusal only counts when the failure is a GitHub one: a mirror
+       * or a download page answering 403 says nothing about a quota. */
+      BOOL textSaysGitHub =
+          [original rangeOfString:@"github"
+                          options:NSCaseInsensitiveSearch].location != NSNotFound;
+      if (!outputSaidRefusal || !textSaysGitHub)
+        return error;
+    }
   if ([original rangeOfString:@"GitHub rate limit"
                       options:NSCaseInsensitiveSearch].location != NSNotFound)
     return error;
@@ -61,6 +99,7 @@ static NSError *AGRewrittenRateLimitError(NSError *error, BOOL outputSaidRateLim
 @implementation AGInstallTask
 {
   BOOL _sawRateLimitOutput;
+  BOOL _sawRefusalOutput;
 }
 
 - (instancetype)initWithApp:(AGApp *)app
@@ -91,14 +130,20 @@ static NSError *AGRewrittenRateLimitError(NSError *error, BOOL outputSaidRateLim
 
 - (void)installDidOutputLine:(NSString *)line
 {
-  if ([line rangeOfString:@"rate limit"
-                  options:NSCaseInsensitiveSearch].location == NSNotFound)
+  if (line == nil)
     return;
-  /* Recorded on the main queue as well: setError: reads the flag from there,
+  BOOL saidRateLimit = AGOutputSaidRateLimitPhrase(line);
+  BOOL saidRefusal = AGOutputSaidRefusal(line);
+  if (!saidRateLimit && !saidRefusal)
+    return;
+  /* Recorded on the main queue as well: setError: reads the flags from there,
    * and the downloader emits every line before it returns the failure, so
-   * the queue's order guarantees the flag is set before the rewrite runs. */
+   * the queue's order guarantees the flags are set before the rewrite runs. */
   [[NSOperationQueue mainQueue] addOperationWithBlock:^{
-    _sawRateLimitOutput = YES;
+    if (saidRateLimit)
+      _sawRateLimitOutput = YES;
+    if (saidRefusal)
+      _sawRefusalOutput = YES;
   }];
 }
 
@@ -133,7 +178,8 @@ static NSError *AGRewrittenRateLimitError(NSError *error, BOOL outputSaidRateLim
  * forget: every failure text passes through here exactly once. */
 - (void)setError:(NSError *)error
 {
-  _error = AGRewrittenRateLimitError(error, _sawRateLimitOutput);
+  _error = AGRewrittenRateLimitError(error, _sawRateLimitOutput,
+                                     _sawRefusalOutput);
 }
 
 /* Defined only so the interface's NS_UNAVAILABLE entry has a body; the

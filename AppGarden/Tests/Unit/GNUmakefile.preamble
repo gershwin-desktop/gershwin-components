@@ -61,3 +61,16 @@ t_AGFeedLoader_OBJC_FILES += ../../Services/AGFeedLoader.m $(AG_FEED_SOURCES)
 ../../Services/AGInstallRegistry.m_FILE_FLAGS += $(AG_ARCFLAGS)
 
 t_AGInstallRegistry_OBJC_FILES += ../../Services/AGInstallRegistry.m $(AG_APP_SOURCES)
+
+# --- the rate-limit rewrite in the task (appended; above stay untouched) ---
+
+../../Services/AGInstallTask.m_FILE_FLAGS += $(AG_ARCFLAGS)
+
+# AGInstallTask.m imports <PackageManager/GWPackageManager.h> for the
+# progress protocol. The header has to be findable - the framework itself is
+# not linked, the task calls nothing in it - and it is not ours to annotate,
+# so the same nullability warning is silenced as in the app's GNUmakefile.
+ADDITIONAL_INCLUDE_DIRS += -I/System/Library/Headers
+ADDITIONAL_OBJCFLAGS += -Wno-nullability-completeness
+
+t_AGInstallTask_OBJC_FILES += ../../Services/AGInstallTask.m
