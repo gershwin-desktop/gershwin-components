@@ -21,6 +21,7 @@ PackageManager_OBJC_FILES = \
   GWAppImageAssetPicker.m \
   GWAppImageDownloader.m \
   GWCurlMeterReader.m \
+  GWKDEAppImagePicker.m \
   ODProgressWindow.m \
   ODLogWindowController.m
 
@@ -39,6 +40,7 @@ PackageManager_HEADER_FILES = \
   GWAppImageAssetPicker.h \
   GWAppImageDownloader.h \
   GWCurlMeterReader.h \
+  GWKDEAppImagePicker.h \
   ODProgressWindow.h \
   ODLogWindowController.h
 

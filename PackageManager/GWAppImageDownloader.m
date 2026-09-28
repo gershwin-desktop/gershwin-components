@@ -11,6 +11,7 @@
 #import "GWAppImageDownloader.h"
 #import "GWAppImageAssetPicker.h"
 #import "GWCurlMeterReader.h"
+#import "GWKDEAppImagePicker.h"
 #import "GWPackageManager.h"
 #import "GWOSDetector.h"
 
@@ -28,13 +29,28 @@ static const float kGWProgressDownloadFirst = 0.05f;
 static const float kGWProgressDownloadLast = 0.95f;
 static const float kGWProgressSaving = 0.97f;
 
+/* How a download directory could not be read. Three different faults, because
+ * the user's next move differs for each: a network problem is worth retrying,
+ * a URL that is not a directory is a wrong link in the catalog, and an empty
+ * directory is neither. Collapsing them into one "could not read" is what
+ * would hide a wrong catalog entry behind a network-sounding message. */
+typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
+  /* The request itself failed, or the body could not be decoded. */
+  GWKDEDirectoryUnreachable = 0,
+  /* The page was fetched but is not a directory index. */
+  GWKDEDirectoryNotAnIndex,
+  /* It is an index, and it lists nothing. */
+  GWKDEDirectoryEmpty
+};
+
 /* The release-resolution half, declared here because the entry point is
  * called from -downloadAppImageFromGitHubRepo: above its definition. The
  * reasoning behind each rule lives in AppGarden/INSTRUCTIONS.md section 8,
  * "Which release, and which file in it".
  *
  * None of this is public API: a caller reaches it only through
- * -downloadAppImageFromGitHubRepo:appName:progress:error:. */
+ * -downloadAppImageFromGitHubRepo:appName:progress:error: and
+ * -downloadAppImageFromKDEListingURL:appName:progress:error:. */
 @interface GWAppImageDownloader (ReleaseResolution)
 
 + (NSString *)resolveGitHubReleaseURLForRepo:(NSString *)repo
@@ -42,6 +58,24 @@ static const float kGWProgressSaving = 0.97f;
                                architecture:(NSString *)arch
                                    progress:(nullable id<GWInstallProgressHandler>)progress
                                       error:(NSError **)error;
+
++ (NSString *)resolveKDEAppImageURLForListingURL:(NSString *)listingURL
+                                        appName:(NSString *)appName
+                                   architecture:(NSString *)arch
+                                       progress:(nullable id<GWInstallProgressHandler>)progress
+                                          error:(NSError **)error;
+
++ (NSArray<NSString *> *)entryNamesInIndexHTML:(NSString *)html;
++ (NSArray<NSString *> *)entryNamesForDirectoryURL:(NSString *)url
+                                           progress:(nullable id<GWInstallProgressHandler>)progress
+                                             fault:(GWKDEDirectoryFault *)outFault;
++ (NSError *)KDEDirectoryErrorForFault:(GWKDEDirectoryFault)fault url:(NSString *)url;
++ (NSError *)KDEErrorWithMessage:(NSString *)message;
++ (NSString *)KDEFileSummary:(NSArray<NSString *> *)names;
++ (NSString *)KDEErrorMessageForOutcome:(GWKDEPickOutcome)outcome
+                               listing:(NSString *)listing
+                          architecture:(NSString *)architecture
+                           candidates:(NSArray<NSString *> *)candidates;
 
 /* The tag to use: the newest release that is not a pre-release and does hold
  * an AppImage, failing that the newest that holds one at all. */
@@ -187,6 +221,43 @@ static const float kGWProgressSaving = 0.97f;
                                                 architecture:arch
                                                     progress:progress
                                                        error:&resolveError];
+  if (!url)
+    {
+      if (error) *error = resolveError;
+      return NO;
+    }
+
+  return [self downloadAppImageFromURL:url appName:appName progress:progress error:error];
+}
+
+- (BOOL)downloadAppImageFromKDEListingURL:(NSString *)listingURL
+                                 appName:(NSString *)appName
+                                progress:(nullable id<GWInstallProgressHandler>)progress
+                                   error:(NSError **)error
+{
+  if (!listingURL || [listingURL length] == 0)
+    {
+      if (error)
+        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
+                                     code:GWPackageManagerErrorCommandFailed
+                                 userInfo:@{
+                                   NSLocalizedDescriptionKey:
+                                     @"No download directory is configured for this AppImage",
+                                 }];
+      return NO;
+    }
+
+  NSString *arch = [GWOSDetector currentArchitecture];
+  if (progress)
+    [progress installDidProgress:kGWProgressIndeterminate
+                         message:@"Resolving AppImage from the download directory..."];
+
+  NSError *resolveError = nil;
+  NSString *url = [self.class resolveKDEAppImageURLForListingURL:listingURL
+                                                        appName:appName
+                                                   architecture:arch
+                                                       progress:progress
+                                                          error:&resolveError];
   if (!url)
     {
       if (error) *error = resolveError;
@@ -776,6 +847,316 @@ static const NSUInteger kGWMaxReleasesToWalk = 6;
         return tag;
     }
   return nil;
+}
+
+#pragma mark - Walking a download.kde.org directory
+
+/* How many version directories to look at before giving up. A Get that costs
+   an unbounded number of requests is a Get that can hang, and the newest
+   directories are the only ones anyone installs: labplot and rkward each
+   ship exactly one, and of the rest only krita has more than two. */
+static const NSUInteger kGWMaxKDEVersionDirsToWalk = 4;
+
+/* The entry names of one autoindex page: the relative hrefs, with the
+   server's own chrome and the trailing slash removed. nil when the page is
+   not a directory index at all, which is what an ordinary web page is: the
+   KDE application page for digiKam (apps.kde.org/digikam) has links but no
+   "Parent Directory" row, and reading its links as a file list would
+   resolve a download page to a bug-report link. */
++ (NSArray<NSString *> *)entryNamesInIndexHTML:(NSString *)html
+{
+  if (html == nil || [html length] == 0)
+    return nil;
+
+  /* The marker every autoindex page carries, and the one thing that tells
+     this page apart from a page that merely links to files. */
+  if ([html rangeOfString:@"Parent Directory"
+                  options:NSCaseInsensitiveSearch].location == NSNotFound)
+    return nil;
+
+  static NSRegularExpression *href = nil;
+  if (href == nil)
+    href = [NSRegularExpression regularExpressionWithPattern:@"href=\"([^\"]+)\""
+                                                    options:NSCaseInsensitiveSearch
+                                                      error:NULL];
+
+  NSMutableArray<NSString *> *names = [NSMutableArray array];
+  NSMutableSet<NSString *> *seen = [NSMutableSet set];
+  [href enumerateMatchesInString:html
+                         options:0
+                           range:NSMakeRange(0, [html length])
+                      usingBlock:^(NSTextCheckingResult *m, NSMatchingFlags f,
+                                   BOOL *stop) {
+    NSString *value = [html substringWithRange:[m rangeAtIndex:1]];
+    /* Query strings are the column sort links, a leading slash is either an
+       absolute path or the page's own chrome, and "://" is a link out to
+       another site (the KDE footer). None of them is a file in this
+       directory. */
+    if ([value length] == 0 || [value hasPrefix:@"?"] ||
+        [value hasPrefix:@"/"] || [value rangeOfString:@"://"].location != NSNotFound)
+      return;
+    if ([value hasPrefix:@"#"] || [value hasPrefix:@"mailto:"])
+      return;
+    while ([value hasSuffix:@"/"])
+      value = [value substringToIndex:[value length] - 1];
+    if ([value length] == 0 || [value isEqualToString:@".."] ||
+        [value isEqualToString:@"."])
+      return;
+    if (![seen containsObject:value])
+      {
+        [seen addObject:value];
+        [names addObject:value];
+      }
+  }];
+  return names;
+}
+
+/* Join a directory URL and the entry inside it. */
+static NSString *GWKDEURL(NSString *base, NSString *entry)
+{
+  if ([base hasSuffix:@"/"])
+    return [base stringByAppendingString:entry];
+  return [base stringByAppendingFormat:@"/%@", entry];
+}
+
+/* Fetch one directory's index into memory. On failure, entries is nil and
+   fault says which of the three it was. */
++ (NSArray<NSString *> *)entryNamesForDirectoryURL:(NSString *)url
+                                           progress:(nullable id<GWInstallProgressHandler>)progress
+                                             fault:(GWKDEDirectoryFault *)outFault
+{
+  if (outFault != NULL)
+    *outFault = GWKDEDirectoryUnreachable;
+
+  NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"gwpm_kde_%@.html",
+                      [[NSUUID UUID] UUIDString]]];
+  if (![self fetchURL:url toPath:path progress:progress])
+    {
+      [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+      return nil;
+    }
+  NSString *html = [NSString stringWithContentsOfFile:path
+                                             encoding:NSUTF8StringEncoding
+                                                error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+
+  NSArray<NSString *> *names = [self entryNamesInIndexHTML:html];
+  if (names == nil)
+    {
+      if (outFault != NULL)
+        *outFault = GWKDEDirectoryNotAnIndex;
+      return nil;
+    }
+  if ([names count] == 0 && outFault != NULL)
+    *outFault = GWKDEDirectoryEmpty;
+  return names;
+}
+
+/* The message for a directory that could not be used at all. */
++ (NSError *)KDEDirectoryErrorForFault:(GWKDEDirectoryFault)fault
+                                  url:(NSString *)url
+{
+  switch (fault)
+    {
+    case GWKDEDirectoryNotAnIndex:
+      return [self KDEErrorWithMessage:
+                [NSString stringWithFormat:
+                  @"%@ is not a download directory, so no AppImage can be chosen from it",
+                  url]];
+    case GWKDEDirectoryEmpty:
+      return [self KDEErrorWithMessage:
+                [NSString stringWithFormat:
+                  @"The download directory %@ is empty", url]];
+    case GWKDEDirectoryUnreachable:
+      break;
+    }
+  return [self KDEErrorWithMessage:
+            [NSString stringWithFormat:
+              @"Could not reach the download directory %@", url]];
+}
+
++ (NSError *)KDEErrorWithMessage:(NSString *)message
+{
+  return [NSError errorWithDomain:GWPackageManagerErrorDomain
+                             code:GWPackageManagerErrorCommandFailed
+                         userInfo:@{ NSLocalizedDescriptionKey: message }];
+}
+
+/* One sentence naming what a version directory holds, for the error when
+   nothing in it can be used. */
++ (NSString *)KDEFileSummary:(NSArray<NSString *> *)names
+{
+  if ([names count] == 0)
+    return @"it is empty";
+  if ([names count] <= 3)
+    return [[NSArray arrayWithObjects:
+             [names objectAtIndex:0],
+             ([names count] > 1 ? [names objectAtIndex:1] : nil),
+             ([names count] > 2 ? [names objectAtIndex:2] : nil), nil]
+            componentsJoinedByString:@", "];
+  return [NSString stringWithFormat:@"%@ and %lu more",
+            [names objectAtIndex:0], (unsigned long)([names count] - 1)];
+}
+
++ (NSString *)resolveKDEAppImageURLForListingURL:(NSString *)listingURL
+                                        appName:(NSString *)appName
+                                   architecture:(NSString *)arch
+                                       progress:(nullable id<GWInstallProgressHandler>)progress
+                                          error:(NSError **)error
+{
+  if (error != NULL)
+    *error = nil;
+
+  GWKDEDirectoryFault fault = GWKDEDirectoryUnreachable;
+  NSArray<NSString *> *entries =
+    [self entryNamesForDirectoryURL:listingURL progress:progress fault:&fault];
+  if (entries == nil)
+    {
+      if (error != NULL)
+        *error = [self KDEDirectoryErrorForFault:fault url:listingURL];
+      return nil;
+    }
+
+  /* The flat shape is tried first, and on the application directory's own
+     entries, whether or not it also has version directories. labplot is the
+     measured case for it (its AppImage sits in the application directory with
+     no version level at all), and trying it first means a directory that has
+     both shapes, whose newest version holds a build for another CPU, still
+     finds the file sitting in its own directory instead of refusing. */
+  BOOL hasAppImageHere = NO;
+  for (NSString *name in entries)
+    {
+      if ([[name lowercaseString] hasSuffix:@".appimage"])
+        {
+          hasAppImageHere = YES;
+          break;
+        }
+    }
+
+  NSArray<NSString *> *versions =
+    [GWKDEAppImagePicker versionDirectoriesFromEntryNames:entries];
+  NSUInteger walk = MIN([versions count], kGWMaxKDEVersionDirsToWalk);
+
+  if (hasAppImageHere && walk == 0)
+    {
+      GWKDEPickOutcome outcome = GWKDEPickNoAppImage;
+      NSArray<NSString *> *candidates = nil;
+      NSString *file = [GWKDEAppImagePicker pickFileFromNames:entries
+                                                      appName:appName
+                                                  architecture:arch
+                                                      outcome:&outcome
+                                                   candidates:&candidates];
+      if (file != nil)
+        return GWKDEURL(listingURL, file);
+      if (error != NULL)
+        *error = [self KDEErrorWithMessage:
+                   [self KDEErrorMessageForOutcome:outcome
+                                          listing:listingURL
+                                      architecture:arch
+                                       candidates:candidates]];
+      return nil;
+    }
+
+  /* Whether any walked directory could be read at all. Without it, a
+     directory tree that was entirely unreachable would end in "no version
+     has an AppImage for this machine", blaming the machine for a network
+     fault. */
+  BOOL readAny = NO;
+
+  /* Walk the version directories newest first. A directory that holds no
+     AppImage at all (kstars 3.8.4.1 is a source tarball, haruna 1.8.1 holds
+     no Linux build) means this version cannot serve an install, and the next
+     older one may: that is the same walk-back the GitHub resolver does. */
+  for (NSUInteger i = 0; i < walk; i++)
+    {
+      NSString *version = [versions objectAtIndex:i];
+      NSString *dirURL = GWKDEURL(listingURL, version);
+      NSArray<NSString *> *files =
+        [self entryNamesForDirectoryURL:dirURL progress:progress fault:NULL];
+      if (files == nil)
+        continue;   /* that directory is gone or unreadable; try the next */
+      readAny = YES;
+
+      GWKDEPickOutcome outcome = GWKDEPickNoAppImage;
+      NSArray<NSString *> *candidates = nil;
+      NSString *file = [GWKDEAppImagePicker pickFileFromNames:files
+                                                      appName:appName
+                                                  architecture:arch
+                                                      outcome:&outcome
+                                                   candidates:&candidates];
+      if (file != nil)
+        return GWKDEURL(dirURL, file);
+
+      /* An architecture or an ambiguity is a refusal, not a reason to look
+         further back: the newest release is the one the user asked for, and
+         quietly installing an older build of the same application instead is
+         a surprise, not a service. */
+      if (outcome != GWKDEPickNoAppImage)
+        {
+          if (error != NULL)
+            *error = [self KDEErrorWithMessage:
+                       [self KDEErrorMessageForOutcome:outcome
+                                              listing:dirURL
+                                          architecture:arch
+                                           candidates:candidates]];
+          return nil;
+        }
+    }
+
+  if (error != NULL)
+    {
+      if (!readAny)
+        *error = [self KDEErrorWithMessage:
+                   [NSString stringWithFormat:
+                     @"None of the %lu version directories under %@ could be read",
+                     (unsigned long)walk, listingURL]];
+      else
+        *error = [self KDEErrorWithMessage:
+                   [NSString stringWithFormat:
+                     @"No version of the application at %@ has an AppImage for this machine",
+                     listingURL]];
+    }
+  return nil;
+}
+
++ (NSString *)KDEErrorMessageForOutcome:(GWKDEPickOutcome)outcome
+                               listing:(NSString *)listing
+                           architecture:(NSString *)arch
+                            candidates:(NSArray<NSString *> *)candidates
+{
+  NSString *dir = [listing lastPathComponent];
+  switch (outcome)
+    {
+    case GWKDEPickNoAppImageForArchitecture:
+      return [NSString stringWithFormat:
+                @"%@ has no AppImage for this machine (%@); it holds %@",
+                dir, arch, [self KDEFileSummary:candidates]];
+    case GWKDEPickAmbiguous:
+      {
+        /* A nil list would print "(null)", which reads as a filename. It
+         * cannot happen today, but the message is what the user sees when
+         * something else goes wrong, so it is worth being definite. */
+        NSString *names = ([candidates count] > 0)
+          ? [[candidates sortedArrayUsingSelector:@selector(compare:)]
+             componentsJoinedByString:@", "]
+          : @"none";
+        return [NSString stringWithFormat:
+                  @"%@ holds several AppImages and none of them is clearly the right one: %@",
+                  dir, names];
+      }
+    case GWKDEPickNoAppImage:
+      return [NSString stringWithFormat:@"%@ has no AppImage", dir];
+    case GWKDEPickChosen:
+      /* Not reachable: a chosen file is returned as the result, not as an
+       * error. The assertion is here so that adding a caller that ignores
+       * the result finds out here rather than reading a sentence that says
+       * the opposite of the outcome. */
+      NSAssert(outcome != GWKDEPickChosen,
+               @"a chosen file is not an error message");
+      return [NSString stringWithFormat:@"%@: the AppImage was chosen", dir];
+    }
+  return [NSString stringWithFormat:@"%@ has no AppImage", dir];
 }
 
 @end

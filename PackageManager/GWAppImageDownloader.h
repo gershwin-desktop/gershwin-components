@@ -34,6 +34,23 @@
                                progress:(nullable id<GWInstallProgressHandler>)progress
                                   error:(NSError **)error;
 
+// Resolves the AppImage for the current architecture from a download.kde.org
+// application directory and downloads it. A KDE link names a directory rather
+// than a file (https://download.kde.org/stable/digikam/), so this reads the
+// directory index, takes the newest version directory that holds an AppImage,
+// and asks GWKDEAppImagePicker which file in it is this machine's build.
+//
+// The architecture is a requirement here, not a preference: every AppImage
+// download.kde.org ships is x86-64, so there is nothing to fall back to for
+// an aarch64 machine, and a failure is reported instead of downloading a file
+// that cannot run.
+//
+// appName is the catalog's name for the application, as above.
+- (BOOL)downloadAppImageFromKDEListingURL:(NSString *)listingURL
+                                 appName:(NSString *)appName
+                                progress:(nullable id<GWInstallProgressHandler>)progress
+                                   error:(NSError **)error;
+
 // Path of the downloaded AppImage for appName.  Used to launch the app after
 // download and to detect an already-downloaded AppImage.
 + (NSString *)launcherPathForAppName:(NSString *)appName;

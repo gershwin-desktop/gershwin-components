@@ -106,6 +106,12 @@ static void runTest(NSString *name, BOOL (^block)(void))
 void AGRegisterAppImageAssetPickerTests(void);
 #include "AGAppImageAssetPickerTests.m"
 
+/* The download.kde.org resolver, the same arrangement: its cases are a
+ * function this file owns, and the recorded index pages it parses live in
+ * Tests/kdefixtures (see the README there). */
+void AGRegisterKDEAppImagePickerTests(void);
+#include "GWKDEAppImagePickerTests.m"
+
 #pragma mark - Mock Objects
 
 #pragma mark Mock Command Executor
@@ -2059,6 +2065,9 @@ static BOOL testNearly(float a, float b)
 
   // --- AppImage asset picking (real releases, see the file's header) ---
   AGRegisterAppImageAssetPickerTests();
+
+  // --- AppImage picking from a download.kde.org directory (real pages) ---
+  AGRegisterKDEAppImagePickerTests();
 
   return (failCount == 0) ? 0 : 1;
 }
