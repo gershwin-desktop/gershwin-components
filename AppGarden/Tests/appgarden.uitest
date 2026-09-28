@@ -12,7 +12,7 @@
 # "-string" flag as the value itself. A catalog cached from an earlier run
 # would win over the fixture for six hours, so it is removed first.
 shell "rm -rf ~/Library/Caches/io.github.gershwin-desktop.AppGarden"
-shell "defaults write io.github.gershwin-desktop.AppGarden AGFeedURL file:///Developer/Library/Sources/gershwin-components/AppGarden/Fixtures/feed-sample.json"
+shell "defaults write io.github.gershwin-desktop.AppGarden AGFeedURL file://${testdir}/../Fixtures/feed-sample.json"
 
 launch application "AppGarden"
 wait until window "AppGarden" timeout 30s
