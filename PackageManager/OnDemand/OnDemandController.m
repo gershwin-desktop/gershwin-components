@@ -132,12 +132,14 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   _appImageURL = [_spec appImageDirectURL];
   _appImageGitHubRepo = [_spec appImageGitHubRepo];
 
-  // Determine what to run after install: for an AppImage we launch the wrapper
-  // bundle we install into ~/Library/Applications; otherwise the plist's
+  // Determine what to run after install: for an AppImage we launch the
+  // AppImage we install into ~/Applications; otherwise the plist's
   // post-install command (if any).
   if (_isAppImageInstall)
     {
-      _launchCommand = [GWAppImageDownloader launcherPathForAppName:_appName];
+      // existingLauncherPathForAppName: keeps an install made before the
+      // download folder moved findable where it still is.
+      _launchCommand = [GWAppImageDownloader existingLauncherPathForAppName:_appName];
       _launchArgs = @[];
     }
   else
@@ -974,10 +976,11 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 {
   if (_isAppImageInstall)
     {
-      // An already-installed AppImage is launched via its wrapper bundle in
-      // ~/Library/Applications.
+      // An already-installed AppImage is launched from its path in
+      // ~/Applications, or from the pre-move directory for an install that
+      // was never moved there.
       BOOL exists = [[NSFileManager defaultManager] isExecutableFileAtPath:_launchCommand];
-      NSLog(@"OnDemand -> commandIsAvailable: appimage wrapper %@ -> %s",
+      NSLog(@"OnDemand -> commandIsAvailable: appimage %@ -> %s",
             _launchCommand, exists ? "YES" : "NO");
       return exists;
     }
