@@ -1040,15 +1040,17 @@ static const unsigned long long modelMinSizes[] = {
 
     // enModel check is done in modelSelected:
     // [translateCheckbox setEnabled:(!isWorking && !isRecording)];
-    [recordButton setEnabled:(!isRecording && !isWorking)];
-    [stopButton setEnabled:isRecording];
+    /* One button for both directions: it shows the stop square while the
+       microphone is open, and stays enabled then so it can stop the recording
+       again.  Only a busy transcription locks it out. */
+    [recordButton setRecording:isRecording];
+    [recordButton setEnabled:(!isWorking)];
 
     BOOL hasResults = [segments count] > 0;
     [copyTextButton setEnabled:hasResults];
 
     // No button responds to Enter (avoids accidental re-trigger after alerts)
     [recordButton setKeyEquivalent:@""];
-    [stopButton setKeyEquivalent:@""];
     [copyTextButton setKeyEquivalent:@""];
     [mainWindow setDefaultButtonCell:nil];
 
@@ -1075,6 +1077,18 @@ static const unsigned long long modelMinSizes[] = {
 }
 
 #pragma mark - Actions
+
+/* The one button is both record and stop: it starts a recording when none is
+   running and stops the one that is.  The capture handle, not the state,
+   decides, because it is what actually holds the microphone open. */
+- (IBAction)toggleRecording:(id)sender
+{
+    if (captureHandle) {
+        [self stopRecording:sender];
+    } else {
+        [self recordAudio:sender];
+    }
+}
 
 /* Ask Player to fall silent for us before the microphone opens, and
    remember that it did, so -resumePlayerIfPaused can tell our pause apart
@@ -2107,24 +2121,16 @@ static const unsigned long long modelMinSizes[] = {
 
     NSView *contentView = [mainWindow contentView];
 
-    // Recording row
-    recordButton = [[NSButton alloc] initWithFrame:NSZeroRect];
-    [recordButton setTitle:@"Record"];
+    // Recording row: one button, centred in the window.  It shows the
+    // application icon at rest and a stop square while recording.
+    recordButton = [[WRecordButton alloc]
+                     initWithFrame:NSMakeRect(0, 0,
+                                              METRICS_ICON_BUTTON_SIDE,
+                                              METRICS_ICON_BUTTON_SIDE)];
     [recordButton setTarget:self];
-    [recordButton setAction:@selector(recordAudio:)];
-    [recordButton setBezelStyle:NSRoundedBezelStyle];
-    [recordButton setKeyEquivalentModifierMask:NSAlternateKeyMask];
-    [recordButton sizeToFit];
+    [recordButton setAction:@selector(toggleRecording:)];
+    [recordButton setKeyEquivalent:@""];
     [contentView addSubview:recordButton];
-
-    stopButton = [[NSButton alloc] initWithFrame:NSZeroRect];
-    [stopButton setTitle:@"Stop"];
-    [stopButton setTarget:self];
-    [stopButton setAction:@selector(stopRecording:)];
-    [stopButton setBezelStyle:NSRoundedBezelStyle];
-    [stopButton setEnabled:NO];
-    [stopButton sizeToFit];
-    [contentView addSubview:stopButton];
 
     recordSpinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     [recordSpinner setStyle:NSProgressIndicatorSpinningStyle];
@@ -2233,30 +2239,24 @@ static const unsigned long long modelMinSizes[] = {
     CGFloat s8  = METRICS_SPACE_8;
     CGFloat s16 = METRICS_SPACE_16;
 
-    // ---- Row 1: Recording + file open ----
-    NSSize recSize  = [recordButton frame].size;
-    NSSize stopSize = [stopButton frame].size;
+    // ---- Row 1: the one record/stop button, horizontally centred ----
+    CGFloat btnSide = METRICS_ICON_BUTTON_SIDE;
+    [recordButton setFrame:NSMakeRect(NSMidX(bounds) - btnSide / 2.0,
+                                      y - btnSide, btnSide, btnSide)];
+    y -= btnSide + s16;
 
-    [recordButton setFrame:NSMakeRect(mx, y - bh, recSize.width, bh)];
-    [stopButton setFrame:NSMakeRect(mx + recSize.width + s8, y - bh,
-                                    stopSize.width, bh)];
-
+    // ---- Row 2: recording spinner + status text ----
     [statusLabel setAlignment:NSRightTextAlignment];
-
     CGFloat spinnerW = [recordSpinner frame].size.width;
-    CGFloat afterStop = mx + recSize.width + s8 + stopSize.width + s8;
-    [recordSpinner setFrame:NSMakeRect(afterStop, y - bh + (bh - spinnerW) / 2,
+    [recordSpinner setFrame:NSMakeRect(mx, y - bh + (bh - spinnerW) / 2,
                                         spinnerW, spinnerW)];
-    CGFloat statusX2 = afterStop + spinnerW + s8;
-    CGFloat statusW2 = w - (statusX2 - mx);
+    CGFloat statusX2 = mx + spinnerW + s8;
+    CGFloat statusW2 = mx + w - statusX2;
     if (statusW2 < 60) statusW2 = 60;
     [statusLabel setFrame:NSMakeRect(statusX2, y - bh, statusW2, bh)];
     y -= bh + s16;
 
-    // ---- Row 4: Settings ----
-    y -= bh + s16;
-
-    // ---- Row 5: Progress bar ----
+    // ---- Row 3: Progress bar ----
     [progressBar setFrame:NSMakeRect(mx, y, w, bh)];
     y -= bh + s8;
 

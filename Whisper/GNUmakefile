@@ -65,6 +65,7 @@ Whisper_RESOURCE_FILES = \
 #
 Whisper_HEADER_FILES = \
 	WhisperController.h \
+	WRecordButton.h \
 	WAudioLoader.h \
 	WCapture.h
 
@@ -73,6 +74,7 @@ Whisper_HEADER_FILES = \
 #
 Whisper_OBJC_FILES = \
 	WhisperController.m \
+	WRecordButton.m \
 	Whisper_main.m \
 	../MediaRemote/GSMediaPlayer2.m
 
