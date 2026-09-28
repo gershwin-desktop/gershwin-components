@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "home_page_url": "https://appimage.github.io/",
+  "feed_url": "https://appimage.github.io/feed.json",
+  "description": "AppImage applications for Linux without installation",
+  "icon": "https://appimage.github.io/apple-touch-icon.png",
+  "favicon": "https://appimage.github.io/favicon.ico",
+  "expired": false,
+  "items": [
+    {
+      "name": "4KWALL",
+      "description": "Browse, download, and auto-change 4K wallpapers",
+      "categories": [
+        "Graphics"
+      ],
+      "authors": [
+        {
+          "name": "rishabh3354",
+          "url": "https://github.com/rishabh3354"
+        }
+      ],
+      "license": "LicenseRef-proprietary=https://raw.githubusercontent.com/rishabh3354/4KWALL/main/share/license/LICENSE",
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "rishabh3354/4KWALL"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/rishabh3354/4KWALL/releases"
+        }
+      ],
+      "icons": [
+        "4KWALL/icons/512x512/com.warlordsoftwares.wallpaper-app-4kwall.png"
+      ],
+      "screenshots": [
+        "4KWALL/screenshot.png"
+      ]
+    },
+    {
+      "name": "86Box",
+      "categories": [
+        "Utility"
+      ],
+      "authors": [
+        {
+          "name": "86Box",
+          "url": "https://github.com/86Box"
+        }
+      ],
+      "license": null,
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "86Box/86Box"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/86Box/86Box/releases"
+        }
+      ],
+      "icons": [
+        "86Box/icons/512x512/86box.png"
+      ],
+      "screenshots": [
+        "86Box/screenshot.png"
+      ]
+    },
+    {
+      "name": "Addaps",
+      "description": "Addap’s, join the new wave of internet social browsing",
+      "categories": [
+        "Chat"
+      ],
+      "authors": null,
+      "license": null,
+      "links": null,
+      "icons": null,
+      "screenshots": [
+        "Addaps/screenshot.png"
+      ]
+    },
+    {
+      "name": "AiyoPerps",
+      "description": "<p>AiyoPerps is a desktop terminal for perpetual futures trading across centralized and decentralized exchanges.</p>\n<p>It includes a desktop UI, a local REST API, and MCP support for AI-assisted workflows.</p>",
+      "categories": [
+        "Office"
+      ],
+      "authors": [
+        {
+          "name": "phidiassj",
+          "url": "https://github.com/phidiassj"
+        }
+      ],
+      "license": "MIT",
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "phidiassj/AiyoPerps"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/phidiassj/AiyoPerps/releases"
+        }
+      ],
+      "icons": [
+        "AiyoPerps/icons/100x100/aiyoperps.png"
+      ],
+      "screenshots": null,
+      "libc": "host",
+      "self_contained": false,
+      "glibc_required": "2.27"
+    },
+    {
+      "name": "DDCal",
+      "description": "Simple Calculator by Nguyen Hong Dang",
+      "categories": [
+        null
+      ],
+      "authors": [
+        {
+          "name": "dangnh0611",
+          "url": "https://github.com/dangnh0611"
+        }
+      ],
+      "license": null,
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "dangnh0611/calculator_qt"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/dangnh0611/calculator_qt/releases"
+        }
+      ],
+      "icons": [
+        "DDCal/icons/512x512/DDCal.png"
+      ],
+      "screenshots": [
+        "DDCal/screenshot.png"
+      ],
+      "libc": "host",
+      "self_contained": false,
+      "glibc_required": "2.27"
+    },
+    {
+      "name": "Agora",
+      "description": "Simple File Conversion Application",
+      "categories": [
+        "Utility"
+      ],
+      "authors": null,
+      "license": null,
+      "links": null,
+      "icons": [
+        "Agora/icons/512x512/agora.png"
+      ],
+      "screenshots": [
+        "Agora/screenshot.png"
+      ]
+    },
+    {
+      "name": "BlackMirror",
+      "description": "two-party automatic writing tool",
+      "categories": [
+        "Utility"
+      ],
+      "authors": [
+        {
+          "name": "sorentycho",
+          "url": "https://github.com/sorentycho"
+        }
+      ],
+      "license": null,
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "sorentycho/blackmirror"
+        },
+        {
+          "type": "Install",
+          "url": "https://github.com/sorentycho/blackmirror/releases"
+        }
+      ],
+      "icons": null,
+      "screenshots": [
+        "BlackMirror/screenshot.png"
+      ]
+    },
+    {
+      "name": "QOwnNotes",
+      "description": "<p>QOwnNotes is the open source (GPL) plain-text file notepad with markdown support and todo list manager for GNU/Linux, Mac OS X and Windows by Patrizio Bekerle, that (optionally) works together with the notes application of ownCloud or Nextcloud.</p>",
+      "categories": [
+        "Utility"
+      ],
+      "authors": [
+        {
+          "name": "pbek",
+          "url": "https://build.opensuse.org/user/show/pbek"
+        }
+      ],
+      "license": "GPL-2.0+",
+      "links": [
+        {
+          "type": "Download",
+          "url": "https://download.opensuse.org/repositories/home:/pbek:/QOwnNotes/AppImage/QOwnNotes-latest-x86_64.AppImage.mirrorlist"
+        }
+      ],
+      "icons": [
+        "QOwnNotes/icons/scalable/QOwnNotes.svg"
+      ],
+      "screenshots": [
+        "https://raw.githubusercontent.com/pbek/QOwnNotes/develop/screenshots/screenshot.png"
+      ]
+    },
+    {
+      "name": "OVideo",
+      "description": "<ul>\n  <li>Create videos</li>\n  <li>Add animations</li>\n  <li>Edit frames</li>\n</ul>",
+      "categories": [
+        "AudioVideo"
+      ],
+      "authors": [
+        {
+          "name": "colin-i",
+          "url": "https://github.com/colin-i"
+        }
+      ],
+      "license": "AGPL-3.0",
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "colin-i/ostream"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/colin-i/ostream/releases"
+        }
+      ],
+      "icons": [
+        "OVideo/icons/128x128/ovideo.png"
+      ],
+      "screenshots": [
+        "https://raw.github.com/colin-i/ostream/master/arh/ovideo.png"
+      ],
+      "libc": "bundled",
+      "self_contained": true
+    },
+    {
+      "name": "APK_Editor_Studio",
+      "description": "Edit APK resources",
+      "categories": [
+        "Utility"
+      ],
+      "authors": [
+        {
+          "name": "kefir500",
+          "url": "https://github.com/kefir500"
+        }
+      ],
+      "license": "GPL-3.0",
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "kefir500/apk-editor-studio"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/kefir500/apk-editor-studio/releases"
+        }
+      ],
+      "icons": [
+        "APK_Editor_Studio/icons/128x128/apk-editor-studio.png"
+      ],
+      "screenshots": [
+        "APK_Editor_Studio/screenshot.png"
+      ],
+      "libc": "host",
+      "self_contained": false,
+      "glibc_required": "2.30"
+    },
+    {
+      "name": "Aptakube",
+      "description": "<p>Aptakube is a Desktop Client for Kubernetes. You can connect to multiple clusters, manage workloads, view logs, compare resources, and a lot more.</p>",
+      "categories": [
+        "Development"
+      ],
+      "authors": null,
+      "license": "LicenseRef-proprietary",
+      "links": null,
+      "icons": [
+        "Aptakube/icons/128x128/aptakube.png"
+      ],
+      "screenshots": [
+        "https://aptakube.com/screenshot.png"
+      ]
+    },
+    {
+      "name": "Apache_NetBeans",
+      "categories": [
+        "Development"
+      ],
+      "authors": [
+        {
+          "name": "codelerity",
+          "url": "https://github.com/codelerity"
+        }
+      ],
+      "license": null,
+      "links": [
+        {
+          "type": "GitHub",
+          "url": "codelerity/netbeans-installers"
+        },
+        {
+          "type": "Download",
+          "url": "https://github.com/codelerity/netbeans-installers/releases"
+        }
+      ],
+      "icons": [
+        "Apache_NetBeans/icons/48x48/netbeans.png"
+      ],
+      "screenshots": [
+        "Apache_NetBeans/screenshot.png"
+      ],
+      "libc": "host",
+      "self_contained": false,
+      "glibc_required": "2.34"
+    },
+    {
+      "name": "Alpine_Client",
+      "description": "<p>Alpine Client is an all-in-one modpack for Minecraft that offers\n            a multitude of enhancements and optimizations to improve your gameplay.\n            It brings together popular mods, exclusive features, player cosmetics,\n            and multi-version support to curate the ultimate player experience.</p>",
+      "categories": [
+        "Game"
+      ],
+      "authors": null,
+      "license": "MPL-2.0",
+      "links": null,
+      "icons": [
+        "Alpine_Client/icons/256x256/alpine-client.png"
+      ],
+      "screenshots": [
+        "https://api.alpineclient.com/uploads/launcher_home_8c99bea736.png"
+      ]
+    },
+    {
+      "name": "Artifact",
+      "description": "<p>As chief artificer Larry Lodestone, your goal is to make your way through the intricate designs of The Artifact. Your goal is to shut down the core, which has gone haywire. However, the way in is filled with obstacles, as weird orbs spawned by the malfunctioning core are disrupting and reconstructing the matrix of The Artifact. Before you can reach the core, these orbs must be isolated to prevent further damage.</p>\n<p>In Artifact, your goal is to make your way through 40 levels of mayhem without getting destroyed, racking up as many points as possible on the way.\n            Each level consists of a screen filled with a variety of different orbs. These orbs must be isolated by the\nplayer. Once 75% of the playing field has been isolated, the level ends, and the player moves on to the score and powerup allocation screen.\n            The player controls the dual-direction Welding Blaster that can be rotated to fire vertically or horizontally.\nWhen fired, a welding beam will slowly traverse the screen in 2 directions. Once both ends reach a wall, the playing field will be cut, isolating balls on each side of the beam. However, care must be taken not to hit the orbs, as they will create a feedback surge, damaging the Welding Blaster. Once the Welding Blaster reaches critical damage, it will explode, and the game will be over.\n            For every level a number of new orbs will be added to the game. These can be of any type depending on the\nlevel. Early levels will not include any of the most challenging orbs and vice versa.\n            Orbs carry over from every level. This means that as the game progresses, there will be more and more orbs\npresent. To counter this, the player may use the Annihilator Shield to get rid of some of the orbs.</p>",
+      "categories": [
+        "Game"
+      ],
+      "authors": null,
+      "license": "MIT",
+      "links": null,
+      "icons": [
+        "Artifact/icons/512x512/artifact-x86_64.png"
+      ],
+      "screenshots": [
+        "https://www.bitbreeds.com/artifact/images/screen1.jpg"
+      ]
+    },
+    {
+      "name": "lux",
+      "description": "<p>lux is a viewer for &apos;ordinary&apos; images, panoramas and panorama specifications in PTO format, made by, e.g., hugin. The view can be zoomed, panned, rotated, made brighter/darker etc. It supports a wide range of image formats, like JPG, PNG, TIFF and openEXR - image I/O is done with libvigraimpex.</p>\n<p>lux supports &apos;flat&apos; and rectilinear images and several panoramic projections: spherical, cylindrical, stereographic, and fisheye, both for the source image and the view. For images made with a camera or smartphone which have appropriate metadata, lux will show a perspective-corrected view.</p>\n<p>lux  can also stitch panoramas, and fuse or HDR-merge exposure brackets specified in a PTO file made with, e.g., hugin. It can not do image registration.\n      Many PTO features are supported, including panoramas with stacks. lux provides it&apos;s own implementation of the\nBurt&amp;Adelson image splining algorithm for seamless stitching and exposure fusion, working directly from the source image set with no intermediate images.</p> <p>What&apos;s seen on-screen can be exported as a &apos;snapshot&apos;.\n      lux is also good for slide shows, especially when the image set is a mixed bunch,\n      containing normal images and panoramas. Panoramas are recognized by their\n      metadata, so they are displayed correctly, and the user does not have to\n      switch between using an image and a panorama viewer.</p>\n<p>lux is extremely configurable, especially when used from the command line.\n      It provides it&apos;s own type of script file, which is similar to ini files,\n      with simple key=value syntax. You can find a listing of the options via\n      the &apos;help&apos; link.</p>",
+      "categories": [
+        "Graphics"
+      ],
+      "authors": [
+        {
+          "name": "kfj",
+          "url": "https://bitbucket.org/kfj"
+        }
+      ],
+      "license": "GPL-3.0-or-later",
+      "links": [
+        {
+          "type": "Download",
+          "url": "https://bitbucket.org/kfj/pv/downloads"
+        }
+      ],
+      "icons": [
+        "lux/icons/256x256/lux.png"
+      ],
+      "screenshots": [
+        "https://kfj.bitbucket.io/lux_screenshot_2.png"
+      ]
+    }
+  ]
+}

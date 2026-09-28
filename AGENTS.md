@@ -13,7 +13,7 @@ to the SYSTEM domain unless noted.
 - Build one component: `cd <dir> && gmake`
 - Install all: `sudo gmake install` — installs `Libraries` and the
   `PackageManager` framework first, then builds the **library consumers**
-  (`Build Menu Network Sound Whisper`) and `PackageManager/OnDemand`, which
+  (`AppGarden Build Menu Network Sound Whisper`) and `PackageManager/OnDemand`, which
   `gmake` alone skips because they link the shared libs. So a changed
   component only compiles during `install` if it links a backend from
   `Libraries/` or the `PackageManager` framework.

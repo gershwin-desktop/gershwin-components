@@ -1,0 +1,56 @@
+# Model tests for AppGarden: each tool links the model sources it needs as
+# collaborators, the way SoftwareUpdate/Tests/Models does.
+#
+# The model objects are compiled with ARC. The test tools stay manual
+# because the TestFramework PASS macros call -retain/-release.
+
+ADDITIONAL_INCLUDE_DIRS += -I../../Models
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Wno-unused-parameter
+
+AG_ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
+
+../../Models/AGAuthor.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGLink.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGApp.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGCatalog.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGCategoryNames.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGFeedParser.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGLicenseFormatter.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGSearchIndex.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGDownloadResolver.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGGridLayout.m_FILE_FLAGS += $(AG_ARCFLAGS)
+
+AG_LINK_SOURCES = ../../Models/AGLink.m ../../Models/AGAuthor.m
+AG_APP_SOURCES = ../../Models/AGApp.m $(AG_LINK_SOURCES)
+AG_CATALOG_SOURCES = ../../Models/AGCatalog.m ../../Models/AGCategoryNames.m $(AG_APP_SOURCES)
+AG_FEED_SOURCES = ../../Models/AGFeedParser.m $(AG_CATALOG_SOURCES)
+
+t_AGFeedParser_OBJC_FILES += $(AG_FEED_SOURCES)
+
+t_AGDownloadResolver_OBJC_FILES += \
+  ../../Models/AGDownloadResolver.m \
+  $(AG_FEED_SOURCES)
+
+t_AGSearchIndex_OBJC_FILES += \
+  ../../Models/AGSearchIndex.m \
+  $(AG_FEED_SOURCES)
+
+t_AGCategoryNames_OBJC_FILES += ../../Models/AGCategoryNames.m
+
+t_AGLicenseFormatter_OBJC_FILES += ../../Models/AGLicenseFormatter.m
+
+t_AGGridLayout_OBJC_FILES += ../../Models/AGGridLayout.m
+
+# --- service tests (appended; the model blocks above stay untouched) ---
+
+ADDITIONAL_INCLUDE_DIRS += -I../../Services
+
+../../Services/AGFeedLoader.m_FILE_FLAGS += $(AG_ARCFLAGS)
+
+t_AGFeedLoader_OBJC_FILES += ../../Services/AGFeedLoader.m $(AG_FEED_SOURCES)
+
+# --- install layer (appended; the blocks above stay untouched) ---
+
+../../Services/AGInstallRegistry.m_FILE_FLAGS += $(AG_ARCFLAGS)
+
+t_AGInstallRegistry_OBJC_FILES += ../../Services/AGInstallRegistry.m $(AG_APP_SOURCES)
