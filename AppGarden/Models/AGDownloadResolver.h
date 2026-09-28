@@ -17,6 +17,12 @@ typedef NS_ENUM(NSInteger, AGDownloadKind) {
 
 // Decides how an application can be obtained. Pure logic: no network, no
 // disk, no PackageManager, so the decision can be tested on its own.
+//
+// This never looks at a release, so it never learns a tag and never chooses
+// a file: those rules belong to PackageManager's downloader and asset picker
+// (section 8 of the brief). GitHubLatestRelease is a promise to ask it, and
+// the name is historical - "latest" now means the newest release that
+// actually ships an AppImage.
 @interface AGDownloadResolver : NSObject
 
 // The architecture this machine reports, read from the kernel. A caller that

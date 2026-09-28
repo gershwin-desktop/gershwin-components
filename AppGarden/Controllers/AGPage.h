@@ -6,9 +6,9 @@
 
 #import <Foundation/Foundation.h>
 
-/* What the top bar shows for a page on the navigation stack. This AppKit's
-   NSViewController copies its own title onto the window, so pages carry
-   their title under a separate name. */
+/* A page the window controller can push onto its navigation stack. The
+   protocol only marks what belongs on the stack; a page says nothing
+   about itself. The sidebar selection names the scope and the window
+   title names the app, so the top bar carries no third copy. */
 @protocol AGPage <NSObject>
-@property (nonatomic, copy) NSString *pageTitle;
 @end

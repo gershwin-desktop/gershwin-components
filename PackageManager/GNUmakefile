@@ -18,7 +18,9 @@ PackageManager_OBJC_FILES = \
   GWHeaderDatabase.m \
   GWPackageManager.m \
   GWSudoHelper.m \
+  GWAppImageAssetPicker.m \
   GWAppImageDownloader.m \
+  GWCurlMeterReader.m \
   ODProgressWindow.m \
   ODLogWindowController.m
 
@@ -34,7 +36,9 @@ PackageManager_HEADER_FILES = \
   GWHeaderDatabase.h \
   GWPackageManager.h \
   GWSudoHelper.h \
+  GWAppImageAssetPicker.h \
   GWAppImageDownloader.h \
+  GWCurlMeterReader.h \
   ODProgressWindow.h \
   ODLogWindowController.h
 

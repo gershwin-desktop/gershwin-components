@@ -146,7 +146,6 @@ static const CGFloat kAGDetailTightGap = 4.0;
 }
 
 @synthesize app = _app;
-@synthesize pageTitle = _pageTitle;
 
 - (instancetype)initWithApp:(AGApp *)app
                  imageCache:(AGImageCache *)imageCache
@@ -158,7 +157,6 @@ static const CGFloat kAGDetailTightGap = 4.0;
       _app = app;
       _imageCache = imageCache;
       _installer = installer;
-      _pageTitle = [[app displayName] copy];
     }
   return self;
 }

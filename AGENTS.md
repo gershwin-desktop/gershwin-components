@@ -31,8 +31,9 @@ to the SYSTEM domain unless noted.
 - `Libraries/` holds shared backends (`SoundBackend`, `NetworkBackend`) that
   `Menu`, `Network`, `Sound`, `Whisper` link against.
 - `PackageManager/` builds the `PackageManager.framework` (cross-distro package
-  install/uninstall + the bundled header database in `Resources/headers.db`).
-  It installs to `/System/Library/Frameworks`; `Build` and
+  install/uninstall, AppImage download into the user's home, + the bundled
+  header database in `Resources/headers.db`).
+  It installs to `/System/Library/Frameworks`; `AppGarden`, `Build` and
   `PackageManager/OnDemand` link it system-wide (no embedding). `OnDemand` and
   `Placeholders` are built and installed only during `install`.
 - `make_appimage/` is a GNUstep tool (`make_appimage`, `make_standalone`) that
@@ -71,6 +72,11 @@ to the SYSTEM domain unless noted.
   `--json`). Anything the tool needs must stay free of AppKit - `PRFormat`
   holds the number formatting for that reason, and only `PRAppearance` (the
   colours and icons) may use AppKit.
+- `PackageManager/Tests/`: one tool, `PackageManagerTest`, which links the
+  freshly built framework rather than the installed copy;
+  `cd PackageManager && gmake test`. It also `#include`s
+  `AGAppImageAssetPickerTests.m` (deliberately not in `OBJC_FILES`: its cases
+  use the `TAssert` macros, which expand to a `return NO`).
 - `Player/Tests/Unit/`: ObjectTesting tools for the playlist, playback session,
   FFmpeg player and menu (`gmake`, then run `./obj/t_*`; `t_PlayerMenu` needs a
   `DISPLAY`). `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.

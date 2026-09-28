@@ -18,7 +18,6 @@
 }
 
 @synthesize delegate = _delegate;
-@synthesize pageTitle = _pageTitle;
 
 - (instancetype)initWithImageCache:(AGImageCache *)imageCache
                          installer:(AGInstaller *)installer

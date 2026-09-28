@@ -8,9 +8,9 @@
 
 @class AGFeedLoader, AGImageCache, AGInstaller;
 
-/* The single window: sidebar on the left, the top bar with Back, title and
-   search, the optional status banner and the page stack on the right.
-   Also the target of every catalog and navigation menu item. */
+/* The single window: sidebar on the left, the top bar with the back arrow
+   and the search field, the optional status banner and the page stack on
+   the right. Also the target of every catalog and navigation menu item. */
 @interface AGMainWindowController : NSWindowController
 
 - (instancetype)initWithFeedLoader:(AGFeedLoader *)feedLoader

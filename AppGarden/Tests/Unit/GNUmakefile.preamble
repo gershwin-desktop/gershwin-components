@@ -19,6 +19,7 @@ AG_ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
 ../../Models/AGSearchIndex.m_FILE_FLAGS += $(AG_ARCFLAGS)
 ../../Models/AGDownloadResolver.m_FILE_FLAGS += $(AG_ARCFLAGS)
 ../../Models/AGGridLayout.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGDiscoverOrder.m_FILE_FLAGS += $(AG_ARCFLAGS)
 
 AG_LINK_SOURCES = ../../Models/AGLink.m ../../Models/AGAuthor.m
 AG_APP_SOURCES = ../../Models/AGApp.m $(AG_LINK_SOURCES)
@@ -40,6 +41,12 @@ t_AGCategoryNames_OBJC_FILES += ../../Models/AGCategoryNames.m
 t_AGLicenseFormatter_OBJC_FILES += ../../Models/AGLicenseFormatter.m
 
 t_AGGridLayout_OBJC_FILES += ../../Models/AGGridLayout.m
+
+# --- the Discover page's order, headless (appended; above stay untouched) ---
+# The generated GNUmakefile already names the test file itself, so only the
+# model source is added here, as the other tools do.
+
+t_AGDiscoverOrder_OBJC_FILES += ../../Models/AGDiscoverOrder.m
 
 # --- service tests (appended; the model blocks above stay untouched) ---
 

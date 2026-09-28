@@ -18,6 +18,7 @@
 #import "AGApp.h"
 #import "AGSearchIndex.h"
 #import "AGCategoryNames.h"
+#import "AGDiscoverOrder.h"
 #import "AppearanceMetrics.h"
 
 static NSString *const kAGWindowFrameAutosaveName = @"AGMainWindow";
@@ -30,6 +31,31 @@ static const CGFloat kAGMinimumHeight = 480.0;
 static const CGFloat kAGSidebarWidth = 200.0;
 static const CGFloat kAGTopBarHeight = 52.0;
 static const CGFloat kAGSearchFieldWidth = 240.0;
+/* An image-only button is a square, not the 100 points a titled button
+   wants: the chevron is 16 points like every other glyph in the app, and
+   the face around it is a little wider so the arrow is not crowded. */
+static const CGFloat kAGBackGlyphSide = 16.0;
+static const CGFloat kAGBackButtonSide = 24.0;
+
+/* The back arrow is a bundled glyph like the sidebar ones, so it belongs
+   to the same iconography and needs no theme image that may be absent. The
+   button falls back to its titled face if it is missing, because the
+   chevron is the only way back out of a detail page. */
+static NSImage *AGBackArrowImage(void)
+{
+  static NSImage *arrow = nil;
+  if (arrow == nil)
+    {
+      NSString *path = [[NSBundle mainBundle] pathForResource:@"back" ofType:@"tiff"];
+      NSImage *loaded = [[NSImage alloc] initWithContentsOfFile:path];
+      if (loaded != nil)
+        {
+          [loaded setSize:NSMakeSize(kAGBackGlyphSide, kAGBackGlyphSide)];
+          arrow = loaded;
+        }
+    }
+  return arrow;
+}
 
 #pragma mark - Field editor
 
@@ -251,16 +277,11 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
   NSString *_pendingMessage;
 }
 
-@synthesize pageTitle = _pageTitle;
-
 - (instancetype)initWithMessage:(NSString *)message
 {
   self = [super initWithNibName:nil bundle:nil];
   if (self != nil)
-    {
-      _pageTitle = [NSLocalizedString(@"AppGarden", @"") copy];
-      _pendingMessage = [message copy];
-    }
+    _pendingMessage = [message copy];
   return self;
 }
 
@@ -311,13 +332,15 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
   NSView *_contentArea;
   AGTopBarView *_topBar;
   NSButton *_backButton;
-  NSTextField *_titleLabel;
   NSSearchField *_searchField;
   AGSearchFieldEditor *_searchFieldEditor;
   AGPageContainerView *_pageContainer;
 
   NSMutableArray<NSViewController<AGPage> *> *_navigationStack;
   AGGridViewController *_rootGridPage;
+  /* The catalog in the order Discover shows it, shuffled once when the
+     catalog arrives rather than on every repopulate. */
+  NSArray<AGApp *> *_discoverApps;
   BOOL _hasCatalogOnce;
   BOOL _toolkitCategoriesShown;
 }
@@ -419,14 +442,27 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
   [_topBar setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
   [_contentArea addSubview:_topBar];
 
-  CGFloat buttonY = floor((kAGTopBarHeight - METRICS_BUTTON_HEIGHT) / 2.0);
+  CGFloat buttonY = floor((kAGTopBarHeight - kAGBackButtonSide) / 2.0);
   _backButton = [[NSButton alloc] initWithFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, buttonY,
-                                                           METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT)];
+                                                           kAGBackButtonSide, kAGBackButtonSide)];
   [_backButton setBezelStyle:NSRoundedBezelStyle];
+  /* The arrow is the whole control, so nothing is drawn but the arrow. The
+     title stays on the button for the tooltip and for the test and the
+     menu item that name it "Back", and the font follows it for that. */
+  NSImage *arrow = AGBackArrowImage();
+  if (arrow != nil)
+    {
+      [_backButton setImage:arrow];
+      [_backButton setImagePosition:NSImageOnly];
+    }
   [_backButton setTitle:NSLocalizedString(@"Back", @"")];
+  [_backButton setToolTip:NSLocalizedString(@"Back", @"")];
   [_backButton setFont:METRICS_FONT_SYSTEM_REGULAR_13];
   [_backButton setTarget:self];
   [_backButton setAction:@selector(goBack:)];
+  /* A button in a bar is not in the Tab loop: the search field is, and
+     Tab from there goes into the grid. */
+  [_backButton setRefusesFirstResponder:YES];
   [_backButton setAutoresizingMask:NSViewMaxXMargin];
   [_topBar addSubview:_backButton];
 
@@ -459,33 +495,6 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
                                                name:NSControlTextDidChangeNotification
                                              object:_searchField];
   [_topBar addSubview:_searchField];
-
-  CGFloat titleHeight = 26.0;
-  _titleLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
-  [_titleLabel setEditable:NO];
-  [_titleLabel setSelectable:NO];
-  [_titleLabel setBordered:NO];
-  [_titleLabel setBezeled:NO];
-  [_titleLabel setDrawsBackground:NO];
-  [_titleLabel setFont:[NSFont boldSystemFontOfSize:20.0]];
-  [_titleLabel setTextColor:[NSColor textColor]];
-  [[_titleLabel cell] setLineBreakMode:NSLineBreakByTruncatingTail];
-  [_titleLabel setFrame:NSMakeRect(0.0, floor((kAGTopBarHeight - titleHeight) / 2.0), 10.0, titleHeight)];
-  [_titleLabel setAutoresizingMask:NSViewWidthSizable];
-  [_topBar addSubview:_titleLabel];
-  [self layoutTitleLabel];
-}
-
-- (void)layoutTitleLabel
-{
-  BOOL backHidden = [_backButton isHidden];
-  CGFloat left = backHidden ? METRICS_CONTENT_SIDE_MARGIN
-                            : NSMaxX([_backButton frame]) + METRICS_SPACE_16;
-  CGFloat right = NSMinX([_searchField frame]) - METRICS_SPACE_16;
-  NSRect frame = [_titleLabel frame];
-  frame.origin.x = left;
-  frame.size.width = MAX(0.0, right - left);
-  [_titleLabel setFrame:frame];
 }
 
 - (void)layoutContentArea
@@ -595,6 +604,10 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
   if (catalog != nil)
     {
       _catalog = catalog;
+      /* Discover gets its order here, once per catalog: re-shuffling on
+         every repopulate would move the cards under the user, throw away
+         the scroll offset and drop the focused card. */
+      _discoverApps = [AGDiscoverOrder shuffled:[catalog apps]];
       _searchIndex = [[AGSearchIndex alloc] initWithCatalog:catalog];
       _hasCatalogOnce = YES;
       _toolkitCategoriesShown = [self showsToolkitCategories];
@@ -733,21 +746,9 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
         return [_catalog appsInCategory:[_sidebar selectedRawCategory]];
       case AGSidebarSectionDiscover:
       default:
-        return [_catalog apps];
-    }
-}
-
-- (NSString *)titleForCurrentScope
-{
-  switch ([_sidebar selectedSection])
-    {
-      case AGSidebarSectionInstalled:
-        return NSLocalizedString(@"Downloaded", @"");
-      case AGSidebarSectionCategory:
-        return [AGCategoryNames displayNameForCategory:[_sidebar selectedRawCategory]];
-      case AGSidebarSectionDiscover:
-      default:
-        return NSLocalizedString(@"Discover", @"");
+        /* Nil until the first catalog lands, which is the state the root
+           page is built in; the grid reads nil as an empty list. */
+        return _discoverApps;
     }
 }
 
@@ -756,7 +757,6 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
   NSString *query = [[_searchField stringValue]
       stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   NSArray<AGApp *> *apps;
-  NSString *title;
   NSString *emptyMessage;
   if ([query length] > 0 && _searchIndex != nil)
     {
@@ -772,17 +772,14 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
           matches = filtered;
         }
       apps = matches;
-      title = [NSString stringWithFormat:NSLocalizedString(@"Search: %@", @""), query];
       emptyMessage = [AGAppGridView emptyMessageForSearchQuery:query];
     }
   else
     {
       apps = [self appsForCurrentScope];
-      title = [self titleForCurrentScope];
       emptyMessage = ([_sidebar selectedSection] == AGSidebarSectionInstalled)
                          ? [AGAppGridView installedEmptyMessage] : @"";
     }
-  [_rootGridPage setPageTitle:title];
   [_rootGridPage setEmptyMessage:emptyMessage];
   [_rootGridPage setApps:apps];
   [self updateTopBar];
@@ -829,10 +826,11 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
 
 - (void)updateTopBar
 {
-  NSViewController<AGPage> *top = [_navigationStack lastObject];
+  /* Nothing names the page in the bar any more: the sidebar selection says
+     which scope is open and the window title says which app this is, so a
+     third copy of the name between the back arrow and the search field
+     was saying the same thing twice. */
   [_backButton setHidden:([_navigationStack count] <= 1)];
-  [_titleLabel setStringValue:([top pageTitle] != nil) ? [top pageTitle] : @""];
-  [self layoutTitleLabel];
   [self revalidateMenus];
 }
 

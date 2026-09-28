@@ -112,20 +112,21 @@
 
 /* --------------------------------------------------------- Controllers */
 
-/* Top bar, banner and page titles (AGMainWindowController,
- * AGStatusBannerController). The first %@ is the fetch date, the second the
+/* Top bar and banner (AGMainWindowController, AGStatusBannerController).
+ * "Back" is the tooltip and the identity of the top bar's arrow, which
+ * draws no text. The banner's first %@ is the fetch date, the second the
  * download error. */
 "Back" = "Back";
 "Search" = "Search";
 "Retry" = "Retry";
-"Discover" = "Discover";
-"Downloaded" = "Downloaded";
-"Search: %@" = "Search: %@";
 "Showing the catalog from %@. Could not reach appimage.github.io: %@" = "Showing the catalog from %@. Could not reach appimage.github.io: %@";
 
-/* Sidebar headers (AGSidebarController). */
+/* Sidebar section rows and headers (AGSidebarController), the same two
+ * names reused by the View menu (AGAppDelegate). */
 "Library" = "Library";
 "Categories" = "Categories";
+"Discover" = "Discover";
+"Downloaded" = "Downloaded";
 
 /* Detail page (AGDetailViewController). %@ is the application's name. */
 "View on appimage.github.io" = "View on appimage.github.io";

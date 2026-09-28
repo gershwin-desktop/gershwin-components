@@ -80,8 +80,10 @@ An item can have `links: null` (326 items), a `GitHub` link only, a
 `Download` link only (15 items, the openSUSE ones), or both.
 
 There is no direct AppImage file URL in the feed. The download target is
-resolved at install time, see INSTRUCTIONS.md section "Resolving the
-download".
+resolved at install time, see INSTRUCTIONS.md section 8, "Resolving the
+download and installing". That resolution is a transliteration of the site's
+own `code/find-appimage.sh`, deliberately, so that "the AppImage of this
+release" means the same thing in the app as on the website.
 
 ## Assets
 

@@ -43,7 +43,9 @@
 
 @property (nonatomic, weak) id<AGAppGridViewDelegate> delegate;
 
-/* The page's items in catalog order. Replacing it recycles every card. */
+/* The page's items, in the order the page chose (the catalog's own order for
+   a category or Downloaded page, a shuffle for Discover). Replacing it
+   recycles every card. */
 @property (nonatomic, copy) NSArray<AGApp *> *apps;
 
 /* YES only before the first catalog arrives: a 32-point spinner over

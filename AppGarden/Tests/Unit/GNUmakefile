@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_AGCategoryNames t_AGDownloadResolver t_AGFeedLoader t_AGFeedParser t_AGGridLayout t_AGInstallRegistry t_AGLicenseFormatter t_AGSearchIndex
+TEST_TOOL_NAME =  t_AGCategoryNames t_AGDiscoverOrder t_AGDownloadResolver t_AGFeedLoader t_AGFeedParser t_AGGridLayout t_AGInstallRegistry t_AGLicenseFormatter t_AGSearchIndex
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -22,6 +22,7 @@ ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 
 
 t_AGCategoryNames_OBJC_FILES=t_AGCategoryNames.m
+t_AGDiscoverOrder_OBJC_FILES=t_AGDiscoverOrder.m
 t_AGDownloadResolver_OBJC_FILES=t_AGDownloadResolver.m
 t_AGFeedLoader_OBJC_FILES=t_AGFeedLoader.m
 t_AGFeedParser_OBJC_FILES=t_AGFeedParser.m

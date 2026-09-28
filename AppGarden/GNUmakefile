@@ -21,6 +21,7 @@ AppGarden_OBJC_FILES = \
   Models/AGSearchIndex.m \
   Models/AGDownloadResolver.m \
   Models/AGGridLayout.m \
+  Models/AGDiscoverOrder.m \
   Services/AGFeedLoader.m \
   Services/AGImageCache.m \
   Services/AGInstaller.m \
@@ -47,6 +48,7 @@ AppGarden_RESOURCE_FILES = \
   AppGarden.png \
   AppGarden@2x.png \
   Icons/ai.tiff Icons/astronomy.tiff Icons/audio.tiff \
+  Icons/back.tiff \
   Icons/audiovideo.tiff Icons/chat.tiff Icons/database.tiff \
   Icons/development.tiff Icons/discover.tiff Icons/downloaded.tiff \
   Icons/education.tiff Icons/electronics.tiff Icons/emulator.tiff \

@@ -3,14 +3,73 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * GWAppImageDownloader - Downloads an AppImage (direct URL or latest GitHub
- * release asset) and places it into ~/Library/Applications as a native
- * .app bundle wrapping the AppImage plus a launcher script.
+ * GWAppImageDownloader - Downloads an AppImage (a direct URL, or the newest
+ * GitHub release that actually ships one for this machine) and places it into
+ * ~/Library/Applications as a flat, executable <name>.AppImage file (no .app
+ * wrapper).
  */
 
 #import "GWAppImageDownloader.h"
+#import "GWAppImageAssetPicker.h"
+#import "GWCurlMeterReader.h"
 #import "GWPackageManager.h"
 #import "GWOSDetector.h"
+
+/*
+ * The scale every GWInstallProgressHandler of a run reads, in the 0..1 range
+ * the protocol promises: -1 while nothing is measurable (the release lookup,
+ * and the first instants of a transfer whose size curl has not learned yet),
+ * then the bytes of the transfer itself, then the file moving into place.
+ * The transfer gets almost the whole run because it takes almost all of the
+ * time; the bar therefore tracks the bytes and reaches the end only when the
+ * install really is over.
+ */
+static const float kGWProgressIndeterminate = -1.0f;
+static const float kGWProgressDownloadFirst = 0.05f;
+static const float kGWProgressDownloadLast = 0.95f;
+static const float kGWProgressSaving = 0.97f;
+
+/* The release-resolution half, declared here because the entry point is
+ * called from -downloadAppImageFromGitHubRepo: above its definition. The
+ * reasoning behind each rule lives in AppGarden/INSTRUCTIONS.md section 8,
+ * "Which release, and which file in it".
+ *
+ * None of this is public API: a caller reaches it only through
+ * -downloadAppImageFromGitHubRepo:appName:progress:error:. */
+@interface GWAppImageDownloader (ReleaseResolution)
+
++ (NSString *)resolveGitHubReleaseURLForRepo:(NSString *)repo
+                                    appName:(NSString *)appName
+                               architecture:(NSString *)arch
+                                   progress:(nullable id<GWInstallProgressHandler>)progress
+                                      error:(NSError **)error;
+
+/* The tag to use: the newest release that is not a pre-release and does hold
+ * an AppImage, failing that the newest that holds one at all. */
++ (NSString *)preferredTagForRepo:(NSString *)repo
+                          progress:(nullable id<GWInstallProgressHandler>)progress;
+
+/* The tag releases/latest redirects to, or nil when it names none (a
+ * repository whose only releases are pre-releases, or none at all). The
+ * redirect chain is followed to its end, so a renamed repository resolves. */
++ (NSString *)latestStableTagForRepo:(NSString *)repo
+                            progress:(nullable id<GWInstallProgressHandler>)progress;
+
+/* The tags of the repository's releases, newest first, from releases.atom. */
++ (NSArray<NSString *> *)releaseTagsForRepo:(NSString *)repo
+                                   progress:(nullable id<GWInstallProgressHandler>)progress;
+
++ (BOOL)fetchURL:(NSString *)url
+          toPath:(NSString *)path
+        progress:(nullable id<GWInstallProgressHandler>)progress;
+
++ (NSArray<NSString *> *)assetNamesForRepo:(NSString *)repo
+                                      tag:(NSString *)tag
+                                  progress:(nullable id<GWInstallProgressHandler>)progress;
+
++ (BOOL)namesContainAppImage:(NSArray<NSString *> *)names;
+
+@end
 
 @implementation GWAppImageDownloader
 
@@ -53,7 +112,7 @@
     return NO;
 
   if (progress)
-    [progress installDidProgress:0.6f message:@"Saving AppImage..."];
+    [progress installDidProgress:kGWProgressSaving message:@"Saving AppImage..."];
 
   BOOL ok = [self _downloadAppImageAtPath:tmp appName:appName error:error];
   if (ok && progress)
@@ -79,14 +138,22 @@
     }
 
   NSString *arch = [GWOSDetector currentArchitecture];
+  /* No size to show until curl has answered, so the bar runs as a barber
+   * pole through the lookup instead of sitting on a made-up percentage. */
   if (progress)
-    [progress installDidProgress:0.05f
+    [progress installDidProgress:kGWProgressIndeterminate
                          message:@"Resolving AppImage from GitHub Releases..."];
 
   NSError *resolveError = nil;
+  /* The catalog's name for the app, not the repository's: a release can hold
+   * AppImages of several programs, and the name that tells them apart is the
+   * one the catalog lists the app under (FreeCAD's repository is FreeCAD but
+   * the catalog calls it FreeCAD2, and Obsidian's is obsidian-releases). */
   NSString *url = [self.class resolveGitHubReleaseURLForRepo:repo
-                                               architecture:arch
-                                                      error:&resolveError];
+                                                   appName:appName
+                                                architecture:arch
+                                                    progress:progress
+                                                       error:&resolveError];
   if (!url)
     {
       if (error) *error = resolveError;
@@ -103,23 +170,52 @@
             progress:(nullable id<GWInstallProgressHandler>)progress
                error:(NSError **)error
 {
+  /* Nothing is measurable until curl has read a size, and the meter keeps
+   * saying so until its first percent arrives. */
   if (progress)
-    [progress installDidProgress:0.1f message:@"Downloading AppImage..."];
+    [progress installDidProgress:kGWProgressIndeterminate
+                         message:@"Downloading AppImage..."];
+
+  GWCurlMeterReader *meter =
+      [[GWCurlMeterReader alloc] initWithProgress:progress
+                                          message:@"Downloading AppImage..."
+                                            first:kGWProgressDownloadFirst
+                                              last:kGWProgressDownloadLast];
 
   // We deliberately use curl over NSURLSession: libdispatch/GCD is unreliable
   // in this runtime, and a plain NSTask keeps the download synchronous and
   // easy to drive from a background thread.
   NSTask *t = [[NSTask alloc] init];
   [t setLaunchPath:@"curl"];
-  [t setArguments:@[@"-fL", @"--retry", @"2", @"--retry-delay", @"1",
+  // -# is curl's progress meter as machine readable as it gets: a percent at
+  // the end of every update, where the default meter writes columns instead.
+  [t setArguments:@[@"-fL", @"--progress-bar", @"--retry", @"2",
+                    @"--retry-delay", @"1",
                     @"-o", dest, url]];
-  NSPipe *ioPipe = [NSPipe pipe];
-  [t setStandardOutput:ioPipe];
-  [t setStandardError:ioPipe];
+  // With -o the body goes to the file, so stdout carries nothing; stderr
+  // carries the meter and the failure text, and it has to be read *while*
+  // curl writes it: nobody reading the pipe not only keeps the bar frozen,
+  // it blocks curl for good once 64 KB of meter has piled up in it.
+  [t setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
+  NSPipe *errPipe = [NSPipe pipe];
+  [t setStandardError:errPipe];
 
   @try
     {
       [t launch];
+
+      /* Reading to end of file is also the wait for the transfer: the write
+       * end of the pipe closes when curl exits, and every update is parsed
+       * as it lands, on this thread, in the order it was written. */
+      NSFileHandle *err = [errPipe fileHandleForReading];
+      for (;;)
+        {
+          NSData *chunk = [err availableData];
+          if ([chunk length] == 0)
+            break;
+          [meter ingestData:chunk];
+        }
+      [meter finish];
       [t waitUntilExit];
     }
   @catch (NSException *e)
@@ -175,7 +271,7 @@
 
   NSFileManager *fm = [NSFileManager defaultManager];
 
-  // The AppImage is placed directly into ~/Library/Applications as a flat,
+  // The AppImage is placed directly into ~/Applications as a flat,
   // executable file - no .app wrapper, no launcher script.
   NSString *dest = [GWAppImageDownloader launcherPathForAppName:appName];
 
@@ -205,8 +301,25 @@
 }
 
 + (NSString *)resolveGitHubReleaseURLForRepo:(NSString *)repo
+                                    appName:(NSString *)appName
                                architecture:(NSString *)arch
+                                   progress:(nullable id<GWInstallProgressHandler>)progress
                                       error:(NSError **)error
+{
+  return [self resolveGitHubReleaseURLForRepo:repo
+                                     appName:appName
+                                  architecture:arch
+                                      progress:progress
+                                         error:error
+                                startingAtTag:nil];
+}
+
++ (NSString *)resolveGitHubReleaseURLForRepo:(NSString *)repo
+                                    appName:(NSString *)appName
+                               architecture:(NSString *)arch
+                                   progress:(nullable id<GWInstallProgressHandler>)progress
+                                      error:(NSError **)error
+                               startingAtTag:(NSString *)startTag
 {
   // The web site instead of api.github.com: the API allows 60 anonymous
   // requests per hour per address, and once a desktop had used them up every
@@ -214,79 +327,53 @@
   // rest of the hour. github.com itself answers releases/latest with a
   // redirect to the tag page, and releases/expanded_assets/<tag> with the
   // asset list as plain links; neither is rate limited that way.
-  NSString *latest = [NSString stringWithFormat:
-                      @"https://github.com/%@/releases/latest", repo];
-  NSString *headers = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                       [NSString stringWithFormat:@"gwpm_gh_%@.headers",
-                         [[NSUUID UUID] UUIDString]]];
   NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
                    [NSString stringWithFormat:@"gwpm_gh_%@.html",
                      [[NSUUID UUID] UUIDString]]];
 
-  NSTask *t = [[NSTask alloc] init];
-  [t setLaunchPath:@"curl"];
-  [t setArguments:@[@"-fsSI", @"-o", headers, latest]];
-  @try
+  // Which release to look at: the newest one that is not a pre-release and
+  // does hold an AppImage, or the newest that holds one at all. Deciding
+  // that here, once, is why the walk below is only a safety net rather than
+  // the normal path.
+  NSString *tag = startTag;
+  if (tag == nil)
     {
-      [t launch];
-      [t waitUntilExit];
-    }
-  @catch (NSException *e)
-    {
-      NSLog(@"GWAppImageDownloader -> GitHub request failed: %@", e);
-      if (error)
-        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
-                                     code:GWPackageManagerErrorCommandFailed
-                                 userInfo:@{
-                                   NSLocalizedDescriptionKey:
-                                     [NSString stringWithFormat:
-                                       @"Could not reach GitHub for %@", repo],
-                                 }];
-      return nil;
+      tag = [self preferredTagForRepo:repo progress:progress];
+      if (tag == nil)
+        {
+          if (error)
+            *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
+                                         code:GWPackageManagerErrorCommandFailed
+                                     userInfo:@{
+                                       NSLocalizedDescriptionKey:
+                                         [NSString stringWithFormat:
+                                           @"No release of %@ has an AppImage", repo],
+                                       }];
+          return nil;
+        }
     }
 
-  NSString *headerText = [NSString stringWithContentsOfFile:headers
-                                                   encoding:NSUTF8StringEncoding
-                                                      error:NULL];
-  [[NSFileManager defaultManager] removeItemAtPath:headers error:NULL];
-  NSString *tagURL = nil;
-  for (NSString *line in [headerText componentsSeparatedByString:@"\n"])
-    {
-      NSRange colon = [line rangeOfString:@":"];
-      if (colon.location == NSNotFound)
-        continue;
-      NSString *field = [[line substringToIndex:colon.location] lowercaseString];
-      if ([field isEqualToString:@"location"])
-        tagURL = [[line substringFromIndex:colon.location + 1]
-                  stringByTrimmingCharactersInSet:
-                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    }
-  // A repository without a release answers releases/latest with the
-  // releases page itself, not a redirect to a tag.
-  NSRange tagRange = [tagURL rangeOfString:@"/releases/tag/"];
-  if ([t terminationStatus] != 0 || tagURL == nil || tagRange.location == NSNotFound)
-    {
-      if (error)
-        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
-                                     code:GWPackageManagerErrorCommandFailed
-                                 userInfo:@{
-                                   NSLocalizedDescriptionKey:
-                                     [NSString stringWithFormat:
-                                       @"GitHub release lookup failed for %@", repo],
-                                 }];
-      return nil;
-    }
-  NSString *tag = [tagURL substringFromIndex:NSMaxRange(tagRange)];
+  // A tag with a slash in it has to be percent-encoded to sit in a path,
+  // which is how janhq/jan's "checkpoint/code-ui-..." tag is spelled.
+  NSString *encodedTag = [tag stringByAddingPercentEncodingWithAllowedCharacters:
+                          [NSCharacterSet URLPathAllowedCharacterSet]];
   NSString *assetsPage = [NSString stringWithFormat:
                           @"https://github.com/%@/releases/expanded_assets/%@",
-                          repo, tag];
+                          repo, encodedTag];
 
-  t = [[NSTask alloc] init];
+  NSTask *t = [[NSTask alloc] init];
   [t setLaunchPath:@"curl"];
   [t setArguments:@[@"-fsSL", @"-o", tmp, assetsPage]];
+  // The lookup runs silent (-s), so nothing lands on stderr but the failure
+  // itself - and that is exactly what a caller needs: a rate limit or a 403
+  // from GitHub is the reason the error below gives, and this pipe is the
+  // only way it leaves the framework.
+  NSPipe *assetsErr = [NSPipe pipe];
+  [t setStandardError:assetsErr];
   @try
     {
       [t launch];
+      [GWCurlMeterReader forwardStderrOfPipe:assetsErr toProgress:progress];
       [t waitUntilExit];
     }
   @catch (NSException *e)
@@ -299,9 +386,10 @@
                                    NSLocalizedDescriptionKey:
                                      [NSString stringWithFormat:
                                        @"Could not reach GitHub for %@", repo],
-                                 }];
+                                   }];
       return nil;
     }
+
   NSString *html = [NSString stringWithContentsOfFile:tmp
                                              encoding:NSUTF8StringEncoding
                                                 error:NULL];
@@ -336,6 +424,26 @@
       }];
     }
 
+  NSArray<NSString *> *names = [assets valueForKey:@"name"];
+
+  // A release with no AppImage in it, however many other files it carries:
+  // Obsidian 1.13.8 is a mobile-only release holding a single .apk. An assets
+  // page listing an .apk is not an empty one, so the test is for an AppImage
+  // and not for any asset at all. preferredTagForRepo: should already have
+  // walked past such a release, so reaching here means it could not.
+  if (![self namesContainAppImage:names])
+    {
+      if (error)
+        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
+                                     code:GWPackageManagerErrorCommandFailed
+                                 userInfo:@{
+                                   NSLocalizedDescriptionKey:
+                                     [NSString stringWithFormat:
+                                       @"No release of %@ has an AppImage", repo],
+                                   }];
+      return nil;
+    }
+
   if ([assets count] == 0)
     {
       if (error)
@@ -349,63 +457,292 @@
       return nil;
     }
 
-  // Heuristic: collect .AppImage assets, then prefer one whose name mentions
-  // the current architecture (aarch64/arm64 or x86_64/amd64), falling back to
-  // the first AppImage if no arch-specific match exists.
-  NSMutableArray<NSDictionary *> *appImages = [NSMutableArray array];
+  // The catalog's own rules, so that "the AppImage of this release" means
+  // here what it means on appimage.github.io.
+  GWAppImagePickOutcome outcome = GWAppImagePickNoAppImage;
+  NSArray<NSString *> *candidates = nil;
+  NSString *chosen = [GWAppImageAssetPicker pickAssetFromNames:names
+                                                      appName:appName
+                                                      outcome:&outcome
+                                                   candidates:&candidates];
+
+  if (chosen == nil)
+    {
+      if (error)
+        {
+          NSString *reason;
+          if (outcome == GWAppImagePickAmbiguous)
+            // Say which files, so the user can fetch one by hand if they
+            // want to: guessing here would hand them the wrong program.
+            reason = [NSString stringWithFormat:
+                      @"The newest release of %@ has several AppImages and none of "
+                      @"them is clearly the right one for this machine: %@",
+                      repo, [candidates componentsJoinedByString:@", "]];
+          else
+            reason = [NSString stringWithFormat:
+                      @"No release of %@ has an AppImage for this machine", repo];
+          *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
+                                       code:GWPackageManagerErrorCommandFailed
+                                   userInfo:@{NSLocalizedDescriptionKey: reason}];
+        }
+      return nil;
+    }
+
   for (NSDictionary *asset in assets)
     {
-      NSString *name = [[asset objectForKey:@"name"] lowercaseString];
-      if (name == nil) continue;
-      // Only the file itself: the checksum and zsync files next to it end in
-      // .AppImage.<something> and used to be picked up as candidates.
-      if ([name hasSuffix:@".appimage"])
-        [appImages addObject:asset];
-    }
-
-  NSString *primary = ([arch isEqualToString:@"aarch64"]) ? @"aarch64" : @"x86_64";
-  NSString *secondary = ([arch isEqualToString:@"aarch64"]) ? @"arm64" : @"amd64";
-
-  NSDictionary *matched = nil;
-  for (NSDictionary *asset in appImages)
-    {
-      NSString *name = [[asset objectForKey:@"name"] lowercaseString];
-      if ([name containsString:primary] || [name containsString:secondary])
+      if ([[asset objectForKey:@"name"] isEqualToString:chosen])
         {
-          matched = asset;
-          break;
+          NSString *downloadURL = [asset objectForKey:@"browser_download_url"];
+          if ([downloadURL length] > 0)
+            return downloadURL;
         }
     }
-  if (!matched && [appImages count] > 0)
-    matched = appImages[0];
 
-  if (!matched)
+  if (error)
+    *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
+                                 code:GWPackageManagerErrorCommandFailed
+                             userInfo:@{
+                               NSLocalizedDescriptionKey:
+                                 @"GitHub asset is missing a download URL",
+                               }];
+  return nil;
+}
+
+#pragma mark - Walking back through releases
+
+/* Fetch a URL into a file, quietly. A failure is the caller's to report. */
++ (BOOL)fetchURL:(NSString *)url
+          toPath:(NSString *)path
+        progress:(nullable id<GWInstallProgressHandler>)progress
+{
+  NSTask *t = [[NSTask alloc] init];
+  [t setLaunchPath:@"curl"];
+  [t setArguments:@[@"-fsSL", @"-o", path, url]];
+  NSPipe *err = [NSPipe pipe];
+  [t setStandardError:err];
+  @try
     {
-      if (error)
-        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
-                                     code:GWPackageManagerErrorCommandFailed
-                                 userInfo:@{
-                                   NSLocalizedDescriptionKey:
-                                     [NSString stringWithFormat:
-                                       @"No AppImage asset for architecture %@ in %@",
-                                       arch, repo],
-                                 }];
+      [t launch];
+      [GWCurlMeterReader forwardStderrOfPipe:err toProgress:progress];
+      [t waitUntilExit];
+    }
+  @catch (NSException *e)
+    {
+      NSLog(@"GWAppImageDownloader -> request failed: %@", e);
+      return NO;
+    }
+  return [t terminationStatus] == 0;
+}
+
+/* The asset names of one release, in the order the forge lists them. */
++ (NSArray<NSString *> *)assetNamesForRepo:(NSString *)repo
+                                      tag:(NSString *)tag
+                                  progress:(nullable id<GWInstallProgressHandler>)progress
+{
+  NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"gwpm_assets_%@.html",
+                      [[NSUUID UUID] UUIDString]]];
+  NSString *encoded = [tag stringByAddingPercentEncodingWithAllowedCharacters:
+                       [NSCharacterSet URLPathAllowedCharacterSet]];
+  NSString *page = [NSString stringWithFormat:
+                    @"https://github.com/%@/releases/expanded_assets/%@",
+                    repo, encoded];
+  if (![self fetchURL:page toPath:path progress:progress])
+    {
+      [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+      return nil;
+    }
+  NSString *html = [NSString stringWithContentsOfFile:path
+                                             encoding:NSUTF8StringEncoding
+                                                error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+  if (html == nil)
+    return nil;
+
+  NSMutableArray<NSString *> *names = [NSMutableArray array];
+  NSRegularExpression *link = [NSRegularExpression regularExpressionWithPattern:
+      @"href=\"(/[^\"]+/releases/download/[^\"]+)\"" options:0 error:NULL];
+  for (NSTextCheckingResult *match in [link matchesInString:html options:0
+                                                         range:NSMakeRange(0, [html length])])
+    {
+      NSString *assetPath = [html substringWithRange:[match rangeAtIndex:1]];
+      [names addObject:[assetPath lastPathComponent]];
+    }
+  return names;
+}
+
+/* The tags of a repository's releases, newest first, read from the Atom
+ * feed github.com serves for them. This is the same walk the catalog does
+ * through the API, done with the web endpoint so a desktop that has already
+ * spent its anonymous API allowance can still install anything. */
++ (NSArray<NSString *> *)releaseTagsForRepo:(NSString *)repo
+                                   progress:(nullable id<GWInstallProgressHandler>)progress
+{
+  NSString *feed = [NSString stringWithFormat:
+                    @"https://github.com/%@/releases.atom", repo];
+  NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"gwpm_tags_%@.atom",
+                      [[NSUUID UUID] UUIDString]]];
+  if (![self fetchURL:feed toPath:path progress:progress])
+    {
+      [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
       return nil;
     }
 
-  NSString *downloadURL = [matched objectForKey:@"browser_download_url"];
-  if (!downloadURL || [downloadURL length] == 0)
+  NSString *xml = [NSString stringWithContentsOfFile:path
+                                             encoding:NSUTF8StringEncoding
+                                                error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+  if (xml == nil)
+    return nil;
+
+  /* The tag is the last path component of the entry's own link, never its
+   * title: Obsidian titles v1.13.7 "1.13.7" with no v, and AppFlowy titles
+   * 0.14.5 "v0.14.5" with one. */
+  NSRegularExpression *entry =
+    [NSRegularExpression regularExpressionWithPattern:
+      @"<entry>(.*?)</entry>" options:NSRegularExpressionDotMatchesLineSeparators
+                                             error:NULL];
+  NSRegularExpression *tag =
+    [NSRegularExpression regularExpressionWithPattern:
+      @"href=\"[^\"]*/releases/tag/([^\"]+)\"" options:0 error:NULL];
+
+  NSMutableArray<NSString *> *tags = [NSMutableArray array];
+  for (NSTextCheckingResult *e in [entry matchesInString:xml options:0
+                                                  range:NSMakeRange(0, [xml length])])
     {
-      if (error)
-        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
-                                     code:GWPackageManagerErrorCommandFailed
-                                 userInfo:@{
-                                   NSLocalizedDescriptionKey:
-                                     @"GitHub asset is missing a download URL",
-                                 }];
+      NSString *body = [xml substringWithRange:[e rangeAtIndex:1]];
+      NSTextCheckingResult *m = [tag firstMatchInString:body options:0
+                                                  range:NSMakeRange(0, [body length])];
+      if (m != nil)
+        {
+          NSString *value = [[body substringWithRange:[m rangeAtIndex:1]]
+                             stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+          if (![tags containsObject:value])
+            [tags addObject:value];
+        }
+    }
+  return tags;
+}
+
+/* The tag releases/latest redirects to, which is by definition the newest
+ * release GitHub does not consider a pre-release, or nil when it names none
+ * (a repository whose only releases are pre-releases, or none at all).
+ *
+ * The redirect has to be followed rather than read once: a renamed
+ * repository answers 301 first, and the first Location of a renamed one
+ * still ends in /releases/latest, so the tag is only in the last header. */
++ (NSString *)latestStableTagForRepo:(NSString *)repo
+                            progress:(nullable id<GWInstallProgressHandler>)progress
+{
+  NSString *headers = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                       [NSString stringWithFormat:@"gwpm_latest_%@.headers",
+                         [[NSUUID UUID] UUIDString]]];
+  NSString *url = [NSString stringWithFormat:
+                   @"https://github.com/%@/releases/latest", repo];
+  NSTask *t = [[NSTask alloc] init];
+  [t setLaunchPath:@"curl"];
+  [t setArguments:@[@"-fsSIL", @"-o", headers, url]];
+  NSPipe *err = [NSPipe pipe];
+  [t setStandardError:err];
+  BOOL ok = NO;
+  @try
+    {
+      [t launch];
+      [GWCurlMeterReader forwardStderrOfPipe:err toProgress:progress];
+      [t waitUntilExit];
+      ok = ([t terminationStatus] == 0);
+    }
+  @catch (NSException *e)
+    {
+      ok = NO;
+    }
+  if (!ok)
+    {
+      [[NSFileManager defaultManager] removeItemAtPath:headers error:NULL];
       return nil;
     }
-  return downloadURL;
+
+  NSString *text = [NSString stringWithContentsOfFile:headers
+                                             encoding:NSUTF8StringEncoding
+                                                error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:headers error:NULL];
+  NSString *tag = nil;
+  for (NSString *line in [text componentsSeparatedByString:@"\n"])
+    {
+      NSRange colon = [line rangeOfString:@":"];
+      if (colon.location == NSNotFound)
+        continue;
+      if (![[[line substringToIndex:colon.location] lowercaseString]
+             isEqualToString:@"location"])
+        continue;
+      NSString *where = [[line substringFromIndex:colon.location + 1]
+                         stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+      NSRange tagRange = [where rangeOfString:@"/releases/tag/"];
+      if (tagRange.location != NSNotFound)
+        tag = [where substringFromIndex:NSMaxRange(tagRange)];
+      /* Keep the last one: with -L the chain is written out in order and the
+       * tag is on the final hop, not the first. */
+    }
+  return tag;
+}
+
+/* Does this release carry a file that IS an AppImage? The end-anchored,
+ * case-insensitive test the picker itself starts from, so "there is nothing
+ * here to install" and "there is something but we cannot choose it" stay
+ * two different answers. */
++ (BOOL)namesContainAppImage:(NSArray<NSString *> *)names
+{
+  for (NSString *name in names)
+    {
+      if ([[name lowercaseString] hasSuffix:@".appimage"])
+        return YES;
+    }
+  return NO;
+}
+
+/* How far back to look for a release that actually has an AppImage. The
+ * Atom feed holds ten entries, and a project that has stopped shipping
+ * AppImages in its last six releases is not going to be helped by a seventh
+ * request. */
+static const NSUInteger kGWMaxReleasesToWalk = 6;
+
+/* The newest release that is not a pre-release and does contain an AppImage;
+ * failing that, the newest one that does, pre-release or not. This is the
+ * catalog's own first rule, and each half of it is load-bearing on real
+ * projects: Obsidian's newest release is a mobile-only .apk, so the rule has
+ * to look past a release that merely exists, and qTox publishes only
+ * pre-releases, so it has to accept one when nothing else is on offer. */
++ (NSString *)preferredTagForRepo:(NSString *)repo
+                          progress:(nullable id<GWInstallProgressHandler>)progress
+{
+  /* releases/latest is the web site's own answer to "the newest real
+   * release", so following its redirect gives the newest non-prerelease
+   * without a second request to find out which entries are pre-releases
+   * (the Atom feed does not say, and the releases page would have to be
+   * fetched and parsed to find out). */
+  NSString *stable = [self latestStableTagForRepo:repo progress:progress];
+
+  if (stable != nil
+      && [self namesContainAppImage:[self assetNamesForRepo:repo
+                                                        tag:stable
+                                                    progress:progress]])
+    return stable;
+
+  NSArray<NSString *> *tags = [self releaseTagsForRepo:repo progress:progress];
+  NSUInteger count = MIN([tags count], kGWMaxReleasesToWalk);
+  for (NSUInteger i = 0; i < count; i++)
+    {
+      NSString *tag = [tags objectAtIndex:i];
+      if ([tag isEqualToString:stable])
+        continue;
+      if ([self namesContainAppImage:[self assetNamesForRepo:repo
+                                                       tag:tag
+                                                   progress:progress]])
+        return tag;
+    }
+  return nil;
 }
 
 @end

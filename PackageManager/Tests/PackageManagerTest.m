@@ -24,6 +24,9 @@
 #import "GWHeaderDatabase.h"
 #import "GWDebBackend.h"
 #import "GWSudoHelper.h"
+#import "GWAppImageDownloader.h"
+#import "GWAppImageAssetPicker.h"
+#import "GWCurlMeterReader.h"
 
 /* The key a Dependencies.plist uses for "any system with this kernel",
  * which is what dependencySearchOrder falls back to last. */
@@ -94,6 +97,14 @@ static void runTest(NSString *name, BOOL (^block)(void))
         }
     }
 }
+
+/* The asset-picker cases live in their own file, but they are compiled INTO
+ * this tool rather than linked beside it: they use the TAssert macros
+ * above, and those expand to a `return NO` that only means anything inside a
+ * function this file owns. Included here, after the macros and this runner
+ * exist, and deliberately not added to OBJC_FILES. */
+void AGRegisterAppImageAssetPickerTests(void);
+#include "AGAppImageAssetPickerTests.m"
 
 #pragma mark - Mock Objects
 
@@ -365,8 +376,10 @@ static void runTest(NSString *name, BOOL (^block)(void))
 @interface GWMockProgressHandler : NSObject <GWInstallProgressHandler>
 {
   NSMutableArray *_progressCalls;
+  NSMutableArray *_outputLines;
 }
 @property (readonly) NSArray *progressCalls;
+@property (readonly) NSArray *outputLines;
 @end
 
 @implementation GWMockProgressHandler
@@ -374,7 +387,11 @@ static void runTest(NSString *name, BOOL (^block)(void))
 - (instancetype)init
 {
   self = [super init];
-  if (self) _progressCalls = [NSMutableArray array];
+  if (self)
+    {
+      _progressCalls = [NSMutableArray array];
+      _outputLines = [NSMutableArray array];
+    }
   return self;
 }
 
@@ -386,7 +403,13 @@ static void runTest(NSString *name, BOOL (^block)(void))
   }];
 }
 
+- (void)installDidOutputLine:(NSString *)line
+{
+  [_outputLines addObject:line ?: @""];
+}
+
 - (NSArray *)progressCalls { return [_progressCalls copy]; }
+- (NSArray *)outputLines { return [_outputLines copy]; }
 
 @end
 
@@ -1454,6 +1477,413 @@ static void runTest(NSString *name, BOOL (^block)(void))
 
 #pragma mark - Test Runner
 
+#pragma mark - Curl Meter / AppImage Download Tests
+
+/* The half of GWAppImageDownloader that runs curl, driven here against a
+ * local file so the test needs no network. The method is private to the
+ * implementation; this declaration only lets the test name it. */
+@interface GWAppImageDownloader (MeterTesting)
+- (BOOL)_downloadURL:(NSString *)url
+              toPath:(NSString *)dest
+            progress:(id<GWInstallProgressHandler>)progress
+               error:(NSError **)error;
+@end
+
+static BOOL testNearly(float a, float b)
+{
+  return (a > b - 0.0001f) && (a < b + 0.0001f);
+}
+
+@interface GWCurlMeterTestHelper : NSObject
+@end
+
+@implementation GWCurlMeterTestHelper
+
+/* One meter update as curl writes it: a carriage return, that many bar
+ * characters padded to the meter's 76 columns, then the percent. */
++ (NSString *)updateForPercent:(double)percent
+{
+  NSUInteger bars = (NSUInteger)(percent / 100.0 * 76.0);
+  NSMutableString *bar = [NSMutableString string];
+  for (NSUInteger i = 0; i < bars; i++)
+    [bar appendString:@"#"];
+  while ([bar length] < 76)
+    [bar appendString:@" "];
+  return [NSString stringWithFormat:@"\r%@%.1f%%", bar, percent];
+}
+
++ (NSArray<NSNumber *> *)valuesOf:(GWMockProgressHandler *)mock
+{
+  NSMutableArray<NSNumber *> *values = [NSMutableArray array];
+  for (NSDictionary *call in [mock progressCalls])
+    [values addObject:call[@"progress"]];
+  return values;
+}
+
++ (BOOL)testMeterUpdatesBecomeFractions
+{
+  double percents[] = {0.0, 12.5, 42.0, 99.9, 100.0};
+  size_t count = sizeof(percents) / sizeof(percents[0]);
+
+  NSMutableString *stream = [NSMutableString string];
+  for (size_t i = 0; i < count; i++)
+    [stream appendString:[self updateForPercent:percents[i]]];
+  [stream appendString:@"\n"];
+
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+  [reader ingestData:[stream dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader finish];
+
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  TAssertTrue([values count] == (NSUInteger)count,
+              @"Each whole percent of the meter should be reported once, got %lu",
+              (unsigned long)[values count]);
+
+  float previous = -1.0f;
+  for (size_t i = 0; i < count; i++)
+    {
+      /* The transfer owns 0.05 .. 0.95 of the run, so 42 % of the bytes is
+       * 0.428 of the install, not 42 % of the bar's width. */
+      float expected = 0.05f + (0.95f - 0.05f) * (float)(percents[i] / 100.0);
+      float value = [values[i] floatValue];
+      TAssertTrue(testNearly(value, expected),
+                  @"%.1f %% should map to %f, got %f",
+                  percents[i], expected, value);
+      TAssertTrue(value >= previous,
+                  @"Progress should never move backwards (%f after %f)",
+                  value, previous);
+      previous = value;
+    }
+
+  TAssertEqualObjects([mock progressCalls][0][@"message"],
+                      @"Downloading AppImage...",
+                      @"The report should carry the phase text");
+  return YES;
+}
+
++ (BOOL)testMeterUpdatesSplitAcrossChunks
+{
+  /* curl writes whenever it feels like it, so an update is routinely cut in
+   * half: three byte chunks split "42.0%" in the middle of the number. */
+  NSMutableString *stream = [NSMutableString string];
+  double percents[] = {0.0, 12.5, 42.0, 99.9, 100.0};
+  size_t count = sizeof(percents) / sizeof(percents[0]);
+  for (size_t i = 0; i < count; i++)
+    [stream appendString:[self updateForPercent:percents[i]]];
+  [stream appendString:@"\n"];
+
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  NSData *data = [stream dataUsingEncoding:NSUTF8StringEncoding];
+  const NSUInteger step = 3;
+  for (NSUInteger offset = 0; offset < [data length]; offset += step)
+    {
+      NSUInteger length = MIN(step, [data length] - offset);
+      [reader ingestData:[data subdataWithRange:NSMakeRange(offset, length)]];
+    }
+  [reader finish];
+
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  TAssertTrue([values count] == (NSUInteger)count,
+              @"A meter split across chunks should still yield every update, "
+              @"got %lu", (unsigned long)[values count]);
+  for (size_t i = 0; i < count; i++)
+    {
+      float expected = 0.05f + (0.95f - 0.05f) * (float)(percents[i] / 100.0);
+      TAssertTrue(testNearly([values[i] floatValue], expected),
+                  @"Update %lu mapped to %f instead of %f",
+                  (unsigned long)i, [values[i] floatValue], expected);
+    }
+  return YES;
+}
+
++ (BOOL)testSpinnerAndTextAreNotProgress
+{
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  /* A transfer whose size the server never declared draws a spinner instead
+   * of a percent: nothing is measurable, so nothing may be reported. */
+  NSArray<NSString *> *noise = @[
+    @"\r#=#=#                       ",
+    @"\r##O#-#                   ",
+    @"\rcurl: (22) The requested URL returned error: 404\n",
+    @"\rTotal 42%\n",             /* a percent in prose is not a meter */
+    @"a tail with no separator at all",
+  ];
+  for (NSString *text in noise)
+    [reader ingestData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader ingestData:[NSData data]];
+  [reader finish];
+
+  TAssertTrue([mock.progressCalls count] == 0,
+              @"Nothing measurable should report nothing, got %lu reports",
+              (unsigned long)[mock.progressCalls count]);
+  return YES;
+}
+
++ (BOOL)testCurlTextLinesAreForwarded
+{
+  /* The stream is one thing to curl: the meter it draws, and the words it
+   * writes when something goes wrong. Those words are the only place the
+   * reason for a failure exists, so they have to come out the other end as
+   * lines while the meter stays progress. */
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  NSMutableString *stream = [NSMutableString string];
+  [stream appendString:[self updateForPercent:42.0]];
+  [stream appendString:@"\r#=#=#                       "];
+  [stream appendString:@"\rcurl: (22) The requested URL returned error: 403\n"];
+  [stream appendString:[self updateForPercent:100.0]];
+  [stream appendString:@"\n"];
+
+  [reader ingestData:[stream dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader finish];
+
+  TAssertTrue([[mock progressCalls] count] == 2,
+              @"The two meter updates should still be the only reports, got %lu",
+              (unsigned long)[[mock progressCalls] count]);
+  TAssertTrue([[mock outputLines] count] == 1,
+              @"The spinner is a picture and the meter is progress, so only "
+              @"curl's own line should come through, got %lu",
+              (unsigned long)[[mock outputLines] count]);
+  TAssertEqualObjects([mock outputLines][0],
+                      @"curl: (22) The requested URL returned error: 403",
+                      @"The line should arrive as curl wrote it, got %s",
+                      [[mock outputLines][0] UTF8String]);
+  return YES;
+}
+
++ (BOOL)testOutputLineSplitsTextFromMeterGlyphs
+{
+  /* The rule behind the forwarding: words come through, the meter's own
+   * no-percent drawing does not, and whitespace is not part of the line. */
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@""],
+             @"An empty segment has nothing to say");
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@"   \n"],
+             @"A blank segment has nothing to say");
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@"#=#=#"],
+             @"A spinner is a picture, not a line of text");
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@"  # #-=O#-  #"],
+             @"A spinner with a glyph face in it is still a picture");
+  TAssertEqualObjects(
+      [GWCurlMeterReader outputLineForSegment:
+          @"  curl: (6) Could not resolve host: github.com  "],
+      @"curl: (6) Could not resolve host: github.com",
+      @"Text should come through trimmed, got %s",
+      [[GWCurlMeterReader outputLineForSegment:
+          @"  curl: (6) Could not resolve host: github.com  "] UTF8String]);
+  TAssertEqualObjects(
+      [GWCurlMeterReader outputLineForSegment:@"Total 42%"],
+      @"Total 42%",
+      @"A percent in prose is text, not a meter update");
+  return YES;
+}
+
++ (BOOL)testStderrPipeLinesAreForwarded
+{
+  /* The release lookup has no meter to read, so its stderr goes through the
+   * class entry point instead - including a line cut in half by a write. */
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  NSPipe *pipe = [NSPipe pipe];
+  NSFileHandle *writer = [pipe fileHandleForWriting];
+  [writer writeData:[@"curl: (22) The requested URL retur"
+                     dataUsingEncoding:NSUTF8StringEncoding]];
+  [writer writeData:[@"ned error: 403\n#=#=#\n"
+                     dataUsingEncoding:NSUTF8StringEncoding]];
+  [writer closeFile];
+
+  [GWCurlMeterReader forwardStderrOfPipe:pipe toProgress:mock];
+
+  TAssertTrue([[mock outputLines] count] == 1,
+              @"A line split across writes should arrive once, and the "
+              @"spinner after it not at all, got %lu: %s",
+              (unsigned long)[[mock outputLines] count],
+              [[[mock outputLines] componentsJoinedByString:@" | "] UTF8String]);
+  TAssertEqualObjects([mock outputLines][0],
+                      @"curl: (22) The requested URL returned error: 403",
+                      @"The line should be reassembled, got %s",
+                      [[mock outputLines][0] UTF8String]);
+  TAssertTrue([[mock progressCalls] count] == 0,
+              @"A silent curl has no meter to report, got %lu reports",
+              (unsigned long)[[mock progressCalls] count]);
+  return YES;
+}
+
++ (BOOL)testWholePercentThrottle
+{
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  /* The meter ticks faster than a bar moves: two updates in the same whole
+   * percent are one report. A retry that restarts the transfer does move
+   * the bar, so it is reported again. */
+  for (NSString *percent in @[@"42.0", @"42.9", @"43.0", @"42.0"])
+    [reader ingestData:[[NSString stringWithFormat:@"\r#### %@%%", percent]
+                        dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader finish];
+
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  TAssertTrue([values count] == 3,
+              @"One report per whole percent, got %lu",
+              (unsigned long)[values count]);
+  TAssertTrue(testNearly([values[0] floatValue], 0.05f + 0.9f * 0.42f),
+              @"First report at 42 %%, got %f", [values[0] floatValue]);
+  TAssertTrue(testNearly([values[1] floatValue], 0.05f + 0.9f * 0.43f),
+              @"43 %% should be reported, got %f", [values[1] floatValue]);
+  TAssertTrue(testNearly([values[2] floatValue], 0.05f + 0.9f * 0.42f),
+              @"A retry should move the bar back, got %f", [values[2] floatValue]);
+  return YES;
+}
+
++ (BOOL)testFinishReportsAnUnterminatedUpdate
+{
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  [reader ingestData:[@"\r#### 77.0%" dataUsingEncoding:NSUTF8StringEncoding]];
+  TAssertTrue([mock.progressCalls count] == 0,
+              @"An update is only complete once its carriage return arrived");
+
+  [reader finish];
+  TAssertTrue([mock.progressCalls count] == 1,
+              @"The last update of the stream should be reported, got %lu",
+              (unsigned long)[mock.progressCalls count]);
+  TAssertTrue(testNearly([mock.progressCalls[0][@"progress"] floatValue],
+                         0.05f + 0.9f * 0.77f),
+              @"77 %% should map to %f, got %f",
+              0.05f + 0.9f * 0.77f,
+              [mock.progressCalls[0][@"progress"] floatValue]);
+  return YES;
+}
+
++ (BOOL)testDownloadReportsCurlProgress
+{
+  NSString *source = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"gw_meter_%@.bin", [[NSUUID UUID] UUIDString]]];
+  NSString *dest = [source stringByAppendingString:@".out"];
+  NSMutableData *payload = [NSMutableData data];
+  NSData *line = [@"0123456789abcdef" dataUsingEncoding:NSUTF8StringEncoding];
+  while ([payload length] < 400000)
+    [payload appendData:line];
+  if (![payload writeToFile:source atomically:YES])
+    {
+      TAssertTrue(NO, @"The fixture file should be writable");
+      return NO;
+    }
+
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWAppImageDownloader *downloader = [[GWAppImageDownloader alloc] init];
+  NSError *error = nil;
+  BOOL ok = [downloader _downloadURL:[@"file://" stringByAppendingString:source]
+                              toPath:dest
+                            progress:mock
+                               error:&error];
+
+  unsigned long long size = ok
+      ? [[[NSFileManager defaultManager] attributesOfItemAtPath:dest
+                                                        error:NULL] fileSize]
+      : 0;
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  BOOL ordered = YES;
+  float previous = -1.0f;
+  for (NSNumber *value in values)
+    {
+      if ([value floatValue] < previous)
+        ordered = NO;
+      previous = [value floatValue];
+    }
+  float last = ([values count] > 0) ? [values lastObject].floatValue : -1.0f;
+
+  [[NSFileManager defaultManager] removeItemAtPath:source error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:dest error:NULL];
+
+  TAssertTrue(ok, @"A file:// download should succeed (%@)",
+              [error localizedDescription]);
+  TAssertTrue(size == (unsigned long long)[payload length],
+              @"The bytes on disk should match what curl was given");
+  TAssertTrue([values count] >= 1,
+              @"The run should start by saying nothing is measurable yet");
+  TAssertTrue(testNearly([values[0] floatValue], -1.0f),
+              @"The first report should be the indeterminate one, got %f",
+              [values[0] floatValue]);
+  TAssertTrue(ordered, @"Progress should never move backwards");
+  if ([values count] > 1)
+    {
+      /* A transfer curl could measure must end where the download's slice of
+       * the run ends - this is the number the button draws. */
+      TAssertTrue(testNearly(last, 0.95f),
+                  @"A finished transfer should end at 0.95, got %f", last);
+      for (NSNumber *value in values)
+        {
+          if ([value floatValue] < 0.0f)
+            continue;   /* the indeterminate report that opens the run */
+          TAssertTrue([value floatValue] >= 0.0499f
+                      && [value floatValue] <= 0.9501f,
+                      @"Every byte report belongs to the download's slice, got %f",
+                      [value floatValue]);
+        }
+    }
+  return YES;
+}
+
++ (BOOL)testDownloadForwardsCurlFailure
+{
+  /* End to end: the download's own failure text, which is the evidence the
+   * caller rewrites its error from, has to arrive at the handler. */
+  NSString *missing = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"gw_absent_%@.AppImage",
+        [[NSUUID UUID] UUIDString]]];
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWAppImageDownloader *downloader = [[GWAppImageDownloader alloc] init];
+  NSError *error = nil;
+  BOOL ok = [downloader _downloadURL:[@"file://" stringByAppendingString:missing]
+                              toPath:[missing stringByAppendingString:@".out"]
+                            progress:mock
+                               error:&error];
+
+  NSArray<NSString *> *lines = [mock outputLines];
+  TAssertFalse(ok, @"A file:// URL that is not there should fail the download");
+  TAssertNotNil(error, @"The failure should be reported as an error");
+  TAssertTrue([lines count] >= 1,
+              @"curl's own reason for failing should reach the handler, got %lu",
+              (unsigned long)[lines count]);
+  if ([lines count] > 0)
+    TAssertTrue([lines[0] hasPrefix:@"curl:"],
+                @"The handler should see curl's line verbatim, got \"%s\"",
+                [lines[0] UTF8String]);
+  return YES;
+}
+
+@end
+
 @interface TestRunner : NSObject
 + (int)runAllTests;
 @end
@@ -1594,6 +2024,41 @@ static void runTest(NSString *name, BOOL (^block)(void))
   runTest(@"testDistroMappingForKnownFamilies", ^{
     return [GWHeaderDatabaseTestHelper testDistroMappingForKnownFamilies];
   });
+
+  // --- AppImage download progress (curl's meter) ---
+  runTest(@"testMeterUpdatesBecomeFractions", ^{
+    return [GWCurlMeterTestHelper testMeterUpdatesBecomeFractions];
+  });
+  runTest(@"testMeterUpdatesSplitAcrossChunks", ^{
+    return [GWCurlMeterTestHelper testMeterUpdatesSplitAcrossChunks];
+  });
+  runTest(@"testSpinnerAndTextAreNotProgress", ^{
+    return [GWCurlMeterTestHelper testSpinnerAndTextAreNotProgress];
+  });
+  runTest(@"testCurlTextLinesAreForwarded", ^{
+    return [GWCurlMeterTestHelper testCurlTextLinesAreForwarded];
+  });
+  runTest(@"testOutputLineSplitsTextFromMeterGlyphs", ^{
+    return [GWCurlMeterTestHelper testOutputLineSplitsTextFromMeterGlyphs];
+  });
+  runTest(@"testStderrPipeLinesAreForwarded", ^{
+    return [GWCurlMeterTestHelper testStderrPipeLinesAreForwarded];
+  });
+  runTest(@"testWholePercentThrottle", ^{
+    return [GWCurlMeterTestHelper testWholePercentThrottle];
+  });
+  runTest(@"testFinishReportsAnUnterminatedUpdate", ^{
+    return [GWCurlMeterTestHelper testFinishReportsAnUnterminatedUpdate];
+  });
+  runTest(@"testDownloadReportsCurlProgress", ^{
+    return [GWCurlMeterTestHelper testDownloadReportsCurlProgress];
+  });
+  runTest(@"testDownloadForwardsCurlFailure", ^{
+    return [GWCurlMeterTestHelper testDownloadForwardsCurlFailure];
+  });
+
+  // --- AppImage asset picking (real releases, see the file's header) ---
+  AGRegisterAppImageAssetPickerTests();
 
   return (failCount == 0) ? 0 : 1;
 }

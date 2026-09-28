@@ -8,8 +8,9 @@
 
 @class AGApp;
 
-// The parsed feed: every item in display order, the categories it uses, and
-// when the document was fetched (the cache banner shows that date).
+// The parsed feed: every item in display order (the canonical order; the
+// Discover page shuffles it, see AGDiscoverOrder), the categories it uses,
+// and when the document was fetched (the cache banner shows that date).
 @interface AGCatalog : NSObject
 
 @property (nonatomic, copy, readonly) NSArray<AGApp *> *apps;         // sorted by displayName

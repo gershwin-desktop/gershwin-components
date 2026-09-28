@@ -35,12 +35,26 @@ assert exists "Apache NetBeans"
 assert not exists "QOwnNotes"
 
 # Escape clears the search (the search field's own behavior), which brings
-# every card back: 4KWALL sorts first, so it is on screen again (cards below
-# the viewport do not exist in the tree, so a later name would never match).
+# the whole catalog back. Discover is in a random order, so no single name
+# can be waited for: with 15 fixture entries any one of them may sit below
+# the viewport, and cards outside it are not in the tree at all. The
+# language has no widget-count assertion, so the cards are counted from the
+# tree instead - more than one card is what the filtered page denied.
 # Then real Cmd+Q key events (not the menu path) so the shortcut binding
 # itself is what gets tested.
+#
+# No double quotes inside the shell string: the parser takes the first
+# "..." as the command and does not understand a backslash before its
+# closing quote, so an escaped quote silently truncates the command to
+# "test \", which passes for any grid at all. The command substitution
+# yields a bare number, so it needs no quoting.
+#
+# The pid is looked up under the harness's own user, never by a bare
+# process name: a second AppGarden under another account (the logged-in
+# desktop's own) would otherwise be found first and asked for a tree it
+# cannot give, and the count would read 0 on every run.
 press key "Escape"
-wait until "4KWALL" timeout 10s
+shell "test $(drive_ui --pid $(pgrep -u $(id -un) -x AppGarden | head -1) get_full_tree | grep -c AGAppCardView) -gt 1"
 press key "Cmd+Q"
 wait until not exists application "AppGarden" timeout 15s
 assert not exists application "AppGarden"

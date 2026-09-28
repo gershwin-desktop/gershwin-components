@@ -153,8 +153,10 @@ In this order. They define the idioms you must match.
 | --- | --- |
 | `AGENTS.md` (repo root) | Build/install commands, layout, conventions. |
 | `FEED.md` (this directory) | The data. Every irregularity your parser must survive. |
+| `DOWNLOADS.md` (this directory) | How a Get works out which release and which file inside it to fetch: the rules, why each exists, the real releases each was written for, and what was wrong before. |
+| `PackageManager/GWAppImageAssetPicker.h/.m` | The rules that choose one AppImage out of one release's asset names. Foundation-only, with no network, so the same rules the catalog's own site uses (AppImage/appimage.github.io, `code/find-appimage.sh`) can be tested against real release names. You never call it; the downloader does. |
 | `Fixtures/feed-sample.json` | The unit-test input. |
-| `PackageManager/GWAppImageDownloader.h/.m` | How an AppImage is downloaded into the user's Applications folder and how a GitHub release asset is picked for the current CPU architecture. You call this; you do not reimplement it. |
+| `PackageManager/GWAppImageDownloader.h/.m` | How an AppImage is downloaded into the user's Applications folder and which GitHub release and which file inside it are used for this machine. You call this; you do not reimplement it. |
 | `PackageManager/GWPackageManager.h` | `GWInstallProgressHandler` protocol (`installDidProgress:message:`, `installDidOutputLine:`) that the downloader reports through. |
 | `SoftwareUpdate/GNUmakefile` | How an app in this repo links `PackageManager.framework` (include path, `-L`, `-rpath`), enables ARC, sets warnings. Your GNUmakefile is modeled on it. |
 | `SoftwareUpdate/Controllers/SWMainWindowController.m` | A fully code-built window controller in this repo using `AppearanceMetrics.h`. |
@@ -175,16 +177,17 @@ skill mentioned in the user's global rules if it is listed.
 ## 3. What the app does
 
 A user opens AppGarden from the Applications folder or the Dock. A single
-window appears: a sidebar on the left with "Discover", "Installed" and a list
-of categories; a large content area on the right showing a grid of
+window appears: a sidebar on the left with "Discover", "Downloaded" and a
+list of categories; a large content area on the right showing a grid of
 application cards (icon, name, one-line description, Get button). A search
 field sits at the top right of the content area. Typing filters the grid as
-you type.
+you type. Discover shows the whole catalog in a random order, and keeps
+that order for as long as the catalog is loaded.
 
 Clicking a card opens the detail page in the same content area: big icon,
 name, author, category, license, a Get button, the screenshot, the full
 description, and links to the project on GitHub and to its page on
-appimage.github.io. A Back button at the top left returns to the grid.
+appimage.github.io. A back arrow at the top left returns to the grid.
 
 Clicking Get on a card or on the detail page downloads the AppImage into the
 user's Applications folder. The button turns into a progress bar while the
@@ -228,6 +231,7 @@ Views.
         AGSearchIndex.h/.m           filter items by query and category, ranking
         AGDownloadResolver.h/.m      AGApp -> how to obtain the AppImage (enum + payload), pure logic
         AGGridLayout.h/.m            pure geometry for the card grid (columns, frames), no AppKit
+        AGDiscoverOrder.h/.m         the random order Discover lists the catalog in, no AppKit
       Services/
         AGFeedLoader.h/.m            fetch feed.json with curl, conditional GET, cache file
         AGImageCache.h/.m            async icon/screenshot loading, memory + disk cache
@@ -324,7 +328,7 @@ Derivation rules (test each in `t_AGFeedParser`):
 
 ### AGCatalog
 
-    @property (readonly) NSArray<AGApp *> *apps;        // sorted by displayName, case-insensitive, localized
+    @property (readonly) NSArray<AGApp *> *apps;        // sorted by displayName, case-insensitive, localized (the canonical order; the Discover page shuffles it, see AGDiscoverOrder)
     @property (readonly) NSArray<NSString *> *categories; // distinct, ordered by AGCategoryNames
     @property (readonly) NSDate *fetchDate;               // when this data was downloaded
     - (AGApp *)appNamed:(NSString *)name;
@@ -376,15 +380,36 @@ diacritic-insensitive, `NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch`)
 in `displayName`, `descriptionText`, `categories` display names or any author
 name. Ranking: name prefix match first, then name contains, then description
 matches; ties by `displayName`. An empty query returns the category's apps in
-catalog order. Must handle 1551 items without noticeable delay on each
+catalog order. Search results are therefore alphabetical within their rank and
+never follow Discover's shuffle: a typed query is a question with an answer, not a
+browse. Must handle 1551 items without noticeable delay on each
 keystroke; a linear scan with `rangeOfString:` is fast enough, measure once
 with a quick timing test tool and note the number in the PR text.
+
+### AGDiscoverOrder
+
+    + (NSArray *)shuffled:(NSArray *)apps;
+
+Foundation only, so the permutation can be pinned down without a window
+(`Tests/Unit/t_AGDiscoverOrder.m`). Returns a copy of `apps` in random order:
+the same elements, each exactly once, never nil (`nil` in gives an empty list
+out). Untyped, so a test can shuffle anything.
+
+The window controller calls this once per catalog, in `catalogDidLoad:`, and
+holds the result in `_discoverApps`. That placement is the whole point: a page
+that reshuffles on every repopulate moves the cards under the user, resets the
+scroll offset and drops the focused card, because `AGAppGridView -setApps:`
+treats any changed array as a new list. Only Discover is shuffled. A category
+page and the Downloaded list are lists of things the user went looking for and
+keep the catalog's alphabetical order, which is a fact about the apps rather
+than an arrangement of them.
 
 ### AGDownloadResolver
 
 Pure function of an `AGApp` and the current architecture string (`x86_64` or
-`aarch64`, obtained from `uname -m` via `NSTask` once at startup in
-`AGInstaller`, passed in for testability):
+`aarch64`, obtained from `uname(2)` through `<sys/utsname.h>` - not `NSTask` -
+falling back to `"unknown"`, once at startup in `AGInstaller`, passed in for
+testability):
 
     typedef NS_ENUM(NSInteger, AGDownloadKind) {
         AGDownloadKindGitHubLatestRelease, // payload: githubRepo
@@ -394,9 +419,22 @@ Pure function of an `AGApp` and the current architecture string (`x86_64` or
     };
     + (AGDownloadKind)kindForApp:(AGApp *)app payload:(id *)payload;
 
+The resolver decides **where an application comes from**, never which file.
+It never looks at a release: `GitHubLatestRelease` is a promise to ask the
+framework, and the rules for choosing a release and a file inside it live
+there (section 8, "Which release, and which file in it"). The name
+`GitHubLatestRelease` is historical - "latest" now means the newest release
+that actually ships an AppImage, preferring the newest that is not a
+pre-release.
+
 Rules, in order:
 
-1. `githubRepo` present -> `GitHubLatestRelease`.
+1. `githubRepo` present -> `GitHubLatestRelease`. The payload is the repo
+   only, but `AGInstaller` also hands the downloader the app's name, because
+   one release can hold AppImages of several different programs and the
+   catalog's name for the app is what tells them apart (FreeCAD's repository
+   is `FreeCAD` while the catalog calls it `FreeCAD2`; Obsidian's is
+   `obsidian-releases`).
 2. `downloadPageURL` ends with `.AppImage` (case-insensitive) -> `DirectURL`.
 3. `downloadPageURL` ends with `.AppImage.mirrorlist` -> `DirectURL` with
    the `.mirrorlist` suffix removed (openSUSE serves the file at that URL; if
@@ -498,8 +536,10 @@ URLs the parser already built. Never rewrite them to
 `raw.githubusercontent.com`, never fetch anything from `api.github.com`
 while browsing, never fetch a project's own README or website for text.
 Descriptions come from `feed.json`, which is served by the same host. The
-one and only GitHub API request AppGarden ever causes is the release lookup
-inside `GWAppImageDownloader` when the user clicks Get.
+AppGarden causes no GitHub API request at all, not even when the user clicks
+Get: the release lookup inside `GWAppImageDownloader` reads github.com's own
+web pages, because the API's 60 anonymous requests per hour are what once
+made every Get fail with 403 for the rest of the hour.
 
 Do not preload all 1300 icons at startup. Cards request their icon when they
 are laid out visible (`AGAppGridView` asks the cache for the icons of the
@@ -529,6 +569,98 @@ the installed app is not registered, do not work around it in AppGarden
 the user with the evidence, proposing either that `make_services` scans that
 directory too or that `launcherPathForAppName:` moves to `~/Applications`.
 That decision changes PackageManager and is the user's to make.
+
+### Which release, and which file in it
+
+Two decisions, and they are two different ones, both inside the framework and
+both behind a single instance method. AppGarden supplies only the repository
+(`AGDownloadResolver`) and the app's name (`AGInstaller`). The rules are not to
+be copied into AppGarden; that is the case the "you call this, you do not
+reimplement it" rule of section 1 was written for.
+
+**Which release.** `+preferredTagForRepo:progress:` picks the newest release
+that is neither a draft nor a pre-release *and* does hold an AppImage, and
+failing that the newest that holds one, pre-release or not. Both halves earn
+their place on real projects: Obsidian's newest release is a mobile-only
+`.apk`, so a release merely having to exist is not enough, and qTox publishes
+only pre-releases, so one has to be accepted when nothing else is on offer.
+The walk back reads at most six entries of `releases.atom`
+(`kGWMaxReleasesToWalk`), because a project that has stopped shipping
+AppImages in its last six releases is not helped by a seventh request.
+
+- The tag comes from each Atom entry's own `href=".../releases/tag/TAG"`, never
+  from its `<title>`: the two disagree in both directions. Obsidian titles
+  `v1.13.7` "1.13.7" with no v, AppFlowy titles `0.14.5` "v0.14.5" with one.
+- Redirects are followed with `-L` on every request, and the
+  `releases/latest` probe keeps the **last** `location:` that carries
+  `/releases/tag/`. This is what makes a renamed repository work:
+  `ipfs-shipyard/ipfs-desktop` became `ipfs/ipfs-desktop`, and the first
+  `location:` of a renamed repository still ends in `/releases/latest` and
+  names no tag, which is exactly how "GitHub release lookup failed" came up
+  for an app that downloads perfectly well. Two of the eleven repositories
+  measured on 2026-09-28 were renamed.
+- A tag containing a slash is percent-encoded with
+  `stringByAddingPercentEncodingWithAllowedCharacters:` before it goes into
+  the path, which is how janhq/jan's `checkpoint/code-ui-...` tag is spelled.
+
+**Which file.** `GWAppImageAssetPicker` answers it, with no network of its own
+so that the rules can be tested against real release names. Five rules in
+order, each a no-op unless it keeps a *strict subset* - which is what lets an
+arm-only release pass through the "prefer x86-64" step untouched:
+
+1. Keep only names **ending** in `.appimage`, case-insensitive. A
+   checksum, `.zsync` or `.blockmap` file *contains* ".AppImage" and is about
+   a hundred kilobytes; AppImageUpdate's release has twelve of them, and
+   digiKam's file is lower case.
+2. Drop the other architectures, matched on word boundaries so that the "arm"
+   in "Armour" and the "64" in "macOS10" do not count. **This is the rule
+   that does most of the work**: a release that also ships an arm build puts
+   it first, and often uploads it first too. Obsidian 1.13.7 lists
+   `Obsidian-1.13.7-arm64.AppImage` before `Obsidian-1.13.7.AppImage` and
+   uploads it five seconds earlier, and the old "first name mentioning
+   x86_64" rule found neither and fell back to the first AppImage - the arm
+   binary, on an x86-64 machine.
+3. Prefer the x86-64 spellings: `x86_64`, `x86-64`, `amd64`, `x64`,
+   `linux64`, `64bit`. The catalog uses six of them, and the old code knew
+   two.
+4. Drop `debug`, `dbg`, `test`, `nightly` and `symbols`, from the **asset
+   name only**. qTox's entire repository is called
+   `qTox-nightly-releases` and its only usable AppImage is a nightly build, so
+   a rule that looked at the repository, the tag or the URL would delete it
+   from the catalog.
+5. Prefer the asset whose name *skeleton* equals the app name's skeleton
+   (`+stemForAssetName:`): lowercased, without the extension, a 7-to-40-digit
+   hex git hash, `x86_64`/`x86-64`/`amd64`/`x64`/`linux64`/`linux`/`glibc`, or
+   any digits. That is what tells three different programs in one release
+   apart - AppImageUpdate's holds `AppImageUpdate`, `appimageupdatetool` and
+   `validate`, for four architectures each, so picking the right x86-64 file
+   still leaves the wrong program to choose.
+
+Several left with the **same** skeleton are taken in name order: 4KWALL ships
+`4kWall-2026.9.5-x86_64.AppImage` and `4kWall-x86_64.AppImage`, which are the
+same bytes with the same upload time, and the catalog's own script refuses
+that case, which would break an app that demonstrably works. Several left
+with **different** skeletons are reported as `GWAppImagePickAmbiguous` rather
+than guessed at, because either could be a different program.
+
+This is a transliteration of the catalog's `code/find-appimage.sh` on purpose:
+so that "the AppImage of this release" means in AppGarden what it means on
+appimage.github.io, and a difference between the two is a bug in one of them
+rather than a surprise for the user.
+
+What the user is told when the picker refuses, which are new strings and the
+only user-facing text this adds:
+
+- `No release of <repo> has an AppImage`
+- `No release of <repo> has an AppImage for this machine`
+- `The newest release of <repo> has several AppImages and none of them is
+  clearly the right one for this machine: <the names>`
+
+The last one is the single case where the user may want to fetch a file by
+hand, which is why it names the candidates instead of saying "failed". These
+come from the framework, so they are English only; nothing in the app
+localizes them.
+
 
 ### AGInstaller
 
@@ -562,10 +694,18 @@ That decision changes PackageManager and is the user's to make.
   4. On success: add to registry, state `Installed`, notification. On error:
      state `Failed`, `task.error` set, notification; the button shows "Failed"
      with the error as tooltip and clicking it shows the error in an `NSAlert`
-     with a "Try Again" button.
-- GitHub's unauthenticated API allows 60 requests per hour per IP. The
-  downloader makes one API call per install, and AppGarden makes none while
-  browsing. Never call the GitHub API to decorate the catalog (no star counts,
+     with a "Try Again" button. The text is the framework's own, which now
+     usually says what went wrong rather than only which step failed (the three
+     messages at the end of "Which release, and which file in it"). Do not
+     replace those with a generic catch-all: they are what makes a refusal
+     legible, and one of them names the files the user could fetch by hand.
+- No GitHub API request is made, by the app or by the downloader: the
+  downloader follows the `releases/latest` redirect chain with `curl -fsSIL`
+  and then reads the Atom feed and the expanded-assets page. A Get costs two
+  requests when the newest non-prerelease already holds an AppImage, and up to
+  eight when it has to walk back through older releases. AppGarden itself
+  makes none while browsing. Never call the GitHub API to decorate the
+  catalog (no star counts,
   no release dates, no asset sizes). When the API answers 403 the downloader
   reports an error; make sure its text says "GitHub rate limit" when curl's
   output contains `rate limit` so the user understands (extend the error text
@@ -671,14 +811,12 @@ A container `NSView` owned by `AGMainWindowController` with three layers:
    `NSViewController` subclasses whose `view` is sized to the page area and
    autoresizes with it.
 
-Navigation stack: an `NSMutableArray` of view controllers. Sidebar clicks
-replace the whole stack with one grid page. A card click pushes a detail
-page. Back pops. Typing in the search field replaces the stack with a search
-grid page for the query in the currently selected category (or all when
-"Discover"/"Installed" is selected: "Installed" plus a query searches the
-installed set). Clearing the search returns to the sidebar selection's page.
-The sidebar selection stays visible while a search page is shown, so the
-user sees the scope of the search.
+Navigation stack: an `NSMutableArray` of view controllers, typed
+`NSViewController<AGPage> *`. `AGPage` is a marker protocol and nothing more:
+pages carry no title, because the top bar shows none and
+`NSViewController`'s own `title` would be copied onto the window, which is
+meant to stay "AppGarden".
+
 
 ### Grid page (`AGGridViewController` + `AGAppGridView` + `AGAppCardView`)
 
@@ -973,8 +1111,25 @@ Tools and what they must assert (minimum):
 `t_AGInstallRegistry`
 - Uses a temporary directory (set via an init parameter), round-trips one entry, drops an entry whose file does not exist on `reconcile`.
 
+`t_AGDiscoverOrder`
+- `nil` in gives an empty list out, never nil; an empty list stays empty; a single app stays itself.
+- 500 apps in, 500 out, and the multiset is unchanged (counted, so a lost or duplicated app fails).
+- The order is actually random, which a rotation or a sort with a fixed key would fail: the first and the last entry of 40 shuffles of a 40-entry list each vary, and two apps swap within 40 shuffles.
+- Two shuffles of the same 500 apps are not equal, so the order differs between launches.
+- The caller's array is left in its own order.
+
 `t_AGFeedLoader`
 - Runs against `file://` URLs? `curl` supports `file://`, so point `AGFeedURL` at the fixture through a temporary cache dir: first load fetches (fromCache NO), second load within max age does not touch the network (assert by pointing the URL at a nonexistent file the second time: it must still succeed from cache). A broken JSON at the URL with a good cache: completion gets the cached catalog AND an error.
+
+The rules that choose which file of a release to download are not tested
+here: they live in the framework, and are covered by
+`PackageManager/Tests/AGAppImageAssetPickerTests.m` - 18 cases over real
+releases from the live catalog, `#include`d into
+`PackageManager/Tests/PackageManagerTest.m` rather than listed in its
+`OBJC_FILES` (the `TAssert` macros expand to a `return NO`, so the cases have
+to be compiled into a file that owns the runner). Run them with
+`cd PackageManager && gmake test`.
+
 
 Run all with `gnustep-tests AppGarden/Tests/Unit` (not the binaries alone),
 report the PASS/FAIL counts. Every test must pass before the UI work starts.
@@ -985,6 +1140,142 @@ report the PASS/FAIL counts. Every test must pass before the UI work starts.
   search field, assert a card titled "Apache NetBeans" exists in the tree,
   press Escape, quit with Cmd+Q. Point `AGFeedURL` at the fixture via the
   test user's defaults so the test does not need the network.
+
+
+  No assertion may name a card that Discover happens to show first: Discover
+  is shuffled, so no name is ever in a known place. After Escape the test
+  counts `AGAppCardView` rows in the tree through `drive_ui` and requires more
+  than one, which is exactly what the filtered page denied and does not depend
+  on the order. The uitest language has no widget-count verb, so this is a
+  `shell` step whose exit status carries the result. Two traps in that step, both
+  found by running a version with the threshold raised so it had to fail: a
+  double quote inside the string truncates the command to `test \`, which
+  passes for any grid (the parser takes the first `"..."` and does not
+  understand a backslash before its closing quote), and the pid must be looked
+  up under `pgrep -u $(id -un)`, because a bare process name finds another
+  account's AppGarden first and the count then reads 0 on every run. Verify
+  any change to that step by raising the threshold and watching it fail.
+
+---------------------------------------------------------------------------
+
+## 14. Acceptance checklist
+
+Do not report done until every line is true and you have the evidence.
+
+- [ ] `gmake clean && gmake` in `AppGarden/` prints zero warnings.
+- [ ] `gnustep-tests AppGarden/Tests/Unit` reports all PASS, no FAIL, no
+      "No tests found".
+- [ ] Installed to SYSTEM only; `/Local` untouched (show the `ls`).
+- [ ] Cold start with no cache: spinner, then grid within a few seconds on
+      a normal connection; second start shows the grid immediately from
+      cache (measure with a stopwatch or DriveUI timing and state it).
+- [ ] Scrolling the full Discover grid (1500+ cards) is smooth; process
+      memory stays under 150 MB after scrolling to the end (`ps -o rss`).
+- [ ] Search filters on each keystroke without lag.
+- [ ] Discover is not in alphabetical order, its order is stable while the
+      user browses and searches it, and it differs between two launches.
+      Category and Downloaded pages are alphabetical.
+- [ ] The top bar holds only the back arrow and the search field: no page
+      title between them, and the arrow is an icon with the tooltip "Back"
+      that is hidden on the root page. Screenshot the bar on a detail page.
+- [ ] Discover is not in alphabetical order, its order is stable while the
+      user browses and searches it, and it differs between two launches.
+      Category and Downloaded pages are alphabetical.
+- [ ] The top bar holds only the back arrow and the search field: no page
+      title between them, and the arrow is an icon with the tooltip "Back"
+      that is hidden on the root page. Screenshot the bar on a detail page.
+
+- [ ] Every sidebar category shows its count and its apps.
+- [ ] Detail page for `4KWALL`: icon, author link, "Proprietary" license as
+      a link, screenshot, description, information rows, "View on
+      appimage.github.io" opens the browser.
+- [ ] Detail page for `86Box`: "The publisher did not provide a
+      description." and "Unknown license". Detail page for `Addaps`:
+      placeholder icon with "A", no screenshot view, button "Unavailable".
+- [ ] Get on a small app (`DDCal` or another small GitHub-released one)
+      downloads, the button shows progress then "Open", "Open" starts the app
+- [ ] Get on an app whose newest release holds no AppImage (Obsidian's newest
+      is a mobile-only `.apk`) installs from the release that has one; Get on
+      a release holding AppImages of several programs (AppImageUpdate) picks
+      the file matching the catalog's name for the app; Get on a renamed
+      repository (ipfs-desktop) works rather than reporting a lookup failure.
+      Each of these was broken before the release-resolution rewrite.
+      (verify a window appears in the isolated session with DriveUI), the
+      file exists at the path from `launcherPathForAppName:`, `make_services`
+      lists it, the Downloaded page lists it, Remove asks and deletes it.
+- [ ] Get on an app whose newest release holds no AppImage (Obsidian's newest
+      is a mobile-only `.apk`) installs from the release that has one; Get on
+      a release holding AppImages of several programs (AppImageUpdate) picks
+      the file matching the catalog's name for the app; Get on a renamed
+      repository (ipfs-desktop) works rather than reporting a lookup failure.
+      Each of these was broken before the release-resolution rewrite.
+      (verify a window appears in the isolated session with DriveUI), the
+      file exists at the path from `launcherPathForAppName:`, `make_services`
+      lists it, the Downloaded page lists it, Remove asks and deletes it.
+- [ ] Unplug the network (or set `AGFeedURL` to an unreachable host) with a
+      cache present: banner with error and Retry, catalog still browsable.
+      Without cache: error view with Retry.
+- [ ] `QOwnNotes` shows Get and installs from the openSUSE URL on x86_64.
+- [ ] `lux` shows "Open Page" and opens the Bitbucket page.
+- [ ] Window resize from 760 to 1600 wide relayouts the grid columns and the
+      detail page without overlaps or clipped text (DriveUI geometry check
+      or screenshots in the isolated session).
+- [ ] The `.uitest` passes in an isolated slot.
+- [ ] `git status` shows only `AppGarden/`, the top-level `GNUmakefile` line
+      and the `AGENTS.md` sentence. Nothing else staged.
+- [ ] The user has tested on their desktop and said it works.
+
+---------------------------------------------------------------------------
+
+## 15. Things not to do
+
+- Do not use `NSCollectionView`. This repo has no working example of it
+  under the Eau theme and the recycled custom grid is under 400 lines.
+- Do not use `NSURLSession`, `NSURLConnection`, `dispatch_*`, threads via
+  `NSThread` directly. `NSOperationQueue` + `curl` only.
+- Do not add a dependency (no JSON library, no HTTP library, no image
+  library). Foundation, AppKit, PackageManager.framework, curl.
+- Do not call the GitHub API while browsing, and do not fetch icons,
+  screenshots or text from anywhere but `https://appimage.github.io/`
+  (rate limits: GitHub Pages has none that matter, `api.github.com` allows
+  60 anonymous requests per hour, `raw.githubusercontent.com` throttles).
+  The downloader's own lookup stays off `api.github.com` for the same reason:
+  that anonymous quota is what once made every Get fail with 403 for the rest
+  of the hour.
+  The downloader's own lookup stays off `api.github.com` for the same reason:
+  that anonymous quota is what once made every Get fail with 403 for the rest
+  of the hour.
+- Do not write to `~/Applications`, `~/.local`, `/usr`, `~/Downloads`, or
+  create `.desktop` files or symlinks. One file at the path the framework
+  gives you, plus the registry plist and the cache directory.
+- Do not fetch icons for items that are not visible.
+- Do not hide errors. Do not add "fallback" code paths this brief did not
+  name.
+- Do not touch `PackageManager/` or `make_services/`; if you need a change
+  there, stop and ask the user with a proposal.
+- Do not install to LOCAL, do not commit, do not push, unless told.
+- Do not put version numbers, "beta", "AppImageHub", "Mac", "GNUstep" in
+  user-visible text.
+
+---------------------------------------------------------------------------
+
+## 16. Handing over
+
+When everything in section 14 is true:
+
+1. Replace `AppGarden/README.md` with a user-facing README (what it is, a
+   screenshot from the isolated session saved as `Resources/screenshot.png`
+   is welcome but optional, how to build, how to test).
+2. Keep `INSTRUCTIONS.md` and `FEED.md` in the directory as the design
+   record; update `FEED.md` if the live data taught you something new, and
+   `DOWNLOADS.md` if the download resolution changed.
+3. Tell the user, in keywords: what was built, the test counts, the install
+   location, the `make_services` finding from section 8, anything you left
+   out and why, and the one-line `LIBRARY_CONSUMERS` change. Ask whether to
+   commit. Do not commit before that answer.
+4. If you learned something reusable (for example how the recycled grid or
+   the `curl -z` cache behaves in this stack), ask the user whether a skill
+   should be written for it.
 
 ---------------------------------------------------------------------------
 
@@ -1063,7 +1354,8 @@ When everything in section 14 is true:
    screenshot from the isolated session saved as `Resources/screenshot.png`
    is welcome but optional, how to build, how to test).
 2. Keep `INSTRUCTIONS.md` and `FEED.md` in the directory as the design
-   record; update `FEED.md` if the live data taught you something new.
+   record; update `FEED.md` if the live data taught you something new, and
+   `DOWNLOADS.md` if the download resolution changed.
 3. Tell the user, in keywords: what was built, the test counts, the install
    location, the `make_services` finding from section 8, anything you left
    out and why, and the one-line `LIBRARY_CONSUMERS` change. Ask whether to
