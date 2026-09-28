@@ -208,17 +208,24 @@
                                architecture:(NSString *)arch
                                       error:(NSError **)error
 {
-  NSString *api = [NSString stringWithFormat:
-                   @"https://api.github.com/repos/%@/releases/latest", repo];
+  // The web site instead of api.github.com: the API allows 60 anonymous
+  // requests per hour per address, and once a desktop had used them up every
+  // Get in AppGarden and every Software Update check failed with 403 for the
+  // rest of the hour. github.com itself answers releases/latest with a
+  // redirect to the tag page, and releases/expanded_assets/<tag> with the
+  // asset list as plain links; neither is rate limited that way.
+  NSString *latest = [NSString stringWithFormat:
+                      @"https://github.com/%@/releases/latest", repo];
+  NSString *headers = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                       [NSString stringWithFormat:@"gwpm_gh_%@.headers",
+                         [[NSUUID UUID] UUIDString]]];
   NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                   [NSString stringWithFormat:@"gwpm_gh_%@.json",
+                   [NSString stringWithFormat:@"gwpm_gh_%@.html",
                      [[NSUUID UUID] UUIDString]]];
 
   NSTask *t = [[NSTask alloc] init];
   [t setLaunchPath:@"curl"];
-  [t setArguments:@[@"-fL",
-                    @"-H", @"Accept: application/vnd.github+json",
-                    @"-o", tmp, api]];
+  [t setArguments:@[@"-fsSI", @"-o", headers, latest]];
   @try
     {
       [t launch];
@@ -226,7 +233,7 @@
     }
   @catch (NSException *e)
     {
-      NSLog(@"GWAppImageDownloader -> GitHub API request failed: %@", e);
+      NSLog(@"GWAppImageDownloader -> GitHub request failed: %@", e);
       if (error)
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
                                      code:GWPackageManagerErrorCommandFailed
@@ -238,7 +245,26 @@
       return nil;
     }
 
-  if ([t terminationStatus] != 0)
+  NSString *headerText = [NSString stringWithContentsOfFile:headers
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:headers error:NULL];
+  NSString *tagURL = nil;
+  for (NSString *line in [headerText componentsSeparatedByString:@"\n"])
+    {
+      NSRange colon = [line rangeOfString:@":"];
+      if (colon.location == NSNotFound)
+        continue;
+      NSString *field = [[line substringToIndex:colon.location] lowercaseString];
+      if ([field isEqualToString:@"location"])
+        tagURL = [[line substringFromIndex:colon.location + 1]
+                  stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+  // A repository without a release answers releases/latest with the
+  // releases page itself, not a redirect to a tag.
+  NSRange tagRange = [tagURL rangeOfString:@"/releases/tag/"];
+  if ([t terminationStatus] != 0 || tagURL == nil || tagRange.location == NSNotFound)
     {
       if (error)
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
@@ -250,32 +276,67 @@
                                  }];
       return nil;
     }
+  NSString *tag = [tagURL substringFromIndex:NSMaxRange(tagRange)];
+  NSString *assetsPage = [NSString stringWithFormat:
+                          @"https://github.com/%@/releases/expanded_assets/%@",
+                          repo, tag];
 
-  NSData *json = [NSData dataWithContentsOfFile:tmp];
-  if (!json)
+  t = [[NSTask alloc] init];
+  [t setLaunchPath:@"curl"];
+  [t setArguments:@[@"-fsSL", @"-o", tmp, assetsPage]];
+  @try
+    {
+      [t launch];
+      [t waitUntilExit];
+    }
+  @catch (NSException *e)
+    {
+      NSLog(@"GWAppImageDownloader -> GitHub request failed: %@", e);
+      if (error)
+        *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
+                                     code:GWPackageManagerErrorCommandFailed
+                                 userInfo:@{
+                                   NSLocalizedDescriptionKey:
+                                     [NSString stringWithFormat:
+                                       @"Could not reach GitHub for %@", repo],
+                                 }];
+      return nil;
+    }
+  NSString *html = [NSString stringWithContentsOfFile:tmp
+                                             encoding:NSUTF8StringEncoding
+                                                error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:tmp error:NULL];
+  if ([t terminationStatus] != 0 || html == nil)
     {
       if (error)
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
                                      code:GWPackageManagerErrorCommandFailed
                                  userInfo:@{
                                    NSLocalizedDescriptionKey:
-                                     @"GitHub returned an empty response",
+                                     [NSString stringWithFormat:
+                                       @"GitHub release assets could not be read for %@", repo],
                                  }];
       return nil;
     }
 
-  NSError *parseError = nil;
-  NSDictionary *release = [NSJSONSerialization JSONObjectWithData:json
-                                                          options:0
-                                                            error:&parseError];
-  if (!release)
+  // Every asset appears as a link to /<owner>/<repo>/releases/download/<tag>/<file>;
+  // the entries carry the two keys the selection below always read from the
+  // API's JSON, so that code stays as it was.
+  NSMutableArray *assets = [NSMutableArray array];
+  NSRegularExpression *link = [NSRegularExpression regularExpressionWithPattern:
+      @"href=\"(/[^\"]+/releases/download/[^\"]+)\"" options:0 error:NULL];
+  for (NSTextCheckingResult *match in [link matchesInString:html options:0
+                                                         range:NSMakeRange(0, [html length])])
     {
-      if (error) *error = parseError;
-      return nil;
+      NSString *path = [[html substringWithRange:[match rangeAtIndex:1]]
+                        stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+      [assets addObject:@{
+        @"name": [path lastPathComponent],
+        @"browser_download_url": [@"https://github.com" stringByAppendingString:path],
+      }];
     }
 
-  NSArray *assets = release[@"assets"];
-  if (![assets isKindOfClass:[NSArray class]] || [assets count] == 0)
+  if ([assets count] == 0)
     {
       if (error)
         *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
@@ -296,7 +357,9 @@
     {
       NSString *name = [[asset objectForKey:@"name"] lowercaseString];
       if (name == nil) continue;
-      if ([name hasSuffix:@".appimage"] || [name containsString:@".appimage."])
+      // Only the file itself: the checksum and zsync files next to it end in
+      // .AppImage.<something> and used to be picked up as candidates.
+      if ([name hasSuffix:@".appimage"])
         [appImages addObject:asset];
     }
 
