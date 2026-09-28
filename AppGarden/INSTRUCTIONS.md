@@ -154,9 +154,9 @@ In this order. They define the idioms you must match.
 | `AGENTS.md` (repo root) | Build/install commands, layout, conventions. |
 | `FEED.md` (this directory) | The data. Every irregularity your parser must survive. |
 | `DOWNLOADS.md` (this directory) | How a Get works out which release and which file inside it to fetch: the rules, why each exists, the real releases each was written for, and what was wrong before. |
-| `PackageManager/GWAppImageAssetPicker.h/.m` | The rules that choose one AppImage out of one release's asset names. Foundation-only, with no network, so the same rules the catalog's own site uses (AppImage/appimage.github.io, `code/find-appimage.sh`) can be tested against real release names. You never call it; the downloader does. |
 | `Fixtures/feed-sample.json` | The unit-test input. |
-| `PackageManager/GWAppImageDownloader.h/.m` | How an AppImage is downloaded into the user's Applications folder and which GitHub release and which file inside it are used for this machine. You call this; you do not reimplement it. |
+| `PackageManager/GWAppImageDownloader.h/.m` | How an AppImage is downloaded into the user's Applications folder, and which GitHub release and which file inside it are used for this machine. You call this; you do not reimplement it. |
+| `PackageManager/GWAppImageAssetPicker.h/.m` | The rules that choose one AppImage out of one release's asset names. Foundation-only, with no network, so the same rules the catalog's own site uses (AppImage/appimage.github.io, `code/find-appimage.sh`) can be tested against real release names. You never call it; the downloader does. |
 | `PackageManager/GWPackageManager.h` | `GWInstallProgressHandler` protocol (`installDidProgress:message:`, `installDidOutputLine:`) that the downloader reports through. |
 | `SoftwareUpdate/GNUmakefile` | How an app in this repo links `PackageManager.framework` (include path, `-L`, `-rpath`), enables ARC, sets warnings. Your GNUmakefile is modeled on it. |
 | `SoftwareUpdate/Controllers/SWMainWindowController.m` | A fully code-built window controller in this repo using `AppearanceMetrics.h`. |
@@ -235,14 +235,14 @@ Views.
       Services/
         AGFeedLoader.h/.m            fetch feed.json with curl, conditional GET, cache file
         AGImageCache.h/.m            async icon/screenshot loading, memory + disk cache
-        AGInstaller.h/.m             wraps GWAppImageDownloader; install/remove/launch; installed-state queries
+        AGInstaller.h/.m             wraps GWAppImageDownloader; install/remove/reveal/launch; installed-state queries
         AGInstallTask.h/.m           one running install: progress, message, state, error
         AGInstallRegistry.h/.m       remembers what AppGarden installed (plist in ~/Library/AppGarden)
       Controllers/
         AGAppDelegate.h/.m           menus, main window, open on launch
         AGMainWindowController.h/.m  window, sidebar/content split, navigation stack, search
-        AGSidebarController.h/.m     sidebar table: Discover, Installed, categories
-        AGGridViewController.h/.m    grid page for a filter (all / category / installed / search)
+        AGSidebarController.h/.m     sidebar table: Discover, Downloaded, categories
+        AGGridViewController.h/.m    grid page for a filter (all / category / downloaded / search)
         AGDetailViewController.h/.m  detail page for one AGApp
         AGStatusBannerController.h/.m  the "cached catalog" / error banner
       Views/
@@ -279,7 +279,7 @@ Rules for the layers:
   (object: the `AGInstallTask`) on the main thread whenever a task's progress
   or state changes, and `AGInstallerInstalledSetDidChangeNotification` when
   something was installed or removed. Cards, the detail page and the
-  Installed page observe these to update their `AGInstallButton`. This keeps
+  Downloaded page observe these to update their `AGInstallButton`. This keeps
   a card that scrolled out of view and back in sync without polling.
 
 ---------------------------------------------------------------------------
@@ -381,8 +381,8 @@ in `displayName`, `descriptionText`, `categories` display names or any author
 name. Ranking: name prefix match first, then name contains, then description
 matches; ties by `displayName`. An empty query returns the category's apps in
 catalog order. Search results are therefore alphabetical within their rank and
-never follow Discover's shuffle: a typed query is a question with an answer, not a
-browse. Must handle 1551 items without noticeable delay on each
+never follow Discover's shuffle: a typed query is a question with an answer,
+not a browse. Must handle 1551 items without noticeable delay on each
 keystroke; a linear scan with `rangeOfString:` is fast enough, measure once
 with a quick timing test tool and note the number in the PR text.
 
@@ -535,7 +535,7 @@ Asset origin: icons and screenshots are fetched only from
 URLs the parser already built. Never rewrite them to
 `raw.githubusercontent.com`, never fetch anything from `api.github.com`
 while browsing, never fetch a project's own README or website for text.
-Descriptions come from `feed.json`, which is served by the same host. The
+Descriptions come from `feed.json`, which is served by the same host.
 AppGarden causes no GitHub API request at all, not even when the user clicks
 Get: the release lookup inside `GWAppImageDownloader` reads github.com's own
 web pages, because the API's 60 anonymous requests per hour are what once
@@ -554,33 +554,43 @@ viewport). Measure with `top` that scrolling the full grid stays smooth.
 
 `GWAppImageDownloader` puts the file at
 `+[GWAppImageDownloader launcherPathForAppName:]`, currently
-`~/Applications/<Display Name>.AppImage`. That is the location the rest of
-the desktop expects from PackageManager (`NSAllApplicationsDirectory` is
-`~/Applications`), so AppGarden uses the same call and never hard-codes the
-path. An install made before the folder moved is still in
-`~/Library/Applications`, and
-`+[GWAppImageDownloader existingLauncherPathForAppName:]` is the call that
-finds an app in either place: everything that asks "is this installed, and
-where" (the state of the button, removal, Open) goes through it, not through
-the download path.
+`~/Applications/<Display Name>.AppImage`. That is the standard user
+applications directory (`GNUSTEP_HOME` is `~`, the user applications
+directory is `Applications`), which is what `NSAllApplicationsDirectory`
+reports and therefore what `make_services` already scans - so an app that
+lands there is registered without anything else having to know about it. That
+is the location the rest of the desktop expects from PackageManager, so
+AppGarden uses the same call and never hard-codes the path.
+
+Two helpers of the downloader matter around it:
+
+- `+existingLauncherPathForAppName:` answers with the current path while the
+  file is there, with the pre-move path (`~/Library/Applications`) if that is
+  where the file still is, and with the current path as the download target
+  when there is no file yet. Every read of an installed file - state, remove,
+  the direct run, the reveal - goes through it, so an install made before the
+  folder moved is never mistaken for nothing.
+- `+applicationsDirectory` and `+legacyApplicationsDirectory` name the two
+  directories themselves.
+
+There is deliberately no code that moves files: the app never touches
+wherever an install already lives, it only looks there. Everything it
+downloads from now on goes to `~/Applications`, and an install that is still
+in `~/Library/Applications` is found, removed and revealed in that old
+directory just the same.
 
 Required verification, part of the acceptance checklist: after a test
 install, run `make_services` (it is in `/System/Library/Tools`) and check
 that the new AppImage is listed as a found application, then confirm that
-`[[NSWorkspace sharedWorkspace] launchApplication:]` with the display name
-starts it. `make_services/README.md` lists the scanned directories. If the
-installed app is not registered, do not work around it in AppGarden (no
-symlinks, no `.desktop` files): stop and report to the user with the
-evidence, because changing where PackageManager puts downloads is the user's
-decision, not a workaround to be made here.
-
-Open does not start the application. `-revealApp:error:` asks the Workspace
-application over Distributed Objects to select the file in a viewer (what
-"Show in File Viewer" does elsewhere), with a 5 second request and reply
-timeout so a file manager that never answers costs an alert rather than a
-window that hangs. A file that is gone, or a file manager that is not
-running, is reported the same way - never silently ignored, and never
-retried.
+the file manager shows it - the Open button does exactly that, over
+Distributed Objects - and that `[[NSWorkspace sharedWorkspace] launchApplication:]`
+with the display name starts it. `make_services/README.md` lists the scanned
+directories: the first bullet is `NSAllApplicationsDirectory` in every domain,
+which covers `~/Applications`, and the last is the legacy
+`~/Library/Applications`, scanned so an install that predates the folder
+move still registers. If the installed app is not registered, do not
+work around it in AppGarden (no symlinks, no `.desktop` files): stop and
+report to the user with the evidence.
 
 ### Which release, and which file in it
 
@@ -673,7 +683,6 @@ hand, which is why it names the candidates instead of saying "failed". These
 come from the framework, so they are English only; nothing in the app
 localizes them.
 
-
 ### AGInstaller
 
     - (instancetype)initWithRegistry:(AGInstallRegistry *)registry;
@@ -682,11 +691,13 @@ localizes them.
     - (AGInstallTask *)installApp:(AGApp *)app;   // starts, returns immediately
     - (void)cancelTask:(AGInstallTask *)task;
     - (BOOL)launchApp:(AGApp *)app error:(NSError **)error;
+    - (BOOL)revealApp:(AGApp *)app error:(NSError **)error;
     - (BOOL)removeApp:(AGApp *)app error:(NSError **)error;
     - (NSArray<AGApp *> *)installedAppsFromCatalog:(AGCatalog *)catalog; // registry entries that still exist on disk
 
-- `stateForApp:` is `Installed` when the registry has the name AND the file at
-  `launcherPathForAppName:` exists and is executable. A registry entry whose
+- `stateForApp:` is `Installed` when the registry has the name AND the file
+  `existingLauncherPathForAppName:` names for it exists and is executable. A
+  registry entry whose
   file is gone (user deleted it in the file manager) is dropped from the
   registry on the next query; that is state reconciliation, not a fallback.
 - `installApp:` creates an `AGInstallTask`, adds an operation to a serial
@@ -717,11 +728,30 @@ localizes them.
   requests when the newest non-prerelease already holds an AppImage, and up to
   eight when it has to walk back through older releases. AppGarden itself
   makes none while browsing. Never call the GitHub API to decorate the
-  catalog (no star counts,
-  no release dates, no asset sizes). When the API answers 403 the downloader
-  reports an error; make sure its text says "GitHub rate limit" when curl's
-  output contains `rate limit` so the user understands (extend the error text
-  in `AGInstallTask`, not in the framework).
+  catalog (no star counts, no release dates, no asset sizes). When GitHub
+  answers 403 (or 429) the downloader reports an error; make sure its text
+  says "GitHub rate limit" so the user understands (extend the error text in
+  `AGInstallTask`, not in the framework). The evidence is curl's own line
+  arriving through `installDidOutputLine:`, and because curl runs with `-f` -
+  which discards the response body - the server's own "API rate limit
+  exceeded" never arrives: a refusal line plus a failure text that already
+  names GitHub counts as that fact, a line containing `rate limit` counts on
+  its own, and a refusal from a mirror or a 404 counts as nothing.
+- `revealApp:` is what the Open button runs: the file manager is asked to
+  show the installed file, nothing is started. It resolves the file with
+  `existingLauncherPathForAppName:` and gives up with an error if it is gone,
+  then looks up the file manager's Distributed Objects connection under its
+  registered name (`Workspace`: GNUstep registers an application's services
+  connection under the application's name with the services listener as the
+  root object, that listener forwards any selector the application delegate
+  answers, and the delegate of Workspace is its own singleton, which
+  implements `-selectFile:inFileViewerRootedAtPath:`; `GSPermittedMessages`,
+  the one default that could filter such a selector out, is not set here).
+  The proxy gets the protocol and a 5 second request and reply timeout before
+  the call, and the file's own directory is the viewer root, so a viewer
+  opens on the folder holding the file. Any failure - file gone, no
+  connection, an exception - becomes one `AGInstallerErrorReveal` error whose
+  text says which it was, and the button shows that in an alert.
 - `launchApp:`: `[[NSWorkspace sharedWorkspace] launchApplication:app.displayName]`
   after a `make_services` refresh has happened once since install (run
   `make_services` with `NSTask`, wait for exit, once per install, on the
@@ -730,7 +760,9 @@ localizes them.
   run the AppImage directly with `NSTask` (launch path = the file, no
   arguments, current directory = home) and report an error only if that
   raises. Comment WHY: the workspace lookup needs the services cache while a
-  plain executable can always be started.
+  plain executable can always be started. The button does not call this any
+  more - it reveals the file instead - so the method stays as the installer's
+  way to start an app.
 - `removeApp:` deletes the file with `NSFileManager`, removes the registry
   entry, posts the notification. The confirmation dialog lives in the
   controller, not here.
@@ -739,7 +771,7 @@ localizes them.
 
 A plist at `~/Library/AppGarden/Installed.plist`: dictionary keyed by
 `app.name` with `{path, installedAt, displayName}`. Read once at startup,
-written atomically on every change. It exists so the Installed page knows what
+written atomically on every change. It exists so the Downloaded page knows what
 AppGarden installed even when the catalog entry disappears later.
 
 ### AGInstallTask
@@ -750,13 +782,19 @@ AppGarden installed even when the catalog entry disappears later.
     @property (readonly) NSString *message;        // "Resolving release...", "Downloading 34 MB..."
     @property (readonly) NSError *error;
 
-`GWAppImageDownloader` reports coarse phases (0.1 downloading, 0.6 saving).
-Byte-accurate progress is not available from its `curl` call without
-changing the framework. Show the progress bar as indeterminate (barber pole)
-while `progress` is between 0.1 and 0.6 and switch to determinate for the
-rest. If you find that unsatisfying, propose a small framework change to the
-user (curl `--progress-bar` parsed from stderr) instead of doing it in
-AppGarden. Do not fork the downloader.
+`GWAppImageDownloader` reads the meter curl writes with `--progress-bar`
+(through `GWCurlMeterReader`) and reports the transfer as a real fraction of
+the run: 0.05 .. 0.95 while the bytes come in, 0.97 while the file moves into
+place, 1.0 when it is done, and -1 until a size exists (the release lookup,
+or a server that never declares one). Draw the fractions as a determinate bar
+and -1 as the barber pole; the value alone says which, so do not infer an
+indeterminate phase from a band of values. The downloader also drains curl's
+stderr while curl writes it, which is what keeps a long download from
+blocking on a full pipe. That drain is a two-way street: every segment that
+is words rather than meter goes to `installDidOutputLine:` (the spinner is a
+picture and is dropped), and the release lookup's stderr runs through the
+same rule, so the task hears curl say *why* a request failed - which is what
+the rate limit rewrite in section 8 lives on.
 
 ---------------------------------------------------------------------------
 
@@ -806,14 +844,29 @@ the install button's progress state.
 A container `NSView` owned by `AGMainWindowController` with three layers:
 
 1. Top bar, 52 points high, full width, background same as content, a
-   1-point bottom separator in `[NSColor gridColor]`. Contains, left to
-   right: a Back button (`NSButton`, bezel style rounded, title "Back",
-   width 72, hidden when the navigation stack has one entry), the page
-   title (`NSTextField` label, bold 20 pt, e.g. "Discover", "Developer
-   Tools", "Search: foo", or the app name on detail), and at the right an
-   `NSSearchField` 240 points wide, `METRICS_TEXT_INPUT_FIELD_HEIGHT` high,
-   placeholder "Search", 24 points right inset. Copy the search field setup
-   from `Build/CatalogController.m` so it works under the Eau theme.
+   1-point bottom separator in `[NSColor gridColor]`. Contains only two
+   things, at the ends, with nothing between them:
+
+   - At the left, a back arrow: an `NSButton` with bezel style rounded,
+     24 x 24 points, at `METRICS_CONTENT_SIDE_MARGIN`, hidden when the
+     navigation stack has one entry. `imagePosition` is `NSImageOnly` and the
+     image is `Icons/back.tiff`, a 16-point chevron drawn like the sidebar
+     glyphs (`Resources/Icons/back.svg`, regenerated with `gmake icons`). The
+     title stays "Back" for the tooltip and so the menu item and a test can
+     still name it, and `refusesFirstResponder` keeps it out of the Tab loop
+     so Tab goes from the search field into the grid. If the image is missing
+     the button falls back to its titled face rather than leaving the user
+     with no way back.
+   - At the right, an `NSSearchField` 240 points wide,
+     `METRICS_TEXT_INPUT_FIELD_HEIGHT` high, placeholder "Search", 24 points
+     right inset. Copy the search field setup from `Build/CatalogController.m`
+     so it works under the Eau theme.
+
+   There is no page title in the bar. The sidebar selection already says which
+   scope is open, the window title says which application this is, and a third
+   copy of the name sitting between the arrow and the search field was saying
+   the same thing twice. Nothing else in the bar is flexible, so a resize moves
+   nothing.
 2. Optional status banner (`AGStatusBannerController`), 32 points high under
    the top bar, pale yellow background `[NSColor colorWithCalibratedRed:1.0 green:0.96 blue:0.80 alpha:1.0]`,
    13 pt text, a small "Retry" button at the right. Shown only in the two
@@ -829,6 +882,13 @@ pages carry no title, because the top bar shows none and
 `NSViewController`'s own `title` would be copied onto the window, which is
 meant to stay "AppGarden".
 
+Sidebar clicks replace the whole stack with one grid page. A card click pushes
+a detail page. Back pops. Typing in the search field replaces the stack with a
+search grid page for the query in the currently selected category (or all when
+"Discover"/"Downloaded" is selected: "Downloaded" plus a query searches the
+installed set). Clearing the search returns to the sidebar selection's page.
+The sidebar selection stays visible while a search page is shown, so the
+user sees the scope of the search.
 
 ### Grid page (`AGGridViewController` + `AGAppGridView` + `AGAppCardView`)
 
@@ -927,10 +987,17 @@ button). Two sizes: small (80 x 22, 11 pt bold) for cards, large (120 x 28,
 | Get | "Get" | Pill (radius = height/2), accent-colored fill, white text | `installApp:` |
 | Waiting | "Waiting..." | Pill, gray fill, white text | cancel task |
 | Downloading | none | Pill outline, inner horizontal progress bar (determinate or barber pole) filling the pill, small "x" at the right to cancel | cancel task |
-| Installed | "Open" | Pill outline in accent color, accent text | `launchApp:` |
+| Installed | "Open" | Pill outline in accent color, accent text | `revealApp:` (nothing is started) |
 | Failed | "Failed" | Pill, red outline and red text, tooltip = error | `NSAlert` with error and "Try Again" |
 | OpenPage | "Open Page" | Pill outline gray, dark text | `openURL:downloadPageURL` |
 | Unavailable | "Unavailable" | Gray text, no pill, disabled | nothing |
+
+"Open" opens nothing: the click asks the file manager over Distributed
+Objects to show the installed file (`revealApp:`), so the user can start it
+from where it is. A file manager that will not answer - the file is gone, the
+connection is not there, the call raises - produces an `NSAlert` titled
+"Could Not Show the File" with that reason; the click is never retried and
+never falls back to starting the app.
 
 The button is told its `AGApp` and observes `AGInstaller`'s notifications for
 that app (filter by `app.name`) to update itself. The barber pole is
@@ -1120,15 +1187,18 @@ Tools and what they must assert (minimum):
 `t_AGGridLayout`
 - width 1000 with 200-wide cards, gap 20, inset 24 -> 4 columns (5 would need 24+5*200+4*20+24 = 1128), gaps widened to spread; frame of index 5 is in row 1 column 1; `indexAtPoint:` in a gap returns -1; heightForCount 0 == 0; heightForCount 1 == inset + 232 + inset.
 
-`t_AGInstallRegistry`
-- Uses a temporary directory (set via an init parameter), round-trips one entry, drops an entry whose file does not exist on `reconcile`.
-
 `t_AGDiscoverOrder`
 - `nil` in gives an empty list out, never nil; an empty list stays empty; a single app stays itself.
 - 500 apps in, 500 out, and the multiset is unchanged (counted, so a lost or duplicated app fails).
 - The order is actually random, which a rotation or a sort with a fixed key would fail: the first and the last entry of 40 shuffles of a 40-entry list each vary, and two apps swap within 40 shuffles.
 - Two shuffles of the same 500 apps are not equal, so the order differs between launches.
 - The caller's array is left in its own order.
+
+`t_AGInstallRegistry`
+- Uses a temporary directory (set via an init parameter), round-trips one entry, drops an entry whose file does not exist on `reconcile`.
+
+`t_AGInstallTask`
+- The GitHub rate limit rule of section 8: a curl refusal line (`returned error: 403`/`429`) plus an error text that already names GitHub rewrites the message to "GitHub rate limit reached: ...", the underlying error and the original code and domain survive, "rate limit" in a line or in the text counts on its own, a mirror 403 and a 404 count as nothing, a failure that was already rewritten is left alone, and no failure means nothing to rewrite. The fixture is the framework's own text "Could not reach GitHub for owner/repo", which the downloader does produce; do not reintroduce a message the framework no longer emits.
 
 `t_AGFeedLoader`
 - Runs against `file://` URLs? `curl` supports `file://`, so point `AGFeedURL` at the fixture through a temporary cache dir: first load fetches (fromCache NO), second load within max age does not touch the network (assert by pointing the URL at a nonexistent file the second time: it must still succeed from cache). A broken JSON at the URL with a good cache: completion gets the cached catalog AND an error.
@@ -1142,7 +1212,6 @@ releases from the live catalog, `#include`d into
 to be compiled into a file that owns the runner). Run them with
 `cd PackageManager && gmake test`.
 
-
 Run all with `gnustep-tests AppGarden/Tests/Unit` (not the binaries alone),
 report the PASS/FAIL counts. Every test must pass before the UI work starts.
 
@@ -1152,7 +1221,6 @@ report the PASS/FAIL counts. Every test must pass before the UI work starts.
   search field, assert a card titled "Apache NetBeans" exists in the tree,
   press Escape, quit with Cmd+Q. Point `AGFeedURL` at the fixture via the
   test user's defaults so the test does not need the network.
-
 
   No assertion may name a card that Discover happens to show first: Discover
   is shuffled, so no name is ever in a known place. After Escape the test
@@ -1190,13 +1258,6 @@ Do not report done until every line is true and you have the evidence.
 - [ ] The top bar holds only the back arrow and the search field: no page
       title between them, and the arrow is an icon with the tooltip "Back"
       that is hidden on the root page. Screenshot the bar on a detail page.
-- [ ] Discover is not in alphabetical order, its order is stable while the
-      user browses and searches it, and it differs between two launches.
-      Category and Downloaded pages are alphabetical.
-- [ ] The top bar holds only the back arrow and the search field: no page
-      title between them, and the arrow is an icon with the tooltip "Back"
-      that is hidden on the root page. Screenshot the bar on a detail page.
-
 - [ ] Every sidebar category shows its count and its apps.
 - [ ] Detail page for `4KWALL`: icon, author link, "Proprietary" license as
       a link, screenshot, description, information rows, "View on
@@ -1206,15 +1267,6 @@ Do not report done until every line is true and you have the evidence.
       placeholder icon with "A", no screenshot view, button "Unavailable".
 - [ ] Get on a small app (`DDCal` or another small GitHub-released one)
       downloads, the button shows progress then "Open", "Open" starts the app
-- [ ] Get on an app whose newest release holds no AppImage (Obsidian's newest
-      is a mobile-only `.apk`) installs from the release that has one; Get on
-      a release holding AppImages of several programs (AppImageUpdate) picks
-      the file matching the catalog's name for the app; Get on a renamed
-      repository (ipfs-desktop) works rather than reporting a lookup failure.
-      Each of these was broken before the release-resolution rewrite.
-      (verify a window appears in the isolated session with DriveUI), the
-      file exists at the path from `launcherPathForAppName:`, `make_services`
-      lists it, the Downloaded page lists it, Remove asks and deletes it.
 - [ ] Get on an app whose newest release holds no AppImage (Obsidian's newest
       is a mobile-only `.apk`) installs from the release that has one; Get on
       a release holding AppImages of several programs (AppImageUpdate) picks
@@ -1254,96 +1306,6 @@ Do not report done until every line is true and you have the evidence.
   The downloader's own lookup stays off `api.github.com` for the same reason:
   that anonymous quota is what once made every Get fail with 403 for the rest
   of the hour.
-  The downloader's own lookup stays off `api.github.com` for the same reason:
-  that anonymous quota is what once made every Get fail with 403 for the rest
-  of the hour.
-- Do not write to `~/Applications`, `~/.local`, `/usr`, `~/Downloads`, or
-  create `.desktop` files or symlinks. One file at the path the framework
-  gives you, plus the registry plist and the cache directory.
-- Do not fetch icons for items that are not visible.
-- Do not hide errors. Do not add "fallback" code paths this brief did not
-  name.
-- Do not touch `PackageManager/` or `make_services/`; if you need a change
-  there, stop and ask the user with a proposal.
-- Do not install to LOCAL, do not commit, do not push, unless told.
-- Do not put version numbers, "beta", "AppImageHub", "Mac", "GNUstep" in
-  user-visible text.
-
----------------------------------------------------------------------------
-
-## 16. Handing over
-
-When everything in section 14 is true:
-
-1. Replace `AppGarden/README.md` with a user-facing README (what it is, a
-   screenshot from the isolated session saved as `Resources/screenshot.png`
-   is welcome but optional, how to build, how to test).
-2. Keep `INSTRUCTIONS.md` and `FEED.md` in the directory as the design
-   record; update `FEED.md` if the live data taught you something new, and
-   `DOWNLOADS.md` if the download resolution changed.
-3. Tell the user, in keywords: what was built, the test counts, the install
-   location, the `make_services` finding from section 8, anything you left
-   out and why, and the one-line `LIBRARY_CONSUMERS` change. Ask whether to
-   commit. Do not commit before that answer.
-4. If you learned something reusable (for example how the recycled grid or
-   the `curl -z` cache behaves in this stack), ask the user whether a skill
-   should be written for it.
-
----------------------------------------------------------------------------
-
-## 14. Acceptance checklist
-
-Do not report done until every line is true and you have the evidence.
-
-- [ ] `gmake clean && gmake` in `AppGarden/` prints zero warnings.
-- [ ] `gnustep-tests AppGarden/Tests/Unit` reports all PASS, no FAIL, no
-      "No tests found".
-- [ ] Installed to SYSTEM only; `/Local` untouched (show the `ls`).
-- [ ] Cold start with no cache: spinner, then grid within a few seconds on
-      a normal connection; second start shows the grid immediately from
-      cache (measure with a stopwatch or DriveUI timing and state it).
-- [ ] Scrolling the full Discover grid (1500+ cards) is smooth; process
-      memory stays under 150 MB after scrolling to the end (`ps -o rss`).
-- [ ] Search filters on each keystroke without lag.
-- [ ] Every sidebar category shows its count and its apps.
-- [ ] Detail page for `4KWALL`: icon, author link, "Proprietary" license as
-      a link, screenshot, description, information rows, "View on
-      appimage.github.io" opens the browser.
-- [ ] Detail page for `86Box`: "The publisher did not provide a
-      description." and "Unknown license". Detail page for `Addaps`:
-      placeholder icon with "A", no screenshot view, button "Unavailable".
-- [ ] Get on a small app (`DDCal` or another small GitHub-released one)
-      downloads, the button shows progress then "Open", "Open" starts the app
-      (verify a window appears in the isolated session with DriveUI), the
-      file exists at the path from `launcherPathForAppName:`, `make_services`
-      lists it, the Installed page lists it, Remove asks and deletes it.
-- [ ] Unplug the network (or set `AGFeedURL` to an unreachable host) with a
-      cache present: banner with error and Retry, catalog still browsable.
-      Without cache: error view with Retry.
-- [ ] `QOwnNotes` shows Get and installs from the openSUSE URL on x86_64.
-- [ ] `lux` shows "Open Page" and opens the Bitbucket page.
-- [ ] Window resize from 760 to 1600 wide relayouts the grid columns and the
-      detail page without overlaps or clipped text (DriveUI geometry check
-      or screenshots in the isolated session).
-- [ ] The `.uitest` passes in an isolated slot.
-- [ ] `git status` shows only `AppGarden/`, the top-level `GNUmakefile` line
-      and the `AGENTS.md` sentence. Nothing else staged.
-- [ ] The user has tested on their desktop and said it works.
-
----------------------------------------------------------------------------
-
-## 15. Things not to do
-
-- Do not use `NSCollectionView`. This repo has no working example of it
-  under the Eau theme and the recycled custom grid is under 400 lines.
-- Do not use `NSURLSession`, `NSURLConnection`, `dispatch_*`, threads via
-  `NSThread` directly. `NSOperationQueue` + `curl` only.
-- Do not add a dependency (no JSON library, no HTTP library, no image
-  library). Foundation, AppKit, PackageManager.framework, curl.
-- Do not call the GitHub API while browsing, and do not fetch icons,
-  screenshots or text from anywhere but `https://appimage.github.io/`
-  (rate limits: GitHub Pages has none that matter, `api.github.com` allows
-  60 anonymous requests per hour, `raw.githubusercontent.com` throttles).
 - Do not write to `~/Applications`, `~/.local`, `/usr`, `~/Downloads`, or
   create `.desktop` files or symlinks. One file at the path the framework
   gives you, plus the registry plist and the cache directory.
