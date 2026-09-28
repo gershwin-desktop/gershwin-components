@@ -101,6 +101,8 @@ static NSArray *MouseSettings(PointerDeviceKind kind)
               @"EnergyBackend +setHddSleep:", @"applyHddSleep:"),
             S(kEnergyDomain, @[@"wakeNetwork"],
               @"EnergyBackend +setWakeNetwork:", @"applyWakeNetwork:"),
+            S(kEnergyDomain, @[@"chargeLimit"],
+              @"EnergyBackend +setChargeLimitPercent:", @"applyChargeLimit:"),
 
             S(kColorDomain, @[@"ColorActiveProfiles"],
               @"ProfileApplier +loadProfile:forOutput:", @"applyColorProfiles:"),

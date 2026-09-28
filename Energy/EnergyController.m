@@ -11,6 +11,10 @@
 #import <dispatch/dispatch.h>
 
 static NSString *const kEnergyDomain = @"EnergyPreferences";
+/* The level a battery is charged up to until the user moves the slider: a
+ * battery held at a full charge all day is what wears a lithium cell out,
+ * and 80% is the limit every other desktop offers. */
+static const int kDefaultChargeLimit = 80;
 
 @interface EnergyController ()
 - (NSString *)readGovernor;
@@ -22,23 +26,32 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 - (void)updateStatus:(NSString *)message;
 - (void)stopInhibitor;
 - (void)applicationWillTerminate:(NSNotification *)notification;
+- (void)refreshChargeLimit:(NSNumber *)saved;
+- (void)persistChargeLimit:(int)percent;
 
 /* Layout helpers (HIG group boxes and rows). */
 - (NSBox *)groupBoxWithTitle:(NSString *)title frame:(NSRect)frame inView:(NSView *)parent;
 - (NSTextField *)labelWithText:(NSString *)text frame:(NSRect)frame alignment:(NSTextAlignment)align;
+- (CGFloat)measuredWidthOfText:(NSString *)text;
+- (CGFloat)labelColumnWidthFor:(NSArray<NSString *> *)labels;
 - (void)addCheckbox:(NSButton *)checkbox toBox:(NSBox *)box y:(CGFloat)y width:(CGFloat)w;
-- (NSTextField *)addInfoRowWithText:(NSString *)text toBox:(NSBox *)box y:(CGFloat)y width:(CGFloat)w;
-- (void)addPopUpRowWithLabel:(NSString *)label
-                      popup:(NSPopUpButton *)popup
-                      toBox:(NSBox *)box
-                          y:(CGFloat)y
-                      width:(CGFloat)w;
-- (void)addSliderRowWithLabel:(NSString *)label
-                       slider:(NSSlider *)slider
-                        value:(NSTextField *)value
+- (NSTextField *)addInfoLabel:(NSTextField *)label
                         toBox:(NSBox *)box
-                            y:(CGFloat)y
-                        width:(CGFloat)w;
+                        frame:(NSRect)frame
+                    alignment:(NSTextAlignment)alignment;
+- (NSTextField *)addPopUpRowWithLabel:(NSString *)label
+                                popup:(NSPopUpButton *)popup
+                                toBox:(NSBox *)box
+                                    y:(CGFloat)y
+                                width:(CGFloat)w
+                               labelW:(CGFloat)labelW;
+- (NSTextField *)addSliderRowWithLabel:(NSString *)label
+                                 slider:(NSSlider *)slider
+                                  value:(NSTextField *)value
+                                  toBox:(NSBox *)box
+                                      y:(CGFloat)y
+                                  width:(CGFloat)w
+                                 labelW:(CGFloat)labelW;
 @end
 
 /* The pane view. When the host window gives us a width (which is not the
@@ -111,6 +124,9 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [powerMgmtBox release];
     [sourceLabel release];
     [batteryPercentLabel release];
+    [chargeLimitSlider release];
+    [chargeLimitTitleLabel release];
+    [chargeLimitLabel release];
     [governorPopUp release];
     [brightnessSlider release];
     [brightnessLabel release];
@@ -136,14 +152,23 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     const CGFloat bottomMargin = METRICS_SPACE_12;               /* under status line */
     const CGFloat boxGap = METRICS_SPACE_8;                      /* between group boxes */
     const CGFloat rowH = METRICS_TEXT_INPUT_FIELD_HEIGHT;        /* 22 */
+    const CGFloat infoRowH = 20;          /* read-only text line */
     const CGFloat rowGap = METRICS_SPACE_8;
     const CGFloat checkboxRowH = METRICS_RADIO_BUTTON_LINE_SPACING; /* 20 */
     const CGFloat boxTitleInset = 14.0;
     /* Group-box heights sized to their content (title inset + rows +
        16px inner margin top and bottom). */
-    const CGFloat powerBoxH = 128;      /* source, battery, governor */
+    const CGFloat powerBoxH = 126;      /* source, charge level, limit, governor */
     const CGFloat displayBoxH = 98;     /* brightness slider, blank popup */
     const CGFloat powerMgmtBoxH = 126;  /* 4 checkboxes */
+
+    /* One label column for every row in the pane, as wide as the widest
+       label in it: the controls then line up down the whole pane, and a
+       longer translation widens the column instead of being clipped. */
+    const CGFloat labelW = [self labelColumnWidthFor:@[@"Charge battery up to:",
+                                                        @"Governor:",
+                                                        @"Brightness:",
+                                                        @"Screen blanks:"]];
 
     mainView = [[EnergyMainView alloc] initWithFrame:NSMakeRect(0, 0, winW, winH)];
     [(EnergyMainView *)mainView setLayoutOwner:self];
@@ -158,19 +183,62 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
                                 frame:NSMakeRect(sideMargin, y - powerBoxH, boxW, powerBoxH)
                                inView:mainView];
     {
-        CGFloat by = powerBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
-        sourceLabel = [self addInfoRowWithText:@"Source: reading..."
-                                         toBox:powerBox y:by width:boxW];
+        /* The power source and the charge level share one row: both are
+           read-only text, and the row the charge level used to need on its
+           own is the one the charge limit now has. */
+        CGFloat by = powerBoxH - boxTitleInset - METRICS_SPACE_16 - infoRowH;
+        sourceLabel = [self labelWithText:@"Source: reading..."
+                                    frame:NSZeroRect
+                                alignment:NSTextAlignmentLeft];
+        batteryPercentLabel = [self labelWithText:@"Battery: --%"
+                                            frame:NSZeroRect
+                                        alignment:NSTextAlignmentRight];
+        CGFloat batteryW = [self measuredWidthOfText:[batteryPercentLabel stringValue]];
+        [self addInfoLabel:sourceLabel
+                    toBox:powerBox
+                    frame:NSMakeRect(METRICS_SPACE_16, by,
+                                     boxW - 2 * METRICS_SPACE_16 - rowGap - batteryW,
+                                     infoRowH)
+                alignment:NSTextAlignmentLeft];
+        [self addInfoLabel:batteryPercentLabel
+                    toBox:powerBox
+                    frame:NSMakeRect(boxW - METRICS_SPACE_16 - batteryW, by,
+                                     batteryW, infoRowH)
+                alignment:NSTextAlignmentRight];
 
         by -= rowGap + rowH;
-        batteryPercentLabel = [self addInfoRowWithText:@"Battery: --%"
-                                                 toBox:powerBox y:by width:boxW];
+        chargeLimitSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+        chargeLimitLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
+        chargeLimitTitleLabel =
+            [self addSliderRowWithLabel:@"Charge battery up to:"
+                                 slider:chargeLimitSlider
+                                  value:chargeLimitLabel
+                                  toBox:powerBox
+                                      y:by
+                                  width:boxW
+                                 labelW:labelW];
+        /* The start threshold has to sit below the end threshold, and the
+           backend puts it a fixed number of points down, so the slider only
+           offers steps that leave room for it. */
+        [chargeLimitSlider setMinValue:[EnergyBackend minimumChargeLimitPercent]];
+        [chargeLimitSlider setMaxValue:[EnergyBackend maximumChargeLimitPercent]];
+        [chargeLimitSlider setFloatValue:kDefaultChargeLimit];
+        [chargeLimitSlider setNumberOfTickMarks:11];
+        [chargeLimitSlider setAllowsTickMarkValuesOnly:YES];
+        [chargeLimitSlider setContinuous:YES];
+        [chargeLimitSlider setTarget:self];
+        [chargeLimitSlider setAction:@selector(settingChanged:)];
+        [chargeLimitLabel setStringValue:
+            [NSString stringWithFormat:@"%d%%", kDefaultChargeLimit]];
 
         by -= rowGap + rowH;
-        [self addPopUpRowWithLabel:@"Governor:"
-                            popup:governorPopUp =
-                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
-                            toBox:powerBox y:by width:boxW];
+        governorPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect];
+        [[self addPopUpRowWithLabel:@"Governor:"
+                             popup:governorPopUp
+                             toBox:powerBox
+                                 y:by
+                             width:boxW
+                            labelW:labelW] release];
     }
     y -= powerBoxH + boxGap;
 
@@ -180,12 +248,15 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
                                  inView:mainView];
     {
         CGFloat by = displayBoxH - boxTitleInset - METRICS_SPACE_16 - rowH;
-        [self addSliderRowWithLabel:@"Brightness:"
-                             slider:brightnessSlider =
-                             [[NSSlider alloc] initWithFrame:NSZeroRect]
-                              value:brightnessLabel =
-                             [[NSTextField alloc] initWithFrame:NSZeroRect]
-                              toBox:displayBox y:by width:boxW];
+        brightnessSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+        brightnessLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
+        [[self addSliderRowWithLabel:@"Brightness:"
+                             slider:brightnessSlider
+                              value:brightnessLabel
+                              toBox:displayBox
+                                  y:by
+                              width:boxW
+                             labelW:labelW] release];
         [brightnessSlider setMinValue:1];
         [brightnessSlider setMaxValue:100];
         [brightnessSlider setFloatValue:100];
@@ -197,10 +268,13 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         [brightnessLabel setStringValue:@"100%"];
 
         by -= rowGap + rowH;
-        [self addPopUpRowWithLabel:@"Screen blanks:"
-                            popup:blankPopUp =
-                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
-                            toBox:displayBox y:by width:boxW];
+        blankPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect];
+        [[self addPopUpRowWithLabel:@"Screen blanks:"
+                             popup:blankPopUp
+                             toBox:displayBox
+                                 y:by
+                             width:boxW
+                            labelW:labelW] release];
         for (NSNumber *seconds in [EnergyBackend screenBlankChoices]) {
             [blankPopUp addItemWithTitle:[EnergyBackend titleForScreenBlankSeconds:[seconds intValue]]];
         }
@@ -326,29 +400,70 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [box addSubview:checkbox];
 }
 
-/* A plain info row (source / battery status); returns the label. */
-- (NSTextField *)addInfoRowWithText:(NSString *)text toBox:(NSBox *)box y:(CGFloat)y width:(CGFloat)w
+/* The width a text needs at the size the pane labels use, so a column
+   sized for the text is never a guess and a longer translation shows in
+   full instead of being clipped. */
+- (CGFloat)measuredWidthOfText:(NSString *)text
 {
-    NSTextField *label = [self labelWithText:text
-                                      frame:NSMakeRect(METRICS_SPACE_16, y + 1,
-                                                      w - 2 * METRICS_SPACE_16, 20)
-                                  alignment:NSTextAlignmentLeft];
+    NSTextField *probe = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 1000, 20)];
+    [probe setFont:[NSFont systemFontOfSize:11]];
+    [probe setBezeled:NO];
+    [probe setEditable:NO];
+    [probe setDrawsBackground:NO];
+    [probe setStringValue:(text ?: @"")];
+    CGFloat width = [[probe cell] cellSize].width;
+    [probe release];
+    return width;
+}
+
+/* The label column every row in the pane shares: as wide as the widest
+   label it holds, and never narrower than the column the pane was laid out
+   with, so the controls line up down the whole pane. */
+- (CGFloat)labelColumnWidthFor:(NSArray<NSString *> *)labels
+{
+    const CGFloat minimum = 110.0;
+    CGFloat widest = minimum;
+    for (NSString *text in labels) {
+        /* A couple of points of slack, so a label whose last glyph is a
+           bearing edge is not shaved. */
+        widest = MAX(widest, [self measuredWidthOfText:text] + 4.0);
+    }
+    return widest;
+}
+
+/* A read-only value in a group box row.  The caller gives it the room it
+   should have: the rest of the row for a left-aligned value, its own
+   measured width for a right-aligned one. */
+- (NSTextField *)addInfoLabel:(NSTextField *)label
+                        toBox:(NSBox *)box
+                        frame:(NSRect)frame
+                    alignment:(NSTextAlignment)alignment
+{
     [label setFont:[NSFont systemFontOfSize:12]];
-    [label setAutoresizingMask:NSViewWidthSizable];
+    [label setAlignment:alignment];
+    [label setFrame:frame];
+    /* Anchored to the right edge, the same way the value labels beside a
+       slider are: the host resizes the box, and a right-anchored label has
+       to follow the edge it is aligned to. */
+    [label setAutoresizingMask:(alignment == NSTextAlignmentRight
+                          ? NSViewMinXMargin
+                          : NSViewWidthSizable)];
     [box addSubview:label];
     return label;
 }
 
 /* A label + pop-up row: label on the left (right aligned), pop-up
-   stretching to fill the rest of the row. */
-- (void)addPopUpRowWithLabel:(NSString *)label
-                      popup:(NSPopUpButton *)popup
-                      toBox:(NSBox *)box
-                          y:(CGFloat)y
-                      width:(CGFloat)w
+   stretching to fill the rest of the row.  Returns the label, which the
+   caller keeps when it has to be greyed out with its control and releases
+   when it does not. */
+- (NSTextField *)addPopUpRowWithLabel:(NSString *)label
+                                popup:(NSPopUpButton *)popup
+                                toBox:(NSBox *)box
+                                    y:(CGFloat)y
+                                width:(CGFloat)w
+                               labelW:(CGFloat)labelW
 {
     const CGFloat pad = METRICS_SPACE_16;
-    const CGFloat labelW = 110;
     const CGFloat gap = METRICS_SPACE_8;
     const CGFloat popupW = w - 2 * pad - labelW - gap;
 
@@ -358,26 +473,27 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [labelField setFont:[NSFont systemFontOfSize:11]];
     [labelField setAutoresizingMask:NSViewMaxXMargin];
     [box addSubview:labelField];
-    [labelField release];
 
     [popup setFrame:NSMakeRect(pad + labelW + gap, y, popupW, 22)];
     [popup setAutoresizingMask:NSViewWidthSizable];
     [popup setTarget:self];
     [popup setAction:@selector(settingChanged:)];
     [box addSubview:popup];
+    return labelField;
 }
 
 /* A label + slider + value row in a group box: label on the left (right
-   aligned), slider stretching, value label on the right. */
-- (void)addSliderRowWithLabel:(NSString *)label
-                       slider:(NSSlider *)slider
-                        value:(NSTextField *)value
-                        toBox:(NSBox *)box
-                            y:(CGFloat)y
-                        width:(CGFloat)w
+   aligned), slider stretching, value label on the right.  Returns the
+   label, like the pop-up row above. */
+- (NSTextField *)addSliderRowWithLabel:(NSString *)label
+                                 slider:(NSSlider *)slider
+                                  value:(NSTextField *)value
+                                  toBox:(NSBox *)box
+                                      y:(CGFloat)y
+                                  width:(CGFloat)w
+                                 labelW:(CGFloat)labelW
 {
     const CGFloat pad = METRICS_SPACE_16;
-    const CGFloat labelW = 110;
     const CGFloat valueW = 50;
     const CGFloat gap = METRICS_SPACE_8;
     const CGFloat sliderW = w - 2 * pad - labelW - valueW - 2 * gap;
@@ -403,6 +519,7 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [value setFont:[NSFont systemFontOfSize:11]];
     [value setAlignment:NSTextAlignmentRight];
     [box addSubview:value];
+    return labelField;
 }
 
 #pragma mark - Actions
@@ -425,6 +542,19 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     NSString *gov = [[governorPopUp selectedItem] title];
     if (![gov isEqualToString:[self readGovernor]]) {
         [self writeGovernor:gov];
+    }
+
+    // -- Charge limit --
+    // Only where the kernel can act on it; the row is greyed out elsewhere,
+    // and its stale value is left where it is rather than pushed at a
+    // driver that has no such threshold.
+    BOOL chargeLimitFailed = NO;
+    if (chargeLimitAvailable) {
+        int limit = [chargeLimitSlider intValue];
+        [chargeLimitLabel setStringValue:[NSString stringWithFormat:@"%d%%", limit]];
+        if (limit != [EnergyBackend readChargeLimitPercent]) {
+            chargeLimitFailed = ![EnergyBackend setChargeLimitPercent:limit];
+        }
     }
 
     // -- Brightness --
@@ -477,7 +607,12 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
 
     // -- Persist --
     [self persistSettings];
-    [self updateStatus:@"Applied"];
+    /* A refused write is worth saying out loud: the slider shows the value
+       the user asked for while the machine kept the old one, and the next
+       login would ask for the same refused write again. */
+    [self updateStatus:chargeLimitFailed
+        ? @"Applied, but the battery charge limit could not be set (sudo refused the write)"
+        : @"Applied"];
 }
 
 - (void)refreshFromSystem
@@ -541,11 +676,14 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [powerFailCheckbox setState:NSControlStateValueOff];
 
     // -- Override with persisted user defaults --
+    NSNumber *savedChargeLimit = nil;
     {
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
         NSDictionary *persisted = [defaults persistentDomainForName:kEnergyDomain];
         if (persisted) {
             NSNumber *val;
+
+            savedChargeLimit = [persisted objectForKey:@"chargeLimit"];
 
             val = [persisted objectForKey:@"brightness"];
             if (val) {
@@ -584,8 +722,57 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
         }
     }
 
+    // -- Charge limit --
+    [self refreshChargeLimit:savedChargeLimit];
+
     isRefreshing = NO;
     [self updateStatus:@"Ready"];
+}
+
+- (void)refreshChargeLimit:(NSNumber *)saved
+{
+    /* Offered only where the kernel can act on it - Linux, and a battery
+       whose driver exposes both charge thresholds.  Everywhere else the row
+       is greyed out and nothing is written down, so the login-time apply
+       has no key to act on either. */
+    chargeLimitAvailable = [EnergyBackend chargeLimitAvailable];
+    [chargeLimitSlider setEnabled:chargeLimitAvailable];
+    [chargeLimitTitleLabel setEnabled:chargeLimitAvailable];
+    [chargeLimitLabel setEnabled:chargeLimitAvailable];
+    if (!chargeLimitAvailable) {
+        return;
+    }
+
+    /* Nothing written down yet means the user has never been offered this
+       row, so the pane's own default goes in now and is remembered; from
+       then on the saved value is what the machine is put back to.  A limit
+       that has drifted since (another tool changed it, a firmware update
+       reset it) is put back too, the same way the sleep inhibitor is. */
+    int wanted = (saved != nil) ? [saved intValue] : kDefaultChargeLimit;
+    [chargeLimitSlider setIntValue:wanted];
+    /* Read it back, so a value hand-edited into the defaults file outside
+       the slider's range is shown and saved as the range allows. */
+    wanted = [chargeLimitSlider intValue];
+    [chargeLimitLabel setStringValue:[NSString stringWithFormat:@"%d%%", wanted]];
+    if (wanted != [EnergyBackend readChargeLimitPercent]
+        && [EnergyBackend setChargeLimitPercent:wanted]) {
+        [self persistChargeLimit:wanted];
+    }
+}
+
+/* One key, so remembering the default the first time the pane is opened
+   does not also write down every other setting the user never touched. */
+- (void)persistChargeLimit:(int)percent
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSMutableDictionary *domain =
+        [[defaults persistentDomainForName:kEnergyDomain] mutableCopy];
+    if (domain == nil) {
+        domain = [NSMutableDictionary dictionary];
+    }
+    [domain setObject:[NSNumber numberWithInt:percent] forKey:@"chargeLimit"];
+    [defaults setPersistentDomain:domain forName:kEnergyDomain];
+    [defaults synchronize];
 }
 
 - (void)persistSettings
@@ -598,6 +785,12 @@ static NSString *const kEnergyDomain = @"EnergyPreferences";
     [domain setObject:[NSNumber numberWithBool:([hddSleepCheckbox state] == NSControlStateValueOn)] forKey:@"hddSleep"];
     [domain setObject:[NSNumber numberWithBool:([wakeNetworkCheckbox state] == NSControlStateValueOn)] forKey:@"wakeNetwork"];
     [domain setObject:[NSNumber numberWithBool:([powerFailCheckbox state] == NSControlStateValueOn)] forKey:@"powerFail"];
+    /* Only where the kernel has the thresholds: a saved limit that could
+       never be applied would have the login-time apply trying, and failing,
+       on every login. */
+    if (chargeLimitAvailable) {
+        [domain setObject:[NSNumber numberWithInt:[chargeLimitSlider intValue]] forKey:@"chargeLimit"];
+    }
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setPersistentDomain:domain forName:kEnergyDomain];
     [defaults synchronize];

@@ -7,6 +7,24 @@
 #import "EnergyBackend.h"
 #import <time.h>
 
+/* The same battery readBatteryInfo reads its level from.  Both files, not
+   just the end one: a limit is charged to and released at, so a driver that
+   offers only one of them cannot express the pair the kernel enforces.
+   These are plain paths, not a Linux-only feature: +chargeLimitAvailable is
+   what says whether the platform has them, and it is what every other
+   method here goes through first, so the plan can be built (and tested)
+   anywhere. */
+static NSString *const kChargeEndThresholdPath =
+    @"/sys/class/power_supply/BAT0/charge_control_end_threshold";
+static NSString *const kChargeStartThresholdPath =
+    @"/sys/class/power_supply/BAT0/charge_control_start_threshold";
+
+/* How far below the end threshold charging has to resume.  The kernel wants
+   the start strictly below the end, and without a gap the battery toggles
+   charging on and off around that one level instead of staying put; five
+   points is the gap every other desktop offers. */
+static const int kChargeResumeGap = 5;
+
 @implementation EnergyBackend
 
 + (NSString *)readFile:(NSString *)path
@@ -120,6 +138,135 @@
         source, @"source",
         [NSNumber numberWithInt:percent], @"percent",
         status, @"status", nil];
+}
+
+#pragma mark - Charge limit
+
++ (int)minimumChargeLimitPercent
+{
+    return 50;
+}
+
++ (int)maximumChargeLimitPercent
+{
+    /* 100 is the kernel's "charge to full": both thresholds at 100 switch
+       the limit off, so the top of the slider means "no limit". */
+    return 100;
+}
+
++ (BOOL)chargeLimitAvailable
+{
+#if defined(__linux__)
+    NSFileManager *fm = [NSFileManager defaultManager];
+    return [fm isReadableFileAtPath:kChargeEndThresholdPath]
+        && [fm isReadableFileAtPath:kChargeStartThresholdPath];
+#else
+    return NO;
+#endif
+}
+
+/* A threshold read out of sysfs, or -1 when the file is gone, empty or says
+   something that is not a number. */
++ (int)readThresholdAtPath:(NSString *)path
+{
+    NSString *raw = [self readFile:path];
+    if ([raw length] == 0) {
+        return -1;
+    }
+    NSScanner *scanner = [NSScanner scannerWithString:raw];
+    int percent;
+    if (![scanner scanInt:&percent] || percent < 0 || percent > 100) {
+        return -1;
+    }
+    return percent;
+}
+
++ (int)readChargeLimitPercent
+{
+#if defined(__linux__)
+    return [self readThresholdAtPath:kChargeEndThresholdPath];
+#else
+    return -1;
+#endif
+}
+
++ (int)readChargeStartThresholdPercent
+{
+#if defined(__linux__)
+    return [self readThresholdAtPath:kChargeStartThresholdPath];
+#else
+    return -1;
+#endif
+}
+
++ (int)chargeLimitStartThresholdForEnd:(int)end
+{
+    if (end >= [self maximumChargeLimitPercent]) {
+        return end;
+    }
+    return end - kChargeResumeGap;
+}
+
++ (NSArray<NSArray<NSString *> *> *)chargeThresholdWritePlanForEnd:(int)end
+                                                        currentEnd:(int)currentEnd
+                                                      currentStart:(int)currentStart
+{
+    int start = [self chargeLimitStartThresholdForEnd:end];
+    NSMutableArray *plan = [NSMutableArray array];
+    NSString *endValue = [NSString stringWithFormat:@"%d", end];
+    NSString *startValue = [NSString stringWithFormat:@"%d", start];
+
+    if (end > currentEnd) {
+        /* Raising the limit: the start still in force is below the end we
+           are about to set, so the end is accepted and the start is then
+           free to follow it up to any value. */
+        if (end != currentEnd) {
+            [plan addObject:@[kChargeEndThresholdPath, endValue]];
+        }
+        if (start != currentStart) {
+            [plan addObject:@[kChargeStartThresholdPath, startValue]];
+        }
+        return plan;
+    }
+    /* Lowering the limit, or holding it while the start has drifted: the
+       start has to come down first, while the end is still high enough to
+       accept it, and only then may the end follow. */
+    if (start != currentStart) {
+        [plan addObject:@[kChargeStartThresholdPath, startValue]];
+    }
+    if (end != currentEnd) {
+        [plan addObject:@[kChargeEndThresholdPath, endValue]];
+    }
+    return plan;
+}
+
++ (BOOL)setChargeLimitPercent:(int)percent
+{
+    if (![self chargeLimitAvailable]) {
+        NSLog(@"EnergyBackend: no charge thresholds in sysfs, not setting a limit of %d%%", percent);
+        return NO;
+    }
+    int maximum = [self maximumChargeLimitPercent];
+    if (percent < [self minimumChargeLimitPercent]) {
+        percent = [self minimumChargeLimitPercent];
+    }
+    if (percent > maximum) {
+        percent = maximum;
+    }
+
+    /* Only the thresholds that are not already right are written, so asking
+       for the limit that is in force costs no privileges at all. */
+    NSArray<NSArray<NSString *> *> *plan =
+        [self chargeThresholdWritePlanForEnd:percent
+                                  currentEnd:[self readChargeLimitPercent]
+                                currentStart:[self readChargeStartThresholdPercent]];
+    BOOL ok = YES;
+    for (NSArray<NSString *> *write in plan) {
+        if (![self writeSysfs:[write objectAtIndex:0] value:[write objectAtIndex:1]]) {
+            ok = NO;
+        }
+    }
+    return ok;
 }
 
 + (int)readBrightnessPercent

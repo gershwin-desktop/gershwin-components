@@ -290,6 +290,18 @@ static PointerDeviceKind KindForSetting(NSDictionary *values, NSString *setting,
     return [EnergyBackend setWakeNetwork:[v boolValue]];
 }
 
+- (BOOL)applyChargeLimit:(NSDictionary *)values
+{
+    id v;
+    if (![self scalar:@"chargeLimit" in:values into:&v]) {
+        return NO;
+    }
+    /* No "is it already there" check of our own: the backend writes only
+       the thresholds that are not already at the wanted level, so a login
+       that changes nothing writes nothing and asks for no privileges. */
+    return [EnergyBackend setChargeLimitPercent:[v intValue]];
+}
+
 #pragma mark - Color
 
 - (BOOL)applyColorProfiles:(NSDictionary *)values

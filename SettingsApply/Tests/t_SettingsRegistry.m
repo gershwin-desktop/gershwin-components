@@ -66,6 +66,7 @@ int main(void)
             @"EnergyPreferences/screenBlank" : @"applyScreenBlank:",
             @"EnergyPreferences/hddSleep" : @"applyHddSleep:",
             @"EnergyPreferences/wakeNetwork" : @"applyWakeNetwork:",
+            @"EnergyPreferences/chargeLimit" : @"applyChargeLimit:",
             @"SystemPreferences/ColorActiveProfiles" : @"applyColorProfiles:",
         };
         PASS_EQUAL(map, want, "each setting is applied by the method named for it");
@@ -215,6 +216,42 @@ int main(void)
         PASS_EQUAL(lines, want, "one line per setting: domain, values, backend method");
     }
     END_SET("dry-run report")
+
+    START_SET("a saved charge limit comes back after a restart")
+    {
+        NSDictionary *energy = @{@"chargeLimit" : @80};
+        NSArray *plan = [SASettingsRegistry planForSettings:settings
+                                                   domains:@{@"EnergyPreferences" : energy}];
+        PASS_EQUAL(PlannedIDs(plan), @[@"EnergyPreferences/chargeLimit"],
+                   "the charge limit the pane saved is the one thing planned");
+        PASS_EQUAL([[plan firstObject] values], energy,
+                    "the level the user chose is passed on unchanged");
+        PASS_EQUAL([[plan firstObject] reportLine],
+                   @"EnergyPreferences chargeLimit=80 -> EnergyBackend +setChargeLimitPercent:",
+                   "the report names the level and the backend method");
+
+        /* The defaults tool writes a number a user typed as "80" back as a
+           string, and the pane reads it with -intValue. */
+        plan = [SASettingsRegistry planForSettings:settings domains:@{
+            @"EnergyPreferences" : @{@"chargeLimit" : @"65"},
+        }];
+        PASS([plan count] == 1, "a level written as text is planned like a number");
+
+        /* And a level the backend cannot act on is refused there, not
+           coerced into one it can. */
+        SASettingsApplier *applier = [[SASettingsApplier new] autorelease];
+        SAPlannedApply *p = [SAPlannedApply plannedApplyWithSetting:[[SASettingsRegistry
+            planForSettings:settings domains:@{@"EnergyPreferences" : energy}] firstObject].setting
+            values:@{@"chargeLimit" : @[@80]}];
+        PASS(![applier apply:p], "a level that is no number is refused before any backend call");
+
+        plan = [SASettingsRegistry planForSettings:settings domains:@{
+            @"EnergyPreferences" : @{@"governor" : @"powersave"},
+        }];
+        PASS([plan count] == 1,
+             "a pane that never reached the charge limit still saves only what it knows");
+    }
+    END_SET("a saved charge limit comes back after a restart")
 
     [arp release];
     return 0;
