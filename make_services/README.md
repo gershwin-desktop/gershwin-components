@@ -19,6 +19,8 @@ the `libs-gui` one.
   such as the menu bar and the window manager live;
 * the user's `~/Downloads` directory, where downloaded AppImage applications
   are commonly kept;
+* the user's `~/Library/Applications` directory, where the PackageManager
+  framework (AppGarden, Software Update) puts downloaded AppImages;
 * the standard `Services` directories.
 
 Every found application is logged (`found application ...`), and AppImage

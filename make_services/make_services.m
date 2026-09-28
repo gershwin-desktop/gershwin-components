@@ -295,6 +295,23 @@ main(int argc, char** argv, char **env_c)
     }
 
   /*
+   *	Also scan the user's Library/Applications directory: the PackageManager
+   *	framework (AppGarden, Software Update) downloads AppImages there, and
+   *	NSAllApplicationsDirectory does not include it, so an application
+   *	installed from the catalog could not be launched by name.
+   */
+  enumerator = [NSSearchPathForDirectoriesInDomains(
+    NSLibraryDirectory, NSUserDomainMask, YES) objectEnumerator];
+  while ((path = [enumerator nextObject]) != nil)
+    {
+      if ([path hasPrefix: @"."] == NO)
+	{
+	  scanApplications(services,
+	    [path stringByAppendingPathComponent: @"Applications"]);
+	}
+    }
+
+  /*
    *	Scan for service information in all standard locations.
    */
   enumerator = [NSSearchPathForDirectoriesInDomains(
