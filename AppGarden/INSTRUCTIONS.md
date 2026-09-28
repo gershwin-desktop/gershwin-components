@@ -157,6 +157,7 @@ In this order. They define the idioms you must match.
 | `Fixtures/feed-sample.json` | The unit-test input. |
 | `PackageManager/GWAppImageDownloader.h/.m` | How an AppImage is downloaded into the user's Applications folder, and which GitHub release and which file inside it are used for this machine. You call this; you do not reimplement it. |
 | `PackageManager/GWAppImageAssetPicker.h/.m` | The rules that choose one AppImage out of one release's asset names. Foundation-only, with no network, so the same rules the catalog's own site uses (AppImage/appimage.github.io, `code/find-appimage.sh`) can be tested against real release names. You never call it; the downloader does. |
+| `PackageManager/GWKDEAppImagePicker.h/.m` | The same job for a `download.kde.org` application directory, which names a directory rather than a file: which version directory is newest, and which file in it is this machine's build. Foundation-only, with no network, for the same reason. You never call it; the downloader does. |
 | `PackageManager/GWPackageManager.h` | `GWInstallProgressHandler` protocol (`installDidProgress:message:`, `installDidOutputLine:`) that the downloader reports through. |
 | `SoftwareUpdate/GNUmakefile` | How an app in this repo links `PackageManager.framework` (include path, `-L`, `-rpath`), enables ARC, sets warnings. Your GNUmakefile is modeled on it. |
 | `SoftwareUpdate/Controllers/SWMainWindowController.m` | A fully code-built window controller in this repo using `AppearanceMetrics.h`. |
@@ -413,6 +414,7 @@ testability):
 
     typedef NS_ENUM(NSInteger, AGDownloadKind) {
         AGDownloadKindGitHubLatestRelease, // payload: githubRepo
+        AGDownloadKindKDEFileListing,      // payload: URL of a download.kde.org directory
         AGDownloadKindDirectURL,           // payload: URL of an .AppImage file
         AGDownloadKindWebPageOnly,         // payload: downloadPageURL; we cannot fetch a file
         AGDownloadKindNone                 // no links at all
@@ -420,12 +422,12 @@ testability):
     + (AGDownloadKind)kindForApp:(AGApp *)app payload:(id *)payload;
 
 The resolver decides **where an application comes from**, never which file.
-It never looks at a release: `GitHubLatestRelease` is a promise to ask the
-framework, and the rules for choosing a release and a file inside it live
-there (section 8, "Which release, and which file in it"). The name
-`GitHubLatestRelease` is historical - "latest" now means the newest release
-that actually ships an AppImage, preferring the newest that is not a
-pre-release.
+It never looks at a release or a directory: `GitHubLatestRelease` and
+`KDEFileListing` are promises to ask the framework, and the rules for
+choosing a release and a file inside it live there (section 8, "Which release,
+and which file in it"). The name `GitHubLatestRelease` is historical -
+"latest" now means the newest release that actually ships an AppImage,
+preferring the newest that is not a pre-release.
 
 Rules, in order:
 
@@ -435,13 +437,19 @@ Rules, in order:
    catalog's name for the app is what tells them apart (FreeCAD's repository
    is `FreeCAD` while the catalog calls it `FreeCAD2`; Obsidian's is
    `obsidian-releases`).
-2. `downloadPageURL` ends with `.AppImage` (case-insensitive) -> `DirectURL`.
-3. `downloadPageURL` ends with `.AppImage.mirrorlist` -> `DirectURL` with
+2. `downloadPageURL` is a `download.kde.org` **directory** -> `KDEFileListing`.
+   All three conditions are needed: the host, the trailing slash (which is
+   what makes it a directory rather than a file), and at least two path
+   components (`/stable/` alone is the list of applications, not one
+   application). The series directory in the middle is not matched by name, so
+   `stable`, `nightly` or a new one all work.
+3. `downloadPageURL` ends with `.AppImage` (case-insensitive) -> `DirectURL`.
+4. `downloadPageURL` ends with `.AppImage.mirrorlist` -> `DirectURL` with
    the `.mirrorlist` suffix removed (openSUSE serves the file at that URL; if
    the name contains `x86_64` and the architecture is not `x86_64`, that is
    `WebPageOnly` instead, because there is no other build).
-4. `downloadPageURL` present -> `WebPageOnly`.
-5. otherwise `None`.
+5. `downloadPageURL` present -> `WebPageOnly`.
+6. otherwise `None`.
 
 ### AGGridLayout
 
@@ -670,6 +678,93 @@ so that "the AppImage of this release" means in AppGarden what it means on
 appimage.github.io, and a difference between the two is a bug in one of them
 rather than a surprise for the user.
 
+**A download.kde.org directory.** The same two questions, asked of a
+different shape. A KDE application link names a directory rather than a
+file: `https://download.kde.org/stable/digikam/` is an autoindex page listing
+version directories (`9.1.0/`), and the newest of those lists the builds. One
+application puts its AppImage straight into its own directory with no version
+level at all (labplot). `+resolveKDEAppImageURLForListingURL:appName:architecture:progress:error:`
+answers it, with `GWKDEAppImagePicker` doing the choosing and no network of
+its own, in the same arrangement as the GitHub pair.
+
+*Which version.* Newest first, compared **numerically per component**, because
+the directory names sort as text in exactly the wrong order. krita's index
+lists `6.0.2.1/` before `6.0.2/`, and `1.10/` before `1.9/`. A version with
+more components wins only when the extra ones are not zero, so `5.3.2.1` beats
+`5.3.2` while `5.3.2.0` adds no version; ties then fall back to the name, so
+the order is total and the same listing always resolves the same way. A name
+is a version only if it is digits and dots, optionally with a leading `v`
+(frameworks ships `v5.110.0` beside `6.7`), which is what keeps krita's
+`FastSketchPlugin-1.0.2` and `updates` out of the walk. A suffixed name
+(`24.08.1-rc1`) is deliberately excluded rather than ordered by a rule nobody
+has measured. At most four directories are read
+(`kGWMaxKDEVersionDirsToWalk`); of the five KDE applications that ship
+AppImages, three have exactly one version directory.
+
+*Which file.* The same narrowing idea, with one deliberate difference. The
+order below is load-bearing:
+
+- Only names **ending** in `.appimage`, case-insensitive, and so not the
+  `.sig` beside them: krita and crow-translate put a signature next to every
+  build, rkward and labplot do not, so a signature cannot be required for a
+  download to count as valid.
+- **The architecture, as a requirement and before any preference rule.** This
+  is the one rule in either picker allowed to leave nothing. Every AppImage
+  download.kde.org ships is x86-64, so on an aarch64 machine there is no arm
+  build to fall back to; picking the x86-64 file would produce a download that
+  cannot execute, which is worse than saying so. The refusal names every
+  AppImage the directory holds, before the preference rules, so that "it holds
+  <the names>" describes the directory. Running it first is what stops a
+  directory holding the only usable build beside a `-debug` build of another
+  CPU from refusing an install that was available; the GitHub picker can
+  afford the opposite order, because those releases ship an arm build beside
+  the x86-64 one rather than instead of it.
+- `debug`, `dbg`, `test`, `nightly`, `symbols` dropped, as above. digiKam 9.1.0
+  lists four AppImages that are all the same program on the same CPU: the Qt5
+  and Qt6 release builds and a `-debug` build of each.
+- Two builds differing only in the Qt toolkit they are built against resolve
+  to the **newest** Qt, not the first: digiKam lists `Qt5` and `Qt6` release
+  builds, an AppImage carries its own Qt, and name order would pick Qt5
+  because "5" sorts before "6" as a character. The rule only applies when
+  *every* remaining name carries a Qt number, so a directory where one file
+  says `Qt6` and another says nothing is left to the rules after it.
+- Then the name-skeleton rule as in the GitHub picker, with one addition: a
+  trailing toolkit tag is dropped first. `stemForAssetName:` keeps every
+  letter, so `digiKam-9.1.0-Qt6-x86-64.appimage` reduces to `digikamqt` against
+  an app named `digiKam` reducing to `digikam` - the rule would be a silent
+  no-op for exactly the application this exists to serve. (The tag's digits
+  are already gone by then, since the skeleton routine strips them, so the
+  pattern is `qt[0-9]*$`; "qtopia" is left alone.) Then the same tie-break and
+  the same `GWKDEPickAmbiguous` refusal.
+
+A version directory that holds no AppImage at all is walked past: kstars 3.8.4.1
+is a source tarball and nothing else, and haruna's newest holds no Linux build.
+An architecture refusal or an ambiguity stops the walk instead, because
+quietly installing an older build of the same application is a surprise, not a
+service.
+
+The index parser is the part that most needs the real input, so
+`PackageManager/Tests/kdefixtures/` keeps saved pages from the site (digikam,
+krita, labplot, and the ordinary `apps.kde.org` page that must be *refused*
+rather than parsed) and the tests run against those bytes. A page is only an
+index if it carries a `Parent Directory` row: `apps.kde.org/digikam` has links
+but none of them is a file in a directory, and reading them as a file list
+would resolve a download page to a bug-report link.
+
+A directory that cannot be read says which of three things happened
+(`GWKDEDirectoryFault`), because the user's next move differs for each: a
+network problem is worth retrying, a URL that is not an index is a wrong link
+in the catalog, and an empty directory is neither. Reporting all three as
+"could not read the download directory" would hide a wrong catalog entry
+behind a network-sounding message. For the same reason, when every version
+directory walked turned out to be unreadable, the message says that rather
+than claiming no version holds an AppImage for this machine.
+
+**Cost.** A KDE resolve is 1 request for the application directory, then 1 per
+version directory walked, so between 1 and 5; the GitHub resolve is 2 for the
+common case and up to 8 with the walk back. The pages are a few kilobytes
+each. No `api.github.com` is involved and no rate limit applies.
+
 What the user is told when the picker refuses, which are new strings and the
 only user-facing text this adds:
 
@@ -677,11 +772,19 @@ only user-facing text this adds:
 - `No release of <repo> has an AppImage for this machine`
 - `The newest release of <repo> has several AppImages and none of them is
   clearly the right one for this machine: <the names>`
+- `<url> is not a download directory, so no AppImage can be chosen from it`
+- `Could not reach the download directory <url>`
+- `The download directory <url> is empty`
+- `None of the N version directories under <url> could be read`
+- `No version of the application at <url> has an AppImage for this machine`
+- `<version> has no AppImage for this machine (<arch>); it holds <the names>`
+- `<version> holds several AppImages and none of them is clearly the right
+  one: <the names>`
 
-The last one is the single case where the user may want to fetch a file by
-hand, which is why it names the candidates instead of saying "failed". These
-come from the framework, so they are English only; nothing in the app
-localizes them.
+The last one, and the two that name what was on offer, are the cases where the
+user may want to fetch a file by hand, which is why they name the candidates
+instead of saying "failed". These come from the framework, so they are English
+only; nothing in the app localizes them.
 
 ### AGInstaller
 
@@ -713,8 +816,12 @@ localizes them.
      spaces for the file name). The task object is the
      `GWInstallProgressHandler`; it forwards `installDidProgress:message:` to
      the main queue and posts the change notification.
-  3. `DirectURL`: `downloadAppImageFromURL:appName:progress:error:`.
-  4. On success: add to registry, state `Installed`, notification. On error:
+  3. `KDEFileListing`: calls
+     `-[GWAppImageDownloader downloadAppImageFromKDEListingURL:appName:progress:error:]`
+     with the directory URL and `appName = app.name`, the same as for a
+     release.
+  4. `DirectURL`: `downloadAppImageFromURL:appName:progress:error:`.
+  5. On success: add to registry, state `Installed`, notification. On error:
      state `Failed`, `task.error` set, notification; the button shows "Failed"
      with the error as tooltip and clicking it shows the error in an `NSAlert`
      with a "Try Again" button. The text is the framework's own, which now
@@ -1203,14 +1310,24 @@ Tools and what they must assert (minimum):
 `t_AGFeedLoader`
 - Runs against `file://` URLs? `curl` supports `file://`, so point `AGFeedURL` at the fixture through a temporary cache dir: first load fetches (fromCache NO), second load within max age does not touch the network (assert by pointing the URL at a nonexistent file the second time: it must still succeed from cache). A broken JSON at the URL with a good cache: completion gets the cached catalog AND an error.
 
-The rules that choose which file of a release to download are not tested
-here: they live in the framework, and are covered by
-`PackageManager/Tests/AGAppImageAssetPickerTests.m` - 18 cases over real
-releases from the live catalog, `#include`d into
+The rules that choose which file to download are not tested here: they live in
+the framework, and are covered by two files `#include`d into
 `PackageManager/Tests/PackageManagerTest.m` rather than listed in its
 `OBJC_FILES` (the `TAssert` macros expand to a `return NO`, so the cases have
-to be compiled into a file that owns the runner). Run them with
-`cd PackageManager && gmake test`.
+to be compiled into a file that owns the runner):
+
+- `PackageManager/Tests/AGAppImageAssetPickerTests.m` - 18 cases over real
+  releases from the live catalog.
+- `PackageManager/Tests/GWKDEAppImagePickerTests.m` - 20 cases over real
+  `download.kde.org` directories. Three parse the **saved index pages** in
+  `PackageManager/Tests/kdefixtures/` (see the README there for what each one
+  is and how to refresh it), because a parser proved against a hand-written
+  sample has only proved that the sample parses. The rest cover the rule order
+  that is easy to get wrong (the architecture requirement before the debug
+  rule), the version comparison pairwise, and the narrowing primitive on its
+  own.
+
+Run them with `cd PackageManager && gmake test`.
 
 Run all with `gnustep-tests AppGarden/Tests/Unit` (not the binaries alone),
 report the PASS/FAIL counts. Every test must pass before the UI work starts.
@@ -1276,6 +1393,16 @@ Do not report done until every line is true and you have the evidence.
       (verify a window appears in the isolated session with DriveUI), the
       file exists at the path from `launcherPathForAppName:`, `make_services`
       lists it, the Downloaded page lists it, Remove asks and deletes it.
+- [ ] Get on a `download.kde.org` link installs, and picks the file the
+      resolver names: the Qt6 rather than the Qt5 build for `digiKam`, the
+      newest version rather than the first listed, and the AppImage rather
+      than the `.dmg`/`.exe`/tarball in the same directory. On an aarch64
+      machine it refuses and the message names the files it found, rather than
+      downloading an x86-64 binary. A link to a page that is not a directory
+      (an `apps.kde.org` application page) is refused with the "not a download
+      directory" message, not a network error. No catalog entry has a KDE
+      link today, so drive this through a fixture entry (the feed fixture has
+      one) rather than expecting it in the live catalog.
 - [ ] Unplug the network (or set `AGFeedURL` to an unreachable host) with a
       cache present: banner with error and Retry, catalog still browsable.
       Without cache: error view with Retry.

@@ -3,8 +3,9 @@
 How AppGarden decides *which file* to fetch when a user presses Get. Two
 decisions, in this order:
 
-1. **Which release** of a project's GitHub repository to look at.
-2. **Which file** inside that release to download.
+1. **Which release** of a project's GitHub repository to look at, or which
+   version directory of a download server to read.
+2. **Which file** inside that release or directory to download.
 
 Both live in `PackageManager`, not here. AppGarden supplies two strings - the
 repository (`AGDownloadResolver`) and the app's catalog name
@@ -20,6 +21,8 @@ the app and the website is a bug in one of them, not a feature.
 | `AGDownloadResolver` (where from) | `AppGarden/Models/AGDownloadResolver.m` |
 | Which release | `PackageManager/GWAppImageDownloader.m`, `+preferredTagForRepo:progress:` |
 | Which file | `PackageManager/GWAppImageAssetPicker.m` |
+| Which version directory (KDE) | `PackageManager/GWKDEAppImagePicker.m` |
+| Which file in it (KDE) | `PackageManager/GWKDEAppImagePicker.m` |
 
 ## No API, ever
 
@@ -193,6 +196,150 @@ on 2026-09-28. It is `#include`d into
 Because the input is a fixed list of names, the suite needs no network and
 cannot drift: if a project renames its assets the test still says what it
 said, and a live run is what notices.
+
+## A download.kde.org directory
+
+Not every catalog entry comes from a repository. A KDE application link names
+a **directory**:
+
+    https://download.kde.org/stable/digikam/
+
+That is an autoindex page listing version directories (`9.1.0/`), and the
+newest of those lists the builds. The same two questions, asked of a different
+shape, and the same answer structure: `GWKDEAppImagePicker` decides with no
+network, and the downloader reads the pages.
+
+| Stage | Where |
+| --- | --- |
+| Recognising the link | `AppGarden/Models/AGDownloadResolver.m`, `AGDownloadKindKDEFileListing` |
+| Which version directory | `GWKDEAppImagePicker.m`, `+versionDirectoriesFromEntryNames:` |
+| Which file in it | `GWKDEAppImagePicker.m`, `+pickFileFromNames:appName:architecture:outcome:candidates:` |
+| Reading the index | `GWAppImageDownloader.m`, `+entryNamesInIndexHTML:` |
+
+No catalog entry has a KDE link today, so this is capability rather than a
+reported failure. It was measured against every application under
+`https://download.kde.org/stable/` (61 of them), of which **five** ship an
+AppImage: digikam, krita, crow-translate, rkward and labplot.
+
+### Two shapes
+
+- **Version directories** (4 of the 5): the newest one that holds an AppImage
+  is the one to read. labplot has none - its AppImage, two `.dmg`s, an `.exe`
+  and two source tarballs sit directly in the application directory - so the
+  resolver checks the application directory itself before walking anything.
+
+### Versions compare as numbers, never as text
+
+| Directory | Text order says | Actually |
+| --- | --- | --- |
+| `6.0.2.1/` vs `6.0.2/` | `6.0.2` first | `6.0.2.1` is the newer release |
+| `1.10/` vs `1.9/` | `1.10` first | `1.9` is the newer: 9 < 10 |
+| `26.08/` vs `24.12/` (kdenlive) | `26.08` first | correct by luck |
+
+A trailing `.0` adds no version, so `5.3.2.0` and `5.3.2` are the same
+release; the name then breaks the tie so the order is total. A suffixed
+directory (`24.08.1-rc1`) is left out of the walk entirely rather than ordered
+by a rule nobody has measured.
+
+plasma's directories include both `6.7.5` and `6.30`, which compare as
+numbers in that order too (30 > 7) - a reminder that a two-digit minor version
+is a number, not a decimal.
+
+A name counts as a version only if it is digits and dots, optionally with a
+leading `v` - frameworks ships `v5.110.0` beside `6.7`. That is what keeps
+krita's `FastSketchPlugin-1.0.2`, `FastSketchPlugin-1.1.0` and `updates` out of
+the walk. At most four version directories are read; three of the five
+applications have exactly one.
+
+### The architecture is a requirement here, and nowhere else
+
+Every AppImage on download.kde.org is **x86-64**. There is no arm build to
+fall back to, so on aarch64 the honest answer is to refuse and name the files
+that were on offer:
+
+```
+9.1.0 has no AppImage for this machine (aarch64); it holds digiKam-9.1.0-Qt5-x86-64.appimage, digiKam-9.1.0-Qt6-x86-64.appimage
+```
+
+This is the one rule in either picker allowed to narrow to nothing, and it
+runs **before** every preference rule. The GitHub picker runs its CPU filter
+after, and can afford to, because those releases ship an arm build beside the
+x86-64 one rather than instead of it; a KDE directory can hold the only build
+that suits the machine together with a `-debug` build of another CPU, and
+dropping the debug one first would refuse an install that was available.
+
+The refusal lists every AppImage the directory holds, before the preference
+rules run, so "it holds" describes the directory rather than what survived.
+
+### Same program, two toolkits
+
+digiKam 9.1.0 lists four AppImages that are all one program on one CPU: the
+Qt5 and Qt6 release builds, and a `-debug` build of each. The answer is the
+**Qt6** build - an AppImage carries its own Qt, so the newer toolkit is the one
+to take - and name order would pick Qt5, because "5" sorts before "6" as a
+character.
+
+The same Qt tag is why the name-skeleton rule needs an addition here. The
+skeleton keeps every letter, so `digiKam-9.1.0-Qt6-x86-64.appimage` reduces to
+`digikamqt` against an app named `digiKam` reducing to `digikam`: without
+dropping a trailing toolkit tag the rule would be a silent no-op for the one
+application this was written for, and a directory holding two Qt-tagged
+programs would be reported ambiguous instead of resolved.
+
+### A page is only an index if it says so
+
+`+entryNamesInIndexHTML:` returns nil unless the page carries a `Parent
+Directory` row. `https://apps.kde.org/digikam` is an ordinary page that
+happens to have links; reading those as a file list would resolve a download
+page to a bug-report link. The site's own chrome is filtered too: the KDE
+footer links out to kde.org, and the column headers are sort queries
+(`?C=N;O=D`).
+
+### Cost
+
+A KDE resolve is **1 request** for the application directory plus 1 per version
+directory walked, so 1 to 5, each a few kilobytes. No rate limit applies and
+`api.github.com` is not involved. Browsing the catalog costs none.
+
+### What the user is told
+
+| Situation | Outcome | Message |
+| --- | --- | --- |
+| the URL is not a directory index | (not a pick) | `<url> is not a download directory, so no AppImage can be chosen from it` |
+| the URL could not be fetched | (not a pick) | `Could not reach the download directory <url>` |
+| the index lists nothing | (not a pick) | `The download directory <url> is empty` |
+| every version directory was unreadable | (not a pick) | `None of the N version directories under <url> could be read` |
+| no version directory holds an AppImage | `NoAppImage` | `No version of the application at <url> has an AppImage for this machine` |
+| the newest version has AppImages, none for this machine | `NoAppImageForArchitecture` | `<version> has no AppImage for this machine (<arch>); it holds <the names>` |
+| the newest version has several that cannot be told apart | `Ambiguous` | `<version> holds several AppImages and none of them is clearly the right one: <the names>` |
+
+A version directory with no AppImage at all is walked past - kstars 3.8.4.1 is
+a source tarball and nothing else - but a refusal or an ambiguity stops the
+walk, because quietly installing an older build of the same application is a
+surprise, not a service.
+
+### Tests
+
+`PackageManager/Tests/GWKDEAppImagePickerTests.m` - 20 cases, `#include`d into
+`PackageManagerTest.m` like the GitHub picker tests. Most use real file names
+copied from the site on 2026-09-28; three parse the **saved index pages** in
+`PackageManager/Tests/kdefixtures/`, because a parser proved against a
+hand-written sample has only proved that the sample parses. The README there
+lists what each page is and how to refresh it.
+
+### Resolved against the live site, 2026-09-28
+
+    digikam          x86_64   https://download.kde.org/stable/digikam/9.1.0/digiKam-9.1.0-Qt6-x86-64.appimage
+    krita            x86_64   https://download.kde.org/stable/krita/5.3.2.1/krita-5.3.2.1-x86_64.AppImage
+    crow-translate   x86_64   https://download.kde.org/stable/crow-translate/4.0.2/crow-translate-master-598-linux-gcc-x86_64.AppImage
+    rkward           x86_64   https://download.kde.org/stable/rkward/0.8.3/rkward-0.8.3-x86_64.AppImage
+    labplot          x86_64   https://download.kde.org/stable/labplot/labplot-2.12.1-x86_64.AppImage
+    kstars           x86_64   refused: no version holds an AppImage
+    haruna           x86_64   refused: no version holds an AppImage
+    apps.kde.org     x86_64   refused: not a directory index
+    digikam         aarch64   refused: no AppImage for this machine
+
+All five resolved URLs answer HTTP 200.
 
 ## Measured before and after
 
