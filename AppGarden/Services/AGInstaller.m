@@ -59,6 +59,19 @@ static NSString *const AGWorkspaceDOName = @"Workspace";
 - (BOOL)selectFile:(NSString *)fullPath inFileViewerRootedAtPath:(NSString *)rootFullpath;
 @end
 
+/* What AppGarden asks Workspace for when the user removes an installed
+ * application. Workspace declares the same method on its own
+ * @protocol WorkspaceAppProtocol, which lives in a source file of
+ * gershwin-workspace rather than in an installed framework header, so the
+ * one selector needed here is declared here; the signature has to match
+ * Workspace's exactly, or the call cannot be decoded.
+ * alreadyConfirmed: passes along the fact that the controller has already
+ * asked the user, so Workspace does not ask a second time. */
+@protocol AGWorkspaceTrashing <NSObject>
+- (oneway void)trashExternalPaths:(NSArray *)paths
+                 alreadyConfirmed:(BOOL)alreadyConfirmed;
+@end
+
 /* Both notifications are promised on the main thread, and every caller of
  * these two helpers is already inside a main-queue block. */
 static void AGPostTaskChange(AGInstallTask *task)
@@ -79,6 +92,7 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
 - (void)runInstallForTask:(AGInstallTask *)task app:(AGApp *)app;
 - (void)refreshServicesForApp:(AGApp *)app;
 - (void)runMakeServices;
+- (BOOL)askWorkspaceToTrashPath:(NSString *)path error:(NSError **)error;
 @end
 
 @implementation AGInstaller
@@ -348,19 +362,18 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   /* The confirmation dialog belongs to the controller: this method only
    * carries out the removal the user already agreed to. */
   NSString *path = [GWAppImageDownloader existingLauncherPathForAppName:[app name]];
-  NSFileManager *fm = [NSFileManager defaultManager];
-  NSError *removeError = nil;
-  if ([fm fileExistsAtPath:path] && ![fm removeItemAtPath:path error:&removeError])
+  if (path != nil
+      && [[NSFileManager defaultManager] fileExistsAtPath:path]
+      && ![self askWorkspaceToTrashPath:path error:error])
     {
-      if (error != NULL)
-        *error = AGInstallerError(AGInstallerErrorRemove, [NSString stringWithFormat:
-            NSLocalizedString(@"Could not remove %@: %@", @""),
-            [app displayName], [removeError localizedDescription]]);
+      /* The launcher is still exactly where it was, so the entry that
+       * promised it and the card that shows it both stay as they are. */
       return NO;
     }
 
-  /* The file is gone (or was already), so the entry that promised it and the
-   * task that finished it both go with it. */
+  /* The file is gone (or was already, or is on its way to the Trash), so
+   * the entry that promised it and the task that finished it both go with
+   * it. */
   [[self registry] removeEntryForName:[app name]];
   @synchronized (self)
     {
@@ -369,6 +382,56 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   [[NSOperationQueue mainQueue] addOperationWithBlock:^{
     AGPostInstalledSetChange(self);
   }];
+  return YES;
+}
+
+/* Hands the launcher to Workspace, which moves it to the Trash.  This is
+ * deliberately not a local -removeItemAtPath: any more: a deleted AppImage
+ * is gone for good, a trashed one can be put back, and going through
+ * Workspace means the icon also flies into the Trash icon on the Dock when
+ * a window is showing it, the way a drag there would look.
+ *
+ * Workspace's call is oneway, so this can report only whether the request
+ * could be made at all, not its outcome - which is why it does not time the
+ * connection out the way -revealApp: does for its reply.  If the file
+ * manager is not running, the launcher is left alone and the error says so,
+ * rather than falling back to deleting it for good behind the user's back. */
+- (BOOL)askWorkspaceToTrashPath:(NSString *)path error:(NSError **)error
+{
+  NSString *failure = nil;
+
+  @try
+    {
+      NSDistantObject *workspace =
+          [NSConnection rootProxyForConnectionWithRegisteredName:AGWorkspaceDOName
+                                                            host:nil];
+      if (workspace == nil)
+        {
+          failure = NSLocalizedString(@"The file manager is not running.", @"");
+        }
+      else
+        {
+          [workspace setProtocolForProxy:@protocol(AGWorkspaceTrashing)];
+          /* YES: the controller has just asked the user with its own
+           * "Remove %@?" dialog, so Workspace must not ask again. */
+          [(id<AGWorkspaceTrashing>)workspace
+              trashExternalPaths:[NSArray arrayWithObject:path]
+                  alreadyConfirmed:YES];
+        }
+    }
+  @catch (NSException *exception)
+    {
+      failure = [NSString stringWithFormat:
+          NSLocalizedString(@"The file manager could not be reached: %@", @""),
+          [exception reason]];
+    }
+
+  if (failure != nil)
+    {
+      if (error != NULL)
+        *error = AGInstallerError(AGInstallerErrorRemove, failure);
+      return NO;
+    }
   return YES;
 }
 

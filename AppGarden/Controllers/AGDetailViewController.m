@@ -463,7 +463,7 @@ static const CGFloat kAGDetailTightGap = 4.0;
   NSAlert *alert = [[NSAlert alloc] init];
   [alert setMessageText:[NSString stringWithFormat:
       NSLocalizedString(@"Remove %@?", @""), [_app displayName]]];
-  [alert setInformativeText:NSLocalizedString(@"The application file is deleted from your Applications folder.", @"")];
+  [alert setInformativeText:NSLocalizedString(@"The application file is moved to the Trash, so you can put it back if you change your mind.", @"")];
   [alert addButtonWithTitle:NSLocalizedString(@"Remove", @"")];
   [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];
   if ([alert runModal] != NSAlertFirstButtonReturn)
