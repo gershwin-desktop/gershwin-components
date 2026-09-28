@@ -152,8 +152,10 @@ static NSString *GSCrashSysctlString(const char *name)
 id<GSCrashPlatform> GSCrashPlatformForCurrentOS(void)
 {
     NSString *os = GSCrashOSName();
+#if defined(__linux__)
     if ([os isEqualToString:@"Linux"])
         return [[GSCrashPlatformLinux alloc] init];
+#endif
 #if defined(__FreeBSD__)
     if ([os isEqualToString:@"FreeBSD"])
         return [[GSCrashPlatformFreeBSD alloc] init];
