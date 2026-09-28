@@ -23,8 +23,9 @@ typedef NS_ENUM(NSInteger, AGInstallButtonStyle) {
  *
  * This view is the one place in AppGarden that talks to AGInstaller. It is
  * given both the AGApp and the AGInstaller, starts and cancels installs,
- * launches the app, opens the download page and reports a failed install in
- * an alert, so a card or the detail page only has to place it. It keeps
+ * shows an installed file in the file manager, opens the download page and
+ * reports a failed install in an alert, so a card or the detail page only
+ * has to place it. It keeps
  * itself correct by observing AGInstaller's two notifications for its own
  * app name, which is what lets a card scroll out of view and come back in
  * step without the controller doing anything.
@@ -57,8 +58,9 @@ typedef NS_ENUM(NSInteger, AGInstallButtonStyle) {
 
 /*
  * Runs whatever the current state's click does: start the install, cancel a
- * running one, launch the app, open the download page, show the failure
- * alert. The grid's Space key calls this for the focused card.
+ * running one, show an installed file in the file manager, open the download
+ * page, show the failure alert. The grid's Space key calls this for the
+ * focused card.
  */
 - (void)performClick;
 

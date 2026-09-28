@@ -5,8 +5,7 @@
  *
  * GWAppImageDownloader - Downloads an AppImage (a direct URL, or the newest
  * GitHub release that actually ships one for this machine) and places it into
- * ~/Library/Applications as a flat, executable <name>.AppImage file (no .app
- * wrapper).
+ * ~/Applications as a flat, executable <name>.AppImage file (no .app wrapper).
  */
 
 #import "GWAppImageDownloader.h"
@@ -73,6 +72,23 @@ static const float kGWProgressSaving = 0.97f;
 
 @implementation GWAppImageDownloader
 
++ (NSString *)applicationsDirectory
+{
+  // The user's own Applications directory, the one GNUstep already reports
+  // for NSAllApplicationsDirectory (GNUSTEP_HOME is ~ and the user apps
+  // directory is "Applications"), so anything that lands here is picked up
+  // by the desktop's application scan without a second scan of its own.
+  return [NSHomeDirectory() stringByAppendingPathComponent:@"Applications"];
+}
+
++ (NSString *)legacyApplicationsDirectory
+{
+  // Where downloads went before the folder moved: kept only so an install
+  // made there can still be found, removed and revealed where it is.
+  return [NSHomeDirectory() stringByAppendingPathComponent:
+          @"Library/Applications"];
+}
+
 + (NSString *)launcherPathForAppName:(NSString *)appName
 {
   // An underscore in the AppImage name becomes a space in the downloaded
@@ -80,12 +96,29 @@ static const float kGWProgressSaving = 0.97f;
   appName = [[appName componentsSeparatedByString:@"_"]
              componentsJoinedByString:@" "];
 
-  // The downloaded AppImage lives directly in the user's home Applications
+  // The downloaded AppImage lives directly in the user's Applications
   // directory as a flat, executable file (no .app wrapper).
-  NSString *home = NSHomeDirectory();
-  NSString *appsDir = [home stringByAppendingPathComponent:@"Library/Applications"];
+  NSString *appsDir = [self applicationsDirectory];
   return [appsDir stringByAppendingPathComponent:
           [NSString stringWithFormat:@"%@.AppImage", appName]];
+}
+
++ (NSString *)existingLauncherPathForAppName:(NSString *)appName
+{
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSString *path = [self launcherPathForAppName:appName];
+  if ([fm fileExistsAtPath:path])
+    return path;
+
+  // An install from before the download folder moved is still in the old
+  // directory; it answers as installed (and is removed and revealed) from
+  // there, instead of looking like nothing was ever downloaded.
+  NSString *legacy = [[self legacyApplicationsDirectory]
+                      stringByAppendingPathComponent:[path lastPathComponent]];
+  if ([fm fileExistsAtPath:legacy])
+    return legacy;
+
+  return path;
 }
 
 - (BOOL)downloadAppImageFromURL:(NSString *)url

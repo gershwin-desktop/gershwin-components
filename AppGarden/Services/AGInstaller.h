@@ -53,6 +53,14 @@ typedef NS_ENUM(NSInteger, AGInstallState) {
 
 - (BOOL)launchApp:(AGApp *)app error:(NSError **)error;
 
+/*
+ * Shows the installed file in the file manager instead of starting it: a
+ * Distributed Objects call to the Workspace application, which selects the
+ * file in a viewer. This is what the Open button runs. Returns NO with error
+ * set when the file is gone or the file manager cannot be reached.
+ */
+- (BOOL)revealApp:(AGApp *)app error:(NSError **)error;
+
 - (BOOL)removeApp:(AGApp *)app error:(NSError **)error;
 
 /*

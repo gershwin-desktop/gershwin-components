@@ -295,10 +295,11 @@ main(int argc, char** argv, char **env_c)
     }
 
   /*
-   *	Also scan the user's Library/Applications directory: the PackageManager
-   *	framework (AppGarden, Software Update) downloads AppImages there, and
-   *	NSAllApplicationsDirectory does not include it, so an application
-   *	installed from the catalog could not be launched by name.
+   *	Also scan the user's Library/Applications directory: that is where
+   *	the PackageManager framework downloaded AppImages before the download
+   *	folder moved to ~/Applications (which NSAllApplicationsDirectory
+   *	covers), so an install made before the folder moved still
+   *	registers.
    */
   enumerator = [NSSearchPathForDirectoriesInDomains(
     NSLibraryDirectory, NSUserDomainMask, YES) objectEnumerator];

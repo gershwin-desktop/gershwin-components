@@ -29,7 +29,8 @@ static NSString *const AGInstallerErrorDomain =
 
 enum {
   AGInstallerErrorRemove = 1,   // the AppImage could not be deleted
-  AGInstallerErrorLaunch        // the AppImage could not be started at all
+  AGInstallerErrorLaunch,       // the AppImage could not be started at all
+  AGInstallerErrorReveal        // the file manager would not show the file
 };
 
 static NSError *AGInstallerError(NSInteger code, NSString *text)
@@ -38,6 +39,25 @@ static NSError *AGInstallerError(NSInteger code, NSString *text)
                              code:code
                          userInfo:@{ NSLocalizedDescriptionKey: text }];
 }
+
+/*
+ * The file manager's Distributed Objects name. GNUstep registers an
+ * application's services connection under the application's name with the
+ * services listener as its root object, and that listener forwards any
+ * selector the application delegate answers to - and the delegate of
+ * Workspace is its own singleton, which implements
+ * -selectFile:inFileViewerRootedAtPath: (Workspace/WorkspaceApplication.m).
+ * The only selector filter there is, the GSPermittedMessages default, is not
+ * set on this desktop, so this one is not filtered out.
+ */
+static NSString *const AGWorkspaceDOName = @"Workspace";
+
+/* What AppGarden asks Workspace for over that connection. Declared here
+ * because the connection is private to this class; the signature has to match
+ * Workspace's own method exactly, or the reply cannot be decoded. */
+@protocol AGWorkspaceFileRevealing <NSObject>
+- (BOOL)selectFile:(NSString *)fullPath inFileViewerRootedAtPath:(NSString *)rootFullpath;
+@end
 
 /* Both notifications are promised on the main thread, and every caller of
  * these two helpers is already inside a main-queue block. */
@@ -58,6 +78,7 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
 @interface AGInstaller ()
 - (void)runInstallForTask:(AGInstallTask *)task app:(AGApp *)app;
 - (void)refreshServicesForApp:(AGApp *)app;
+- (void)runMakeServices;
 @end
 
 @implementation AGInstaller
@@ -112,7 +133,10 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   AGInstallRegistry *registry = [self registry];
   if ([registry entryForName:name] != nil)
     {
-      NSString *path = [GWAppImageDownloader launcherPathForAppName:name];
+      /* existing, not the download path alone: an install that predates the
+       * move of the download folder is still where it was downloaded to, and
+       * that is where it is found, removed and revealed. */
+      NSString *path = [GWAppImageDownloader existingLauncherPathForAppName:name];
       NSFileManager *fm = [NSFileManager defaultManager];
       if ([fm isExecutableFileAtPath:path])
         return AGInstallStateInstalled;
@@ -323,7 +347,7 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
 
   /* The confirmation dialog belongs to the controller: this method only
    * carries out the removal the user already agreed to. */
-  NSString *path = [GWAppImageDownloader launcherPathForAppName:[app name]];
+  NSString *path = [GWAppImageDownloader existingLauncherPathForAppName:[app name]];
   NSFileManager *fm = [NSFileManager defaultManager];
   NSError *removeError = nil;
   if ([fm fileExistsAtPath:path] && ![fm removeItemAtPath:path error:&removeError])
@@ -376,7 +400,7 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
    * AppImage the cache does not know about opens this way instead of being
    * reported as unlaunchable. An error is reported only if this raises. */
   NSTask *task = [[NSTask alloc] init];
-  [task setLaunchPath:[GWAppImageDownloader launcherPathForAppName:name]];
+  [task setLaunchPath:[GWAppImageDownloader existingLauncherPathForAppName:name]];
   [task setArguments:@[]];
   [task setCurrentDirectoryPath:NSHomeDirectory()];
   @try
@@ -394,12 +418,79 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   return YES;
 }
 
+#pragma mark - Revealing
+
+/*
+ * What the Open button runs: not starting the application, but asking the
+ * file manager over Distributed Objects to show the file it installed, the
+ * same thing "Show in File Viewer" does elsewhere on the desktop. The file
+ * manager is the Workspace application; the connection is looked up by its
+ * registered name, so nothing is hard-coded beyond that name, and a file
+ * manager that is not running is reported rather than silently ignored.
+ */
+- (BOOL)revealApp:(AGApp *)app error:(NSError **)error
+{
+  if (error != NULL)
+    *error = nil;
+
+  NSString *name = [app name];
+  NSString *path = (name != nil)
+      ? [GWAppImageDownloader existingLauncherPathForAppName:name] : nil;
+  if (path == nil || ![[NSFileManager defaultManager] fileExistsAtPath:path])
+    {
+      if (error != NULL)
+        *error = AGInstallerError(AGInstallerErrorReveal, [NSString stringWithFormat:
+            NSLocalizedString(@"%@ is no longer on disk.", @""),
+            [app displayName]]);
+      return NO;
+    }
+
+  BOOL shown = NO;
+  NSString *failure = NSLocalizedString(@"The file manager did not show the file.", @"");
+  @try
+    {
+      NSDistantObject *workspace =
+          [NSConnection rootProxyForConnectionWithRegisteredName:AGWorkspaceDOName
+                                                            host:nil];
+      if (workspace == nil)
+        {
+          failure = NSLocalizedString(@"The file manager is not running.", @"");
+        }
+      else
+        {
+          /* Opening a viewer can take a moment the first time, and a file
+           * manager that never answers must cost a dialog, not a window that
+           * sits there unresponsive: the same 5 second bound the desktop
+           * puts on its own workspace calls. */
+          NSConnection *connection = [workspace connectionForProxy];
+          [connection setRequestTimeout:5.0];
+          [connection setReplyTimeout:5.0];
+          [workspace setProtocolForProxy:@protocol(AGWorkspaceFileRevealing)];
+          shown = [(id<AGWorkspaceFileRevealing>)workspace
+              selectFile:path
+              inFileViewerRootedAtPath:[path stringByDeletingLastPathComponent]];
+        }
+    }
+  @catch (NSException *exception)
+    {
+      failure = [NSString stringWithFormat:
+          NSLocalizedString(@"The file manager could not be reached: %@", @""),
+          [exception reason]];
+    }
+
+  if (!shown)
+    {
+      if (error != NULL)
+        *error = AGInstallerError(AGInstallerErrorReveal, failure);
+      return NO;
+    }
+  return YES;
+}
+
 #pragma mark - Private
 
 /* Runs make_services once per install: attempts are counted per install, not
- * retried, so a broken tool cannot turn every Open click into a stall. The
- * tool's own output goes to null because nobody reads it here and a full
- * pipe would stall the tool instead. */
+ * retried, so a broken tool cannot turn every Open click into a stall. */
 - (void)refreshServicesForApp:(AGApp *)app
 {
   NSString *name = [app name];
@@ -410,7 +501,13 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
           [_servicesRefreshed addObject:name];
         }
     }
+  [self runMakeServices];
+}
 
+/* The tool itself, run after an install. Its output goes to null because
+ * nobody reads it here and a full pipe would stall the tool instead. */
+- (void)runMakeServices
+{
   NSTask *task = [[NSTask alloc] init];
   [task setLaunchPath:AGMakeServicesPath];
   [task setArguments:@[]];

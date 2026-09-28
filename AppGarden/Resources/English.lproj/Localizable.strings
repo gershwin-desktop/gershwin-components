@@ -78,6 +78,14 @@
 "Could not remove %@: %@" = "Could not remove %@: %@";
 "Could not start %@: %@" = "Could not start %@: %@";
 
+/* Showing the installed file in the file manager (AGInstaller revealApp:),
+ * shown in an alert. %@ is the application's display name, or the file
+ * manager's own reason. */
+"%@ is no longer on disk." = "%@ is no longer on disk.";
+"The file manager is not running." = "The file manager is not running.";
+"The file manager did not show the file." = "The file manager did not show the file.";
+"The file manager could not be reached: %@" = "The file manager could not be reached: %@";
+
 /* A GitHub API failure that was a rate limit: the downloader's own message
  * names only the step that failed, so the rewrite in AGInstallTask prefixes
  * it. %@ is that original message. */
@@ -99,13 +107,14 @@
 "Unavailable" = "Unavailable";
 "Downloading. Click to cancel." = "Downloading. Click to cancel.";
 
-/* Download alerts and the failed-state tooltip fallback. */
+/* Alert titles and the failed-state tooltip fallback: a download that did
+ * not finish, and an Open click the file manager did not answer. */
 "Download Failed" = "Download Failed";
 "The download failed." = "The download failed.";
 "Try Again" = "Try Again";
 "Cancel" = "Cancel";
 "OK" = "OK";
-"Could Not Open the Application" = "Could Not Open the Application";
+"Could Not Show the File" = "Could Not Show the File";
 
 /* Screenshot frame fallback when the picture does not arrive (AGScreenshotView). */
 "Screenshot unavailable" = "Screenshot unavailable";

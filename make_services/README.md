@@ -20,7 +20,9 @@ the `libs-gui` one.
 * the user's `~/Downloads` directory, where downloaded AppImage applications
   are commonly kept;
 * the user's `~/Library/Applications` directory, where the PackageManager
-  framework (AppGarden, Software Update) puts downloaded AppImages;
+  framework (AppGarden, Software Update) put downloaded AppImages before the
+  download folder moved to `~/Applications` (already covered by the first
+  bullet);
 * the standard `Services` directories.
 
 Every found application is logged (`found application ...`), and AppImage

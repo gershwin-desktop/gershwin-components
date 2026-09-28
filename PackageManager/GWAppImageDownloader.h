@@ -15,7 +15,7 @@
 
 @interface GWAppImageDownloader : NSObject
 
-// Downloads an already-known AppImage URL into ~/Library/Applications/<appName>.app
+// Downloads an already-known AppImage URL into ~/Applications/<appName>.AppImage
 - (BOOL)downloadAppImageFromURL:(NSString *)url
                          appName:(NSString *)appName
                         progress:(nullable id<GWInstallProgressHandler>)progress
@@ -34,8 +34,21 @@
                                progress:(nullable id<GWInstallProgressHandler>)progress
                                   error:(NSError **)error;
 
-// Path of the launcher inside the downloaded .app bundle.  Used to launch the
-// app after download and to detect an already-downloaded AppImage.
+// Path of the downloaded AppImage for appName.  Used to launch the app after
+// download and to detect an already-downloaded AppImage.
 + (NSString *)launcherPathForAppName:(NSString *)appName;
+
+// Where launcherPathForAppName: puts new downloads (~/Applications), and the
+// directory they went to before the download folder moved there
+// (~/Library/Applications), which existingLauncherPathForAppName: still
+// checks for an install made before the move.
++ (NSString *)applicationsDirectory;
++ (NSString *)legacyApplicationsDirectory;
+
+// The launcher path an install can actually be found at: the current
+// directory while the file is there, the pre-move directory if that is where
+// it still is, and the current path as the download target when there is no
+// file yet.
++ (NSString *)existingLauncherPathForAppName:(NSString *)appName;
 
 @end

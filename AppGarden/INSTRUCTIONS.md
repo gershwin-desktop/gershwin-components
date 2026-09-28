@@ -554,21 +554,33 @@ viewport). Measure with `top` that scrolling the full grid stays smooth.
 
 `GWAppImageDownloader` puts the file at
 `+[GWAppImageDownloader launcherPathForAppName:]`, currently
-`~/Library/Applications/<Display Name>.AppImage`. That is the location the
-rest of the desktop expects from PackageManager, so AppGarden uses the same
-call and never hard-codes the path.
+`~/Applications/<Display Name>.AppImage`. That is the location the rest of
+the desktop expects from PackageManager (`NSAllApplicationsDirectory` is
+`~/Applications`), so AppGarden uses the same call and never hard-codes the
+path. An install made before the folder moved is still in
+`~/Library/Applications`, and
+`+[GWAppImageDownloader existingLauncherPathForAppName:]` is the call that
+finds an app in either place: everything that asks "is this installed, and
+where" (the state of the button, removal, Open) goes through it, not through
+the download path.
 
 Required verification, part of the acceptance checklist: after a test
 install, run `make_services` (it is in `/System/Library/Tools`) and check
 that the new AppImage is listed as a found application, then confirm that
-the file manager shows it and that `[[NSWorkspace sharedWorkspace] launchApplication:]`
-with the display name starts it. `make_services/README.md` lists the scanned
-directories, and `~/Library/Applications` is not obviously among them. If
-the installed app is not registered, do not work around it in AppGarden
-(no symlinks into `~/Applications`, no `.desktop` files): stop and report to
-the user with the evidence, proposing either that `make_services` scans that
-directory too or that `launcherPathForAppName:` moves to `~/Applications`.
-That decision changes PackageManager and is the user's to make.
+`[[NSWorkspace sharedWorkspace] launchApplication:]` with the display name
+starts it. `make_services/README.md` lists the scanned directories. If the
+installed app is not registered, do not work around it in AppGarden (no
+symlinks, no `.desktop` files): stop and report to the user with the
+evidence, because changing where PackageManager puts downloads is the user's
+decision, not a workaround to be made here.
+
+Open does not start the application. `-revealApp:error:` asks the Workspace
+application over Distributed Objects to select the file in a viewer (what
+"Show in File Viewer" does elsewhere), with a 5 second request and reply
+timeout so a file manager that never answers costs an alert rather than a
+window that hangs. A file that is gone, or a file manager that is not
+running, is reported the same way - never silently ignored, and never
+retried.
 
 ### Which release, and which file in it
 

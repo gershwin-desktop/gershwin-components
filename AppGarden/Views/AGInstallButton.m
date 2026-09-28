@@ -239,11 +239,13 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 
   if (downloading)
     {
-      /* The downloader reports coarse phases: between "downloading" and
-       * "saving" no byte count exists, so the bar runs indeterminate there
-       * and determinate outside that band. */
+      /* The task's progress is a fraction of the whole install, or -1 while
+       * nothing is measurable yet (the release lookup, or a server that
+       * declares no size). The value alone decides which of the two the bar
+       * draws, so it is never guessed from a band of values: the transfer
+       * reports real fractions all the way from 0.05 to 0.95. */
       float progress = [[_installer taskForApp:_app] progress];
-      BOOL indeterminate = (progress < 0.0f || (progress > 0.1f && progress < 0.6f));
+      BOOL indeterminate = (progress < 0.0f);
       [_progress setIndeterminate:indeterminate];
       if (!indeterminate)
         [_progress setDoubleValue:progress];
@@ -284,7 +286,7 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
       case AGInstallButtonStateDownloading:
         return @"";   /* the progress bar stands in for the button */
       case AGInstallButtonStateOpen:
-        return NSLocalizedString(@"Open", @"Launch the installed application");
+        return NSLocalizedString(@"Open", @"Show the installed file in the file manager");
       case AGInstallButtonStateFailed:
         return NSLocalizedString(@"Failed", @"The install did not finish");
       case AGInstallButtonStateOpenPage:
@@ -337,9 +339,11 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 
       case AGInstallButtonStateOpen:
         {
+          /* Open shows where the file is; it does not start the application.
+           * A file manager that will not show it is reported, not retried. */
           NSError *error = nil;
-          if (![_installer launchApp:app error:&error])
-            [self showMessage:NSLocalizedString(@"Could Not Open the Application", @"")
+          if (![_installer revealApp:app error:&error])
+            [self showMessage:NSLocalizedString(@"Could Not Show the File", @"")
                        details:[error localizedDescription]];
         }
         break;
