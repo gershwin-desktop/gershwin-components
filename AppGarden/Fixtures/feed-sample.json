@@ -189,6 +189,32 @@
       ]
     },
     {
+      "name": "digiKam",
+      "description": "<p>digiKam is a powerful photo management program for Linux, which makes it easy to browse, manage and use your digital images.</p>",
+      "categories": [
+        "Photography"
+      ],
+      "authors": [
+        {
+          "name": "KDE",
+          "url": "https://www.kde.org"
+        }
+      ],
+      "license": "GPL-3.0-or-later",
+      "links": [
+        {
+          "type": "Download",
+          "url": "https://download.kde.org/stable/digikam/"
+        }
+      ],
+      "icons": [
+        "digikam/icons/256x256/digikam.png"
+      ],
+      "screenshots": [
+        "digikam/screenshot.png"
+      ]
+    },
+    {
       "name": "QOwnNotes",
       "description": "<p>QOwnNotes is the open source (GPL) plain-text file notepad with markdown support and todo list manager for GNU/Linux, Mac OS X and Windows by Patrizio Bekerle, that (optionally) works together with the notes application of ownCloud or Nextcloud.</p>",
       "categories": [

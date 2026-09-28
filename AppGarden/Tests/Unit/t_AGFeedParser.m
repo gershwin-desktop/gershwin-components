@@ -50,9 +50,9 @@ int main(void)
                                                  error: &error];
     PASS(catalog != nil, "fixture parses without error: %s",
          (catalog != nil) ? "ok" : [[error localizedDescription] UTF8String]);
-    /* The fixture documents 15 items, so 15 apps means zero skipped. */
-    PASS([catalog apps] != nil && [[catalog apps] count] == 15,
-         "all 15 fixture items parsed and none were skipped (got %lu)",
+    /* The fixture documents 16 items, so 16 apps means zero skipped. */
+    PASS([catalog apps] != nil && [[catalog apps] count] == 16,
+         "all 16 fixture items parsed and none were skipped (got %lu)",
          (unsigned long)[[catalog apps] count]);
     PASS([catalog appNamed: @"4KWALL"] != nil, "appNamed: finds 4KWALL");
     PASS_EQUAL([catalog fetchDate], fetched,

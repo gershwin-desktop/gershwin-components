@@ -155,8 +155,8 @@ int main(void)
   PASS(waitForLoad(30.0), "the first load completes");
   PASS(sError == nil, "the first load reports no error: %s", errorText(sError));
   PASS(sFromCache == NO, "the first load came from the network");
-  PASS(sCatalog != nil && [[sCatalog apps] count] == 15,
-       "the first load parses all 15 fixture items (got %lu)",
+  PASS(sCatalog != nil && [[sCatalog apps] count] == 16,
+       "the first load parses all 16 fixture items (got %lu)",
        (sCatalog != nil) ? (unsigned long)[[sCatalog apps] count] : 0UL);
   PASS([loader isLoading] == NO, "loading is clear once the completion ran");
 
@@ -184,7 +184,7 @@ int main(void)
   PASS(sError == nil, "a young cache is served without any request: %s",
        errorText(sError));
   PASS(sFromCache == YES, "the cached load is marked fromCache YES");
-  PASS(sCatalog != nil && [[sCatalog apps] count] == 15,
+  PASS(sCatalog != nil && [[sCatalog apps] count] == 16,
        "the cached catalog is complete");
 
   /* --- 2b. the default max age is 6 hours: 5 hours still counts --- */
@@ -222,7 +222,7 @@ int main(void)
   PASS(waitForLoad(30.0), "the conditional load completes");
   PASS(sError == nil, "an unchanged feed reports no error: %s", errorText(sError));
   PASS(sFromCache == YES, "an unchanged feed is served from the cache");
-  PASS(sCatalog != nil && [[sCatalog apps] count] == 15,
+  PASS(sCatalog != nil && [[sCatalog apps] count] == 16,
        "an unchanged feed serves the full catalog");
   NSString *touchedDateText = readDateFile(cacheDir);
   PASS(touchedDateText != nil && ![staleDateText isEqualToString: touchedDateText],
@@ -255,7 +255,7 @@ int main(void)
   PASS(waitForLoad(30.0), "the reload of a broken feed completes");
   PASS(sError != nil, "a feed that does not parse reports an error: %s",
        errorText(sError));
-  PASS(sCatalog != nil && [[sCatalog apps] count] == 15,
+  PASS(sCatalog != nil && [[sCatalog apps] count] == 16,
        "the cached catalog is served beside the error");
   PASS(sFromCache == YES, "the result of the broken reload is the cached one");
   cachedBytes = [NSData dataWithContentsOfFile: [loader cachePath]];

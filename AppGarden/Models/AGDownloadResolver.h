@@ -10,6 +10,7 @@
 
 typedef NS_ENUM(NSInteger, AGDownloadKind) {
     AGDownloadKindGitHubLatestRelease, // payload: githubRepo
+    AGDownloadKindKDEFileListing,      // payload: URL of a download.kde.org directory
     AGDownloadKindDirectURL,           // payload: URL of an .AppImage file
     AGDownloadKindWebPageOnly,         // payload: downloadPageURL; we cannot fetch a file
     AGDownloadKindNone                 // no links at all

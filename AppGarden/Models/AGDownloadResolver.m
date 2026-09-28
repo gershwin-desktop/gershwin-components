@@ -16,6 +16,45 @@ static BOOL AGHasSuffixIgnoringCase(NSString *string, NSString *suffix)
   return suffixRange.location != NSNotFound;
 }
 
+/* Whether a download link is a download.kde.org application directory rather
+ * than a file or an ordinary web page.
+ *
+ * All three conditions are needed. The host, because the resolver to use is
+ * the one that reads a directory index. The trailing slash, because that is
+ * what makes it a directory: the file links in the catalog end in a name
+ * (".AppImage") and the page links do not end in a slash. And a path with at
+ * least two components after the host, because /stable/ on its own is the
+ * list of applications, not one application. The series directory in the
+ * middle (stable, nightly, attic) is not checked by name, so a new series
+ * keeps working. */
+static BOOL AGIsKDEFileListingURL(NSString *URLString)
+{
+  if (URLString == nil || ![URLString hasSuffix:@"/"])
+    return NO;
+
+  NSRange schemeRange = [URLString rangeOfString:@"://"];
+  if (schemeRange.location == NSNotFound)
+    return NO;
+
+  NSString *rest = [URLString substringFromIndex:
+                    NSMaxRange(schemeRange)];
+  NSRange slash = [rest rangeOfString:@"/"];
+  if (slash.location == NSNotFound)
+    return NO;
+
+  NSString *host = [rest substringToIndex:slash.location];
+  if ([host caseInsensitiveCompare:@"download.kde.org"] != NSOrderedSame)
+    return NO;
+
+  NSString *path = [rest substringFromIndex:NSMaxRange(slash)];
+  NSMutableArray<NSString *> *components = [NSMutableArray array];
+  for (NSString *part in [path componentsSeparatedByString:@"/"])
+    if ([part length] > 0)
+      [components addObject:part];
+
+  return [components count] >= 2;
+}
+
 @implementation AGDownloadResolver
 
 + (NSString *)currentArchitecture
@@ -57,6 +96,17 @@ static BOOL AGHasSuffixIgnoringCase(NSString *string, NSString *suffix)
     return AGDownloadKindNone;
 
   NSString *URLString = [page absoluteString];
+
+  // A download.kde.org application link names a directory, not a file:
+  // https://download.kde.org/stable/digikam/ lists version directories and
+  // the newest of those lists the builds. The framework reads the index and
+  // picks the file, the same way it reads a release and picks the asset.
+  if (AGIsKDEFileListingURL(URLString))
+    {
+      if (payload != NULL)
+        *payload = page;
+      return AGDownloadKindKDEFileListing;
+    }
 
   if (AGHasSuffixIgnoringCase(URLString, @".AppImage"))
     {

@@ -82,6 +82,20 @@ int main(void)
                "the payload is the unchanged download page");
   }
 
+  /* --- a download.kde.org application directory is a file we can fetch --- */
+  {
+    id payload = nil;
+    AGDownloadKind kind = [AGDownloadResolver kindForApp: [catalog appNamed: @"digiKam"]
+                                            architecture: @"x86_64"
+                                                 payload: &payload];
+    PASS(kind == AGDownloadKindKDEFileListing,
+         "a download.kde.org application directory resolves to a listing, "
+         "not to a page that can only be opened");
+    PASS_EQUAL([(NSURL *)payload absoluteString],
+               @"https://download.kde.org/stable/digikam/",
+               "the payload is the directory to read");
+  }
+
   /* --- no file can be fetched from here --- */
   {
     id payload = nil;

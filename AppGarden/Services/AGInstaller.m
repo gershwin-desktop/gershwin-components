@@ -272,6 +272,7 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   /* WebPageOnly and None never reach here: the button opens the download
    * page for them, so asking to install one is a programming error. */
   NSAssert(kind == AGDownloadKindGitHubLatestRelease ||
+           kind == AGDownloadKindKDEFileListing ||
            kind == AGDownloadKindDirectURL,
            @"AGInstaller may only be asked to install what the Get button downloads");
 
@@ -287,6 +288,17 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
                                                        appName:name
                                                       progress:(id<GWInstallProgressHandler>)task
                                                          error:&error];
+    }
+  else if (kind == AGDownloadKindKDEFileListing)
+    {
+      /* A download.kde.org application directory, not a file: the framework
+       * reads the index, walks to the newest version that ships an AppImage
+       * and picks this machine's build out of it. */
+      succeeded = [_downloader downloadAppImageFromKDEListingURL:
+                    [(NSURL *)payload absoluteString]
+                                                    appName:name
+                                                   progress:(id<GWInstallProgressHandler>)task
+                                                      error:&error];
     }
   else if (kind == AGDownloadKindDirectURL)
     {

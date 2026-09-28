@@ -103,7 +103,7 @@ int main(void)
                "an empty query keeps catalog order, second game second");
 
     NSArray *all = [index appsMatchingQuery: @"   " inCategory: nil];
-    PASS([all count] == 15, "a whitespace-only query over no category is everything (got %lu)",
+    PASS([all count] == 16, "a whitespace-only query over no category is everything (got %lu)",
          (unsigned long)[all count]);
   }
   {
