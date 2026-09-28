@@ -213,7 +213,7 @@ static NSDictionary *AGStatusAttributes(void)
 + (NSString *)installedEmptyMessage
 {
   return NSLocalizedString(
-      @"You have not installed anything yet. Apps you get from AppGarden appear here.",
+      @"You have not downloaded anything yet. Apps you get from AppGarden appear here.",
       @"");
 }
 

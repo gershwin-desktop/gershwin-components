@@ -17,7 +17,57 @@
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, copy) NSString *rawCategory;
 @property (nonatomic, copy) NSString *countText;
+@property (nonatomic, copy) NSString *iconName;
 @end
+
+/* Which glyph a scope row shows. The catalog's categories are open-ended,
+   so anything without a glyph of its own takes the generic one. */
+static NSString *AGSidebarIconNameForCategory(NSString *rawCategory)
+{
+  static NSDictionary *names = nil;
+  if (names == nil)
+    names = @{ @"Utility" : @"utility", @"Development" : @"development",
+               @"Office" : @"office", @"Graphics" : @"graphics",
+               @"AudioVideo" : @"audiovideo", @"Audio" : @"audio",
+               @"Video" : @"video", @"Music" : @"music",
+               @"Network" : @"network", @"Chat" : @"chat",
+               @"Game" : @"game", @"Education" : @"education",
+               @"Science" : @"science", @"Finance" : @"finance",
+               @"System" : @"system", @"Settings" : @"system",
+               @"News" : @"news", @"Engineering" : @"engineering",
+               @"TerminalEmulator" : @"terminal", @"Emulator" : @"emulator",
+               @"VideoConference" : @"videoconference",
+               @"HamRadio" : @"hamradio", @"Electronics" : @"electronics",
+               @"WordProcessor" : @"wordprocessor", @"Astronomy" : @"astronomy",
+               @"AdventureGame" : @"game", @"StrategyGame" : @"game",
+               @"ArtificialIntelligence" : @"ai", @"Database" : @"database",
+               @"IDE" : @"development", @"WebDevelopment" : @"development",
+               @"InstantMessaging" : @"chat", @"Photography" : @"photography",
+               @"ProjectManagement" : @"office", @"Sequencer" : @"music",
+               @"TextEditor" : @"texteditor", @"Viewer" : @"viewer",
+               @"X-Tool" : @"utility", @"X-Utilities" : @"utility",
+               @"Qt" : @"generic", @"GTK" : @"generic", @"GNOME" : @"generic",
+               @"KDE" : @"generic", @"Application" : @"generic" };
+  NSString *name = (rawCategory != nil) ? [names objectForKey:rawCategory] : nil;
+  return (name != nil) ? name : @"generic";
+}
+
+static NSImage *AGSidebarIcon(NSString *name)
+{
+  static NSMutableDictionary *icons = nil;
+  if (icons == nil)
+    icons = [[NSMutableDictionary alloc] init];
+  NSImage *icon = [icons objectForKey:name];
+  if (icon == nil)
+    {
+      NSString *path = [[NSBundle mainBundle] pathForResource:name ofType:@"tiff"];
+      icon = [[NSImage alloc] initWithContentsOfFile:path];
+      NSCAssert(icon != nil, @"sidebar glyph %@ missing from the bundle", name);
+      [icon setSize:NSMakeSize([AGSourceListCell iconSide], [AGSourceListCell iconSide])];
+      [icons setObject:icon forKey:name];
+    }
+  return icon;
+}
 
 @implementation AGSidebarRow
 @end
@@ -95,6 +145,10 @@
   /* One uniform column so rows keep the full list width while the split view
      pins the sidebar: the cell positions its own text and count. */
   [column setResizingMask:NSTableColumnAutoresizingMask];
+  /* One cell for the whole column; the row kind, count and glyph are set
+   * per row in -tableView:willDisplayCell:forTableColumn:row:, the hook
+   * this table view consults (it never asks for a data cell per row). */
+  [column setDataCell:[[AGSourceListCell alloc] initTextCell:@""]];
   [_tableView addTableColumn:column];
   [_tableView setColumnAutoresizingStyle:NSTableViewUniformColumnAutoresizingStyle];
 
@@ -141,6 +195,12 @@
   row.section = section;
   row.title = title;
   row.rawCategory = rawCategory;
+  switch (section)
+    {
+      case AGSidebarSectionDiscover: row.iconName = @"discover"; break;
+      case AGSidebarSectionInstalled: row.iconName = @"downloaded"; break;
+      case AGSidebarSectionCategory: row.iconName = AGSidebarIconNameForCategory(rawCategory); break;
+    }
   if (count >= 0)
     row.countText = [NSString stringWithFormat:@"%ld", (long)count];
   [rows addObject:row];
@@ -166,7 +226,7 @@
                  count:-1
                   into:rows];
       [self addSection:AGSidebarSectionInstalled
-                 title:NSLocalizedString(@"Installed", @"")
+                 title:NSLocalizedString(@"Downloaded", @"")
           rawCategory:nil
                  count:-1
                   into:rows];
@@ -199,7 +259,7 @@
                  count:-1
                   into:rows];
       [self addSection:AGSidebarSectionInstalled
-                 title:NSLocalizedString(@"Installed", @"")
+                 title:NSLocalizedString(@"Downloaded", @"")
           rawCategory:nil
                  count:-1
                   into:rows];
@@ -313,25 +373,35 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn
   return [self heightForRowAtIndex:row];
 }
 
-- (NSCell *)tableView:(NSTableView *)tableView
- dataCellForTableColumn:(NSTableColumn *)tableColumn
-                   row:(NSInteger)row
+- (void)tableView:(NSTableView *)tableView
+  willDisplayCell:(id)cell
+   forTableColumn:(NSTableColumn *)tableColumn
+              row:(NSInteger)row
 {
-  (void)tableColumn;
-  if (row < 0 || row >= (NSInteger)[_rows count])
-    return nil;
+  (void)tableView; (void)tableColumn;
+  if (row < 0 || row >= (NSInteger)[_rows count]
+      || ![cell isKindOfClass:[AGSourceListCell class]])
+    return;
   AGSidebarRow *rowObject = _rows[(NSUInteger)row];
-  AGSourceListCell *cell = [[AGSourceListCell alloc] initTextCell:@""];
+  AGSourceListCell *sourceCell = cell;
   if (rowObject.isHeader)
-    [cell setRowKind:AGSourceListRowKindHeader];
+    {
+      [sourceCell setRowKind:AGSourceListRowKindHeader];
+      [sourceCell setCountText:nil];
+      [sourceCell setImage:nil];
+    }
   else if (rowObject.isSpacer)
-    [cell setRowKind:AGSourceListRowKindSpacer];
+    {
+      [sourceCell setRowKind:AGSourceListRowKindSpacer];
+      [sourceCell setCountText:nil];
+      [sourceCell setImage:nil];
+    }
   else
     {
-      [cell setRowKind:AGSourceListRowKindItem];
-      [cell setCountText:rowObject.countText];
+      [sourceCell setRowKind:AGSourceListRowKindItem];
+      [sourceCell setCountText:rowObject.countText];
+      [sourceCell setImage:AGSidebarIcon(rowObject.iconName)];
     }
-  return cell;
 }
 
 - (BOOL)tableView:(NSTableView *)tableView shouldSelectRow:(NSInteger)row

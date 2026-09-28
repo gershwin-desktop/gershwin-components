@@ -15,7 +15,7 @@ Applications folder and starts like any other application.
 - Get downloads the application (GitHub releases resolve to the right build
   for this machine; direct .AppImage links download as they are). While the
   download runs the button shows its progress; afterwards it reads Open.
-- Installed lists what AppGarden installed. The detail page of an installed
+- Downloaded lists what AppGarden downloaded. The detail page of a downloaded
   application has a Remove button that deletes the file after asking.
 - Applications the catalog only links to a web page for show Open Page.
 

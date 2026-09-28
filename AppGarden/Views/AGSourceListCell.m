@@ -5,34 +5,19 @@
 
 static const CGFloat kAGSourceRowHeight = 24.0;
 static const CGFloat kAGSourceSpacerHeight = 12.0;
-/* Left inset of a label: items sit further in than headers, so the two
- * columns of text do not read as one list of items. */
-static const CGFloat kAGSourceItemInset = 12.0;
-static const CGFloat kAGSourceHeaderInset = 8.0;
+/* Headers and glyphs share one left inset; an item's label starts after the
+ * glyph column so the two columns of text do not read as one list. */
+static const CGFloat kAGSourceLeftInset = 12.0;
+static const CGFloat kAGSourceIconSide = 16.0;
+static const CGFloat kAGSourceIconGap = 8.0;
 static const CGFloat kAGSourceCountInset = 12.0;
 static const CGFloat kAGSourceCountGap = 8.0;
 
-/* Small caps only where the font set really has the trait: asking a font
- * manager for a trait it cannot supply returns the font unchanged, and a
- * section label that silently stops being small caps is still a section
- * label, so the bold fallback is explicit rather than accidental. */
+/* Section titles are bold capitals: no font here carries a small-caps
+ * trait, and capitals set them apart from the items at a glance. */
 static NSFont *AGSourceHeaderFont(void)
 {
-  static NSFont *font = nil;
-  if (font == nil)
-    {
-      NSFont *bold = METRICS_FONT_SYSTEM_BOLD_11;
-      NSFontManager *manager = [NSFontManager sharedFontManager];
-      NSFont *smallCaps = [manager convertFont:bold
-                                    toHaveTrait:(NSBoldFontMask |
-                                                  NSSmallCapsFontMask)];
-      if (smallCaps != nil &&
-          (([manager traitsOfFont:smallCaps] & NSSmallCapsFontMask) != 0))
-        font = smallCaps;
-      else
-        font = bold;
-    }
-  return font;
+  return METRICS_FONT_SYSTEM_BOLD_11;
 }
 
 /* Built once: a paragraph style is immutable here, and a row list redrawn on
@@ -80,14 +65,39 @@ static NSDictionary *AGSourceCountAttributes(NSColor *color)
   };
 }
 
-/* The y a single measured line starts at to sit centered in frame. Measuring
- * first is what makes this right in a flipped and an unflipped table alike. */
-static CGFloat AGSourceCenteredTop(NSSize textSize, NSRect frame)
+/* The y a single line starts at so that its capitals sit centered in frame.
+ * Centering the line box instead put the glyphs about four points high: the
+ * box carries the descender and this font's generous ascender, neither of
+ * which the eye counts. The cap height comes from the cairo backend patch
+ * cairo-cap-height-x-height (unpatched backends report 0 and would centre
+ * the baseline instead). */
+static CGFloat AGSourceCenteredTop(NSDictionary *attributes, NSRect frame)
 {
-  return NSMidY(frame) - textSize.height / 2.0;
+  NSFont *font = [attributes objectForKey:NSFontAttributeName];
+  CGFloat baseline = NSMidY(frame) + [font capHeight] / 2.0;
+  return baseline - [font ascender];
+}
+
+static NSRect AGSourceIconRect(NSRect frame)
+{
+  return NSMakeRect(NSMinX(frame) + kAGSourceLeftInset,
+                    floor(NSMidY(frame) - kAGSourceIconSide / 2.0),
+                    kAGSourceIconSide, kAGSourceIconSide);
 }
 
 @implementation AGSourceListCell
+
+@dynamic countText;
+
+- (NSString *)countText
+{
+  return [self representedObject];
+}
+
+- (void)setCountText:(NSString *)countText
+{
+  [self setRepresentedObject:[countText copy]];
+}
 
 + (CGFloat)rowHeight
 {
@@ -97,6 +107,11 @@ static CGFloat AGSourceCenteredTop(NSSize textSize, NSRect frame)
 + (CGFloat)spacerRowHeight
 {
   return kAGSourceSpacerHeight;
+}
+
++ (CGFloat)iconSide
+{
+  return kAGSourceIconSide;
 }
 
 #pragma mark - Drawing
@@ -121,17 +136,17 @@ static CGFloat AGSourceCenteredTop(NSSize textSize, NSRect frame)
 
 - (void)drawHeaderInFrame:(NSRect)frame
 {
-  NSString *title = [self stringValue];
+  NSString *title = [[self stringValue] uppercaseString];
   if ([title length] == 0)
     return;
 
   NSDictionary *attributes = AGSourceHeaderAttributes();
   NSSize size = [title sizeWithAttributes:attributes];
-  CGFloat width = NSWidth(frame) - kAGSourceHeaderInset;
+  CGFloat width = NSWidth(frame) - kAGSourceLeftInset;
   if (width <= 0.0)
     return;
-  NSRect line = NSMakeRect(NSMinX(frame) + kAGSourceHeaderInset,
-                           AGSourceCenteredTop(size, frame),
+  NSRect line = NSMakeRect(NSMinX(frame) + kAGSourceLeftInset,
+                           AGSourceCenteredTop(attributes, frame),
                            width, size.height);
   [title drawInRect:line withAttributes:attributes];
 }
@@ -155,7 +170,20 @@ static CGFloat AGSourceCenteredTop(NSSize textSize, NSRect frame)
    * goes illegible. */
   NSColor *countColor = selected ? color : [NSColor disabledControlTextColor];
 
-  CGFloat labelX = NSMinX(frame) + kAGSourceItemInset;
+  NSImage *image = [self image];
+  if (image != nil)
+    {
+      /* respectFlipped: the table is flipped and the glyph would otherwise
+       * draw upside down. */
+      [image drawInRect:AGSourceIconRect(frame)
+               fromRect:NSZeroRect
+              operation:NSCompositeSourceOver
+               fraction:1.0
+         respectFlipped:YES
+                  hints:nil];
+    }
+
+  CGFloat labelX = NSMinX(frame) + kAGSourceLeftInset + kAGSourceIconSide + kAGSourceIconGap;
   CGFloat rightEdge = NSMaxX(frame) - kAGSourceCountInset;
   CGFloat countWidth = 0.0;
 
@@ -176,7 +204,7 @@ static CGFloat AGSourceCenteredTop(NSSize textSize, NSRect frame)
       if (maxWidth > 0.0)
         {
           NSSize size = [title sizeWithAttributes:attributes];
-          NSRect line = NSMakeRect(labelX, AGSourceCenteredTop(size, frame),
+          NSRect line = NSMakeRect(labelX, AGSourceCenteredTop(attributes, frame),
                                    maxWidth, size.height);
           [title drawInRect:line withAttributes:attributes];
         }
@@ -187,7 +215,7 @@ static CGFloat AGSourceCenteredTop(NSSize textSize, NSRect frame)
       NSDictionary *attributes = AGSourceCountAttributes(countColor);
       NSSize size = [count sizeWithAttributes:attributes];
       NSRect line = NSMakeRect(rightEdge - size.width,
-                               AGSourceCenteredTop(size, frame),
+                               AGSourceCenteredTop(attributes, frame),
                                size.width, size.height);
       [count drawInRect:line withAttributes:attributes];
     }

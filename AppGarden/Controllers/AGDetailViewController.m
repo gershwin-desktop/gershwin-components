@@ -275,7 +275,7 @@ static const CGFloat kAGDetailTightGap = 4.0;
   [_installButton setApp:app];
   [_contentView addSubview:_installButton];
 
-  _removeButton = [[NSButton alloc] initWithFrame:NSMakeRect(0.0, 0.0, 88.0, buttonSize.height)];
+  _removeButton = [[NSButton alloc] initWithFrame:NSMakeRect(0.0, 0.0, buttonSize.width, buttonSize.height)];
   [_removeButton setBezelStyle:NSRoundedBezelStyle];
   [_removeButton setTitle:NSLocalizedString(@"Remove", @"")];
   [_removeButton setFont:METRICS_FONT_SYSTEM_REGULAR_13];

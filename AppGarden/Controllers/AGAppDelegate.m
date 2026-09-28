@@ -108,7 +108,7 @@ static NSString *const kAGHelpURLString =
   NSMenu *viewMenu = [self submenuTitled:NSLocalizedString(@"View", @"") inMenu:mainMenu];
   [self addItemTitled:NSLocalizedString(@"Discover", @"")
                action:@selector(showDiscover:) key:@"1" modifiers:NSCommandKeyMask toMenu:viewMenu];
-  [self addItemTitled:NSLocalizedString(@"Installed", @"")
+  [self addItemTitled:NSLocalizedString(@"Downloaded", @"")
                action:@selector(showInstalled:) key:@"2" modifiers:NSCommandKeyMask toMenu:viewMenu];
   [viewMenu addItem:[NSMenuItem separatorItem]];
   [self addItemTitled:NSLocalizedString(@"Reload Catalog", @"")

@@ -45,7 +45,18 @@ AppGarden_OBJC_FILES = \
 # The two files still land in AppGarden.app/Resources/ as before.
 AppGarden_RESOURCE_FILES = \
   AppGarden.png \
-  AppGarden@2x.png
+  AppGarden@2x.png \
+  Icons/ai.tiff Icons/astronomy.tiff Icons/audio.tiff \
+  Icons/audiovideo.tiff Icons/chat.tiff Icons/database.tiff \
+  Icons/development.tiff Icons/discover.tiff Icons/downloaded.tiff \
+  Icons/education.tiff Icons/electronics.tiff Icons/emulator.tiff \
+  Icons/engineering.tiff Icons/finance.tiff Icons/game.tiff \
+  Icons/generic.tiff Icons/graphics.tiff Icons/hamradio.tiff \
+  Icons/music.tiff Icons/network.tiff Icons/news.tiff \
+  Icons/office.tiff Icons/photography.tiff Icons/science.tiff \
+  Icons/system.tiff Icons/terminal.tiff Icons/texteditor.tiff \
+  Icons/utility.tiff Icons/video.tiff Icons/videoconference.tiff \
+  Icons/viewer.tiff Icons/wordprocessor.tiff
 AppGarden_RESOURCE_FILES_DIR = Resources
 AppGarden_LOCALIZED_RESOURCE_FILES = Localizable.strings
 AppGarden_LANGUAGES = English
@@ -76,3 +87,19 @@ ADDITIONAL_LDFLAGS += -Wl,-rpath,/System/Library/Frameworks/PackageManager.frame
 AppGarden_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 
 include $(GNUSTEP_MAKEFILES)/application.make
+
+# The sidebar glyphs are drawn as 16-point SVGs; each TIFF carries a 16 px
+# 72 dpi page and a 32 px 144 dpi page so NSImage picks a sharp bitmap at
+# GSScaleFactor 1 and 2. The TIFFs are committed so that building needs no
+# SVG renderer; run "gmake icons" after editing an SVG.
+.PHONY: icons
+icons:
+	set -e; for svg in Resources/Icons/*.svg; do \
+	  tiff=$${svg%.svg}.tiff; \
+	  inkscape -w 16 -h 16 -o $$tiff.1x.png $$svg; \
+	  inkscape -w 32 -h 32 -o $$tiff.2x.png $$svg; \
+	  convert \( $$tiff.1x.png -set units PixelsPerInch -set density 72 \) \
+	    \( $$tiff.2x.png -set units PixelsPerInch -set density 144 \) \
+	    -type TrueColorAlpha -compress lzw -define tiff:alpha=associated $$tiff; \
+	  rm -f $$tiff.1x.png $$tiff.2x.png; \
+	done

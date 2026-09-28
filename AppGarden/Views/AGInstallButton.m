@@ -1,7 +1,6 @@
 /* Copyright (c) 2026 Simon Peter / SPDX-License-Identifier: BSD-2-Clause */
 
 #import "AGInstallButton.h"
-#import "AGColors.h"
 #import "AppearanceMetrics.h"
 #import "AGApp.h"
 #import "AGInstaller.h"
@@ -23,13 +22,6 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
     AGInstallButtonStateUnavailable
 };
 
-/* Stripe period and band width of the barber pole, in points: wide enough to
- * read at 22 points of button height, narrow enough that three stripes are
- * visible at once in an 80-point pill. */
-static const CGFloat kAGBarberPeriod = 12.0;
-static const CGFloat kAGBarberStripe = 6.0;
-/* Right-hand gutter that keeps the cancel glyph clear of the stripes. */
-static const CGFloat kAGCancelGutter = 16.0;
 
 @implementation AGInstallButton
 {
@@ -37,9 +29,8 @@ static const CGFloat kAGCancelGutter = 16.0;
   AGInstaller *_installer;
   AGApp *_app;
   AGInstallButtonState _state;
-  NSTimer *_barberTimer;
-  CGFloat _barberPhase;
-  BOOL _pressed;
+  NSButton *_button;
+  NSProgressIndicator *_progress;
 }
 
 #pragma mark - Setup
@@ -54,6 +45,7 @@ static const CGFloat kAGCancelGutter = 16.0;
       _style = style;
       _installer = installer;
       _state = AGInstallButtonStateUnavailable;
+      [self buildControls];
 
       NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
       /* The task notification carries the task as its object, so it cannot be
@@ -75,8 +67,6 @@ static const CGFloat kAGCancelGutter = 16.0;
 - (void)dealloc
 {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
-  [_barberTimer invalidate];
-  _barberTimer = nil;
 }
 
 - (BOOL)isFlipped
@@ -102,9 +92,10 @@ static const CGFloat kAGCancelGutter = 16.0;
 
 + (NSSize)sizeForStyle:(AGInstallButtonStyle)style
 {
-  if (style == AGInstallButtonStyleDetail)
-    return NSMakeSize(120.0, 28.0);
-  return NSMakeSize(80.0, 22.0);
+  /* One size everywhere: the standard push button of the appearance
+   * metrics, so the card, the detail page and Remove next to it line up. */
+  (void)style;
+  return NSMakeSize(METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT);
 }
 
 - (AGApp *)app
@@ -126,8 +117,7 @@ static const CGFloat kAGCancelGutter = 16.0;
 {
   _state = [self computeState];
   [self updateToolTip];
-  [self updateBarberTimer];
-  [self setNeedsDisplay:YES];
+  [self updateControls];
 }
 
 - (AGInstallButtonState)computeState
@@ -175,15 +165,22 @@ static const CGFloat kAGCancelGutter = 16.0;
 
 - (void)updateToolTip
 {
+  if (_state == AGInstallButtonStateDownloading)
+    {
+      [self setToolTip:NSLocalizedString(@"Downloading. Click to cancel.", @"")];
+      return;
+    }
   if (_state != AGInstallButtonStateFailed)
     {
       [self setToolTip:nil];
+      [_button setToolTip:nil];
       return;
     }
   NSString *text = [[[_installer taskForApp:_app] error] localizedDescription];
   if ([text length] == 0)
-    text = NSLocalizedString(@"The installation failed.", @"");
+    text = NSLocalizedString(@"The download failed.", @"");
   [self setToolTip:text];
+  [_button setToolTip:text];
 }
 
 - (void)taskDidChange:(NSNotification *)note
@@ -208,47 +205,73 @@ static const CGFloat kAGCancelGutter = 16.0;
   [self reloadState];
 }
 
-#pragma mark - Barber pole
+#pragma mark - Controls
 
-- (void)updateBarberTimer
+/* The button is a real NSButton so the theme draws it like every other push
+ * button on this desktop, at the standard 100 x 20; only the download state
+ * is not a button and shows the theme's progress bar instead. */
+- (void)buildControls
 {
-  BOOL wanted = (_state == AGInstallButtonStateDownloading && [self window] != nil);
-  if (wanted && _barberTimer == nil)
+  NSRect bounds = [self bounds];
+  _button = [[NSButton alloc] initWithFrame:bounds];
+  [_button setBezelStyle:NSRoundedBezelStyle];
+  [_button setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+  [_button setTarget:self];
+  [_button setAction:@selector(buttonClicked:)];
+  [_button setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+  [self addSubview:_button];
+
+  _progress = [[NSProgressIndicator alloc] initWithFrame:bounds];
+  [_progress setStyle:NSProgressIndicatorBarStyle];
+  [_progress setControlSize:NSSmallControlSize];
+  [_progress setMinValue:0.0];
+  [_progress setMaxValue:1.0];
+  [_progress setHidden:YES];
+  [_progress setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+  [self addSubview:_progress];
+}
+
+- (void)updateControls
+{
+  BOOL downloading = (_state == AGInstallButtonStateDownloading);
+  [_button setHidden:downloading];
+  [_progress setHidden:!downloading];
+
+  if (downloading)
     {
-      /* Common modes so the pole keeps moving while the grid is scrolled,
-       * which is the one moment a Downloading card is looked at. The timer
-       * retains the button; dropping it when the view leaves a window is what
-       * breaks that retain when a card is recycled. */
-      _barberTimer = [NSTimer timerWithTimeInterval:1.0 / 20.0
-                                             target:self
-                                           selector:@selector(barberTick:)
-                                           userInfo:nil
-                                            repeats:YES];
-      [[NSRunLoop mainRunLoop] addTimer:_barberTimer forMode:NSRunLoopCommonModes];
+      /* The downloader reports coarse phases: between "downloading" and
+       * "saving" no byte count exists, so the bar runs indeterminate there
+       * and determinate outside that band. */
+      float progress = [[_installer taskForApp:_app] progress];
+      BOOL indeterminate = (progress < 0.0f || (progress > 0.1f && progress < 0.6f));
+      [_progress setIndeterminate:indeterminate];
+      if (!indeterminate)
+        [_progress setDoubleValue:progress];
+      [self updateAnimation];
+      return;
     }
-  else if (!wanted && _barberTimer != nil)
-    {
-      [_barberTimer invalidate];
-      _barberTimer = nil;
-    }
+  [self updateAnimation];
+  [_button setTitle:[self titleForState:_state]];
+  [_button setEnabled:(_state != AGInstallButtonStateUnavailable)];
+}
+
+/* The indeterminate bar animates only while it can be seen, so a card
+ * recycled off screen costs nothing. */
+- (void)updateAnimation
+{
+  BOOL wanted = (_state == AGInstallButtonStateDownloading && [self window] != nil
+                 && [_progress isIndeterminate]);
+  if (wanted)
+    [_progress startAnimation:nil];
+  else
+    [_progress stopAnimation:nil];
 }
 
 - (void)viewDidMoveToWindow
 {
   [super viewDidMoveToWindow];
-  [self updateBarberTimer];
+  [self updateAnimation];
 }
-
-- (void)barberTick:(NSTimer *)timer
-{
-  (void)timer;
-  _barberPhase += 2.0;
-  if (_barberPhase >= kAGBarberPeriod)
-    _barberPhase -= kAGBarberPeriod;
-  [self setNeedsDisplay:YES];
-}
-
-#pragma mark - Drawing
 
 - (NSString *)titleForState:(AGInstallButtonState)state
 {
@@ -259,7 +282,7 @@ static const CGFloat kAGCancelGutter = 16.0;
       case AGInstallButtonStateWaiting:
         return NSLocalizedString(@"Waiting...", @"Queued behind another install");
       case AGInstallButtonStateDownloading:
-        return nil;   /* the progress bar is the label in this state */
+        return @"";   /* the progress bar stands in for the button */
       case AGInstallButtonStateOpen:
         return NSLocalizedString(@"Open", @"Launch the installed application");
       case AGInstallButtonStateFailed:
@@ -269,239 +292,23 @@ static const CGFloat kAGCancelGutter = 16.0;
       case AGInstallButtonStateUnavailable:
         return NSLocalizedString(@"Unavailable", @"Nothing can be installed for this machine");
     }
-  return nil;
-}
-
-- (NSRect)pillRect
-{
-  /* Pressed draws the pill 1.5 points tighter: the only press feedback that
-   * needs no extra colour and therefore no new literal. */
-  CGFloat inset = _pressed ? 2.0 : 0.5;
-  NSRect rect = NSInsetRect([self bounds], inset, inset);
-  if (NSWidth(rect) < 4.0 || NSHeight(rect) < 4.0)
-    return NSZeroRect;
-  return rect;
-}
-
-- (NSBezierPath *)pillPath
-{
-  NSRect rect = [self pillRect];
-  if (NSIsEmptyRect(rect))
-    return [NSBezierPath bezierPath];
-  CGFloat radius = NSHeight(rect) / 2.0;
-  return [NSBezierPath bezierPathWithRoundedRect:rect xRadius:radius yRadius:radius];
-}
-
-- (void)drawRect:(NSRect)dirtyRect
-{
-  (void)dirtyRect;
-
-  NSRect bounds = [self bounds];
-  if (NSIsEmptyRect(bounds))
-    return;
-
-  NSColor *fill = nil;
-  NSColor *stroke = nil;
-  NSColor *foreground = nil;
-
-  switch (_state)
-    {
-      case AGInstallButtonStateGet:
-        fill = AGAccentColor();
-        foreground = [NSColor whiteColor];
-        break;
-      case AGInstallButtonStateWaiting:
-        fill = [NSColor disabledControlTextColor];
-        foreground = [NSColor whiteColor];
-        break;
-      case AGInstallButtonStateDownloading:
-        stroke = [NSColor gridColor];
-        break;
-      case AGInstallButtonStateOpen:
-        stroke = AGAccentColor();
-        foreground = AGAccentColor();
-        break;
-      case AGInstallButtonStateFailed:
-        stroke = [NSColor systemRedColor];
-        foreground = [NSColor systemRedColor];
-        break;
-      case AGInstallButtonStateOpenPage:
-        stroke = [NSColor gridColor];
-        foreground = [NSColor textColor];
-        break;
-      case AGInstallButtonStateUnavailable:
-        foreground = [NSColor disabledControlTextColor];
-        break;
-    }
-
-  NSBezierPath *pill = [self pillPath];
-  if (fill != nil && ![pill isEmpty])
-    {
-      [fill setFill];
-      [pill fill];
-    }
-
-  if (_state == AGInstallButtonStateDownloading)
-    [self drawProgressInRect:[self pillRect]];
-
-  if (stroke != nil && ![pill isEmpty])
-    {
-      [stroke setStroke];
-      [pill setLineWidth:1.0];
-      [pill stroke];
-    }
-
-  NSString *title = [self titleForState:_state];
-  if (title != nil && foreground != nil)
-    {
-      NSFont *font = (_style == AGInstallButtonStyleDetail)
-          ? METRICS_FONT_SYSTEM_BOLD_13 : METRICS_FONT_SYSTEM_BOLD_11;
-      NSDictionary *attributes = @{
-        NSFontAttributeName : font,
-        NSForegroundColorAttributeName : foreground
-      };
-      NSSize measured = [title sizeWithAttributes:attributes];
-      /* Centre by measurement rather than by a text rect: the maths is the
-       * same distance from both edges whether this view reports flipped. */
-      NSPoint origin = NSMakePoint(floor((NSWidth(bounds) - measured.width) / 2.0),
-                                   floor((NSHeight(bounds) - measured.height) / 2.0));
-      [title drawAtPoint:origin withAttributes:attributes];
-    }
-
-  if (_state == AGInstallButtonStateDownloading)
-    [self drawCancelGlyphInRect:bounds];
-}
-
-- (void)drawProgressInRect:(NSRect)rect
-{
-  NSBezierPath *pill = [self pillPath];
-  if ([pill isEmpty] || NSIsEmptyRect(rect))
-    return;
-
-  NSGraphicsContext *context = [NSGraphicsContext currentContext];
-  [context saveGraphicsState];
-  [pill addClip];
-
-  /* The pole's gaps show this colour, so the bar reads as "working" over the
-   * button's own interior instead of over whatever is behind it. */
-  [[NSColor controlBackgroundColor] setFill];
-  NSRectFill(rect);
-
-  float progress = -1.0f;
-  AGInstallTask *task = [_installer taskForApp:_app];
-  if (task != nil)
-    progress = [task progress];
-
-  /* -1 means the phase has no measurable size. The downloader also moves in
-   * two coarse steps (0.1 and 0.6), so everything from "not started" through
-   * "downloading" through "saving" is animated; only the gaps between those
-   * steps are a real percentage. */
-  BOOL indeterminate = (progress <= 0.0f) ||
-      (progress >= 0.1f && progress <= 0.6f);
-
-  if (indeterminate)
-    [self drawBarberPoleInRect:rect];
-  else
-    {
-      double fraction = progress;
-      if (fraction > 1.0)
-        fraction = 1.0;
-      NSRect done = NSMakeRect(NSMinX(rect), NSMinY(rect),
-                               NSWidth(rect) * fraction, NSHeight(rect));
-      if (!NSIsEmptyRect(done))
-        {
-          [AGAccentColor() setFill];
-          NSRectFill(done);
-        }
-    }
-
-  [context restoreGraphicsState];
-}
-
-- (void)drawBarberPoleInRect:(NSRect)rect
-{
-  CGFloat height = NSHeight(rect);
-  CGFloat top = NSMinY(rect);
-  CGFloat bottom = NSMaxY(rect);
-  CGFloat limit = NSMaxX(rect) + height;
-
-  NSBezierPath *stripes = [NSBezierPath bezierPath];
-  for (CGFloat x = -height - kAGBarberPeriod; x < limit; x += kAGBarberPeriod)
-    {
-      CGFloat sx = x + _barberPhase;
-      [stripes moveToPoint:NSMakePoint(sx, top)];
-      [stripes lineToPoint:NSMakePoint(sx + kAGBarberStripe, top)];
-      [stripes lineToPoint:NSMakePoint(sx + kAGBarberStripe - height, bottom)];
-      [stripes lineToPoint:NSMakePoint(sx - height, bottom)];
-      [stripes closePath];
-    }
-  [AGAccentColor() setFill];
-  [stripes fill];
-}
-
-- (void)drawCancelGlyphInRect:(NSRect)bounds
-{
-  NSRect disc = NSMakeRect(NSWidth(bounds) - kAGCancelGutter,
-                           (NSHeight(bounds) - 12.0) / 2.0, 12.0, 12.0);
-  /* A disc in the button's own interior colour keeps the glyph readable both
-   * where the pole has already run and where it has not. */
-  [[NSColor controlBackgroundColor] setFill];
-  NSRectFill(disc);
-
-  CGFloat cx = NSMidX(disc);
-  CGFloat cy = NSMidY(disc);
-  CGFloat r = 3.0;
-  NSBezierPath *cross = [NSBezierPath bezierPath];
-  [cross setLineWidth:1.5];
-  [cross setLineCapStyle:NSRoundLineCapStyle];
-  [cross moveToPoint:NSMakePoint(cx - r, cy - r)];
-  [cross lineToPoint:NSMakePoint(cx + r, cy + r)];
-  [cross moveToPoint:NSMakePoint(cx - r, cy + r)];
-  [cross lineToPoint:NSMakePoint(cx + r, cy - r)];
-  [[NSColor textColor] setStroke];
-  [cross stroke];
+  return @"";
 }
 
 #pragma mark - Interaction
 
-- (BOOL)isClickable
+- (void)buttonClicked:(id)sender
 {
-  return _state != AGInstallButtonStateUnavailable;
+  (void)sender;
+  [self performClick];
 }
 
+/* A click on the running progress bar cancels the download; the bar has no
+ * room for a second control at the standard button size. */
 - (void)mouseDown:(NSEvent *)event
 {
-  if (![self isClickable])
-    return;
-
-  /* Tracked by hand instead of firing on mouseDown: a drag that starts on the
-   * button is a gesture the user meant for the scroller, and only a press
-   * held to a release inside the pill is a click. */
-  _pressed = YES;
-  [self setNeedsDisplay:YES];
-
-  NSEvent *last = event;
-  while (last != nil)
-    {
-      last = [[self window] nextEventMatchingMask:(NSLeftMouseUpMask |
-                                                   NSLeftMouseDraggedMask)];
-      if (last == nil || [last type] == NSLeftMouseUp)
-        break;
-      NSPoint point = [self convertPoint:[last locationInWindow] fromView:nil];
-      BOOL inside = NSPointInRect(point, [self bounds]);
-      if (inside != _pressed)
-        {
-          _pressed = inside;
-          [self setNeedsDisplay:YES];
-        }
-    }
-
-  BOOL activate = (last != nil) &&
-      NSPointInRect([self convertPoint:[last locationInWindow] fromView:nil],
-                    [self bounds]);
-  _pressed = NO;
-  [self setNeedsDisplay:YES];
-  if (activate)
+  (void)event;
+  if (_state == AGInstallButtonStateDownloading)
     [self performClick];
 }
 
@@ -555,10 +362,10 @@ static const CGFloat kAGCancelGutter = 16.0;
 {
   NSString *details = [[[_installer taskForApp:_app] error] localizedDescription];
   if ([details length] == 0)
-    details = NSLocalizedString(@"The installation failed.", @"");
+    details = NSLocalizedString(@"The download failed.", @"");
 
   NSAlert *alert = [[NSAlert alloc] init];
-  [alert setMessageText:NSLocalizedString(@"Installation Failed", @"")];
+  [alert setMessageText:NSLocalizedString(@"Download Failed", @"")];
   [alert setInformativeText:details];
   [alert addButtonWithTitle:NSLocalizedString(@"Try Again", @"")];
   [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];

@@ -9,7 +9,6 @@
 #import "AppearanceMetrics.h"
 
 static const CGFloat kAGBannerHeight = 32.0;
-static const CGFloat kAGRetryButtonWidth = 72.0;
 
 /* A plain view with the banner tint; kept as a class so the tint survives
    the theme's window background repaint. */
@@ -55,7 +54,7 @@ static const CGFloat kAGRetryButtonWidth = 72.0;
       _retryButton = [[NSButton alloc] initWithFrame:NSZeroRect];
       [_retryButton setBezelStyle:NSRoundedBezelStyle];
       [_retryButton setTitle:NSLocalizedString(@"Retry", @"")];
-      [_retryButton setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+      [_retryButton setFont:METRICS_FONT_SYSTEM_REGULAR_13];
       [_retryButton setTarget:self];
       [_retryButton setAction:@selector(retryClicked:)];
       [_retryButton setAutoresizingMask:NSViewMinXMargin];
@@ -80,9 +79,9 @@ static const CGFloat kAGRetryButtonWidth = 72.0;
 - (void)layoutForWidth:(CGFloat)width
 {
   CGFloat buttonHeight = METRICS_BUTTON_HEIGHT;
-  NSRect buttonFrame = NSMakeRect(width - METRICS_CONTENT_SIDE_MARGIN - kAGRetryButtonWidth,
+  NSRect buttonFrame = NSMakeRect(width - METRICS_CONTENT_SIDE_MARGIN - METRICS_BUTTON_MIN_WIDTH,
                                   floor((kAGBannerHeight - buttonHeight) / 2.0),
-                                  kAGRetryButtonWidth, buttonHeight);
+                                  METRICS_BUTTON_MIN_WIDTH, buttonHeight);
   [_retryButton setFrame:buttonFrame];
 
   CGFloat labelHeight = 17.0;

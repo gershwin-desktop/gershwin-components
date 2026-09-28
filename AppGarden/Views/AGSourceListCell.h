@@ -28,7 +28,14 @@ typedef NS_ENUM(NSInteger, AGSourceListRowKind) {
 @property (nonatomic, assign) AGSourceListRowKind rowKind;
 
 /* Right-aligned grey count beside an item label, nil for the other kinds. */
+/* Kept in the cell's representedObject rather than an ivar of its own: this
+   AppKit copies a cell with NSCopyObject, a bitwise copy that retains only
+   the ivars NSCell knows about. An object ivar added here would be shared
+   by the copy without a retain and freed twice once the table's tracking
+   copy went away, which crashed the sidebar on the first click. The glyph
+   uses NSCell's own image slot for the same reason. */
 @property (nonatomic, copy) NSString *countText;
++ (CGFloat)iconSide;
 
 /* Row pitches of the sidebar table: a full row and the section gap. */
 + (CGFloat)rowHeight;

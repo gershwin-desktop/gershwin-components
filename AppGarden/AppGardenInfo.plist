@@ -9,7 +9,7 @@
 	<key>ApplicationName</key>
 	<string>AppGarden</string>
 	<key>ApplicationDescription</key>
-	<string>Discover and install applications for your desktop</string>
+	<string>Discover and download applications</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.gershwin-desktop.AppGarden</string>
 	<key>CFBundleExecutable</key>

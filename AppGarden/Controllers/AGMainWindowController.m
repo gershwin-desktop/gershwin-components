@@ -29,7 +29,6 @@ static const CGFloat kAGMinimumWidth = 760.0;
 static const CGFloat kAGMinimumHeight = 480.0;
 static const CGFloat kAGSidebarWidth = 200.0;
 static const CGFloat kAGTopBarHeight = 52.0;
-static const CGFloat kAGBackButtonWidth = 72.0;
 static const CGFloat kAGSearchFieldWidth = 240.0;
 
 #pragma mark - Field editor
@@ -422,7 +421,7 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
 
   CGFloat buttonY = floor((kAGTopBarHeight - METRICS_BUTTON_HEIGHT) / 2.0);
   _backButton = [[NSButton alloc] initWithFrame:NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, buttonY,
-                                                           kAGBackButtonWidth, METRICS_BUTTON_HEIGHT)];
+                                                           METRICS_BUTTON_MIN_WIDTH, METRICS_BUTTON_HEIGHT)];
   [_backButton setBezelStyle:NSRoundedBezelStyle];
   [_backButton setTitle:NSLocalizedString(@"Back", @"")];
   [_backButton setFont:METRICS_FONT_SYSTEM_REGULAR_13];
@@ -743,7 +742,7 @@ static const CGFloat kAGSearchFieldWidth = 240.0;
   switch ([_sidebar selectedSection])
     {
       case AGSidebarSectionInstalled:
-        return NSLocalizedString(@"Installed", @"");
+        return NSLocalizedString(@"Downloaded", @"");
       case AGSidebarSectionCategory:
         return [AGCategoryNames displayNameForCategory:[_sidebar selectedRawCategory]];
       case AGSidebarSectionDiscover:
