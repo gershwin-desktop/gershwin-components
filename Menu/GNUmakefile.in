@@ -49,6 +49,7 @@ Menu_OBJC_FILES = \
 	RunningApplicationList.m \
 	ForceQuitPanel.m \
 	MenuExtraManager.m \
+	GSExtrasMenuView.m \
 	GSMenuExtraContext.m \
 	GSMenuExtraBundle.m \
 	GSMenuExtraInstance.m \

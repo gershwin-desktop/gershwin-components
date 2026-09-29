@@ -5,6 +5,7 @@
  */
 
 #import "MenuExtraManager.h"
+#import "GSExtrasMenuView.h"
 #import "GSMenuExtra.h"
 #import "GSMenuExtraContext.h"
 #import "GSMenuExtraBundle.h"
@@ -25,8 +26,6 @@
 
 
 
-static char kExtrasMenuViewTag;
-static char kWidthIndexKey;
 static char kExtrasSubmenuIdentifierKey;
 
 /* The gap between the extras and the end of the bar.
@@ -43,82 +42,21 @@ static char kExtrasSubmenuIdentifierKey;
  * uneven, and the difference grows with whatever is leftmost. */
 const CGFloat GSExtrasEdgeMargin = 8.0;
 
-#pragma mark - GSTheme hook (horizontal menus only, never vertical dropdowns)
-
-@interface GSTheme (FixedWidthExtras)
-@end
-
 static NSMutableDictionary<NSString *, GSMenuExtraInstance *> *GSMenuExtraInstanceDictionary = nil;
-
-@implementation GSTheme (FixedWidthExtras)
-
-- (CGFloat)proposedTitleWidth:(CGFloat)proposedWidth forMenuView:(NSMenuView *)aMenuView
-{
-    if (!objc_getAssociatedObject(aMenuView, &kExtrasMenuViewTag)) {
-        return proposedWidth;
-    }
-
-    NSNumber *idx = objc_getAssociatedObject(aMenuView, &kWidthIndexKey);
-    NSUInteger index = [idx unsignedIntegerValue];
-    NSMenu *menu = [aMenuView menu];
-    NSArray *items = [menu itemArray];
-    if (index >= [items count]) {
-        index = 0;
-        objc_setAssociatedObject(aMenuView, &kWidthIndexKey, @1, OBJC_ASSOCIATION_RETAIN);
-    } else {
-        objc_setAssociatedObject(aMenuView, &kWidthIndexKey, @(index + 1), OBJC_ASSOCIATION_RETAIN);
-    }
-
-    NSMenuItem *item = [items objectAtIndex:index];
-    NSString *ident = [item representedObject];
-    CGFloat result = proposedWidth;
-    if (ident && GSMenuExtraInstanceDictionary) {
-        GSMenuExtraInstance *inst = [GSMenuExtraInstanceDictionary objectForKey:ident];
-        if (inst) {
-            @try {
-                /* -preferredWidth is the width of the extra's TITLE plus its
-                   own padding; the view adds the icon and the bar's padding on
-                   top of it, which is how every titled extra has always been
-                   drawn.  An extra that wants the WHOLE item measured
-                   otherwise says so with -totalWidthInMenuBar, and the
-                   chrome is taken off that instead - returning it as-is would
-                   make the item wider than asked for by the icon and the
-                   padding, and push everything to its left along. */
-                CGFloat wanted = [inst width];
-                if ([inst respondsToSelector:@selector(totalWidthInMenuBar)]) {
-                    NSMenuItemCell *cell =
-                        [aMenuView menuItemCellForItemAtIndex: (NSInteger)index];
-                    CGFloat chrome = 2.0 * [aMenuView horizontalEdgePadding];
-                    if (cell && [cell imageWidth]) {
-                        chrome += [cell imageWidth] + GSCellTextImageXDist;
-                    }
-                    result = MAX(0.0, wanted - chrome);
-                } else {
-                    result = wanted;
-                }
-            } @catch (NSException *e) {
-                NSLog(@"GSMenuExtra: exception in proposedTitleWidth for %@: %@", ident, e);
-            }
-        }
-    }
-    return result;
-}
-
-@end
 
 #pragma mark - MenuExtraManager
 
 static NSString *const GSMenuExtraEnabledKey = @"GSMenuExtraEnabled";
 static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
-@interface MenuExtraManager ()
+@interface MenuExtraManager () <GSExtrasMenuViewWidthProvider>
 {
     MenuExtrasPrefPanel *_prefPanel;
     NSMutableDictionary<NSString *, GSMenuExtraInstance *> *_instances;
     dispatch_source_t _fsMonitorSource;
     NSMutableSet<NSString *> *_knownBundlePaths;
     NSMenu *_extrasMenu;
-    NSMenuView *_extrasMenuView;
+    GSExtrasMenuView *_extrasMenuView;
     NSMutableDictionary *_extrasMenuItems;
 
     /* The items of extras that are enabled but have nothing to show, keyed
@@ -143,6 +81,52 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 @end
 
 @implementation MenuExtraManager
+
+/* The width provider of the extras view (GSExtrasMenuView.h says why the
+   view, not a counter, names the item being measured).
+
+   -preferredWidth is the width of the extra's TITLE plus its own padding; the
+   view adds the icon and the bar's padding on top of it, which is how every
+   titled extra has always been drawn.  An extra that wants the WHOLE item
+   measured otherwise says so with -totalWidthInMenuBar, and the chrome is
+   taken off that instead - returning it as-is would make the item wider
+   than asked for by the icon and the padding, and push everything to its
+   left along. */
+- (CGFloat)extrasMenuView:(GSExtrasMenuView *)aMenuView
+       proposedTitleWidth:(CGFloat)proposedWidth
+           forItemAtIndex:(NSInteger)index
+{
+    NSArray *items = [[aMenuView menu] itemArray];
+    if (index < 0 || (NSUInteger)index >= [items count]) {
+        return proposedWidth;
+    }
+    NSMenuItem *item = [items objectAtIndex:(NSUInteger)index];
+    NSString *ident = [item representedObject];
+    if (!ident || !GSMenuExtraInstanceDictionary) {
+        return proposedWidth;
+    }
+    GSMenuExtraInstance *inst = [GSMenuExtraInstanceDictionary objectForKey:ident];
+    if (!inst) {
+        return proposedWidth;
+    }
+    CGFloat result = proposedWidth;
+    @try {
+        CGFloat wanted = [inst width];
+        if ([inst respondsToSelector:@selector(totalWidthInMenuBar)]) {
+            NSMenuItemCell *cell = [aMenuView menuItemCellForItemAtIndex:index];
+            CGFloat chrome = 2.0 * [aMenuView horizontalEdgePadding];
+            if (cell && [cell imageWidth]) {
+                chrome += [cell imageWidth] + GSCellTextImageXDist;
+            }
+            result = MAX(0.0, wanted - chrome);
+        } else {
+            result = wanted;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"GSMenuExtra: exception in proposedTitleWidth for %@: %@", ident, e);
+    }
+    return result;
+}
 
 - (instancetype)initWithScreenWidth:(CGFloat)width
                       menuBarHeight:(CGFloat)height
@@ -567,9 +551,9 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     /* Update view */
     NSLog(@"GSMenuExtra: updating view");
     if (!_extrasMenuView) {
-        _extrasMenuView = [[NSMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
+        _extrasMenuView = [[GSExtrasMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
         [_extrasMenuView setHorizontal:YES];
-        objc_setAssociatedObject(_extrasMenuView, &kExtrasMenuViewTag, @YES, OBJC_ASSOCIATION_RETAIN);
+        [_extrasMenuView setWidthProvider:self];
 
         [_extrasMenuView setMenu:_extrasMenu];
     } else {
@@ -577,7 +561,6 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     }
     NSLog(@"GSMenuExtra: view menu set");
 
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [_extrasMenuView sizeToFit];
     CGFloat width = [self extrasMenuWidth];
     NSLog(@"GSMenuExtra: width=%g", width);
@@ -863,10 +846,9 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         [_extrasMenu addItem:item];
         [_extrasMenuItems setObject:item forKey:ident];
     }
-    _extrasMenuView = [[NSMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
+    _extrasMenuView = [[GSExtrasMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
     [_extrasMenuView setHorizontal:YES];
-    objc_setAssociatedObject(_extrasMenuView, &kExtrasMenuViewTag, @YES, OBJC_ASSOCIATION_RETAIN);
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
+    [_extrasMenuView setWidthProvider:self];
     [_extrasMenuView setMenu:_extrasMenu];
 
     CGFloat width = [self extrasMenuWidth];
@@ -879,7 +861,6 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 {
     if (!view || !menu || [[menu itemArray] count] == 0) return 0;
 
-    objc_setAssociatedObject(view, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [view sizeToFit];
 
     __block CGFloat maxX = 0;
@@ -923,7 +904,6 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     NSUInteger savedCollapse = _currentCollapsedExtraCount;
     [self setCollapsedExtraCount:0];
 
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [_extrasMenuView sizeToFit];
 
     NSMutableArray *widths = [NSMutableArray arrayWithCapacity:total];
@@ -980,7 +960,6 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
     _currentCollapsedExtraCount = count;
 
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [_extrasMenuView sizeToFit];
     CGFloat width = [self extrasMenuWidth];
     NSView *superview = [_extrasMenuView superview];
@@ -1008,7 +987,6 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 - (void)updateTimerFired:(NSTimer *)timer
 {
     @try {
-        objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
         /* The list is taken live, not from the timer's userInfo: enabling or
            disabling an extra from the preferences panel replaces _menuExtras,
            and the snapshot taken when the timer started would leave every
@@ -1195,7 +1173,6 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
    tells the bar so the app titles make room. */
 - (void)relayoutExtras
 {
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [_extrasMenuView sizeToFit];
 
     CGFloat width = [self extrasMenuWidth];

@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_MPRISMediaController t_MediaHub
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -126,6 +126,12 @@ t_MenuBarLayout_OBJC_FILES = t_MenuBarLayout.m ../../MenuBarLayout.m
 # extra that comes and goes does to the room it takes.  Foundation-only -
 # the geometry, with the widths the view adds on top of an extra's own.
 t_ExtrasBarLayout_OBJC_FILES = t_ExtrasBarLayout.m
+
+# The extras view lays every item out at the width its extra asked for, on
+# the passes NSMenuView runs by itself too.  Needs a display (real fonts):
+# skips without $DISPLAY, run under xvfb-run.
+t_ExtrasMenuViewWidths_OBJC_FILES = t_ExtrasMenuViewWidths.m ../../GSExtrasMenuView.m
+t_ExtrasMenuViewWidths_TOOL_LIBS += -lgnustep-gui
 
 # The media hub.  MPRISMediaController is the D-Bus half and is tested
 # against a dbus-daemon and a real (fake) MPRIS2 player that
