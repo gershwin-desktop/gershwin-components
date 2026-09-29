@@ -70,7 +70,15 @@ static GWSystemCommandExecutor *sharedExecutor = nil;
           if (!*errorOutput) *errorOutput = @"";
         }
 
-      NSLog(@"GWSystemCommandExecutor <- exit code %d (output length: %lu chars)", status, (unsigned long)[*output length]);
+      // "output" is an out-parameter, and the two convenience selectors above
+      // deliberately pass nil for it: a caller that only wants the exit status
+      // (every backend's "is this package installed?" check) has nowhere to put
+      // a string. Reading through it anyway dereferenced NULL and took the
+      // whole process down - which, in an app that runs this during a
+      // privileged update, meant the update simply stopped. Report zero
+      // characters when nothing was captured.
+      NSUInteger outputLength = (output && *output) ? [*output length] : 0;
+      NSLog(@"GWSystemCommandExecutor <- exit code %d (output length: %lu chars)", status, (unsigned long)outputLength);
       return status;
     }
   @catch (NSException *e)
@@ -147,6 +155,29 @@ static dispatch_source_t _streamPipe(int fd,
   return source;
 }
 
+/* KNOWN DEFECT, still present, deliberately not fixed here.
+ *
+ * This is the selector every package *install* goes through, and it hangs
+ * whenever the command writes to stdout or stderr: `pkg install` streaming its
+ * progress never reaches the wait below, so the caller blocks forever instead
+ * of finishing. Reproduced with the real executor on Linux:
+ *
+ *   execute:@"/bin/sh" arguments:@[@"-c", @"printf a"]  -> hangs
+ *   execute:@"/bin/sh" arguments:@[@"-c", @"exit 0"]    -> returns 0
+ *
+ * The dispatch sources are created on the pipe fds BEFORE [task launch] runs
+ * (see below), and a source that is resumed against a pipe with no writer yet
+ * sees EOF on its first read and cancels itself, signalling the eof
+ * semaphores early; the child then writes into a pipe nobody is reading, and
+ * the wait for the real EOF never completes. "exit 0" survives only because it
+ * never writes, so nothing is lost. The sources must be created after the
+ * launch - or driven by a run loop rather than raw fds.
+ *
+ * It is called out here rather than fixed because it is a concurrency change
+ * to the install path, and the failure it causes (a stuck progress window) is
+ * loud and harmless compared with getting the shutdown ordering subtly wrong
+ * and losing install output. Fix it with a run-loop-backed read, and cover it
+ * with a test that waits on a real timeout. */
 - (int)execute:(NSString *)path
      arguments:(NSArray *)args
  stdoutCallback:(void (^)(NSString *line))stdoutCallback

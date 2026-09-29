@@ -38,7 +38,10 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   NSFileHandle *_updateReadHandle;
   NSString *_updateArgsPath;
   NSArray<SWRepository *> *_updateRepositories; // as confirmed, in run order (developer first if present)
+  BOOL _updateIsRebuild;                         // this run is a rebuild, not an update
   NSString *_updateCurrentPhase;                // "developer" / "prereqs" / "repos"
+  NSString *_updateCurrentPhaseId;              // the progress window's phase id for it
+  NSUInteger _updateCurrentItemIndex;           // row the current repository occupies, NSNotFound if none
   NSUInteger _updateUnitsTotal;
   NSUInteger _updateUnitsCompleted;
   NSMutableArray<SWCompletionResultRow *> *_updateResultRows;
@@ -237,10 +240,27 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     // Being up to date is not a problem, so it should not wear the same
     // caution icon as a real error - NSAlert defaults to that icon unless
     // given one explicitly.
+    //
+    // "Rebuild" is offered here and nowhere else, because this is the only
+    // moment the user is told there is nothing to fetch: it is the only point
+    // from which "the code is current, but is what is installed from it?"
+    // becomes worth asking. That happens after a hand edit, after an install
+    // that failed part-way, or after a library was rebuilt by hand.
     NSAlert *alert = [[NSAlert alloc] init];
     [alert setIcon:[NSImage imageNamed:@"SoftwareUpdate"]];
     [alert setMessageText:@"Your software is up to date."];
-    [alert runModal];
+    [alert setInformativeText:
+      @"You can rebuild and reinstall the code that is already checked out."];
+    // OK first, so it is the default button and the one Return activates.
+    // Rebuild recompiles and reinstalls every repository, which is a long job
+    // to start by accident: someone who taps Return on a dialog that says
+    // everything is fine means "fine, close it", not "rebuild the desktop".
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Rebuild"];
+    if ([alert runModal] == NSAlertSecondButtonReturn) {
+      [self startRebuildForRepositories:all];
+      return;
+    }
     [NSApp terminate:nil];
     return;
   }
@@ -293,12 +313,32 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 - (void)mainWindowController:(SWMainWindowController *)controller
       didConfirmUpdateForRepositories:(NSArray<SWRepository *> *)repositories
 {
+  [self startPrivilegedRunWithRepositories:repositories rebuild:NO];
+}
+
+// The "Rebuild" button on the "Your software is up to date." alert: compile
+// and install what is already checked out, over every repository the check
+// looked at (not just the ones with updates - by definition there are none,
+// which is why the button is only offered when the list is empty).
+- (void)startRebuildForRepositories:(NSArray<SWRepository *> *)repositories
+{
+  [self startPrivilegedRunWithRepositories:repositories rebuild:YES];
+}
+
+// Everything the two actions have in common: write the helper's arguments,
+// build the phase list, and launch the privileged helper. The helper streams
+// the same event vocabulary either way, so the progress window, the Stop
+// button, the completion table and the alerts are all shared as they are.
+- (void)startPrivilegedRunWithRepositories:(NSArray<SWRepository *> *)repositories
+                                   rebuild:(BOOL)rebuild
+{
   NSString *sourcesDirectory = [kGershwinDeveloperPath stringByAppendingPathComponent:@"Library/Sources"];
   NSString *installScriptPath = [kGershwinDeveloperPath
     stringByAppendingPathComponent:@"Library/Scripts/install-system-domain.sh"];
   NSString *osSupportDirectory = [kGershwinDeveloperPath stringByAppendingPathComponent:@"Library/OSSupport"];
 
   _updateRepositories = repositories;
+  _updateIsRebuild = rebuild;
 
   NSMutableArray *repoDicts = [NSMutableArray array];
   for (SWRepository *repo in repositories) {
@@ -320,8 +360,11 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   [args writeToFile:argsPath atomically:YES];
 
   // The repository names are already known, so the "repos" phase's sub-rows
-  // do not have to wait for the helper process to report them.
-  BOOL hasDeveloperPhase = [[[repositories firstObject] name] isEqualToString:@"gershwin-developer"];
+  // do not have to wait for the helper process to report them. A rebuild has
+  // no developer phase: nothing is being fetched, so gershwin-developer is
+  // just one more repository to compile, and it reports no build step anyway.
+  BOOL hasDeveloperPhase = !rebuild &&
+    [[[repositories firstObject] name] isEqualToString:@"gershwin-developer"];
   NSArray<SWRepository *> *phase3Repos = hasDeveloperPhase
     ? [repositories subarrayWithRange:NSMakeRange(1, [repositories count] - 1)]
     : repositories;
@@ -340,7 +383,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 
   SWProgressPhase *reposPhase = [[SWProgressPhase alloc] init];
   [reposPhase setIdentifier:@"repos"];
-  [reposPhase setTitle:@"Update repositories"];
+  [reposPhase setTitle:rebuild ? @"Rebuild repositories" : @"Update repositories"];
   for (SWRepository *repo in phase3Repos) {
     SWProgressItem *item = [[SWProgressItem alloc] init];
     [item setTitle:[repo name]];
@@ -353,6 +396,8 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   _updateResultRows = [NSMutableArray array];
   _updateStashConflicts = [NSMutableArray array];
   _updateCurrentPhase = nil;
+  _updateCurrentPhaseId = nil;
+  _updateCurrentItemIndex = NSNotFound;
   _updateWasStopped = NO;
   _updateFatalOccurred = NO;
   _updateFatalAlertShown = NO;
@@ -369,7 +414,9 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 
   NSString *executablePath = [[NSBundle mainBundle] executablePath];
   NSMutableArray *sudoArgs = [NSMutableArray arrayWithArray:GWSudoArgPrefix()];
-  [sudoArgs addObjectsFromArray:@[executablePath, @"--run-update", argsPath]];
+  [sudoArgs addObjectsFromArray:@[executablePath,
+                                 rebuild ? @"--rebuild" : @"--run-update",
+                                 argsPath]];
 
   NSTask *task = [[NSTask alloc] init];
   [task setLaunchPath:GWSudoPath()];
@@ -411,11 +458,26 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [[_progressWindow window] orderOut:nil];
     NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:@"Software Update could not start the privileged update."];
+    [alert setMessageText:_updateIsRebuild
+      ? @"Software Update could not start the rebuild."
+      : @"Software Update could not start the privileged update."];
     [alert setInformativeText:[exception reason] ?: @""];
     [alert runModal];
-    [self returnToMainWindow];
+    [self leavePrivilegedRun];
   }
+}
+
+// Where to go once a run ends without reaching the completion window. An
+// update returns to the main window it came from; a rebuild was started from
+// the "up to date" alert, so there is no such window to go back to and the
+// app simply quits.
+- (void)leavePrivilegedRun
+{
+  if (_updateIsRebuild) {
+    [NSApp terminate:nil];
+    return;
+  }
+  [self returnToMainWindow];
 }
 
 - (void)returnToMainWindow
@@ -465,7 +527,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     NSString *headline =
       [_updateCurrentPhase isEqualToString:@"developer"] ? @"Updating gershwin-developer…" :
       [_updateCurrentPhase isEqualToString:@"prereqs"] ? @"Installing prerequisites…" :
-      @"Updating repositories…";
+      (_updateIsRebuild ? @"Rebuilding repositories…" : @"Updating repositories…");
     [_progressWindow beginPhaseWithIdentifier:_updateCurrentPhase headline:headline];
 
   } else if ([line hasPrefix:@"PREREQ_MISSING:"]) {
@@ -487,6 +549,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     NSArray *parts = [[line substringFromIndex:17] componentsSeparatedByString:@":"];
     if ([parts count] >= 3) {
       NSUInteger idx = (NSUInteger)[parts[1] integerValue];
+      _updateCurrentItemIndex = idx - 1;
       [_progressWindow beginItemAtIndex:idx - 1 inPhaseWithIdentifier:@"prereqs" trailingText:@""];
       [_progressWindow setStatusText:[NSString stringWithFormat:@"Installing %@ (package %@ of %@)",
         parts[0], parts[1], parts[2]]];
@@ -497,6 +560,12 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     if ([parts count] >= 3) {
       NSUInteger idx = (NSUInteger)[parts[1] integerValue];
       NSString *phaseId = [_updateCurrentPhase isEqualToString:@"developer"] ? @"developer" : @"repos";
+      // Remembered so the DONE: event, which carries the repository name but
+      // no position, can mark this same row as finished. Without it the row
+      // kept the tick the next REPO: gave it, and a repository that had failed
+      // was shown as successfully completed.
+      _updateCurrentItemIndex = idx - 1;
+      _updateCurrentPhaseId = phaseId;
       [_progressWindow beginItemAtIndex:idx - 1 inPhaseWithIdentifier:phaseId trailingText:@""];
       [_progressWindow setStatusText:[NSString stringWithFormat:@"Checking out %@ (repository %@ of %@)",
         parts[0], parts[1], parts[2]]];
@@ -532,6 +601,14 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
       }
       [_updateResultRows addObject:row];
 
+      // Mark the row in the progress list now, while we still know which row
+      // this repository was, instead of leaving it to be swept Done with the
+      // rest of the phase at the end - which reported a failed build as a
+      // green tick for the remainder of the run.
+      [_progressWindow finishItemAtIndex:_updateCurrentItemIndex
+                     inPhaseWithIdentifier:_updateCurrentPhaseId
+                                outcome:outcome];
+
       if (outcome == SWRepositoryUpdateOutcomeStashKept) {
         SWStashConflict *conflict = [[SWStashConflict alloc] init];
         [conflict setRepositoryName:name];
@@ -563,6 +640,16 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     [alert addButtonWithTitle:@"OK"];
     _updateFatalAlertShown = YES;
     [alert runModal];
+  } else if ([reason hasPrefix:@"RUNBUSY:"]) {
+    // Refused before touching anything, so the whole "could not complete"
+    // alert that would normally follow is not wanted - this one says what
+    // actually happened and what to do about it.
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Software Update is already running."];
+    [alert setInformativeText:[reason substringFromIndex:8]];
+    [alert addButtonWithTitle:@"OK"];
+    _updateFatalAlertShown = YES;
+    [alert runModal];
   }
   // A REPO: fatal failure already produced its own DONE row with a note
   // (build/install failed); the completion window explains it there.
@@ -591,18 +678,22 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   if (_updateWasStopped || completelyErroredOut) {
     if (_updateWasStopped) {
       NSAlert *alert = [[NSAlert alloc] init];
-      [alert setMessageText:@"Update stopped."];
+      [alert setMessageText:_updateIsRebuild ? @"Rebuild stopped." : @"Update stopped."];
       [alert setInformativeText:[_updateResultRows count] > 0
-        ? @"Repositories already finished stay updated."
+        ? (_updateIsRebuild
+            ? @"Repositories already rebuilt stay installed."
+            : @"Repositories already finished stay updated.")
         : @"No repositories were changed."];
       [alert runModal];
     } else if (!_updateFatalAlertShown) {
       NSAlert *alert = [[NSAlert alloc] init];
-      [alert setMessageText:@"Software Update could not complete the update."];
+      [alert setMessageText:_updateIsRebuild
+        ? @"Software Update could not complete the rebuild."
+        : @"Software Update could not complete the update."];
       [alert addButtonWithTitle:@"OK"];
       [alert runModal];
     }
-    [self returnToMainWindow];
+    [self leavePrivilegedRun];
     return;
   }
 
@@ -610,6 +701,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     _completionWindow = [[SWCompletionWindowController alloc] init];
     [_completionWindow setDelegate:self];
   }
+  [_completionWindow setRebuild:_updateIsRebuild];
   [_completionWindow setResults:_updateResultRows];
   [[_completionWindow window] makeKeyAndOrderFront:nil];
 }
@@ -619,9 +711,17 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 - (void)progressWindowControllerDidClickStop:(SWProgressWindowController *)controller
 {
   NSAlert *alert = [[NSAlert alloc] init];
-  [alert setMessageText:@"Stop updating?"];
-  [alert setInformativeText:
-    @"The repository currently being updated will be rolled back. Repositories already finished stay updated."];
+  if (_updateIsRebuild) {
+    // Nothing is being checked out or stashed, so there is no rollback to
+    // promise - only the repository mid-build is left half-written.
+    [alert setMessageText:@"Stop rebuilding?"];
+    [alert setInformativeText:
+      @"The repository currently being built will be left as it is. Repositories already rebuilt stay installed."];
+  } else {
+    [alert setMessageText:@"Stop updating?"];
+    [alert setInformativeText:
+      @"The repository currently being updated will be rolled back. Repositories already finished stay updated."];
+  }
   [alert addButtonWithTitle:@"Stop"];
   [alert addButtonWithTitle:@"Continue"];
   if ([alert runModal] == NSAlertFirstButtonReturn) {

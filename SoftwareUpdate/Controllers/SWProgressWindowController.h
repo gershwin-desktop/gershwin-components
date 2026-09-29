@@ -38,6 +38,13 @@
 
 // Marks items before index done and the item at index running (with
 // trailingText, e.g. the current step verb), within the named phase.
+// Marks one item as finished, as a tick or as a warning depending on what
+// became of its repository. index is NSNotFound when the event carried no
+// usable position, in which case nothing is touched.
+- (void)finishItemAtIndex:(NSUInteger)index
+        inPhaseWithIdentifier:(NSString *)identifier
+                   outcome:(SWRepositoryUpdateOutcome)outcome;
+
 - (void)beginItemAtIndex:(NSUInteger)index
        inPhaseWithIdentifier:(NSString *)identifier
                 trailingText:(NSString *)trailingText;

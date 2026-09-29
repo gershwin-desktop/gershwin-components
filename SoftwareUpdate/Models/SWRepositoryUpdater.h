@@ -36,6 +36,19 @@ typedef NS_ENUM(NSInteger, SWRepositoryUpdateOutcome) {
                                   targetBranch:(NSString *)targetBranch
                                     stepHandler:(void (^)(NSString *stepVerb))stepHandler;
 
+// The "Rebuild" action: compile and install the code that is already checked
+// out, touching no git state at all. Nothing is stashed, no branch is
+// switched, no patch is applied - the working copy is built exactly as it
+// stands and installed over /System. Use it when the check found no updates
+// but the installed software is stale or broken (a hand-edited file, a failed
+// earlier build, a library that was rebuilt out of band).
+//
+// Deliberately not -updateRepository: with the git steps skipped by a flag:
+// the two have nothing else in common, and sharing one method would mean every
+// rebuild ran a checkout and a stash/pop it does not want.
+- (SWRepositoryUpdateOutcome)rebuildRepository:(SWRepository *)repository
+                                   stepHandler:(void (^)(NSString *stepVerb))stepHandler;
+
 // Valid after -updateRepository:... returns SWRepositoryUpdateOutcomeStashKept
 // for this repository: the files git reported as conflicted when the stash
 // could not be popped, for the stash alert (spec screen 6).

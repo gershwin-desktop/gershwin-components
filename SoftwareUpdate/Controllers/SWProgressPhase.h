@@ -10,6 +10,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import "SWRepositoryUpdater.h"
 
 typedef NS_ENUM(NSInteger, SWProgressItemStatus) {
   SWProgressItemStatusPending = 0,
@@ -18,6 +19,23 @@ typedef NS_ENUM(NSInteger, SWProgressItemStatus) {
   SWProgressItemStatusFailed,
   SWProgressItemStatusSkipped,
 };
+
+// How a finished repository reads in the progress list.
+//
+// Only Updated is a plain tick. Everything else gets the warning mark,
+// including a kept stash: the software really was built and installed there,
+// but something is visibly not as it should be - the user's own edits are
+// still in a stash - and a green tick next to it claims otherwise.
+//
+// This lives here, rather than in the window controller, so it can be checked
+// without a display: SWProgressWindowController is an NSWindowController, and
+// creating one needs a window server this has no business requiring.
+static inline SWProgressItemStatus SWProgressItemStatusForOutcome(SWRepositoryUpdateOutcome outcome)
+{
+  return outcome == SWRepositoryUpdateOutcomeUpdated
+    ? SWProgressItemStatusDone
+    : SWProgressItemStatusFailed;
+}
 
 @interface SWProgressItem : NSObject
 @property (nonatomic, copy) NSString *title;

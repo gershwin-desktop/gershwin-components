@@ -254,6 +254,27 @@ static const float kIconSmall = 16.0;
   [self reloadPhasesBox];
 }
 
+// Marks the item a repository just finished on, as done or as a warning.
+//
+// Without this, a repository's row kept whatever status the next repository's
+// REPO: event gave it: -beginItemAtIndex:... trailingText: marks every earlier
+// item Done, so a repository whose build had failed was shown with a green
+// tick for the rest of the run - the run visibly going wrong, reported as
+// going right - and nothing marked Failed at all until the whole phase was
+// swept to Done at the end.
+- (void)finishItemAtIndex:(NSUInteger)index
+        inPhaseWithIdentifier:(NSString *)identifier
+                   outcome:(SWRepositoryUpdateOutcome)outcome
+{
+  if (index == NSNotFound) return;
+  SWProgressPhase *phase = [self phaseWithIdentifier:identifier];
+  NSArray<SWProgressItem *> *items = [phase items];
+  if (!phase || index >= [items count]) return;
+
+  [items[index] setStatus:SWProgressItemStatusForOutcome(outcome)];
+  [self reloadPhasesBox];
+}
+
 - (void)beginItemAtIndex:(NSUInteger)index
        inPhaseWithIdentifier:(NSString *)identifier
                 trailingText:(NSString *)trailingText

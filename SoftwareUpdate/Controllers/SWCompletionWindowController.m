@@ -7,9 +7,6 @@
 #import "SWCompletionWindowController.h"
 #import "AppearanceMetrics.h"
 
-@implementation SWCompletionResultRow
-@end
-
 static const float kWinWidth = METRICS_WIN_MIN_WIDTH;
 static const float kWinHeight = 380.0;
 // Must clear the icon's own footprint (METRICS_ICON_TOP + METRICS_ICON_SIDE
@@ -28,12 +25,14 @@ static const float kBottomBarHeight = 60.0;
   NSButton *_secondaryButton; // Later, hidden when nothing needs a restart
   NSTextField *_headlineField;
   BOOL _needsRestart;
+  BOOL _isRebuild; // this run was a rebuild, not an update
 }
 @end
 
 @implementation SWCompletionWindowController
 
 @synthesize delegate = _delegate;
+@synthesize rebuild = _isRebuild;
 
 - (instancetype)init
 {
@@ -142,19 +141,16 @@ static const float kBottomBarHeight = 60.0;
 - (void)setResults:(NSArray<SWCompletionResultRow *> *)results
 {
   _results = [results copy];
-  _needsRestart = NO;
-  for (SWCompletionResultRow *row in _results) {
-    if ([row restartRequired] && [row outcome] == SWRepositoryUpdateOutcomeUpdated) {
-      _needsRestart = YES;
-    }
-  }
 
-  if (_needsRestart) {
-    [_headlineField setStringValue:@"Installation complete. You must restart your computer to finish updating."];
+  SWCompletionSummary *summary =
+    [SWCompletionSummary summaryForResults:results rebuild:_isRebuild];
+  _needsRestart = [summary needsRestart];
+
+  [_headlineField setStringValue:[summary headline]];
+  if ([summary needsRestart]) {
     [_primaryButton setTitle:@"Restart"];
     [_secondaryButton setHidden:NO];
   } else {
-    [_headlineField setStringValue:@"Installation complete."];
     [_primaryButton setTitle:@"Quit"];
     [_secondaryButton setHidden:YES];
   }

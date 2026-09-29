@@ -31,6 +31,14 @@ static void setUpFixture(NSString *base)
 
   runShell([NSString stringWithFormat:@"git clone -q %@ %@", origin, work]);
 
+  // A clone does not inherit the origin repository's local user.name/
+  // user.email, so without this the "work" clone has no committer identity and
+  // every commit it is asked to make fails with "Author identity unknown" -
+  // which then leaves it one commit deep and fails the HEAD~1 cases further
+  // down, on a machine that simply has no global git identity configured.
+  runShell([NSString stringWithFormat:
+    @"cd %@ && git config user.email t@example.invalid && git config user.name Test", work]);
+
   // Advance origin's main by two commits after the clone was taken, so
   // "work" is behind by exactly two.
   runShell([NSString stringWithFormat:

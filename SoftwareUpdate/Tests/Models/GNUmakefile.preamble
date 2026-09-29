@@ -1,4 +1,4 @@
-ADDITIONAL_INCLUDE_DIRS += -I../../Models
+ADDITIONAL_INCLUDE_DIRS += -I../../Models -I../../Controllers
 
 # SWGitTool resolves the privilege-escalation command through PackageManager's
 # GWSudoHelper, so every test tool that links it needs the framework too -
@@ -46,7 +46,22 @@ t_SWRepositoryUpdater_OBJC_FILES += \
   ../../Models/SWRepository.m \
   ../../Models/SWGitTool.m \
   ../../Models/SWRepositoryUpdater.m
+# The streaming-output case drives a real long-running child from a background
+# queue while the main thread watches the log.
+t_SWRepositoryUpdater_TOOL_LIBS += -ldispatch
 t_SWRepositoryUpdater_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
+
+# Foundation only on purpose: the point of SWCompletionSummary is that the
+# completion window's wording can be tested with no window server, so this
+# tool must not pull AppKit in.
+../../Models/SWCompletionSummary.m_FILE_FLAGS += $(ARCFLAGS)
+t_SWCompletionSummary_OBJC_FILES += t_SWCompletionSummary.m \
+  ../../Models/SWCompletionSummary.m
+
+# Same reason: the outcome-to-status mapping is a static inline in the header,
+# so this needs nothing but Foundation.
+t_SWProgressPhase_OBJC_FILES += t_SWProgressPhase.m \
+  ../../Controllers/SWProgressPhase.m
 
 ../../Models/SWPrerequisitesInstaller.m_FILE_FLAGS += $(ARCFLAGS)
 t_SWPrerequisitesInstaller_OBJC_FILES += \
@@ -55,3 +70,8 @@ t_SWPrerequisitesInstaller_OBJC_FILES += \
 # PackageManager/) for GWPackageManager/GWOSDetector.
 t_SWPrerequisitesInstaller_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 ADDITIONAL_LDFLAGS += -Wl,-rpath,/System/Library/Frameworks/PackageManager.framework/Versions/1
+
+# The run guard shells out to ps and reads no display, so Foundation only.
+../../Models/SWRunGuard.m_FILE_FLAGS += $(ARCFLAGS)
+t_SWRunGuard_OBJC_FILES += t_SWRunGuard.m \
+  ../../Models/SWRunGuard.m

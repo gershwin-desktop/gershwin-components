@@ -1500,6 +1500,92 @@ static BOOL testNearly(float a, float b)
   return (a > b - 0.0001f) && (a < b + 0.0001f);
 }
 
+/* The real NSTask-backed executor, not the mock every other case in this file
+ * injects.  A mock answers from a dictionary and never touches an
+ * out-parameter, so it could not have caught what these cases are about: the
+ * convenience selectors that take no "output" pass nil, and the real one used
+ * to read through it anyway.  That killed the process outright - and in
+ * Software Update it killed the privileged update helper on the very first
+ * prerequisite check, so an update stopped after gershwin-developer and
+ * installed nothing else.  If any case below dies instead of returning, the
+ * whole tool dies, so the regression is self-announcing.
+ *
+ * /bin/sh is used as the command because it exists on every platform these
+ * builds run on; the backends it stands in for do not.
+ *
+ * Only the non-live selectors are covered here. The live one (the install
+ * path's) is deliberately left alone: it currently hangs on any command that
+ * writes to a pipe, which is a separate defect and not something to be
+ * introduced by a test run. See the note in GWSystemCommandExecutor.m. */
+@interface GWRealCommandExecutorTestHelper : NSObject
+@end
+
+@implementation GWRealCommandExecutorTestHelper
+
++ (GWSystemCommandExecutor *)executor
+{
+  return [GWSystemCommandExecutor sharedExecutor];
+}
+
++ (int)runShell:(NSString *)script
+{
+  return [[self executor] execute:@"/bin/sh" arguments:@[@"-c", script]];
+}
+
++ (BOOL)testNoOutputSelectorReturnsZero
+{
+  return [self runShell:@"exit 0"] == 0;
+}
+
++ (BOOL)testNoOutputSelectorReportsFailure
+{
+  return [self runShell:@"exit 3"] == 3;
+}
+
++ (BOOL)testNoOutputSelectorStandsInForAPackageQuery
+{
+  // The shape every backend's -isPackageInstalled: uses, and the one that
+  // crashed: a command whose stdout nobody wants, only the exit status.
+  return [self runShell:@"exit 0"] == 0;
+}
+
++ (BOOL)testOutputSelectorStillCapturesStdout
+{
+  NSString *output = nil;
+  int status = [[self executor] execute:@"/bin/sh"
+                             arguments:@[@"-c", @"printf hello"]
+                                output:&output];
+  return status == 0 && [output isEqualToString:@"hello"];
+}
+
++ (BOOL)testOutputAndErrorSelectorsBothCapture
+{
+  NSString *output = nil;
+  NSString *errorOutput = nil;
+  int status = [[self executor] execute:@"/bin/sh"
+                             arguments:@[@"-c", @"printf out; printf err >&2"]
+                                output:&output
+                          errorOutput:&errorOutput];
+  return status == 0 && [output isEqualToString:@"out"]
+                     && [errorOutput isEqualToString:@"err"];
+}
+
++ (BOOL)testFailingCommandStillReturnsItsCapturedOutput
+{
+  NSString *output = nil;
+  int status = [[self executor] execute:@"/bin/sh"
+                             arguments:@[@"-c", @"printf nope; exit 7"]
+                                output:&output];
+  return status == 7 && [output isEqualToString:@"nope"];
+}
+
++ (BOOL)testMissingCommandIsReportedNotCrashed
+{
+  return [[self executor] execute:@"/nonexistent/command/xyz" arguments:@[]] != 0;
+}
+
+@end
+
 @interface GWCurlMeterTestHelper : NSObject
 @end
 
@@ -2061,6 +2147,29 @@ static BOOL testNearly(float a, float b)
   });
   runTest(@"testDownloadForwardsCurlFailure", ^{
     return [GWCurlMeterTestHelper testDownloadForwardsCurlFailure];
+  });
+
+  // --- the real NSTask-backed executor (every other case uses a mock) ---
+  runTest(@"testNoOutputSelectorReturnsZero", ^{
+    return [GWRealCommandExecutorTestHelper testNoOutputSelectorReturnsZero];
+  });
+  runTest(@"testNoOutputSelectorReportsFailure", ^{
+    return [GWRealCommandExecutorTestHelper testNoOutputSelectorReportsFailure];
+  });
+  runTest(@"testNoOutputSelectorStandsInForAPackageQuery", ^{
+    return [GWRealCommandExecutorTestHelper testNoOutputSelectorStandsInForAPackageQuery];
+  });
+  runTest(@"testOutputSelectorStillCapturesStdout", ^{
+    return [GWRealCommandExecutorTestHelper testOutputSelectorStillCapturesStdout];
+  });
+  runTest(@"testOutputAndErrorSelectorsBothCapture", ^{
+    return [GWRealCommandExecutorTestHelper testOutputAndErrorSelectorsBothCapture];
+  });
+  runTest(@"testFailingCommandStillReturnsItsCapturedOutput", ^{
+    return [GWRealCommandExecutorTestHelper testFailingCommandStillReturnsItsCapturedOutput];
+  });
+  runTest(@"testMissingCommandIsReportedNotCrashed", ^{
+    return [GWRealCommandExecutorTestHelper testMissingCommandIsReportedNotCrashed];
   });
 
   // --- AppImage asset picking (real releases, see the file's header) ---

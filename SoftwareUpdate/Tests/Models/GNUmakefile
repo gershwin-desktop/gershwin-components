@@ -1,6 +1,6 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_SWRepositoryList t_SWGitTool t_SWSelectionRules t_SWGitHubBuildStatus t_SWUpdateChecker t_SWPrerequisitesInstaller t_SWRepositoryUpdater
+TEST_TOOL_NAME = t_SWRepositoryList t_SWGitTool t_SWSelectionRules t_SWGitHubBuildStatus t_SWUpdateChecker t_SWPrerequisitesInstaller t_SWRepositoryUpdater t_SWCompletionSummary t_SWProgressPhase t_SWRunGuard
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Wno-unused-parameter -Wno-deprecated
