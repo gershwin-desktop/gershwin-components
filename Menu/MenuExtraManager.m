@@ -565,14 +565,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     CGFloat width = [self extrasMenuWidth];
     NSLog(@"GSMenuExtra: width=%g", width);
 
-    NSView *superview = [_extrasMenuView superview];
-    if (superview) {
-        CGFloat menuBarW = NSWidth([superview bounds]);
-        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - GSExtrasEdgeMargin, 0, width, _menuBarHeight)];
-        [superview setNeedsDisplay:YES];
-    } else {
-        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
-    }
+    [self placeExtrasViewWithWidth:width];
     NSLog(@"GSMenuExtra: rebuildExtrasMenu done");
 }
 
@@ -711,14 +704,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         [_extrasMenuView setFrameSize:NSMakeSize(0, _menuBarHeight)];
         [_extrasMenuView sizeToFit];
         CGFloat width = [self extrasMenuWidth];
-        NSView *superview = [_extrasMenuView superview];
-        if (superview) {
-            CGFloat menuBarW = NSWidth([superview bounds]);
-            [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - GSExtrasEdgeMargin, 0, width, _menuBarHeight)];
-            [superview setNeedsDisplay:YES];
-        } else {
-            [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
-        }
+        [self placeExtrasViewWithWidth:width];
     }
 
     [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraEnabledSetDidChange"
@@ -857,6 +843,21 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     return _extrasMenuView;
 }
 
+/* Puts the extras group at the right end of the bar and pins its right edge
+   there, so the view keeps it through every later resize of its own. */
+- (void)placeExtrasViewWithWidth:(CGFloat)width
+{
+    NSView *superview = [_extrasMenuView superview];
+    if (superview) {
+        CGFloat menuBarW = NSWidth([superview bounds]);
+        [_extrasMenuView setAnchoredRightEdge:menuBarW - GSExtrasEdgeMargin];
+        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - GSExtrasEdgeMargin, 0, width, _menuBarHeight)];
+        [superview setNeedsDisplay:YES];
+    } else {
+        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
+    }
+}
+
 - (CGFloat)extrasMenuWidthForView:(NSMenuView *)view menu:(NSMenu *)menu
 {
     if (!view || !menu || [[menu itemArray] count] == 0) return 0;
@@ -962,14 +963,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
     [_extrasMenuView sizeToFit];
     CGFloat width = [self extrasMenuWidth];
-    NSView *superview = [_extrasMenuView superview];
-    if (superview) {
-        CGFloat menuBarW = NSWidth([superview bounds]);
-        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - GSExtrasEdgeMargin, 0, width, _menuBarHeight)];
-        [superview setNeedsDisplay:YES];
-    } else {
-        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
-    }
+    [self placeExtrasViewWithWidth:width];
 }
 
 #pragma mark - Update timers
@@ -1176,15 +1170,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     [_extrasMenuView sizeToFit];
 
     CGFloat width = [self extrasMenuWidth];
-    NSView *superview = [_extrasMenuView superview];
-    if (superview) {
-        CGFloat menuBarW = NSWidth([superview bounds]);
-        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - GSExtrasEdgeMargin,
-                                             0, width, _menuBarHeight)];
-        [superview setNeedsDisplay:YES];
-    } else {
-        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
-    }
+    [self placeExtrasViewWithWidth:width];
     [_extrasMenuView setNeedsDisplay:YES];
 
     /* The app titles share the bar with the extras and are laid out from the

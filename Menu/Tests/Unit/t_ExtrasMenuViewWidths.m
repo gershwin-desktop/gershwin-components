@@ -12,6 +12,11 @@
    highlight rectangles sat beside their icons and the clock was pushed off
    the screen, until a later pass happened to line up again.
 
+   And the group is anchored by its right edge: when an item comes or goes,
+   the view's own re-layout leaves the right edge where it was, so the
+   extras to the right of that item never move - they used to jump left and
+   back every time the player started or quit.
+
    Needs a display (NSMenuView lays out with real fonts): skipped without
    $DISPLAY, run it under xvfb-run. */
 
@@ -122,6 +127,27 @@ int main(void)
   [view sizeToFit];
   [view sizeToFit];
   PASS(AllItemsAtTheirWidth(view, widths), "repeated passes keep every item at its own width");
+
+  /* Anchored by its right edge: an item coming or going changes the width,
+     and the view's own re-layout must leave the right edge where it was,
+     so the extras to the right of the item never move. */
+  NSView *bar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 600, 22)];
+  [bar addSubview:view];
+  [view setAnchoredRightEdge:592.0];
+  [view sizeToFit];
+  PASS(fabs(NSMaxX([view frame]) - 592.0) < 0.5, "anchored: the right edge sits on the anchor");
+  CGFloat leftBefore = NSMinX([view frame]);
+  [menu insertItemWithTitle:@"Media" action:NULL keyEquivalent:@"" atIndex:2];
+  /* NSMenuView lays itself out again lazily, the first time a rect is
+     wanted after the change - drawing asks the same way. */
+  [view rectOfItemAtIndex:0];
+  PASS(fabs(NSMaxX([view frame]) - 592.0) < 0.5,
+       "anchored: after the view's own re-layout for an added item the right edge has not moved");
+  PASS(NSMinX([view frame]) < leftBefore - 19.0, "anchored: the added item grew the group to the left");
+  [menu removeItemAtIndex:2];
+  [view rectOfItemAtIndex:0];
+  PASS(fabs(NSMaxX([view frame]) - 592.0) < 0.5 && fabs(NSMinX([view frame]) - leftBefore) < 0.5,
+       "anchored: after the item left, the group is back where it was, right edge untouched");
 
   /* The app menus are not touched: a plain menu view keeps the theme's width. */
   NSMenuView *plain = [[NSMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, 22)];

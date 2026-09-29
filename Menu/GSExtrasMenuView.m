@@ -39,6 +39,71 @@
   return _widthProvider;
 }
 
+/* The width of the items themselves: NSMenuView lays a horizontal menu out
+ * from x = 0 and then sets the frame as wide as the SCREEN, so the frame
+ * says nothing about how much of it is items.  The view's list of cells can
+ * lag the menu's list of items by one notification, and asking for a rect it
+ * has no cell for raises; that pass is then left alone, the next one (after
+ * the notification) puts the group right. */
+- (CGFloat)itemsWidth
+{
+  NSInteger count = (NSInteger)[[[self menu] itemArray] count];
+  if (count == 0) {
+    return 0.0;
+  }
+  @try {
+    return NSMaxX([self rectOfItemAtIndex:count - 1]);
+  } @catch (NSException *e) {
+    return -1.0;
+  }
+}
+
+/* Sizes the frame to the items and puts its right edge on the anchor.  The
+ * area the view leaves behind is the superview's to repaint: a frame change
+ * marks only the view itself. */
+- (void)keepRightEdge
+{
+  if (!_anchored) {
+    return;
+  }
+  CGFloat width = [self itemsWidth];
+  if (width < 0.0) {
+    return;
+  }
+  NSRect old = [self frame];
+  NSRect wanted = NSMakeRect(_anchoredRightEdge - width, NSMinY(old), width, NSHeight(old));
+  if (NSEqualRects(old, wanted)) {
+    return;
+  }
+  [super setFrame:wanted];
+  NSView *superview = [self superview];
+  if (superview) {
+    [superview setNeedsDisplayInRect:NSUnionRect(old, wanted)];
+  }
+}
+
+- (void)setAnchoredRightEdge:(CGFloat)x
+{
+  _anchored = YES;
+  _anchoredRightEdge = x;
+  [self keepRightEdge];
+}
+
+/* Every layout pass ends here, the ones NSMenuView runs by itself after an
+ * item changed included, so the group is back on its anchor before anything
+ * is drawn. */
+- (void)sizeToFit
+{
+  [super sizeToFit];
+  [self keepRightEdge];
+}
+
+- (void)setFrame:(NSRect)frame
+{
+  [super setFrame:frame];
+  [self keepRightEdge];
+}
+
 @end
 
 /* Horizontal menus only: the hook is reached for every menu view the theme
