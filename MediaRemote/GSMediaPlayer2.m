@@ -8,13 +8,6 @@
 
 #include <unistd.h>
 
-NSString * const GSMediaPlayer2Playing = @"Playing";
-NSString * const GSMediaPlayer2Paused = @"Paused";
-NSString * const GSMediaPlayer2Stopped = @"Stopped";
-
-NSString * const GSMediaPlayer2PlayerServiceName =
-    @"io.github.gershwin-desktop.MediaPlayer2.Player";
-
 // Player answers at once or not at all: a media player is either running
 // or it is not, and a client waiting longer only holds up whatever it was
 // doing (Whisper's dictation service blocks on this call).

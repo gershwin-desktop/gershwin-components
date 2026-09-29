@@ -26,14 +26,24 @@
 
 /// What -playbackStatus answers: the playback states of MPRIS, spelled
 /// the same way.
-extern NSString * const GSMediaPlayer2Playing;
-extern NSString * const GSMediaPlayer2Paused;
-extern NSString * const GSMediaPlayer2Stopped;
+///
+/// These are the words MPRIS itself uses on the bus, and they are defined
+/// here rather than in the .m so that a program which only needs to say
+/// which state something is in - Menu, which steers players on the bus -
+/// can use them without linking the client below.  A state read over D-Bus
+/// compares equal to one of these.
+#define GSMediaPlayer2Playing @"Playing"
+#define GSMediaPlayer2Paused  @"Paused"
+#define GSMediaPlayer2Stopped @"Stopped"
 
 /// The name Player registers its interface under.  Another player
 /// registers its own name the same way, as MPRIS players register
 /// org.mpris.MediaPlayer2.<identity>.
-extern NSString * const GSMediaPlayer2PlayerServiceName;
+///
+/// A macro for the reason the states above are: Menu looks this name up to
+/// steer Player, and it does not link the client below.  The name is the
+/// wire name of the service and never changes.
+#define GSMediaPlayer2PlayerServiceName @"io.github.gershwin-desktop.MediaPlayer2.Player"
 
 /**
  * The remote interface itself.  The server class declares conformance
@@ -95,6 +105,52 @@ extern NSString * const GSMediaPlayer2PlayerServiceName;
 /// the pause and released it, NO when it held nothing - the caller then
 /// must not assume the player is playing.
 - (BOOL)resumeForClient:(bycopy NSString *)client;
+
+/* Saying that something changed.
+ *
+ * Everything above is a question, and a question is answered with the state
+ * as it was when the player last looked.  That is enough for a client that
+ * only presses buttons - it presses one and the player does what it was
+ * asked - but not for a client that *shows* the state, such as Menu's media
+ * extra.  Shown state has to be current, and a client cannot get that by
+ * asking, because asking is what it is trying to avoid doing sixty times a
+ * minute to no purpose.  MPRIS solves this with a PropertiesChanged signal;
+ * there is no such thing here, so the player is asked to push instead.
+ *
+ * A client subscribes by giving the player the name it is registered under,
+ * and the player calls -stateDidChange on that name whenever its state
+ * moves.  The call is oneway: the player is in the middle of playing a track
+ * or answering somebody else, and must not wait for a listener to be ready.
+ *
+ * A name and not a connection because this runtime cannot send one: an
+ * NSConnection is not encodable across Distributed Objects at all
+ * (-[NSConnection encodeWithCoder:] raises by design), so a client that
+ * handed over its connection would get an exception instead of a
+ * subscription.  A registered name is what every other part of Gershwin uses
+ * to be found, and it encodes as the string it is.
+ *
+ * Both methods are optional.  A client asks for the subscription with
+ * -respondsToSelector: first, because an older player does not have them
+ * and a client that assumes they exist gets an exception instead of a
+ * slower but working display.  The two are optional together: a player that
+ * has -subscribeWatcher: has -stateDidChange.
+ */
+
+/* Subscribes the service registered under `serviceName`: it is sent
+ * -stateDidChange whenever the player starts, stops, pauses or resumes.
+ * Answers NO when the player will not take a subscription, and the client
+ * then falls back to asking on a timer. */
+- (BOOL)subscribeWatcher:(bycopy NSString *)serviceName;
+
+/// Sent to a subscriber when the player starts, stops, pauses or resumes.
+/// The subscriber's job is to ask -playbackStatus again: this says that
+/// something moved, not what it moved to, so a player that is mid-change
+/// does not have to describe a state it has not settled into.
+///
+/// A subscriber that has gone away is dropped silently: watching a player is
+/// not worth an error, and the player must not be held up by a listener that
+/// is no longer listening.
+- (oneway void)stateDidChange;
 
 @end
 

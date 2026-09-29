@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_MPRISMediaController t_MediaHub
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -121,5 +121,32 @@ endif
 # MenuBarLayout is Foundation-only (no display needed): the pure geometry
 # that decides which titles/extras a bar of a given width can show.
 t_MenuBarLayout_OBJC_FILES = t_MenuBarLayout.m ../../MenuBarLayout.m
+
+# The right-hand end of the bar: the extras group, its anchor, and what an
+# extra that comes and goes does to the room it takes.  Foundation-only -
+# the geometry, with the widths the view adds on top of an extra's own.
+t_ExtrasBarLayout_OBJC_FILES = t_ExtrasBarLayout.m
+
+# The media hub.  MPRISMediaController is the D-Bus half and is tested
+# against a dbus-daemon and a real (fake) MPRIS2 player that
+# t_MPRISMediaController.m starts for itself; t_MediaHub is the merge of the
+# bus players with the native player over Distributed Objects, driven
+# against a player standing in for Player.  Both link the controller's
+# source rather than a library, so neither needs anything installed.
+# MediaRemote is where the interface the hub serves, and the one the native
+# player serves, are declared; libdispatch comes with the hub's poll queue,
+# and libdbus with the controller.
+t_MPRISMediaController_OBJC_FILES = t_MPRISMediaController.m ../../MPRISMediaController.m
+../../MPRISMediaController.m_FILE_FLAGS += $(ARCFLAGS)
+t_MPRISMediaController_OBJCFLAGS += -I../../../MediaRemote
+t_MPRISMediaController_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
+t_MPRISMediaController_TOOL_LIBS += -ldbus-1
+
+t_MediaHub_OBJC_FILES = t_MediaHub.m ../../MediaHub.m ../../MPRISMediaController.m
+../../MediaHub.m_FILE_FLAGS += $(ARCFLAGS)
+../../MPRISMediaController.m_FILE_FLAGS += $(ARCFLAGS)
+t_MediaHub_OBJCFLAGS += -I../../../MediaRemote
+t_MediaHub_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
+t_MediaHub_TOOL_LIBS += -ldbus-1 -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

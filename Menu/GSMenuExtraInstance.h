@@ -20,6 +20,10 @@
 @property (readonly) GSMenuExtraContext *context;
 @property (assign) CGFloat cachedWidth;
 
+/* YES when the extra asked to be in the menu bar from the start.  See
+   -enabledByDefault in GSMenuExtra. */
+@property (readonly) BOOL enabledByDefault;
+
 - (instancetype)initWithExtra:(id<GSMenuExtra>)extra
                    identifier:(NSString *)identifier
                   displayName:(NSString *)displayName
@@ -29,6 +33,7 @@
 - (BOOL)load;
 - (void)unload;
 - (BOOL)isIconOnly;
+- (BOOL)isHiddenFromMenuBar;
 
 - (NSString *)title;
 - (NSMenu *)menu;

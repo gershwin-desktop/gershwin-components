@@ -1150,6 +1150,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)playerSessionDidChangeState:(PlayerSession *)aSession
 {
+    // Read before anything below changes anything, so the media remote can
+    // tell whether this callback is a real transition or the same state
+    // arriving twice.
+    NSString *wasStatus = [mediaRemote playbackStatus];
     if ([session state] == PlayerSessionPlaying) {
         if (!positionTimer) {
             positionTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
@@ -1168,6 +1172,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [self updateControls];
     // Playback moved for a reason of its own: a client's pause ends here
     [mediaRemote notePlaybackChanged];
+    // ... and a subscriber that is showing this state is told, which is the
+    // user pressing play in this window rather than somebody asking us to.
+    [mediaRemote playbackStateDidChange:wasStatus];
 }
 
 - (void)playerSessionDidChangeTrack:(PlayerSession *)aSession

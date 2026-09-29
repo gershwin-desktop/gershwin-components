@@ -61,6 +61,8 @@ Menu_OBJC_FILES = \
 	FreeBSDBacklightBackend.m \
 	WsconsBacklightBackend.m \
 	MediaKeyController.m \
+	MPRISMediaController.m \
+	MediaHub.m \
 	TintedMenuItemCell.m
 
 # Header files
@@ -108,6 +110,8 @@ Menu_HEADER_FILES = \
 	FreeBSDBacklightBackend.h \
 	WsconsBacklightBackend.h \
 	MediaKeyController.h \
+	MPRISMediaController.h \
+	MediaHub.h \
 	TintedMenuItemCell.h
 
 # Resources
@@ -129,6 +133,11 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/wlan-disabled.tiff \
 	Resources/Icons/wlan-off.tiff \
 	Resources/Icons/brightness.tiff \
+	Resources/Icons/media-play.tiff \
+	Resources/Icons/media-pause.tiff \
+	Resources/Icons/media-stop.tiff \
+	Resources/Icons/media-next.tiff \
+	Resources/Icons/media-previous.tiff \
 	Resources/Icons/clock.tiff \
 	Resources/Icons/cpu.tiff \
 	Resources/Icons/ram.tiff \
@@ -142,7 +151,8 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/wlan-weak-locked.tiff
 
 # Libraries and frameworks - configured by configure script
-Menu_TOOL_LIBS += -ldbus-1 -lX11
+DBUS_LIBS = -ldbus-1
+Menu_TOOL_LIBS += $(DBUS_LIBS) -lX11
 Menu_GUI_LIBS += -L/System/Library/Libraries -lgnustep-gui -lgnustep-base -lobjc -ldispatch -lSoundBackend -lNetworkBackend
 Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/System/Library/Libraries -Wl,--no-as-needed
 
@@ -180,10 +190,31 @@ ifeq ($(PROFILE),1)
 ADDITIONAL_OBJCFLAGS += -DMENU_PROFILING=1
 endif
 
-ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
+ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I../MediaRemote -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
 # --as-needed avoids unnecessary libm dependency (needed on FreeBSD)
 ADDITIONAL_LDFLAGS = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo '-Wl,--as-needed' || echo '')
 AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo 'ADDITIONAL_LDFLAGS=-Wl,--as-needed' || echo '')
+
+# ── libdbus, and the menu extras that need it ─────────────────────────────
+# Menu's own bus connection needs libdbus, and configure will not write a
+# makefile without it.  The MediaExtra is a separate matter: it steers
+# media players over MPRIS2, so where libdbus is not there it has nothing
+# to steer anything with, and it is left out of the build and out of the
+# installation instead of failing either.  The probe compiles a program that
+# includes <dbus/dbus.h> and links against the very library Menu links
+# against, because a header on its own says nothing about a library.
+HAVE_LIBDBUS := $(shell printf '#include <dbus/dbus.h>\nint main(void) { return 0; }\n' | \
+	$(CC) -x c - $(DBUS_CFLAGS) $(DBUS_LIBS) -o /dev/null > /dev/null 2>&1 && echo yes || echo no)
+
+# Every menu extra that Menu builds, and the bundle each one leaves behind,
+# in one place so that the two lists cannot disagree about what there is.
+MENU_EXTRA_DIRS = ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra
+MENU_EXTRA_BUNDLES = ClockExtra/Clock BatteryExtra/Battery CPUExtra/CPU RAMExtra/RAM \
+	WLANExtra/WLAN SoundExtra/Sound BrightnessExtra/Brightness BuildMonitorExtra/BuildMonitor
+ifeq ($(HAVE_LIBDBUS),yes)
+MENU_EXTRA_DIRS += MediaExtra
+MENU_EXTRA_BUNDLES += MediaExtra/Media
+endif
 
 # Canonical install location for Menu.app
 INSTALL_APPS_DIR = /System/Library/CoreServices/Applications
@@ -216,16 +247,12 @@ icons:
 # away.  MAKEFLAGS= gives each sub-make a clean slate.
 after-Menu-all::
 	@echo "Building standalone menu extra bundles..."
-	@for d in ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra; do \
+	@for d in $(MENU_EXTRA_DIRS); do \
 		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) $(AS_NEEDED_FLAG) all) || echo "  ($$d skipped - see the errors above)"; \
 	done
 	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) all || echo "  (wlanauth skipped)")
 	@cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth Resources/ 2>/dev/null || true
 	@echo "Done building bundles."
-
-# Directory/Bundle of each menu extra that Menu installs.
-MENU_EXTRA_BUNDLES = ClockExtra/Clock BatteryExtra/Battery CPUExtra/CPU RAMExtra/RAM \
-	WLANExtra/WLAN SoundExtra/Sound BrightnessExtra/Brightness BuildMonitorExtra/BuildMonitor
 
 # A running Menu has the installed binaries of itself and of every extra
 # mapped, and cp rewrites an existing file in place, which crashed Menu on
@@ -244,7 +271,7 @@ install:: custom-install
 
 custom-install: $(APP_NAME).app
 	@echo "Building menu extra bundles..."
-	@for d in ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra; do \
+	@for d in $(MENU_EXTRA_DIRS); do \
 		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) $(AS_NEEDED_FLAG) all) || exit 1; \
 	done
 	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) all)

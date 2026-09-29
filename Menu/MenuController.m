@@ -24,6 +24,7 @@
 #import "SystemActions.h"
 #import "ForceQuitPanel.h"
 #import "MediaKeyController.h"
+#import "MediaHub.h"
 
 #import "GNUstepGUI/GSTheme.h"
 #include <GNUstepGUI/GSDisplayServer.h>
@@ -66,9 +67,10 @@
 
 @end
 
-@interface MenuController ()
+@interface MenuController () <MenuExtraManagerDelegate>
 {
     MediaKeyController *_mediaKeyController;
+    MediaHub *_mediaHub;
     NSThread *_powerKeyThread;
     volatile BOOL _powerKeyMonitorRunning;
     int _powerKeyFDs[16];
@@ -571,6 +573,15 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     [self recomputeMenuBarLayout];
 }
 
+- (void)menuExtraManagerNeedsLayout:(MenuExtraManager *)manager
+{
+    /* An extra appeared or went away, so the space the extras take changed
+       and the app titles have to be laid out against what is left of the
+       bar.  This is the same decision as for a preferences toggle, reached
+       because a single extra's own content came or went. */
+    [self recomputeMenuBarLayout];
+}
+
 /* Decide, and apply, how many of the active application's own menu titles
  * and how many menu extras the bar can show directly at its current width -
  * the app's own titles keep priority; see +[MenuBarLayout
@@ -586,7 +597,6 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
        ordinary short title/extra rather than measured itself, to avoid a
        chicken-and-egg dependency on the very layout being decided. */
     const CGFloat kOverflowItemWidth = 28.0;
-    const CGFloat kEdgeMargin = 8.0;
 
     CGFloat barWidth = NSWidth([self.menuBarView bounds]);
     NSArray<NSNumber *> *titleWidths = [self.appMenuWidget topLevelItemWidths];
@@ -595,7 +605,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     NSUInteger visibleTitleCount = [titleWidths count];
     NSUInteger collapsedExtraCount = 0;
     [MenuBarLayout layoutForBarWidth:barWidth
-                            edgeMargin:kEdgeMargin
+                            edgeMargin:GSExtrasEdgeMargin
                            titleWidths:titleWidths
                     titleOverflowWidth:kOverflowItemWidth
                            extraWidths:extraWidths
@@ -616,11 +626,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
     CGFloat barHeight = NSHeight([self.menuBarView bounds]);
     if (extrasMenuView) {
-        [extrasMenuView setFrame:NSMakeRect(barWidth - extrasWidth - kEdgeMargin, 0,
+        [extrasMenuView setFrame:NSMakeRect(barWidth - extrasWidth - GSExtrasEdgeMargin, 0,
                                             extrasWidth, barHeight)];
     }
 
-    CGFloat widgetWidth = barWidth - extrasWidth - kEdgeMargin;
+    CGFloat widgetWidth = barWidth - extrasWidth - GSExtrasEdgeMargin;
     [self.appMenuWidget setFrame:NSMakeRect(0, 0, widgetWidth, barHeight)];
     [self.menuBarView setNeedsDisplay:YES];
 }
@@ -1257,9 +1267,13 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     CGFloat extrasMenuWidth = [self.menuExtraManager extrasMenuWidth];
     NSDebugLLog(@"gwcomp", @"MenuController: Extras menu view width: %.0f", extrasMenuWidth);
 
-    // Position extras 8px from the right edge of the menu bar
-    [extrasMenuView setFrame:NSMakeRect(self.screenSize.width - extrasMenuWidth - 8, 0,
+    // Position extras a margin in from the right edge of the menu bar
+    [extrasMenuView setFrame:NSMakeRect(self.screenSize.width - extrasMenuWidth
+                                        - GSExtrasEdgeMargin, 0,
                                         extrasMenuWidth, menuBarHeight)];
+
+    // An extra that comes and goes changes the width the app titles get
+    self.menuExtraManager.layoutDelegate = self;
 
     // Observe extras layout changes so we can resize AppMenuWidget
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -1348,6 +1362,14 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                           action:@selector(showPanel:)];
 
     _mediaKeyController = [[MediaKeyController alloc] initWithShortcutManager:[X11ShortcutManager sharedManager]];
+
+    /* Started here, not by the Media extra, because the hub is also what
+       serves the same commands to programs that ask over Distributed
+       Objects: it must be there whether or not the extra is shown, and
+       whether or not libdbus is (where it is not, it steers the native
+       player alone). */
+    NSDebugLLog(@"gwcomp", @"MenuController: Starting the media hub");
+    _mediaHub = [MediaHub sharedHub];
 
     // Register the hardware power key (XF86PowerOff).  A short press shows the
     // shutdown confirmation; a long press (> POWER_KEY_LONG_PRESS) shuts down

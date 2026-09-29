@@ -13,8 +13,68 @@ player for a while - Whisper, while its microphone is open.
 
     MediaRemote/GSMediaPlayer2.h    the interface and the client
     MediaRemote/GSMediaPlayer2.m    the client and the service name
+    MediaRemote/GSMediaControl.h    what Menu serves, for programs with no bus
     Player/PlayerMediaRemote.m      Player's server side
+    Menu/MediaHub.m                 Menu's side of both
     MediaRemote/PROTOCOL.md         this file
+
+## The two directions
+
+`GSMediaPlayer2` is what a **player** serves, so a program can reach a native
+Gershwin player that speaks no D-Bus. Whisper uses it to fall silent while
+its microphone is open.
+
+`GSMediaControl` is what **Menu** serves, for the other direction: a program
+that wants to steer whatever is playing, without a bus. Menu watches the
+session bus for the players that implement MPRIS2 - VLC, mpv, Rhythmbox, a
+player in a browser - and steers them there, so a program written against
+`GSMediaControl` reaches all of them through one interface, and reaches a
+native Gershwin player through the same one. The method names and the spelled
+states are the same in all three interfaces, so a call reads the same
+wherever it is written.
+
+| | MPRIS2 | GSMediaPlayer2 | GSMediaControl |
+| --- | --- | --- | --- |
+| **served by** | VLC, mpv, ... | Player | Menu |
+| **transport** | over D-Bus | over DO | over DO |
+| **client** | any D-Bus program | Whisper | any program |
+| **can say what plays** | yes | no | yes, from either side |
+
+A native Gershwin player has no MPRIS metadata and no D-Bus, so
+`GSMediaControl` is where the two halves meet: `MediaHub` in Menu keeps the
+MPRIS players and the native one in a single list, shows the first playing
+one, and sends each command to whichever kind it is.
+
+## Using GSMediaControl
+
+`MediaRemote/GSMediaControl.h` is the whole of the client side - it declares
+the interface, the name Menu registers it under and `GSMediaControlProxy()`,
+which looks that name up and hands back a proxy already set up. A program
+includes it and links nothing:
+
+```objc
+#import "GSMediaControl.h"
+
+id<GSMediaControl> media = GSMediaControlProxy();
+if (media == nil) {
+    // Menu.app is not running, so nothing is steering a player.
+} else if ([media hasPlayers]) {
+    [media playPause];
+}
+```
+
+`-players` lists every player Menu can see, each as a dictionary with
+`identifier`, `identity`, `playbackStatus`, `title`, `artist` and `native`,
+and `-usePlayer:` picks which one the transport methods act on. A transport
+method answers YES when the command was sent to a player and NO when there
+was none; it does not wait for the player to act on it. `-refresh` looks the
+bus over again at once, for a program that has just started a player.
+
+The states and the player service name are `#define`s in
+`GSMediaPlayer2.h` rather than declared strings, so that a program which only
+needs to say which state something is in can use them without linking
+`GSMediaPlayer2.m` - which is what lets Menu speak both interfaces in one
+binary.
 
 ## Looking a player up (client)
 
@@ -52,7 +112,9 @@ up; a client that still times out treats the player as absent.
 
 One registered name per player: several players may run, each under
 its own name of its own choosing.  This document and
-`GSMediaPlayer2PlayerServiceName` cover the one Player registers.
+`GSMediaPlayer2PlayerServiceName` cover the one Player registers.  Menu
+looks that name up to steer Player from the menu bar; see the two
+directions above.
 
 ## Interface
 
@@ -98,6 +160,26 @@ A pause has exactly one owner, the client token that took it:
 - `-next` and `-previous` forward and then check again.
 - `-resumeForClient:` gives the pause back only to its owner, and
   plays whatever the player now holds.
+
+## Interface reference: GSMediaControl
+
+What Menu serves, as a client sees it.  Every method is on the proxy from
+`GSMediaControlProxy()`; none of them waits for a player to act on a
+command.
+
+| method | answers |
+| --- | --- |
+| `-play` / `-pause` / `-playPause` / `-stop` / `-next` / `-previous` | `YES` when the command was sent to a player, `NO` when there was none to send it to |
+| `-hasPlayers` | `YES` while a player runs that this interface can steer |
+| `-playbackStatus` | `Playing`, `Paused` or `Stopped`, for the player the transport methods act on |
+| `-identity` | that player's own name, e.g. `VLC` or `Player` |
+| `-players` | one dictionary per player: `identifier`, `identity`, `playbackStatus`, `title`, `artist`, `native` |
+| `-usePlayer:` | `YES` when that player is running, and it is steered from now on |
+| `-refresh` | nothing; the request is queued |
+
+The player the transport methods act on is the one the user picked, or else
+the first one playing, or else the first one running.  A player that is
+picked and then quits is not waited for.
 
 ## States and modes
 

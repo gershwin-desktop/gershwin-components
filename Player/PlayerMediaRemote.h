@@ -50,14 +50,28 @@
     id<PlayerMediaRemoteTarget> player; // not retained: the player owns us
     NSString *pauseClient;  // retained: the token holding the pause, nil if none
     NSString *pausedStatus; // retained: the status the pause left behind
+    NSString *watcherName;    // retained: the service name to tell, nil if none
 }
-
 - (id)initWithPlayer:(id<PlayerMediaRemoteTarget>)aPlayer;
 
 /// Playback moved for a reason of its own (a button, a stream, the user):
 /// a pause whose status no longer matches ends here.  The player calls
 /// this from its state-change callbacks.
+///
+/// This is bookkeeping only.  It is also called from -playbackStatus, because
+/// asking the player what it is doing is a moment at which a pause may have
+/// ended, and a question is not a change - so it does not tell a watcher
+/// anything.  Use -playbackStateDidChange: for that.
 - (void)notePlaybackChanged;
+
+/* Tells a subscriber that the state moved, if it did.
+ *
+ * The player calls this when the *user* moves playback - its own buttons and
+ * keys, a stream that starts or fails - which is the case the transport
+ * methods above cannot see, because those are only reached when somebody
+ * else asked.  `wasStatus` is what the state was before; if it is the same
+ * now, nothing is sent. */
+- (void)playbackStateDidChange:(NSString *)wasStatus;
 
 @end
 
