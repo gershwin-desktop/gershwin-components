@@ -112,7 +112,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     CGFloat result = proposedWidth;
     @try {
         CGFloat wanted = [inst width];
-        if ([inst respondsToSelector:@selector(totalWidthInMenuBar)]) {
+        if ([inst statesTotalWidthInMenuBar]) {
             NSMenuItemCell *cell = [aMenuView menuItemCellForItemAtIndex:index];
             CGFloat chrome = 2.0 * [aMenuView horizontalEdgePadding];
             if (cell && [cell imageWidth]) {

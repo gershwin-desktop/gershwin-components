@@ -39,6 +39,8 @@
 - (NSMenu *)menu;
 - (NSImage *)icon;
 - (CGFloat)width;
+/* YES when -width is the whole item (the extra implements -totalWidthInMenuBar). */
+- (BOOL)statesTotalWidthInMenuBar;
 - (void)invalidateWidth;
 - (void)tick;
 - (void)menuWillOpen;

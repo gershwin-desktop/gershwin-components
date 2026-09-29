@@ -15,16 +15,6 @@
    takes them a little smaller. */
 static const CGFloat kItemIconSize = 16.0;
 
-/* The room an icon takes in the bar, being the icon and the gap either side
- * of it.  This is the theme's own padding rather than a number of our own:
- * the bar is laid out by asking each extra how wide it is, and the extras
- * that were here first are asked the same way.
- *
- * It is also the smallest an item in a bar can be - there is no title to put
- * the icon beside, so all that is left of the width is the icon and the
- * padding, and asking for less than this is asking for nothing at all. */
-static const CGFloat kIconWidth = 28.0;
-
 @implementation MediaExtra
 {
     BOOL _running;
@@ -340,22 +330,6 @@ static const CGFloat kIconWidth = 28.0;
             player.identifier, player.playbackStatus,
             (unsigned long)[[_hub knownPlayers] count],
             _expectedStatus];
-}
-
-/* The whole width this extra wants in the menu bar, icon and padding
- * included.
- *
- * -preferredWidth means the width of the title, and the bar adds the icon
- * and the padding to it; an extra that has only an icon wants a total
- * instead, or the item would come out that much too wide and everything to
- * its left would move with it.  22 is a menu-bar icon and the room to sit
- * in. */
-- (CGFloat)totalWidthInMenuBar
-{
-    if ([_hub currentPlayer] == nil) {
-        return 0.0;
-    }
-    return kIconWidth;
 }
 
 /* Whether this extra wants any room in the bar at all.

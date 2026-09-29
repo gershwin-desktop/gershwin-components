@@ -32,15 +32,14 @@
  * The WHOLE width this extra wants in the menu bar: icon, title and the
  * bar's padding, all of it.
  *
- * For an extra with no title, which is most icon-only ones: there is no
- * title to measure, so -preferredWidth has nothing to say and the item would
- * come out as wide as the bar's chrome alone - or, if the chrome were taken
- * out of it, wider than asked for, pushing every extra to the left along
- * with it.  Say the total here instead and the bar will honour it exactly.
+ * An icon-only extra does not need this: with an empty title it is measured
+ * the way Battery and WLAN are (the icon and the bar's padding), and that is
+ * what keeps every icon-only item the same width.  Implement it only when
+ * the whole item has to be a stated width; the bar then takes its own
+ * padding and the icon out of it before laying the item out.
  *
  * An extra that implements this is measured by it in place of
- * -preferredWidth.  Extras with a title should use -preferredWidth and need
- * not implement this at all.
+ * -preferredWidth.  Extras with a title should use -preferredWidth.
  */
 - (CGFloat)totalWidthInMenuBar;
 

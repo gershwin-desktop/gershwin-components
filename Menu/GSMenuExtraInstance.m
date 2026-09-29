@@ -137,6 +137,11 @@
     return _cachedWidth;
 }
 
+- (BOOL)statesTotalWidthInMenuBar
+{
+    return [_extra respondsToSelector:@selector(totalWidthInMenuBar)];
+}
+
 - (void)invalidateWidth
 {
     _cachedWidth = 0;
