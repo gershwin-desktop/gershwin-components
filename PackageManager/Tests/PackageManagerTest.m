@@ -1586,6 +1586,140 @@ static BOOL testNearly(float a, float b)
 
 @end
 
+/* The live selector - the one every package INSTALL goes through - driven
+ * against the real executor and guarded by a real timeout.
+ *
+ * It used to be driven by a dispatch source per pipe, which signalled its
+ * semaphore from the CANCEL handler, so the only thing that could release the
+ * waiter was a read() inside the event handler seeing EOF.  A command that
+ * wrote anything consumed the last of its output in that read and then needed
+ * one more event to observe the close; when that event did not arrive the
+ * waiter sat on DISPATCH_TIME_FOREVER with no way out.  Measured on Linux:
+ *
+ *   /bin/sh -c "printf a"  -> hung
+ *   /bin/sh -c "exit 0"    -> returned
+ *
+ * Only a command that writes nothing happened to work, which is why this
+ * survived: the install path reaches it only when a package is genuinely being
+ * installed.  It did not reproduce on the NextBSD box, so it was a
+ * platform-dependent hang rather than a certain one - worse, in that it would
+ * have passed a casual check on the machine you happened to be using.
+ *
+ * Each case runs the call on a background queue and waits with a deadline, so
+ * a regression FAILS the case instead of hanging the suite: a test that takes
+ * the suite with it when it fails is a test nobody runs. */
+@interface GWLiveExecutorTestHelper : NSObject
+@end
+
+@implementation GWLiveExecutorTestHelper
+
+/* Runs the live selector and reports what came back. nil status means it did
+ * not return before the deadline. */
++ (NSDictionary *)runScript:(NSString *)script seconds:(double)seconds
+{
+  GWSystemCommandExecutor *executor = [GWSystemCommandExecutor sharedExecutor];
+  __block NSMutableArray *outLines = [NSMutableArray array];
+  __block NSMutableArray *errLines = [NSMutableArray array];
+  __block NSString *capturedErr = nil;
+  __block NSNumber *status = nil;
+  __block BOOL firstLineArrivedWhileRunning = NO;
+  __block BOOL childExited = NO;
+
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    int s = [executor execute:@"/bin/sh"
+                    arguments:@[@"-c", script]
+               stdoutCallback:^(NSString *line) {
+      @synchronized (outLines) {
+        if ([line length] > 0 && !childExited) firstLineArrivedWhileRunning = YES;
+        [outLines addObject:line];
+      }
+    }
+               stderrCallback:^(NSString *line) {
+      @synchronized (errLines) { if ([line length] > 0) [errLines addObject:line]; }
+    }
+            capturedErrorOutput:&capturedErr];
+    status = @(s);
+    dispatch_semaphore_signal(done);
+  });
+
+  long waited = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW,
+      (int64_t)(seconds * NSEC_PER_SEC)));
+  if (waited != 0) return nil; // hung: the whole point of these cases
+
+  return @{
+    @"status": status,
+    @"out": [outLines copy],
+    @"err": [errLines copy],
+    @"captured": capturedErr ?: @"",
+    @"live": @(firstLineArrivedWhileRunning),
+  };
+}
+
++ (BOOL)testCommandThatWritesReturns
+{
+  return [self runScript:@"printf a" seconds:20.0] != nil;
+}
+
++ (BOOL)testCommandThatWritesBothStreamsReturns
+{
+  return [self runScript:@"printf a; printf b >&2; exit 3" seconds:20.0] != nil;
+}
+
++ (BOOL)testOutputFarPastAPipeBufferReturns
+{
+  // 20000 lines is several times a pipe buffer, so a reader that stopped
+  // draining would wedge the child in write() instead of finishing.
+  return [self runScript:@"i=1; while [ $i -le 20000 ]; do echo line $i; i=$((i+1)); done"
+                 seconds:60.0] != nil;
+}
+
++ (BOOL)testSlowCommandStillReturns
+{
+  return [self runScript:@"sleep 0.3; echo late" seconds:30.0] != nil;
+}
+
++ (BOOL)testEveryLineIsDelivered
+{
+  NSDictionary *r = [self runScript:
+    @"i=1; while [ $i -le 5 ]; do echo out$i; i=$((i+1)); done" seconds:30.0];
+  return r != nil && [r[@"out"] count] == 5;
+}
+
++ (BOOL)testExitStatusIsReported
+{
+  NSDictionary *r = [self runScript:@"printf a; exit 3" seconds:20.0];
+  return r != nil && [r[@"status"] intValue] == 3;
+}
+
++ (BOOL)testStderrIsDeliveredAndCaptured
+{
+  NSDictionary *r = [self runScript:
+    @"i=1; while [ $i -le 4 ]; do echo err$i >&2; i=$((i+1)); done" seconds:30.0];
+  return r != nil && [r[@"err"] count] == 4 &&
+         [[r[@"captured"] description] length] > 0;
+}
+
++ (BOOL)testALineArrivesBeforeTheCommandFinishes
+{
+  // The reason this selector exists at all: an install streams progress, and
+  // a caller that sees nothing until pkg exits cannot show a progress bar.
+  // The trailing sleep makes "delivered only at the end" distinguishable
+  // from "delivered as it happened".
+  NSDictionary *r = [self runScript:
+    @"echo first; sleep 1; echo last" seconds:30.0];
+  return r != nil && [r[@"live"] boolValue];
+}
+
++ (BOOL)testALineWithNoTrailingNewlineIsStillDelivered
+{
+  NSDictionary *r = [self runScript:@"printf no-newline" seconds:20.0];
+  return r != nil && [r[@"out"] count] == 1 &&
+         [r[@"out"][0] isEqualToString:@"no-newline"];
+}
+
+@end
+
 @interface GWCurlMeterTestHelper : NSObject
 @end
 
@@ -2170,6 +2304,35 @@ static BOOL testNearly(float a, float b)
   });
   runTest(@"testMissingCommandIsReportedNotCrashed", ^{
     return [GWRealCommandExecutorTestHelper testMissingCommandIsReportedNotCrashed];
+  });
+
+  // --- the live selector, the install path, guarded by a real timeout ---
+  runTest(@"testCommandThatWritesReturns", ^{
+    return [GWLiveExecutorTestHelper testCommandThatWritesReturns];
+  });
+  runTest(@"testCommandThatWritesBothStreamsReturns", ^{
+    return [GWLiveExecutorTestHelper testCommandThatWritesBothStreamsReturns];
+  });
+  runTest(@"testOutputFarPastAPipeBufferReturns", ^{
+    return [GWLiveExecutorTestHelper testOutputFarPastAPipeBufferReturns];
+  });
+  runTest(@"testSlowCommandStillReturns", ^{
+    return [GWLiveExecutorTestHelper testSlowCommandStillReturns];
+  });
+  runTest(@"testEveryLineIsDelivered", ^{
+    return [GWLiveExecutorTestHelper testEveryLineIsDelivered];
+  });
+  runTest(@"testExitStatusIsReported", ^{
+    return [GWLiveExecutorTestHelper testExitStatusIsReported];
+  });
+  runTest(@"testStderrIsDeliveredAndCaptured", ^{
+    return [GWLiveExecutorTestHelper testStderrIsDeliveredAndCaptured];
+  });
+  runTest(@"testALineArrivesBeforeTheCommandFinishes", ^{
+    return [GWLiveExecutorTestHelper testALineArrivesBeforeTheCommandFinishes];
+  });
+  runTest(@"testALineWithNoTrailingNewlineIsStillDelivered", ^{
+    return [GWLiveExecutorTestHelper testALineWithNoTrailingNewlineIsStillDelivered];
   });
 
   // --- AppImage asset picking (real releases, see the file's header) ---
