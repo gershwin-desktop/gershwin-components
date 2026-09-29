@@ -552,6 +552,33 @@ static NSString *MediaPlayersSignature(NSArray<MediaPlayerEntry *> *entries)
     return described;
 }
 
+/* The same list, as the text that goes over the wire.
+ *
+ * A returned collection does not reach a client as one on this runtime: it
+ * arrives as a proxy standing in for this array, and so does every dictionary
+ * in it.  A string is a value and arrives as one, so the list travels as a
+ * property list and the client's GSMediaControlPlayers() reads it back into
+ * real objects.  See GSMediaControl.h. */
+- (NSString *)playersPropertyList
+{
+    NSArray *described = [self players];
+    if ([described count] == 0) {
+        return @"[]";
+    }
+    NSError *error = nil;
+    NSData *data = [NSPropertyListSerialization
+                       dataWithPropertyList:described
+                                     format:NSPropertyListXMLFormat_v1_0
+                                    options:0
+                                      error:&error];
+    if (data == nil) {
+        NSLog(@"MediaHub: could not write the player list for the wire: %@",
+              error);
+        return @"[]";
+    }
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+}
+
 - (BOOL)usePlayerWithIdentifier:(NSString *)identifier
 {
     if (![identifier isKindOfClass:[NSString class]]) return NO;

@@ -103,8 +103,8 @@
 - (bycopy NSString *)identity;
 
 /**
- * Every player Menu can see, as an array of dictionaries, one per player.
- * Each holds:
+ * Every player Menu can see, as one property list in a string: an array of
+ * dictionaries, one per player.  Each holds:
  *
  *   identifier      the player's name on the bus, or the name it is
  *                   registered under over Distributed Objects.  This is
@@ -118,15 +118,19 @@
  *   native          YES for a player reached over Distributed Objects, NO
  *                   for one reached over MPRIS2.
  *
- * Deliberately NOT bycopy.  GNUstep marshals a bycopy object return
- * through a path that treats the returned pointer as though it were already
- * a value; a bycopy NSArray of NSDictionary goes through that path and the
- * client dies inside -[NSPortCoder encodeObject:] on what is a stack
- * address.  Without bycopy the same method is correct, and the object is
- * copied for the trip either way - that is what Distributed Objects does
- * with a returned object, and bycopy only says the callee does not keep it.
+ * Carried as a string and not returned as an NSArray, because a returned
+ * collection does not survive the trip on this runtime: it arrives as a proxy
+ * standing in for the server's own array, so a client is handed something
+ * that answers -count and -objectAtIndex: over the wire but is not an NSArray,
+ * and every dictionary inside it is a proxy as well.  That is true with and
+ * without bycopy - bycopy is not what decides it, and asking for it only
+ * changes how the return is encoded.  A string is a value and comes across as
+ * one, so the list travels as text and GSMediaControlPlayers() below turns it
+ * back into real objects on the caller's side.
+ *
+ * Use GSMediaControlPlayers() rather than reading this directly.
  */
-- (NSArray *)players;
+- (bycopy NSString *)playersPropertyList;
 
 /// Steers `identifier` from now on, as -playbackStatus describes.  NO when
 /// no player of that name is running.
@@ -162,6 +166,49 @@ static inline id<GSMediaControl> GSMediaControlProxy(void)
     [connection setRequestTimeout:2.0];
     [connection setReplyTimeout:2.0];
     return (id<GSMediaControl>)proxy;
+}
+
+/**
+ * Every player Menu can see, as a real NSArray of real NSDictionaries - one
+ * per player, with the keys -playersPropertyList describes.
+ *
+ * An empty array when Menu.app is not running, cannot be reached, or has
+ * nothing playing.  Never nil, and never a proxy standing in for the far
+ * side: this is the whole reason the list travels as text.
+ *
+ * The array is autoreleased, as anything a convenience function hands back
+ * here is.  A program built without ARC must not release it.
+ */
+static inline NSArray *GSMediaControlPlayers(id<GSMediaControl> control)
+{
+    if (control == nil) {
+        return [NSArray array];
+    }
+    NSString *text = nil;
+    @try {
+        text = [control playersPropertyList];
+    }
+    @catch (NSException *e) {
+        /* Menu.app went away between the lookup and the call, or answered
+           with something that is not a list.  An empty list is the honest
+           answer either way. */
+        return [NSArray array];
+    }
+    if ([text length] == 0) {
+        return [NSArray array];
+    }
+    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    if (data == nil) {
+        return [NSArray array];
+    }
+    id decoded = [NSPropertyListSerialization propertyListWithData:data
+                                                          options:NSPropertyListImmutable
+                                                           format:NULL
+                                                            error:NULL];
+    if ([decoded isKindOfClass:[NSArray class]]) {
+        return decoded;
+    }
+    return [NSArray array];
 }
 
 #endif /* GSMediaControl_h */

@@ -220,6 +220,35 @@ int main(void)
                  "a description always has a title, even an empty one");
         }
 
+        /* What actually goes over the wire.  A returned collection does not
+           reach a client as one on this runtime - it arrives as a proxy
+           standing in for the hub's own array, with a proxy for every
+           dictionary in it - so the list travels as a property list in a
+           string and the client reads it back.  That is the shape of the
+           whole fix, so it is checked here rather than left to the reader. */
+        NSString *onTheWire = [hub playersPropertyList];
+        PASS([onTheWire isKindOfClass:[NSString class]],
+             "the list goes over the wire as a string, not a collection");
+        id decoded = [NSPropertyListSerialization
+                         propertyListWithData:[onTheWire dataUsingEncoding:NSUTF8StringEncoding]
+                                       options:NSPropertyListImmutable
+                                        format:NULL
+                                         error:NULL];
+        PASS([decoded isKindOfClass:[NSArray class]],
+             "and it decodes to a real array, not a proxy (got %s)",
+             [[decoded class] description]);
+        PASS([decoded isKindOfClass:[NSArray class]] &&
+                 [decoded count] == [described count],
+             "carrying every player, as the in-process list does");
+        if ([decoded isKindOfClass:[NSArray class]] && [decoded count] > 0) {
+            id first = [decoded objectAtIndex:0];
+            PASS([first isKindOfClass:[NSDictionary class]],
+                 "and each entry is a real dictionary, not a proxy (got %s)",
+                 [[first class] description]);
+            PASS_EQUAL([first objectForKey:@"identifier"], kFakeNativeName,
+                       "with the same keys the header promises");
+        }
+
         /* Picking a player that is not there is refused rather than
            silently ignored, so a client can tell. */
         PASS(![hub usePlayer:@"org.mpris.MediaPlayer2.nosuchplayer"],
@@ -247,6 +276,17 @@ int main(void)
     PASS_EQUAL([empty identity], @"",
                "and no name");
     PASS([[empty players] count] == 0, "and no players to list");
+    /* An empty list still has to cross the wire as something a client can
+       read, rather than as nothing at all. */
+    NSString *emptyOnTheWire = [empty playersPropertyList];
+    id emptyDecoded = [NSPropertyListSerialization
+                          propertyListWithData:[emptyOnTheWire dataUsingEncoding:NSUTF8StringEncoding]
+                                        options:NSPropertyListImmutable
+                                         format:NULL
+                                          error:NULL];
+    PASS([emptyDecoded isKindOfClass:[NSArray class]] &&
+             [emptyDecoded count] == 0,
+         "and an empty list still decodes to an empty array, not to nothing");
     [empty shutdown];
 
     [hub release];

@@ -63,12 +63,22 @@ if (media == nil) {
 }
 ```
 
-`-players` lists every player Menu can see, each as a dictionary with
-`identifier`, `identity`, `playbackStatus`, `title`, `artist` and `native`,
-and `-usePlayer:` picks which one the transport methods act on. A transport
-method answers YES when the command was sent to a player and NO when there
-was none; it does not wait for the player to act on it. `-refresh` looks the
-bus over again at once, for a program that has just started a player.
+`GSMediaControlPlayers()` lists every player Menu can see, each as a
+dictionary with `identifier`, `identity`, `playbackStatus`, `title`, `artist`
+and `native`, and `-usePlayer:` picks which one the transport methods act on.
+A transport method answers YES when the command was sent to a player and NO
+when there was none; it does not wait for the player to act on it.
+`-refresh` looks the bus over again at once, for a program that has just
+started a player.
+
+The list crosses the wire as one property list in a string, read by
+`GSMediaControlPlayers()`. It has to: a returned collection does not survive
+the trip on this runtime. An `NSArray` comes back as a proxy standing in for
+the server's own array - it answers `-count` and `-objectAtIndex:` over the
+wire, but it is not an `NSArray`, and every dictionary inside it is a proxy
+too. That is the same with and without `bycopy`, which changes only how the
+return is encoded. A string is a value and arrives as one, so the helper
+decodes the list into real objects on the caller's side.
 
 The states and the player service name are `#define`s in
 `GSMediaPlayer2.h` rather than declared strings, so that a program which only
@@ -173,7 +183,7 @@ command.
 | `-hasPlayers` | `YES` while a player runs that this interface can steer |
 | `-playbackStatus` | `Playing`, `Paused` or `Stopped`, for the player the transport methods act on |
 | `-identity` | that player's own name, e.g. `VLC` or `Player` |
-| `-players` | one dictionary per player: `identifier`, `identity`, `playbackStatus`, `title`, `artist`, `native` |
+| `-playersPropertyList` | the list of players as a property list in a string: one dictionary per player, with `identifier`, `identity`, `playbackStatus`, `title`, `artist`, `native`. Read it with `GSMediaControlPlayers()`, which is what a program should call |
 | `-usePlayer:` | `YES` when that player is running, and it is steered from now on |
 | `-refresh` | nothing; the request is queued |
 
