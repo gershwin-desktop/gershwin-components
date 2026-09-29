@@ -556,7 +556,11 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         [_extrasMenuView setWidthProvider:self];
 
         [_extrasMenuView setMenu:_extrasMenu];
-    } else {
+    } else if ([_extrasMenuView menu] != _extrasMenu) {
+        /* Only a NEW menu is attached: attaching the one the view already
+           has adds a second set of cells behind the first (-setMenu: makes a
+           cell per item and keeps the old ones), and from then on the view
+           has cells no item accounts for. */
         [_extrasMenuView setMenu:_extrasMenu];
     }
     NSLog(@"GSMenuExtra: view menu set");
@@ -907,10 +911,19 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
     [_extrasMenuView sizeToFit];
 
+    /* One width per extra, in _menuExtras order, taken from the item that
+       extra has in the menu: an extra with nothing to show has no item and
+       takes no room, so it is 0 rather than the rect of whatever item sits
+       at its index - past the end of the menu once one extra is hidden. */
     NSMutableArray *widths = [NSMutableArray arrayWithCapacity:total];
     for (NSUInteger i = 0; i < total; i++) {
-        NSRect r = [_extrasMenuView rectOfItemAtIndex:i];
-        [widths addObject:@(NSWidth(r))];
+        NSMenuItem *item = [_extrasMenuItems objectForKey:[_menuExtras[i] identifier]];
+        NSInteger idx = item ? [_extrasMenu indexOfItem:item] : -1;
+        CGFloat width = 0.0;
+        if (idx >= 0) {
+            width = NSWidth([_extrasMenuView restingRectOfItemAtIndex:idx]);
+        }
+        [widths addObject:@(width)];
     }
 
     [self setCollapsedExtraCount:savedCollapse];
@@ -989,14 +1002,10 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
            kept ticking forever. */
         NSArray *items = [_menuExtras copy];
 
-        /* Work out first what has to change, and if anything has to, take the
-           view out of sight while it is done.  Removing an item makes the
-           view lay itself out again and redraw at once, and that redraw
-           happens with the frame the view still has - so the extras beside
-           the one that left are drawn a whole item-width too far left, for as
-           long as it takes the new frame to be applied.  A hidden view does
-           not draw, which makes the swap a single step as far as the screen
-           is concerned. */
+        /* Work out first what has to change, so the items are moved in one
+           go and the bar is laid out once afterwards.  The view keeps its
+           right edge on the bar's through every pass of its own, so an item
+           leaving or arriving never shows the group anywhere else. */
         NSMutableArray *toHide = [NSMutableArray array];
         NSMutableArray *toShow = [NSMutableArray array];
         for (GSMenuExtraInstance * item in items) {
@@ -1036,51 +1045,13 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         }
 
         if (visibilityChanged) {
-            /* The view hears about the change to the menu through a
-               notification, so its own list of items is still the old one
-               until that has been delivered: measuring now would ask it
-               about an item it no longer has, which it answers by raising.
-               The next turn of the run loop is after that, and the view is
-               out of sight until then either way. */
-            [self performSelector:@selector(finishVisibilityChange)
-                       withObject:nil
-                       afterDelay:0];
+            /* The view followed the items out of and into the menu through
+               NSMenu's notifications, which are posted as they happen, so it
+               can be laid out and placed right away. */
+            [self relayoutExtras];
         }
     } @catch (NSException *e) {
         NSLog(@"GSMenuExtra: exception in updateTimerFired: %@", e);
-    }
-}
-
-/* Puts the extras back where they belong after one of them came or went.
- *
- * This is deliberately not done in the same turn as the change to the menu.
- * The view keeps its own list of the menu's items and hears about a change
- * through a notification, so straight after one is removed the view still
- * lays itself out for the old, longer list - and measuring it then gives the
- * width of a group that no longer exists.  Placed at that width, the group is
- * a whole item too wide, and the extras to the right of the one that left sit
- * that far to the left of where they belong until something measures it
- * again.  The next turn of the run loop is after the notification, and is
- * close enough behind that the misplacement is never shown. */
-- (void)finishVisibilityChange
-{
-    @try {
-        /* The view keeps its own list of the menu's items, taken when the
-           menu was attached to it, and follows later changes item by item.
-           An item taken out of, or put into, the menu can leave that list a
-           different length from the menu's, and a view asked about an item it
-           has no cell for raises instead of answering - which leaves the
-           group at the width it had before, and every extra to the right of
-           the one that came or went a whole item-width too far left.
-           Attaching the menu again is what makes the two agree, and it is
-           only done when one actually came or went. */
-        if (_extrasMenuView && _extrasMenu) {
-            [_extrasMenuView setMenu:_extrasMenu];
-        }
-        [self relayoutExtras];
-    } @catch (NSException *e) {
-        NSLog(@"GSMenuExtra: exception replacing the extras after one came or "
-              @"went: %@", e);
     }
 }
 
