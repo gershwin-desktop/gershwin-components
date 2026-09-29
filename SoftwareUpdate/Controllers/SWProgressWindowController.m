@@ -307,6 +307,31 @@ static const float kIconSmall = 16.0;
 
 #pragma mark - Details disclosure
 
+// The y of the clip view's bounds origin that puts the container's TOP edge
+// (where the first row lives - see -reloadPhasesBox) at the top of the
+// visible area. Zero while the content still fits, so "at the top" is the
+// same as the default origin until the box first overflows.
+- (float)phasesBoxTopOriginY
+{
+  float documentHeight = NSHeight([_phasesContainer bounds]);
+  float clipHeight = NSHeight([[_phasesScroll contentView] bounds]);
+  return MAX(0.0, documentHeight - clipHeight);
+}
+
+- (BOOL)phasesBoxIsAtTop
+{
+  float originY = NSMinY([[_phasesScroll contentView] bounds]);
+  return fabs(originY - [self phasesBoxTopOriginY]) < 1.0;
+}
+
+- (void)scrollPhasesBoxToTop
+{
+  // -scrollToPoint: runs the point through -constrainScrollPoint:, which is
+  // what keeps this honest while the window (and so the box's height) is being
+  // animated; it clamps the origin into the document's own bounds.
+  [[_phasesScroll contentView] scrollToPoint:NSMakePoint(0.0, [self phasesBoxTopOriginY])];
+}
+
 - (void)detailsClicked:(id)sender
 {
   // NSPushOnPushOffButton already flipped [_detailsButton state] before this
@@ -330,6 +355,15 @@ static const float kIconSmall = 16.0;
   // at once rather than just one or the other.
   if (_detailsVisible) {
     [_phasesScroll setHidden:NO];
+    // Show the box from its first row, not from wherever the list happens to
+    // be parked: the rows are laid out top-down in the container's own
+    // (y-up) bounds, so the FIRST phase row sits at the container's NSMaxY
+    // while a scroll view's untouched bounds origin is (0,0) - the container's
+    // BOTTOM. Opening Details therefore showed the tail of the list with the
+    // run's first phase scrolled off above. Scroll to the top of the document
+    // before the snapshot is cached, so the fade-in rolls down onto the top of
+    // the list too.
+    [self scrollPhasesBoxToTop];
     NSRect boxBounds = [_phasesScroll bounds];
     NSBitmapImageRep *rep = [_phasesScroll bitmapImageRepForCachingDisplayInRect:boxBounds];
     [_phasesScroll cacheDisplayInRect:boxBounds toBitmapImageRep:rep];
@@ -478,7 +512,18 @@ static const float kIconSmall = 16.0;
   float totalHeight = 0;
   for (NSDictionary *row in rows) totalHeight += [row[@"height"] floatValue];
   float containerHeight = MAX(totalHeight, NSHeight([_phasesScroll bounds]));
+
+  // The container is resized on every event, and its rows hang off its TOP
+  // edge, so a taller container pushes the first row up out of the visible
+  // area unless the clip view follows it. While the box is still sitting at
+  // the top, keep it there (this also carries the very first overflow past
+  // the box's own height); if the user scrolled away, leave their position
+  // alone. Read the "at the top" answer BEFORE the resize, since the clip view
+  // only re-clamps the old origin afterwards and cannot tell a moved origin
+  // from a clamped one.
+  BOOL wasAtTop = [self phasesBoxIsAtTop];
   [_phasesContainer setFrame:NSMakeRect(0, 0, width, containerHeight)];
+  if (wasAtTop) [self scrollPhasesBoxToTop];
 
   // Place rows top-down: the first row's top edge is the container's top edge.
   y = containerHeight;
