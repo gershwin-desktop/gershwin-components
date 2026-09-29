@@ -62,6 +62,17 @@ static CGFloat TitleWidthAt(NSMenuView *view, NSInteger index)
   return NSWidth([view rectOfItemAtIndex:index]) - 2.0 * [view horizontalEdgePadding];
 }
 
+/* Where an item is drawn, and where it rests, in the superview. */
+static CGFloat SuperX(GSExtrasMenuView *view, NSInteger index)
+{
+  return NSMinX([view rectOfItemAtIndex:index]) + NSMinX([view frame]);
+}
+
+static CGFloat RestingSuperX(GSExtrasMenuView *view, NSInteger index)
+{
+  return NSMinX([view restingRectOfItemAtIndex:index]) + NSMinX([view frame]);
+}
+
 static BOOL AllItemsAtTheirWidth(GSExtrasMenuView *view, NSDictionary *widths)
 {
   NSArray *items = [[view menu] itemArray];
@@ -148,6 +159,42 @@ int main(void)
   [view rectOfItemAtIndex:0];
   PASS(fabs(NSMaxX([view frame]) - 592.0) < 0.5 && fabs(NSMinX([view frame]) - leftBefore) < 0.5,
        "anchored: after the item left, the group is back where it was, right edge untouched");
+
+  /* Motion: an item the layout moved on screen starts where it was and
+     settles on its new place; an item that did not move stays put; the
+     view stays wide enough on the left for the sliding item; at the end
+     everything is at rest and the timer is gone. */
+  [view rectOfItemAtIndex:0];
+  CGFloat cpuRestX = SuperX(view, 0);
+  CGFloat clockRestX = SuperX(view, 3);
+  [menu insertItemWithTitle:@"Media" action:NULL keyEquivalent:@"" atIndex:2];
+  [view rectOfItemAtIndex:0];
+  CGFloat cpuNewRest = RestingSuperX(view, 0);
+  PASS(cpuNewRest < cpuRestX - 19.0, "slide: the CPU item's resting place moved left by the new item");
+  PASS([view isSliding], "slide: a layout that moved an item starts the slide");
+  PASS(fabs(SuperX(view, 0) - cpuRestX) < 1.0,
+       "slide: right after the layout the CPU item is still drawn where it was");
+  PASS(fabs(SuperX(view, 4) - clockRestX) < 0.5,
+       "slide: the clock, which did not move, is drawn at its place");
+  [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.15]];
+  CGFloat cpuMid = SuperX(view, 0);
+  PASS(cpuMid < cpuRestX - 1.0 && cpuMid > cpuNewRest - 8.0,
+       "slide: part way through, the CPU item is between where it was and where it goes");
+  [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+  PASS(![view isSliding], "slide: over after its duration");
+  PASS(fabs(SuperX(view, 0) - cpuNewRest) < 0.5,
+       "slide: the CPU item rests at its new place");
+  PASS(fabs(NSMaxX([view frame]) - 592.0) < 0.5 && fabs(NSWidth([view frame]) - [view itemsWidth]) < 0.5,
+       "slide: afterwards the frame is the items' width on the anchor");
+  /* The item leaves: the CPU item slides right, from outside the new frame,
+     so the frame reaches left to cover it while it slides. */
+  [menu removeItemAtIndex:2];
+  [view rectOfItemAtIndex:0];
+  PASS([view isSliding] && NSMinX([view frame]) + 0.5 < 592.0 - [view itemsWidth],
+       "slide: while an item slides in from the left the frame reaches out to it");
+  [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
+  PASS(![view isSliding] && fabs(NSWidth([view frame]) - [view itemsWidth]) < 0.5,
+       "slide: the frame shrinks back to the items once they rest");
 
   /* The app menus are not touched: a plain menu view keeps the theme's width. */
   NSMenuView *plain = [[NSMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, 22)];

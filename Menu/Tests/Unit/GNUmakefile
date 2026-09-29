@@ -132,6 +132,9 @@ t_ExtrasBarLayout_OBJC_FILES = t_ExtrasBarLayout.m
 # skips without $DISPLAY, run under xvfb-run.
 t_ExtrasMenuViewWidths_OBJC_FILES = t_ExtrasMenuViewWidths.m ../../GSExtrasMenuView.m
 t_ExtrasMenuViewWidths_TOOL_LIBS += -lgnustep-gui
+# Menu builds the view with ARC; the tool stays MRC for the PASS macros, so
+# only the view's own object gets the ARC flags (keyed by its path as written).
+../../GSExtrasMenuView.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 
 # The media hub.  MPRISMediaController is the D-Bus half and is tested
 # against a dbus-daemon and a real (fake) MPRIS2 player that

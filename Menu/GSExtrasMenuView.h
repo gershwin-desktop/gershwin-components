@@ -40,13 +40,31 @@
  * moment an item comes or goes until whoever placed it gets to move it, and
  * on screen the extras to the right of that item jump.  With an anchor set,
  * the view moves itself back to the anchor inside every resize, so no layout
- * pass, its own included, ever shows the group anywhere else. */
+ * pass, its own included, ever shows the group anywhere else.
+ *
+ * Motion: an item that a layout pass moved on screen (everything left of an
+ * extra that came or went, or of one whose title grew) does not jump there.
+ * It starts where it was and settles on its new place along a damped spring,
+ * drawn and hit-tested at the in-between positions, so the bar reads as
+ * things sliding aside rather than being redrawn. */
 @interface GSExtrasMenuView : NSMenuView
 {
   NSInteger _measuringIndex;
   id<GSExtrasMenuViewWidthProvider> _widthProvider;
   BOOL _anchored;
   CGFloat _anchoredRightEdge;
+
+  /* Where each item sat in the superview after the last layout pass, keyed
+   * by the item itself: the "before" of the next pass. */
+  NSMapTable *_restingX;
+  /* Items in motion: item -> the x offset they started the slide at. */
+  NSMapTable *_slideStart;
+  NSDate *_slideBegan;
+  NSTimer *_slideTimer;
+  CGFloat _slideLeftReach;
+  /* The items' width from the last pass whose cells matched the menu. */
+  CGFloat _restingWidth;
+  BOOL _reportedMismatch;
 }
 
 /* The index of the item whose cell was fetched last, or -1 before any. */
@@ -59,5 +77,18 @@
 /* The x, in the superview's coordinates, the view's right edge stays at from
  * now on, whatever its width becomes. */
 - (void)setAnchoredRightEdge:(CGFloat)x;
+
+/* The rect NSMenuView laid the item out at, slide or no slide. */
+- (NSRect)restingRectOfItemAtIndex:(NSInteger)index;
+
+/* The width of the items at rest, slide or no slide: from x = 0 to the right
+ * edge of the last item, as of the last layout pass whose list of cells
+ * matched the menu's list of items (the cells follow the items through
+ * notifications, and a pass in between lays out a list that is not the
+ * menu's). */
+- (CGFloat)itemsWidth;
+
+/* YES while items are still sliding to their places. */
+- (BOOL)isSliding;
 
 @end

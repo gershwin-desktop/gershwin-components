@@ -862,32 +862,15 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     }
 }
 
-- (CGFloat)extrasMenuWidthForView:(NSMenuView *)view menu:(NSMenu *)menu
+- (CGFloat)extrasMenuWidthForView:(GSExtrasMenuView *)view menu:(NSMenu *)menu
 {
     if (!view || !menu || [[menu itemArray] count] == 0) return 0;
 
     [view sizeToFit];
-
-    __block CGFloat maxX = 0;
-    [[menu itemArray] enumerateObjectsUsingBlock:
-        ^(NSMenuItem *item, NSUInteger idx, BOOL *stop) {
-            NSRect r = NSZeroRect;
-            @try {
-                r = [view rectOfItemAtIndex: (NSInteger)idx];
-            } @catch (NSException *e) {
-                /* The view raises if the index is past the end of its own
-                   list of items, which is what happens when the menu and the
-                   view disagree - the view hears of a change to the menu only
-                   through a notification.  Stop at the first one it will not
-                   answer rather than raising over the whole bar. */
-                *stop = YES;
-                return;
-            }
-            CGFloat right = NSMaxX(r);
-            if (right > maxX) maxX = right;
-        }];
-
-    return maxX;
+    /* The resting width: while items slide, the rects they are drawn at are
+       off their places, and the bar is laid out around where they will come
+       to rest. */
+    return [view itemsWidth];
 }
 
 - (CGFloat)extrasMenuWidth
