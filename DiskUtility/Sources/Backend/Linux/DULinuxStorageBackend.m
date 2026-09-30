@@ -47,6 +47,18 @@
     ];
 }
 
+// The tools without which discovery, verify, format, mount and imaging cannot
+// happen at all. mdadm, qemu-img, xorriso, wipefs and the resize/tune tools
+// each gate one feature and are already reported per-feature in the
+// capabilities report, so their absence must not block startup.
+- (NSArray<NSString *> *)requiredToolNames
+{
+    return @[
+        @"lsblk", @"blkid", @"mount", @"umount", @"dd", @"cat", @"gzip",
+        @"parted",
+    ];
+}
+
 #pragma mark - Discovery
 
 - (NSArray<DUStorageObject *> *)discoverStorageObjects:(NSError **)error
