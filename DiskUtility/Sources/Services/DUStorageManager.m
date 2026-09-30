@@ -261,8 +261,14 @@
     }
 
     [_lock lock];
-    BOOL changed = [self differsFromSnapshot:discovered];
-    _currentObjects = [discovered copy];
+    /* Merge FIRST, then decide whether anything changed. Comparing against
+     * the raw discovery result would report a change on every poll for a disk
+     * an operation is busy with, reloading the browser for a difference the
+     * merge then papers over. */
+    NSArray<DUStorageObject *> *merged =
+        [self carryingForwardBusyObjectsFrom:_currentObjects into:discovered];
+    BOOL changed = [self differsFromSnapshot:merged];
+    _currentObjects = [merged copy];
     [_lock unlock];
 
     if (changed) {
@@ -276,6 +282,118 @@
                             waitUntilDone:NO];
     }
     return YES;
+}
+
+/* Keeps an object that an operation is working on visible in the snapshot.
+ *
+ * Discovery runs on a timer while a destructive operation is in flight, and
+ * the very act of the operation can make the object briefly unreadable: a
+ * whole-disk erase destroys the partition table, so one poll can find a disk
+ * with no table and the next finds it whole again. Without this the row
+ * disappears from the browser, -reloadWithPreferredSelection: cannot resolve
+ * the selection and falls back to the FIRST device in the list, and the
+ * Information panel then describes a different disk than the one being
+ * erased. The user is left looking at one disk while the app destroys
+ * another, and the next click acts on the wrong device.
+ *
+ * A busy object missing from the fresh tree is therefore carried forward with
+ * its last known subtree, so the row and the selection survive the poll. The
+ * next refresh after the lock is released replaces it with the real state.
+ * Objects that are merely CHANGED while busy are not carried forward: their
+ * row updates as normal, because the operation holds its own reference and
+ * does not depend on the snapshot.
+ *
+ * Must be called with _lock held. */
+- (NSArray<DUStorageObject *> *)carryingForwardBusyObjectsFrom:
+        (NSArray<DUStorageObject *> *)current
+                                                  into:
+        (NSArray<DUStorageObject *> *)fresh
+{
+    if (_busyIdentifiers.count == 0 || current.count == 0) {
+        return fresh;
+    }
+
+    // Index the fresh tree by identifier, so "is it still there?" is a
+    // dictionary lookup rather than a walk per busy object.
+    NSMutableSet<NSString *> *present = [NSMutableSet set];
+    NSMutableArray<DUStorageObject *> *work = [NSMutableArray array];
+    for (DUStorageObject *root in [fresh reverseObjectEnumerator]) {
+        [work addObject:root];
+    }
+    while (work.count > 0) {
+        DUStorageObject *object = work.lastObject;
+        [work removeLastObject];
+        if (object.identifier.length > 0) {
+            [present addObject:object.identifier];
+        }
+        for (DUStorageObject *child in [object.children reverseObjectEnumerator]) {
+            [work addObject:child];
+        }
+    }
+
+    // Find each missing busy object in the current tree, together with the
+    // parent it hung from, so it can be re-attached in the same place.
+    NSMutableDictionary<NSString *, DUStorageObject *> *carried =
+        [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, DUStorageObject *> *carriedParent =
+        [NSMutableDictionary dictionary];
+    NSMutableArray<DUStorageObject *> *pending = [NSMutableArray array];
+    for (DUStorageObject *root in [current reverseObjectEnumerator]) {
+        [pending addObject:root];
+    }
+    while (pending.count > 0) {
+        DUStorageObject *object = pending.lastObject;
+        [pending removeLastObject];
+        if (object.identifier.length > 0 &&
+            [_busyIdentifiers containsObject:object.identifier] &&
+            ![present containsObject:object.identifier]) {
+            carried[object.identifier] = object;
+            carriedParent[object.identifier] = object.parent;
+        }
+        for (DUStorageObject *child in [object.children reverseObjectEnumerator]) {
+            [pending addObject:child];
+        }
+    }
+    if (carried.count == 0) {
+        return fresh;
+    }
+
+    NSMutableArray<DUStorageObject *> *merged = [fresh mutableCopy];
+    for (NSString *identifier in carried) {
+        DUStorageObject *object = carried[identifier];
+        DUStorageObject *parent = carriedParent[identifier];
+        if (parent != nil && [present containsObject:parent.identifier]) {
+            DUStorageObject *freshParent = nil;
+            for (DUStorageObject *candidate in merged) {
+                freshParent = [self firstObjectWithIdentifier:candidate
+                                                       matching:parent.identifier];
+                if (freshParent != nil) {
+                    break;
+                }
+            }
+            [freshParent addChild:object];
+        } else {
+            [merged addObject:object];
+        }
+    }
+    return merged;
+}
+
+// Depth-first search for a descendant carrying `identifier`.
+- (DUStorageObject *)firstObjectWithIdentifier:(DUStorageObject *)root
+                                      matching:(NSString *)identifier
+{
+    if ([root.identifier isEqualToString:identifier]) {
+        return root;
+    }
+    for (DUStorageObject *child in root.children) {
+        DUStorageObject *hit = [self firstObjectWithIdentifier:child
+                                                       matching:identifier];
+        if (hit != nil) {
+            return hit;
+        }
+    }
+    return nil;
 }
 
 // Main-thread continuation of refreshWithError:; observers touch views.
