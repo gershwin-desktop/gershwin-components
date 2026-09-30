@@ -17,6 +17,10 @@
 #import "DUOperation.h"
 #import "DUOperationManager.h"
 #import "DUStorageBackend.h"
+#import "DUDiskImage.h"
+#import "DUPartition.h"
+#import "DUStorageDevice.h"
+#import "DUStorageVolume.h"
 #import "DURepairOperation.h"
 #import "DUVerifyOperation.h"
 
@@ -137,8 +141,15 @@
 
 // --- Refresh / reconcile -------------------------------------------------
 
-// Structural comparison keyed by stable identifiers; enough to spot
-// additions, removals and metadata changes without deep value semantics.
+/* Structural comparison keyed by stable identifiers, over EVERY object in
+ * the tree rather than the roots only. The old version looked at each root's
+ * own type/name/path and its children.count, which never changes when a
+ * partition is resized, deleted, added at a deeper level, or when a volume is
+ * mounted or unmounted - so the sidebar and the Information panel froze on
+ * the layout captured at launch. Worst case: swap one bridged drive for
+ * another of the same model while the app runs (same identifier, name, path
+ * and child count) and it kept presenting the previous disk's partitions to
+ * a user who is about to erase. */
 - (BOOL)differsFromSnapshot:(NSArray<DUStorageObject *> *)fresh
 {
     NSArray<DUStorageObject *> *old = _currentObjects;
@@ -146,24 +157,94 @@
         return YES;
     }
     NSMutableDictionary<NSString *, DUStorageObject *> *byId =
-        [NSMutableDictionary dictionaryWithCapacity:fresh.count];
-    for (DUStorageObject *object in fresh) {
+        [NSMutableDictionary dictionary];
+    for (DUStorageObject *object in [self flattenObjects:fresh]) {
         byId[object.identifier] = object;
     }
-    for (DUStorageObject *previous in old) {
-        DUStorageObject *next = byId[previous.identifier];
+    NSMutableDictionary<NSString *, DUStorageObject *> *previousById =
+        [NSMutableDictionary dictionary];
+    for (DUStorageObject *object in [self flattenObjects:old]) {
+        previousById[object.identifier] = object;
+    }
+    if (byId.count != previousById.count) {
+        return YES;
+    }
+    for (NSString *identifier in previousById) {
+        DUStorageObject *previous = previousById[identifier];
+        DUStorageObject *next = byId[identifier];
         if (next == nil) {
             return YES;
         }
         if (previous.type != next.type ||
             ![previous.displayName isEqualToString:next.displayName] ||
             !(previous.backendPath == next.backendPath ||
-              [previous.backendPath isEqualToString:next.backendPath]) ||
-            previous.children.count != next.children.count) {
+              [previous.backendPath isEqualToString:next.backendPath])) {
+            return YES;
+        }
+        if ([self mutableStateOfObject:previous] !=
+            [self mutableStateOfObject:next]) {
             return YES;
         }
     }
     return NO;
+}
+
+// The state that changes under a live disk without changing its identity or
+// name. Built as one comparable string per object so a single equality test
+// covers every field that moves.
+- (NSString *)mutableStateOfObject:(DUStorageObject *)object
+{
+    NSMutableString *state = [NSMutableString string];
+    [state appendFormat:@"c=%lu", (unsigned long)object.children.count];
+    if ([object isKindOfClass:[DUStorageDevice class]]) {
+        DUStorageDevice *device = (DUStorageDevice *)object;
+        [state appendFormat:@"|cap=%llu|s=%@|sm=%ld|h=%@|u=%d",
+                             device.capacityBytes,
+                             device.partitionScheme ?: @"-",
+                             (long)device.smartStatus,
+                             device.healthStatus ?: @"-",
+                             device.partitionTableUnreadable];
+    } else if ([object isKindOfClass:[DUPartition class]]) {
+        DUPartition *partition = (DUPartition *)object;
+        [state appendFormat:@"|i=%ld|o=%llu|z=%llu|t=%@|f=%@|n=%@",
+                             (long)partition.index, partition.offsetBytes,
+                             partition.sizeBytes,
+                             partition.partitionType ?: @"-",
+                             partition.filesystemType ?: @"-",
+                             partition.name ?: @"-"];
+    } else if ([object isKindOfClass:[DUStorageVolume class]]) {
+        DUStorageVolume *volume = (DUStorageVolume *)object;
+        [state appendFormat:@"|f=%@|cap=%llu|m=%@|mp=%@|av=%llu|us=%llu",
+                             volume.filesystemType ?: @"-",
+                             volume.capacityBytes,
+                             volume.mounted ? @"1" : @"0",
+                             volume.mountPoint ?: @"-",
+                             volume.availableBytes, volume.usedBytes];
+    } else if ([object isKindOfClass:[DUDiskImage class]]) {
+        DUDiskImage *image = (DUDiskImage *)object;
+        [state appendFormat:@"|p=%@|z=%llu", image.path ?: @"-",
+                             image.sizeBytes];
+    }
+    return state;
+}
+
+// Pre-order flatten, iterative so it cannot retain-cycle under ARC.
+- (NSArray<DUStorageObject *> *)flattenObjects:(NSArray<DUStorageObject *> *)roots
+{
+    NSMutableArray<DUStorageObject *> *all = [NSMutableArray array];
+    NSMutableArray<DUStorageObject *> *work = [NSMutableArray array];
+    for (DUStorageObject *root in [roots reverseObjectEnumerator]) {
+        [work addObject:root];
+    }
+    while (work.count > 0) {
+        DUStorageObject *object = work.lastObject;
+        [work removeLastObject];
+        [all addObject:object];
+        for (DUStorageObject *child in [object.children reverseObjectEnumerator]) {
+            [work addObject:child];
+        }
+    }
+    return all;
 }
 
 - (BOOL)refreshWithError:(NSError **)error

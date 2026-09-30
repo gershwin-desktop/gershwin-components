@@ -28,17 +28,52 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
     }
     _storageManager = storageManager;
     _lock = [[NSLock alloc] init];
+    _interval = [self configuredInterval];
 
+    // The interval was read once at init and the timer armed from it, so
+    // changing the preference in Preferences did nothing until the app was
+    // restarted - the control looked broken. Re-arm on the change instead.
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(defaultsChanged:)
+               name:NSUserDefaultsDidChangeNotification
+             object:nil];
+    return self;
+}
+
+- (NSTimeInterval)configuredInterval
+{
     NSNumber *configured =
         [[NSUserDefaults standardUserDefaults]
             objectForKey:DURefreshIntervalDefaultsKey];
     if (configured != nil && configured.doubleValue >= 1.0) {
-        _interval = configured.doubleValue;
-    } else {
-        _interval = DUDefaultRefreshInterval;
+        return configured.doubleValue;
     }
+    return DUDefaultRefreshInterval;
+}
 
-    return self;
+- (void)defaultsChanged:(NSNotification *)notification
+{
+    (void)notification;
+    NSTimeInterval wanted = [self configuredInterval];
+    [_lock lock];
+    BOOL same = wanted == _interval;
+    NSTimer *timer = _timer;
+    [_lock unlock];
+    if (same || timer == nil) {
+        return;
+    }
+    [_lock lock];
+    _interval = wanted;
+    [_timer invalidate];
+    _timer = [NSTimer timerWithTimeInterval:_interval
+                                     target:self
+                                   selector:@selector(timerFired:)
+                                   userInfo:nil
+                                    repeats:YES];
+    NSTimer *armed = _timer;
+    [_lock unlock];
+    [[NSRunLoop currentRunLoop] addTimer:armed forMode:NSRunLoopCommonModes];
 }
 
 - (void)start
@@ -76,6 +111,7 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
     // Timers retain their target; if we are deallocating anyway, make sure
     // the run loop lets go too.
     [_timer invalidate];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)timerFired:(NSTimer *)timer
@@ -96,16 +132,27 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
 
     NSThread *thread = [[NSThread alloc] initWithBlock:^{
         @autoreleasepool {
-            NSError *error = nil;
-            // A failed poll keeps the previous snapshot; discovery errors on
-            // transient devices are routine and must not tear down the model.
-            if (![self.storageManager refreshWithError:&error] && error != nil) {
-                NSLog(@"DUDeviceMonitor: refresh failed: %@",
-                      error.localizedDescription);
+            /* The in-flight flag MUST be cleared however this attempt ends.
+             * It used to be set to NO after the refresh call, so any
+             * exception raised inside discovery (a device node that vanishes
+             * mid-walk) left it set for good: every later tick returned
+             * immediately and the app never noticed a disk being plugged,
+             * unplugged or repartitioned again. */
+            @try {
+                NSError *error = nil;
+                // A failed poll keeps the previous snapshot; discovery errors
+                // on transient devices are routine and must not tear down the
+                // model.
+                if (![self.storageManager refreshWithError:&error] &&
+                    error != nil) {
+                    NSLog(@"DUDeviceMonitor: refresh failed: %@",
+                          error.localizedDescription);
+                }
+            } @finally {
+                [self->_lock lock];
+                self->_refreshInFlight = NO;
+                [self->_lock unlock];
             }
-            [self->_lock lock];
-            self->_refreshInFlight = NO;
-            [self->_lock unlock];
         }
     }];
     thread.name = @"DUDeviceMonitor refresh";
