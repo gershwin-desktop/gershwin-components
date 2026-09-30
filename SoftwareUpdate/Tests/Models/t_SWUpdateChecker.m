@@ -126,10 +126,59 @@ int main(void)
 
   PASS(workspaceResult != nil, "gershwin-workspace is included: it has new commits");
   PASS([workspaceResult commitCount] == 2, "gershwin-workspace shows both new commits");
+  PASS([workspaceResult isReachable], "a repository whose fetch succeeded is reachable");
   PASS_EQUAL([workspaceResult targetBranch], @"main", "gershwin-workspace's target branch is main");
   PASS([workspaceResult buildStatus] == SWBuildStatusPassed,
        "gershwin-workspace's build status comes from the injected GitHub client");
   PASS([workspaceResult selected], "a passed-build repository with new commits is selected by default");
+
+  /* --- a repository whose fetch cannot work is reported, not read as
+         "no updates" --------------------------------------------------------- */
+  {
+    // A real repository whose origin cannot be reached, so its fetch fails for
+    // a reason that has nothing to do with permissions. The point of the case
+    // is what the checker does with a failed fetch: origin/<branch> never
+    // moves, so every HEAD..origin/<branch> comes back empty, and a checker
+    // that carried on would report the repository as having no updates - the
+    // claim this case exists to rule out.
+    //
+    // A permission failure would be the case seen on the box, but it no longer
+    // reaches this path: SWGitTool now sends a repository whose object database
+    // is not writable through sudo, so its fetch succeeds instead of failing.
+    // (That routing is covered where it belongs, by t_SWGitTool's elevation
+    // cases.) A headless test must not ask for a password either.
+    NSString *workBlocked = [sourcesDir stringByAppendingPathComponent:@"gershwin-blocked"];
+    runShell([NSString stringWithFormat:@"cp -R %@ %@", workWorkspace, workBlocked]);
+    runShell([NSString stringWithFormat:@"cd %@ && git remote set-url origin %@",
+      workBlocked, [originDir stringByAppendingPathComponent:@"no-such-remote.git"]]);
+
+    SWRepository *blocked = [[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-blocked", @"URL": @"u"}];
+    __block SWRepository *checked = [blocked retain];
+    __block NSArray *blockedResult = nil;
+    SWUpdateChecker *blockedChecker = [[SWUpdateChecker alloc] initWithSourcesDirectory:sourcesDir
+                                                                           useDevBranch:NO
+                                                                         gitToolFactory:nil
+                                                                      buildStatusClient:buildStatus
+                                                                             logHandler:nil];
+    [blockedChecker checkRepositories:@[blocked]
+                       stopRequested:nil
+                            progress:nil
+                          completion:^(NSArray *withUpdates, BOOL anyReachable) {
+      (void)anyReachable;
+      blockedResult = [[withUpdates retain] autorelease];
+    }];
+    PASS(![checked isReachable], "a repository whose fetch failed is not reachable");
+    PASS([[checked unreachableReason] hasPrefix:@"Couldn't fetch:"],
+         "the failure names the fetch rather than saying only \"couldn't check\"");
+    PASS([[checked unreachableReason] rangeOfString:@"no-such-remote"].location != NSNotFound,
+         "git's own complaint about the remote survives into the reason");
+    PASS([checked commitCount] == 0,
+         "no commit count is claimed for a repository that was never fetched");
+    PASS(![checked selected], "a repository that could not be checked is not selected for update");
+    PASS([blockedResult count] == 0,
+         "a failed fetch does not report the repository as having an update");
+    [checked release];
+  }
 
   [result release];
   runShell([NSString stringWithFormat:@"rm -rf %@", base]);

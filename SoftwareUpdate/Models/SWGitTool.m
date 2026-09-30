@@ -6,6 +6,9 @@
 
 #import "SWGitTool.h"
 #import <PackageManager/GWSudoHelper.h>
+#include <ctype.h>
+#include <dirent.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -69,21 +72,85 @@ static BOOL SWOwnedByOtherUser(NSString *path, uid_t runAs)
          (uid_t)st.st_uid != runAs;
 }
 
+// YES when this path exists and this user may not write it as themselves -
+// either somebody else owns it, or the mode forbids it. lstat and access(),
+// which is what git itself uses. An absent path is NO: git states the real
+// problem itself, in its own words.
+//
+// Search permission is only asked of directories. Asking it of a file asks
+// whether the file is executable, and .git/packed-refs is an ordinary 0644
+// file - so demanding X_OK there reports every healthy repository as
+// unusable, sends every git call through sudo, and the object database that
+// root then writes comes back root-owned. That is the very condition this
+// function exists to route around, manufactured by the check itself.
+static BOOL SWNeedsWriteAccess(NSString *path)
+{
+  if ([path length] == 0) return NO;
+  struct stat st;
+  const char *fsPath = [path fileSystemRepresentation];
+  if (lstat(fsPath, &st) != 0) return NO;
+  if ((uid_t)st.st_uid != geteuid()) return YES;
+  if (access(fsPath, W_OK) != 0) return YES;
+  return S_ISDIR(st.st_mode) && access(fsPath, X_OK) != 0;
+}
+
+// git stores a loose object in .git/objects/<xx>, where <xx> is the first two
+// hex digits of its sha - and it reuses that directory when one already
+// exists rather than creating a new one. So a single directory left behind by
+// a git that ran as root is enough to break every later unprivileged fetch:
+//
+//   error: insufficient permission for adding an object to repository
+//   database .git/objects
+//   fatal: failed to write object
+//   fatal: unpack-objects failed
+//
+// and because the objects never land, the remote-tracking ref is never
+// advanced either - which is what made a check read "HEAD..origin/dev is
+// empty", i.e. no updates, on a repository that was plainly behind. Every
+// existing two-hex-digit directory is therefore inspected, not just .git.
+static BOOL SWObjectsDirNeedsWriteAccess(NSString *objectsDir)
+{
+  // An absent object database is nothing to escalate for: there is no
+  // database to write into, and git states the real problem itself. Checked
+  // first, because the "cannot read it" case below would otherwise turn every
+  // path that is not a repository at all into one that needs sudo.
+  struct stat st;
+  if (lstat([objectsDir fileSystemRepresentation], &st) != 0) return NO;
+  if (SWNeedsWriteAccess(objectsDir)) return YES;
+  if (SWNeedsWriteAccess([objectsDir stringByAppendingPathComponent:@"pack"])) return YES;
+
+  DIR *dir = opendir([objectsDir fileSystemRepresentation]);
+  if (!dir) return YES;   // exists but unreadable: certainly not writable
+  BOOL needsElevation = NO;
+  struct dirent *entry = NULL;
+  while (!needsElevation && (entry = readdir(dir)) != NULL) {
+    const char *name = entry->d_name;
+    if (strlen(name) != 2) continue;
+    if (!isxdigit((unsigned char)name[0]) || !isxdigit((unsigned char)name[1])) continue;
+    if (SWNeedsWriteAccess([objectsDir stringByAppendingPathComponent:
+                             [NSString stringWithUTF8String:name]])) {
+      needsElevation = YES;
+    }
+  }
+  closedir(dir);
+  return needsElevation;
+}
+
 // YES when git's own checks would refuse this path: it belongs to another
 // user, or this user may not write to it. Judged with lstat and access on
-// the worktree and its .git directory, which is what git itself inspects -
-// and it has to write both to record a fetch, a checkout or a stash.
+// everything a fetch, a checkout or a stash has to write - the worktree, its
+// .git directory, the objects database and the refs - and not merely the two
+// paths at the top, because "the repository is mine" says nothing about
+// whether the object database inside it is.
 // Absent paths are not escalated for: git states the real problem itself.
 static BOOL SWPathNeedsElevation(NSString *path)
 {
   if ([path length] == 0) return NO;
-  for (NSString *candidate in @[path, [path stringByAppendingPathComponent:@".git"]]) {
-    const char *fsPath = [candidate fileSystemRepresentation];
-    struct stat st;
-    if (lstat(fsPath, &st) != 0) continue;
-    if ((uid_t)st.st_uid != geteuid()) return YES;
-    if (access(fsPath, W_OK) != 0) return YES;
-  }
+  NSString *gitDir = [path stringByAppendingPathComponent:@".git"];
+  if (SWNeedsWriteAccess(path) || SWNeedsWriteAccess(gitDir)) return YES;
+  if (SWObjectsDirNeedsWriteAccess([gitDir stringByAppendingPathComponent:@"objects"])) return YES;
+  if (SWNeedsWriteAccess([gitDir stringByAppendingPathComponent:@"refs"])) return YES;
+  if (SWNeedsWriteAccess([gitDir stringByAppendingPathComponent:@"packed-refs"])) return YES;
   return NO;
 }
 
@@ -221,7 +288,8 @@ static BOOL SWPathNeedsElevation(NSString *path)
     NSMutableArray *display = [NSMutableArray array];
     if ([sudoPrefix count] > 0) [display addObject:launchPath];
     [display addObjectsFromArray:argv];
-    _logHandler([NSString stringWithFormat:@"$ %@", [display componentsJoinedByString:@" "]]);
+    _logHandler([NSString stringWithFormat:@"$ %@%@", [self logTag],
+      [display componentsJoinedByString:@" "]]);
   }
 
   NSTask *task = [[NSTask alloc] init];
@@ -240,7 +308,8 @@ static BOOL SWPathNeedsElevation(NSString *path)
     [task launch];
   } @catch (NSException *exception) {
     if (_logHandler) {
-      _logHandler([NSString stringWithFormat:@"git could not be started: %@", [exception reason]]);
+      _logHandler([NSString stringWithFormat:@"%@git could not be started: %@",
+        [self logTag], [exception reason]]);
     }
     if (outOutput) *outOutput = @"";
     return -1;
@@ -254,7 +323,7 @@ static BOOL SWPathNeedsElevation(NSString *path)
 
   if (_logHandler) {
     for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
-      if ([line length] > 0) _logHandler(line);
+      if ([line length] > 0) _logHandler([self logTagForOutputLine:line]);
     }
   }
 
@@ -262,9 +331,47 @@ static BOOL SWPathNeedsElevation(NSString *path)
   return [task terminationStatus];
 }
 
-- (BOOL)fetchPruneOrigin
+// Every logged line carries the repository it came from, in the same order the
+// fetches fan out. Without it a failure is unattributable: the check runs up
+// to six repositories at once through one log, so a bare "fatal: unpack-objects
+// failed" could have come from any of them, and reading the log to find out
+// which meant guessing from the surrounding lines.
+- (NSString *)logTag
 {
-  return [self runGit:@[@"fetch", @"--prune", @"origin"] output:NULL] == 0;
+  NSString *name = [[_path lastPathComponent] copy];
+  return [NSString stringWithFormat:@"[%@] ", [name length] > 0 ? name : @"?"];
+}
+
+- (NSString *)logTagForOutputLine:(NSString *)line
+{
+  return [NSString stringWithFormat:@"%@%@", [self logTag], line];
+}
+
+// git's own first line of complaint, with its severity prefix and trailing
+// punctuation left alone: it names the actual problem ("insufficient
+// permission for adding an object to repository database .git/objects",
+// "Could not resolve host: github.com") in a form no paraphrase of ours
+// would be as precise as. Capped, because this ends up in a table row.
+static NSString *SWFirstErrorLine(NSString *output)
+{
+  for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
+    NSString *trimmed = [line stringByTrimmingCharactersInSet:
+      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([trimmed length] == 0) continue;
+    if ([trimmed length] > 140) {
+      return [[trimmed substringToIndex:139] stringByAppendingString:@"…"];
+    }
+    return trimmed;
+  }
+  return nil;
+}
+
+- (BOOL)fetchPruneOrigin:(NSString **)outError
+{
+  NSString *output = nil;
+  if ([self runGit:@[@"fetch", @"--prune", @"origin"] output:&output] == 0) return YES;
+  if (outError) *outError = SWFirstErrorLine(output);
+  return NO;
 }
 
 - (NSString *)currentBranch

@@ -140,7 +140,7 @@
         if (!(stopRequested && stopRequested())) {
           [self checkOneRepository:repo];
         } else {
-          [repo setUnreachableReason:@"Couldn't check"];
+          [repo setUnreachableReason:@"Check stopped before it finished"];
         }
         dispatch_semaphore_signal(concurrencyLimit);
         reportDone(repo);
@@ -167,8 +167,15 @@
 - (void)checkOneRepository:(SWRepository *)repo
 {
   SWGitTool *git = [self gitToolForRepository:repo];
-  if (![git fetchPruneOrigin]) {
-    [repo setUnreachableReason:@"Couldn't check"];
+  NSString *fetchError = nil;
+  if (![git fetchPruneOrigin:&fetchError]) {
+    // A fetch that failed leaves origin/<branch> exactly where it was, so
+    // every HEAD..origin/<branch> below would come back empty and the
+    // repository would read as "no updates" - a claim, when in fact nothing
+    // was checked. Say what happened instead, in git's own words, and stop
+    // here so nothing downstream mistakes a stale ref for a current one.
+    [repo setUnreachableReason:[NSString stringWithFormat:@"Couldn't fetch: %@",
+      fetchError ?: @"git failed"]];
     return;
   }
 

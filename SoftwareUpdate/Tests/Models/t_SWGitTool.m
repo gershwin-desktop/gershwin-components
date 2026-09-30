@@ -62,7 +62,9 @@ int main(void)
 
   /* --- fetch and count/list commits behind origin --- */
   {
-    PASS([git fetchPruneOrigin], "fetch --prune origin succeeds against a real remote");
+    NSString *fetchError = nil;
+    PASS([git fetchPruneOrigin:&fetchError] && fetchError == nil,
+         "fetch --prune origin succeeds against a real remote");
     PASS([git commitCountBehindTarget:@"main"] == 2,
          "work is behind origin/main by exactly the two commits made after cloning");
 
@@ -111,7 +113,7 @@ int main(void)
       @"cd %@ && echo local-only >> file.txt && git commit -q -am 'local divergent commit'", work]);
     runShell([NSString stringWithFormat:
       @"cd %@/origin && echo four >> file.txt && git commit -q -am 'fourth commit'", gBaseDir]);
-    [git fetchPruneOrigin];
+    [git fetchPruneOrigin:NULL];
 
     PASS(![git switchAndFastForwardTo:@"main"],
          "a fast-forward-only merge fails once local and remote have diverged");
@@ -169,6 +171,79 @@ int main(void)
            "a repository git may not write is run with sudo");
       runShell([NSString stringWithFormat:@"chmod 0755 %@/.git", locked]);
     }
+
+    // The case that made a check report "no updates" on a repository that was
+    // plainly behind: the worktree and .git are ours, so the old two-path test
+    // said no elevation was needed, but one .git/objects/<xx> directory was
+    // left behind by a git that ran as root. git then aborts the fetch with
+    // "insufficient permission for adding an object to repository database",
+    // origin/<branch> never moves, and every HEAD..origin/<branch> is empty.
+    // A single unwritable two-hex-digit object directory has to be enough to
+    // send this through sudo - so the whole object database is inspected, not
+    // just the two paths at the top.
+    NSString *objLocked = [gBaseDir stringByAppendingPathComponent:@"objects-locked"];
+    NSString *objDir = [objLocked stringByAppendingPathComponent:@".git/objects"];
+    NSString *oneXX = [objDir stringByAppendingPathComponent:@"1f"];
+    NSString *packedRefs = [objLocked stringByAppendingPathComponent:@".git/packed-refs"];
+    runShell([NSString stringWithFormat:@"mkdir -p %@/pack %@/refs", objDir,
+      [objLocked stringByAppendingPathComponent:@".git"]]);
+    runShell([NSString stringWithFormat:@"mkdir -p %@", oneXX]);
+    if (geteuid() == 0) {
+      PASS(![SWGitTool needsElevationForPath:objLocked],
+           "root needs no elevation for a repository with a full object database");
+    } else {
+      PASS(![SWGitTool needsElevationForPath:objLocked],
+           "a complete object database this user owns needs no elevation");
+
+      // packed-refs is an ordinary 0644 regular file, not a directory. Asking
+      // for search permission as well as write permission would read this -
+      // present in almost every clone - as unusable, escalate every git call
+      // to root, and leave a root-owned object database behind for the next
+      // run to trip over, which is the very condition being routed around.
+      runShell([NSString stringWithFormat:@"printf '# pack-refs with: peeled\\n' > %@", packedRefs]);
+      runShell([NSString stringWithFormat:@"chmod 0644 %@", packedRefs]);
+      PASS(![SWGitTool needsElevationForPath:objLocked],
+           "a plain 0644 packed-refs file needs no elevation");
+      runShell([NSString stringWithFormat:@"chmod 0444 %@", packedRefs]);
+      PASS([SWGitTool needsElevationForPath:objLocked],
+           "a read-only packed-refs does need elevation, since git rewrites it");
+      runShell([NSString stringWithFormat:@"chmod 0644 %@", packedRefs]);
+
+      runShell([NSString stringWithFormat:@"chmod 0555 %@", oneXX]);
+      PASS([SWGitTool needsElevationForPath:objLocked],
+           "one unwritable .git/objects/<xx> directory forces the fetch through sudo");
+      runShell([NSString stringWithFormat:@"chmod 0755 %@", oneXX]);
+
+      runShell([NSString stringWithFormat:@"chmod 0555 %@/pack", objDir]);
+      PASS([SWGitTool needsElevationForPath:objLocked],
+           "an unwritable .git/objects/pack forces the fetch through sudo");
+      runShell([NSString stringWithFormat:@"chmod 0755 %@/pack", objDir]);
+
+      // Locking all 256 is what makes the difference measurable. git picks an
+      // object's directory from its own sha, so with only some of them locked
+      // a fetch can still land every object in an unlocked one - and a check
+      // that would have caught the box's condition looks like it has nothing
+      // to do. On the box, 50 of 135 directories were left behind this way.
+      runShell([NSString stringWithFormat:
+        @"for i in $(seq 0 255); do d=$(printf '%%02x' $i); mkdir -p %@/$d; chmod 0555 %@/$d; done",
+        objDir, objDir]);
+      PASS([SWGitTool needsElevationForPath:objLocked],
+           "an object database root wrote into is sent through sudo, not just one bad directory");
+      runShell([NSString stringWithFormat:
+        @"for i in $(seq 0 255); do d=$(printf '%%02x' $i); chmod 0755 %@/$d; done", objDir]);
+    }
+
+    // A .git with no objects directory at all is left to git to report, the
+    // same as a path that does not exist: there is nothing here yet to write,
+    // and treating "cannot open it" as a permission problem would make every
+    // path that is not a repository ask for a password.
+    NSString *noObjects = [gBaseDir stringByAppendingPathComponent:@"no-objects"];
+    runShell([NSString stringWithFormat:@"mkdir -p %@/.git", noObjects]);
+    PASS(![SWGitTool needsElevationForPath:noObjects],
+         "a .git with no object database is not treated as a permission problem");
+    PASS(![SWGitTool needsElevationForPath:
+             [gBaseDir stringByAppendingPathComponent:@"no-such-repository"]],
+         "a path that does not exist at all needs no elevation");
   }
 
   runShell([NSString stringWithFormat:@"rm -rf %@", gBaseDir]);

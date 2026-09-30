@@ -236,6 +236,35 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     return;
   }
 
+  // A repository that could not be checked is not evidence of anything: its
+  // origin/<branch> never moved, so "no new commits" is what a failed fetch
+  // looks like from here. Collect them before saying anything about being up
+  // to date, because "Your software is up to date." is the one sentence in
+  // this app that must never be a guess.
+  NSMutableArray<SWRepository *> *unchecked = [NSMutableArray array];
+  for (SWRepository *repo in all) {
+    if (![repo isReachable]) [unchecked addObject:repo];
+  }
+
+  if ([withUpdates count] == 0 && [unchecked count] > 0) {
+    NSMutableString *detail = [NSMutableString string];
+    for (SWRepository *repo in unchecked) {
+      [detail appendFormat:@"%@: %@\n", [repo name],
+        [repo unreachableReason] ?: @"couldn't be checked"];
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:[NSString stringWithFormat:
+      @"%lu %@ could not be checked.",
+      (unsigned long)[unchecked count], [unchecked count] == 1 ? @"repository" : @"repositories"]];
+    [alert setInformativeText:[NSString stringWithFormat:
+      @"Software Update does not know whether these have updates, so it cannot tell you that "
+       @"your software is up to date:\n%@", detail]];
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+    [NSApp terminate:nil];
+    return;
+  }
+
   if ([withUpdates count] == 0) {
     // Being up to date is not a problem, so it should not wear the same
     // caution icon as a real error - NSAlert defaults to that icon unless
@@ -274,7 +303,13 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     _mainWindow = [[SWMainWindowController alloc] init];
     [_mainWindow setDelegate:self];
   }
-  NSUInteger upToDateCount = [all count] - [withUpdates count];
+  // Counted explicitly rather than as "all minus the ones with updates": the
+  // difference counts a repository that could not be checked as up to date,
+  // which is the claim this whole path exists to stop making.
+  NSUInteger upToDateCount = 0;
+  for (SWRepository *repo in all) {
+    if ([repo isReachable] && ![repo hasUpdate]) upToDateCount++;
+  }
   [_mainWindow setRepositories:withUpdates upToDateCount:upToDateCount useDevelopmentBranch:_useDevBranch];
   [[_mainWindow window] makeKeyAndOrderFront:nil];
 }

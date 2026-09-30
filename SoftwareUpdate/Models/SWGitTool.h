@@ -38,10 +38,15 @@ typedef void (^SWGitLogLine)(NSString *line);
 // exemption for that one path, since root does not own it either.
 
 // YES when git could not work in a repository at path as the current user:
-// somebody else owns it (or its .git directory), or this user may not write
-// to it - so it has to be run with elevated privileges. NO when this process
-// is already root, when the repository is ours to use, or when it does not
-// exist (git then reports the real problem itself).
+// somebody else owns it, or this user may not write to it - so it has to be
+// run with elevated privileges. "May not write" covers the whole object
+// database, not just the worktree and .git: a loose object is written into
+// .git/objects/<xx>, so one <xx> directory left behind by a git that ran as
+// root makes every unprivileged fetch fail with "insufficient permission for
+// adding an object to repository database", and the remote-tracking ref then
+// never moves, which reads as "no updates" on a repository that is behind.
+// NO when this process is already root, when the repository is ours to use,
+// or when it does not exist (git then reports the real problem itself).
 + (BOOL)needsElevationForPath:(NSString *)path;
 
 // Asks sudo - once, before the first git runs - for the permission every
@@ -56,8 +61,11 @@ typedef void (^SWGitLogLine)(NSString *line);
                           reason:(NSString **)outReason;
 
 // Runs `git -C <path> fetch --prune origin`. Returns NO (and logs stderr) if
-// the remote could not be reached at all.
-- (BOOL)fetchPruneOrigin;
+// the fetch failed - the remote could not be reached, or git was not allowed
+// to write the objects - in which case *outError, if given, receives git's
+// own first line of complaint so the failure can be reported as what it is
+// rather than as "no updates".
+- (BOOL)fetchPruneOrigin:(NSString **)outError;
 
 // `git -C <path> rev-parse --abbrev-ref HEAD`, or nil if detached/unknown.
 - (NSString *)currentBranch;

@@ -19,7 +19,12 @@
 + (NSString *)blockedReasonForRepository:(SWRepository *)repository
 {
   if (![repository isReachable]) {
-    return @"Couldn't check";
+    // The checker's own words, not a flat "Couldn't check": it already knows
+    // whether the fetch failed, what git said, or whether the user stopped the
+    // run, and a row that only says "couldn't check" sends the reader looking
+    // for a network problem that may have nothing to do with the network.
+    NSString *reason = [repository unreachableReason];
+    return [reason length] > 0 ? reason : @"Couldn't check";
   }
   switch ([repository buildStatus]) {
     case SWBuildStatusFailed:

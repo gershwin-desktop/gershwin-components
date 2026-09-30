@@ -7,12 +7,17 @@
 #import "SWRepository.h"
 #import "SWSelectionRules.h"
 
-static SWRepository *makeRepo(SWBuildStatus status, BOOL reachable)
+static SWRepository *makeRepoWithReason(SWBuildStatus status, NSString *reason)
 {
   SWRepository *repo = [[SWRepository alloc] initWithPlistEntry:@{@"Name": @"x", @"URL": @"u"}];
   [repo setBuildStatus:status];
-  if (!reachable) [repo setUnreachableReason:@"Couldn't check"];
+  if (reason) [repo setUnreachableReason:reason];
   return repo;
+}
+
+static SWRepository *makeRepo(SWBuildStatus status, BOOL reachable)
+{
+  return makeRepoWithReason(status, reachable ? nil : @"Couldn't check");
 }
 
 int main(void)
@@ -33,6 +38,22 @@ int main(void)
                "a running build reports the exact spec wording");
     PASS([SWSelectionRules blockedReasonForRepository:makeRepo(SWBuildStatusPassed, NO)] != nil,
          "an unreachable repository is blocked even with a passed build");
+
+    // The checker's own reason is what the user is shown, not a flat
+    // "Couldn't check": a failed fetch and a stopped run are different
+    // problems, and "couldn't check" alone sends the reader looking for a
+    // network fault that may have nothing to do with the network.
+    SWRepository *fetchFailed = makeRepoWithReason(SWBuildStatusPassed,
+      @"Couldn't fetch: error: insufficient permission for adding an object to repository "
+       "database .git/objects");
+    PASS_EQUAL([SWSelectionRules blockedReasonForRepository:fetchFailed],
+               @"Couldn't fetch: error: insufficient permission for adding an object to "
+                "repository database .git/objects",
+               "a failed fetch reports git's own message");
+    PASS_EQUAL([SWSelectionRules blockedReasonForRepository:
+                 makeRepoWithReason(SWBuildStatusPassed, @"Check stopped before it finished")],
+               @"Check stopped before it finished",
+               "a stopped check says so instead of claiming it could not check");
   }
 
   /* --- force (Control-click) override of a refused Install checkbox --- */
