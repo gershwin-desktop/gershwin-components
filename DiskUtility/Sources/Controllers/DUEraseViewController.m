@@ -127,6 +127,14 @@ static NSString * const kDefaultsConfirmDestructive =
            selector:@selector(operationDidFinish:)
                name:DUOperationDidFinishNotification
              object:nil];
+    /* Same class of bug as the Restore tab: an erase that FAILS posts
+     * DidFail, which this controller did not observe, so the Erase button
+     * stayed disabled and the log never said why. */
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(operationDidFinish:)
+               name:DUOperationDidFailNotification
+             object:nil];
     return self;
 }
 
