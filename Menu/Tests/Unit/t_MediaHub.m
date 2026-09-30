@@ -132,15 +132,48 @@ static BOOL WaitFor(NSTimeInterval seconds, BOOL (^test)(void))
     return test();
 }
 
+/* The hub's entry for one named player, or nil.  The hub merges everything
+   it can see, so which entry is at which index depends on what else is
+   running; the name is the only thing that identifies the one under test. */
+/* The dictionary describing one named player, or nil. */
+static NSDictionary *DescribedNamed(NSString *identifier, NSArray *described)
+{
+    NSUInteger i;
+    for (i = 0; i < [described count]; i++) {
+        NSDictionary *d = [described objectAtIndex:i];
+        if ([[d objectForKey:@"identifier"] isEqualToString:identifier]) {
+            return d;
+        }
+    }
+    return nil;
+}
+
+static MediaPlayerEntry *PlayerNamed(NSString *identifier, MediaHub *hub)
+{
+    NSArray *known = [hub knownPlayers];
+    NSUInteger i;
+    for (i = 0; i < [known count]; i++) {
+        MediaPlayerEntry *e = [known objectAtIndex:i];
+        if ([[e identifier] isEqualToString:identifier]) {
+            return e;
+        }
+    }
+    return nil;
+}
+
 #pragma mark - The test
 
 int main(void)
 {
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
 
-    /* No bus here: this test is about the native player and the merge, and
-       the controller finds no players on a bus of its own, which is the
-       state the hub has to cope with anyway. */
+    /* The session bus is not empty and is not this test's to empty: any
+       browser running exports MPRIS, and a player on the bus is a player the
+       hub is right to find.  So nothing below may assume which player comes
+       first, or that the transport commands go to the one under test.  The
+       player is picked by name and looked up by name; what is being tested
+       is the native player and the merge, not what else happens to be
+       playing on the machine. */
     FakeNativePlayer *player = [[FakeNativePlayer alloc] init];
     NSConnection *connection = [[NSConnection alloc] init];
     [connection setRootObject:player];
@@ -152,11 +185,11 @@ int main(void)
     [hub start];
 
     /* --- the native player is found --- */
-    PASS(WaitFor(5.0, ^BOOL{ return [[hub knownPlayers] count] > 0; }),
+    PASS(WaitFor(5.0, ^BOOL{ return PlayerNamed(kFakeNativeName, hub) != nil; }),
          "the hub finds the native player");
 
-    if ([[hub knownPlayers] count] > 0) {
-        MediaPlayerEntry *entry = [[hub knownPlayers] objectAtIndex:0];
+    MediaPlayerEntry *entry = PlayerNamed(kFakeNativeName, hub);
+    if (entry != nil) {
         PASS_EQUAL([entry identifier], kFakeNativeName,
                    "the player is listed under the name it is registered under");
         PASS_EQUAL([entry identity], @"Fake Native Player",
@@ -171,6 +204,15 @@ int main(void)
     PASS(WaitFor(5.0, ^BOOL{ return player->plays + player->pauses == 0; }),
          "the fake player has not been touched yet");
 
+    /* The transport methods act on the hub's chosen player, and with another
+       player on the bus that is not necessarily this one - a browser playing
+       something is a perfectly good player to steer.  So the player under
+       test is chosen by name before anything is sent to it, which is also
+       what -usePlayer: is for. */
+    if ([hub hasPlayers]) {
+        PASS([hub usePlayer:kFakeNativeName],
+             "the native player is the one the transport methods act on");
+    }
     if ([hub hasPlayers]) {
         PASS([hub play], "play is accepted");
         PASS(WaitFor(5.0, ^BOOL{ return player->plays == 1; }),
@@ -202,16 +244,19 @@ int main(void)
         }), "and the hub reports the player stopped once it has asked again");
 
         /* What the DO interface hands out: one dictionary per player, with
-           the keys the header promises. */
+           the keys the header promises.  The player under test is found by
+           name, for the same reason as above. */
         NSArray *described = [hub players];
         PASS([described count] == [[hub knownPlayers] count],
              "-players describes every player the hub knows");
-        if ([described count] > 0) {
-            NSDictionary *entry = [described objectAtIndex:0];
-            PASS_EQUAL([entry objectForKey:@"identifier"], kFakeNativeName,
-                       "the description carries the identifier");
+        NSDictionary *mine = DescribedNamed(kFakeNativeName, described);
+        PASS(mine != nil, "and the player under test is among them");
+        if (mine != nil) {
+            NSDictionary *entry = mine;
             PASS_EQUAL([entry objectForKey:@"identity"], @"Fake Native Player",
-                       "and the identity");
+                       "the description carries the identifier's player, by identity");
+            PASS_EQUAL([entry objectForKey:@"identifier"], kFakeNativeName,
+                       "carrying the identifier");
             PASS_EQUAL([entry objectForKey:@"playbackStatus"], [hub playbackStatus],
                        "and the state the hub reports");
             PASS([[entry objectForKey:@"native"] boolValue],
