@@ -201,11 +201,19 @@ AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && ech
 # makefile without it.  The MediaExtra is a separate matter: it steers
 # media players over MPRIS2, so where libdbus is not there it has nothing
 # to steer anything with, and it is left out of the build and out of the
-# installation instead of failing either.  The probe compiles a program that
-# includes <dbus/dbus.h> and links against the very library Menu links
-# against, because a header on its own says nothing about a library.
-HAVE_LIBDBUS := $(shell printf '#include <dbus/dbus.h>\nint main(void) { return 0; }\n' | \
-	$(CC) -x c - $(DBUS_CFLAGS) $(DBUS_LIBS) -o /dev/null > /dev/null 2>&1 && echo yes || echo no)
+# installation instead of failing either.
+#
+# The answer comes from has-libdbus.sh, which compiles a program using both
+# the header and the library rather than trusting pkg-config to be there.
+# That matters because being wrong in the "no" direction costs the extra
+# silently: it drops out of both lists below, so it is neither built nor
+# installed and nothing says so.  An install run from the top of the tree
+# runs under sudo, which may not have pkg-config on its path at all, and the
+# hard-coded include path a fallback would need is not the same on every
+# system - so the probe asks pkg-config, then the flags already worked out
+# here, then looks for the header where it actually is.  Run it with -v to
+# hear which of those it settled on.
+HAVE_LIBDBUS := $(shell CC="$(CC)" sh has-libdbus.sh "$(DBUS_CFLAGS) $(DBUS_LIBS)" 2>/dev/null)
 
 # Every menu extra that Menu builds, and the bundle each one leaves behind,
 # in one place so that the two lists cannot disagree about what there is.
@@ -245,7 +253,10 @@ icons:
 # OPERATION overrides ride along in MAKEFLAGS.  Handed to an extra's makefile
 # they say "you are building the Menu application", so it defines no `all`
 # target and every extra was skipped - invisibly, because stderr was thrown
-# away.  MAKEFLAGS= gives each sub-make a clean slate.
+# away.  MAKEFLAGS= gives each sub-make a clean slate.  The install target
+# below needs the same thing: an install started from the top of the tree is
+# a deeper nest again, and an extra skipped there is not built and not
+# installed, which is how the Media extra went missing from an install.
 after-Menu-all::
 	@echo "Building standalone menu extra bundles..."
 	@for d in $(MENU_EXTRA_DIRS); do \
@@ -273,7 +284,7 @@ install:: custom-install
 custom-install: $(APP_NAME).app
 	@echo "Building menu extra bundles..."
 	@for d in $(MENU_EXTRA_DIRS); do \
-		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) $(AS_NEEDED_FLAG) all) || exit 1; \
+		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) $(AS_NEEDED_FLAG) all) || exit 1; \
 	done
 	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) all)
 	@if [ -f MenuExtras/WLANExtra/wlanauth/obj/wlanauth ]; then \
