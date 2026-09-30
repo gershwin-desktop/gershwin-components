@@ -132,7 +132,7 @@ extern NSString * const kLsblkKeyFstype;
                          @"NAME,PKNAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,LABEL,PARTUUID,UUID,MODEL,RO,RM,HOTPLUG,MAJ:MIN" ]
                  error:&runError];
     if (result == nil || !result.exitedNormally ||
-        WEXITSTATUS(result.terminationStatus) > 1) {
+        result.terminationStatus > 1) {
         // Exit 2 means "no devices" on some lsblk versions; anything above
         // is a real failure worth reporting through the fallback instead
         // of aborting discovery outright.
@@ -144,7 +144,7 @@ extern NSString * const kLsblkKeyFstype;
     NSArray<NSDictionary *> *rows =
         [DULsblkParser parsePairsOutput:result.standardOutput];
     if (rows.count == 0 && result.standardOutput.length == 0 &&
-        WEXITSTATUS(result.terminationStatus) != 0) {
+        ![result exitedWithStatus:0]) {
         return NO;
     }
     for (NSDictionary *row in rows) {
