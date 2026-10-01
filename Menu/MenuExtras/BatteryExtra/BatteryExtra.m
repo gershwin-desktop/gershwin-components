@@ -37,6 +37,8 @@ static const int kBatteryRefreshTicks = 15;
     char _status[256];
     char _source[64];
     int _timeRemainingMinutes;
+    int _powerMilliwatts;     /* present draw (discharging) or charge rate; -1 unknown */
+    float _energyFullWh;      /* full-charge capacity in watt-hours; -1 unknown */
     BOOL _running;
     GSMenuExtraContext *_context;
     int _ticksSinceRefresh;
@@ -53,6 +55,8 @@ static const int kBatteryRefreshTicks = 15;
     if (self) {
         _percent = -1;
         _timeRemainingMinutes = -1;
+        _powerMilliwatts = -1;
+        _energyFullWh = -1.0f;
     }
     return self;
 }
@@ -114,6 +118,8 @@ static const int kBatteryRefreshTicks = 15;
         _percent = -1;
         _status[0] = '\0';
         _timeRemainingMinutes = -1;
+        _powerMilliwatts = -1;
+        _energyFullWh = -1.0f;
 
 #if defined(__linux__)
         NSString *acOnline = [self readFile:@"/sys/class/power_supply/AC/online"];
@@ -134,15 +140,21 @@ static const int kBatteryRefreshTicks = 15;
             }
         }
 
-        // Time remaining
+        // Time remaining, and the draw and capacity that go with it.  Energy
+        // units are microwatt-hours and power microwatts; the charge-based
+        // fallback is in microamp-hours and microamps, turned into watts and
+        // watt-hours with the battery voltage so the menu reads the same either
+        // way the kernel reports it.
         NSString *energyNow = [self readFile:@"/sys/class/power_supply/BAT0/energy_now"];
         NSString *powerNow = [self readFile:@"/sys/class/power_supply/BAT0/power_now"];
+        NSString *energyFull = [self readFile:@"/sys/class/power_supply/BAT0/energy_full"];
+        if ([energyFull length] > 0) _energyFullWh = [energyFull intValue] / 1000000.0f;
         if ([energyNow length] > 0 && [powerNow length] > 0) {
             int pNow = [powerNow intValue];
             if (pNow > 0) {
+                _powerMilliwatts = pNow / 1000;
                 float hours;
                 if (strcmp(_status, "Charging") == 0) {
-                    NSString *energyFull = [self readFile:@"/sys/class/power_supply/BAT0/energy_full"];
                     hours = ([energyFull length] > 0)
                         ? (float)([energyFull intValue] - [energyNow intValue]) / (float)pNow
                         : -1;
@@ -154,12 +166,19 @@ static const int kBatteryRefreshTicks = 15;
         } else {
             NSString *chargeNow = [self readFile:@"/sys/class/power_supply/BAT0/charge_now"];
             NSString *currentNow = [self readFile:@"/sys/class/power_supply/BAT0/current_now"];
+            NSString *voltageNow = [self readFile:@"/sys/class/power_supply/BAT0/voltage_now"];
+            NSString *chargeFull = [self readFile:@"/sys/class/power_supply/BAT0/charge_full"];
+            if ([chargeFull length] > 0 && [voltageNow length] > 0)
+                _energyFullWh = ((float)[chargeFull intValue] / 1000000.0f)
+                              * ((float)[voltageNow intValue] / 1000000.0f);
             if ([chargeNow length] > 0 && [currentNow length] > 0) {
                 int iNow = [currentNow intValue];
                 if (iNow > 0) {
+                    if ([voltageNow length] > 0)
+                        _powerMilliwatts = (int)(((float)iNow / 1000.0f)
+                                               * ((float)[voltageNow intValue] / 1000000.0f));
                     float hours;
                     if (strcmp(_status, "Charging") == 0) {
-                        NSString *chargeFull = [self readFile:@"/sys/class/power_supply/BAT0/charge_full"];
                         hours = ([chargeFull length] > 0)
                             ? (float)([chargeFull intValue] - [chargeNow intValue]) / (float)iNow
                             : -1;
@@ -204,6 +223,13 @@ static const int kBatteryRefreshTicks = 15;
                                          args:@[@"-n", @"hw.acpi.battery.time"]];
         if ([battTime length] > 0) {
             _timeRemainingMinutes = [battTime intValue];
+        }
+        // Present draw/charge rate, in milliwatts.
+        NSString *battRate = [self runCommand:@"/sbin/sysctl"
+                                         args:@[@"-n", @"hw.acpi.battery.rate"]];
+        if ([battRate length] > 0) {
+            int r = [battRate intValue];
+            if (r > 0) _powerMilliwatts = r;
         }
 
 #elif defined(__OpenBSD__)
@@ -268,6 +294,13 @@ static const int kBatteryRefreshTicks = 15;
                                          args:@[@"-n", @"hw.acpi.battery.time"]];
         if ([battTime length] > 0) {
             _timeRemainingMinutes = [battTime intValue];
+        }
+        // Present draw/charge rate, in milliwatts.
+        NSString *battRate = [self runCommand:@"/sbin/sysctl"
+                                         args:@[@"-n", @"hw.acpi.battery.rate"]];
+        if ([battRate length] > 0) {
+            int r = [battRate intValue];
+            if (r > 0) _powerMilliwatts = r;
         }
 #endif
     } @catch (NSException *e) {
@@ -377,6 +410,24 @@ static const int kBatteryRefreshTicks = 15;
     }
 }
 
+/* The present draw or charge rate in watts, worded for the direction, or nil
+   when it is not known or the battery is resting at zero. */
+- (NSString *)powerString
+{
+    if (_powerMilliwatts <= 0) return nil;
+    float watts = _powerMilliwatts / 1000.0f;
+    BOOL charging = (strcmp(_status, "Charging") == 0);
+    return [NSString stringWithFormat:@"%@ %.1f W",
+            charging ? @"Charging at" : @"Drawing", watts];
+}
+
+/* The battery's full-charge capacity in watt-hours, or nil when unknown. */
+- (NSString *)capacityString
+{
+    if (_energyFullWh <= 0.0f) return nil;
+    return [NSString stringWithFormat:@"Capacity %.0f Wh", _energyFullWh];
+}
+
 #pragma mark - System compatibility
 
 - (BOOL)isCompatibleWithSystem
@@ -455,6 +506,25 @@ static const int kBatteryRefreshTicks = 15;
             [timeItem setEnabled:NO];
             [m addItem:timeItem];
         }
+    }
+
+    /* The draw and the capacity, the same figures the menu-bar readout shows,
+       as plain disabled lines. */
+    NSString *powerStr = [self powerString];
+    if (powerStr) {
+        NSMenuItem *powerItem = [[NSMenuItem alloc] initWithTitle:powerStr
+                                                           action:NULL
+                                                    keyEquivalent:@""];
+        [powerItem setEnabled:NO];
+        [m addItem:powerItem];
+    }
+    NSString *capStr = [self capacityString];
+    if (capStr) {
+        NSMenuItem *capItem = [[NSMenuItem alloc] initWithTitle:capStr
+                                                         action:NULL
+                                                  keyEquivalent:@""];
+        [capItem setEnabled:NO];
+        [m addItem:capItem];
     }
 
     NSMenuItem *governorItem = [self governorMenuItem];

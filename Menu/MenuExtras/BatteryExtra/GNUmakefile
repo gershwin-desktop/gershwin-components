@@ -4,6 +4,10 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 BUNDLE_NAME = Battery
 BUNDLE_EXTENSION = .gsmenuextra
 
+# Menu loads extras from /System/Library/MenuExtras, not the default bundle
+# directory, so install there (same as BrightnessExtra and the other extras).
+Battery_INSTALL_DIR = /System/Library/MenuExtras
+
 Battery_PRINCIPAL_CLASS = BatteryExtra
 Battery_OBJC_FILES = BatteryExtra.m
 
