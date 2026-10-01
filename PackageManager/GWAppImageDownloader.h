@@ -22,6 +22,13 @@
 
 // Resolves the AppImage for the current architecture from the latest GitHub
 // release of <repo> ("owner/repo"), then downloads it.
+//
+// <repo> may end in "#Channel" ("owner/repo#nightly") for a repository that
+// publishes each channel of an application as a release of its own (tags such
+// as stable, esr, beta, nightly): then the newest release (and AppImage) whose
+// tag or file name has that word is used, and it is an error if there is none.
+// Without a channel, releases and AppImages of the well-known other channels
+// (esr, nightly, beta, devedition, ...) are left out if there are others.
 - (BOOL)downloadAppImageFromGitHubRepo:(NSString *)repo
                                 appName:(NSString *)appName
                                progress:(nullable id<GWInstallProgressHandler>)progress
