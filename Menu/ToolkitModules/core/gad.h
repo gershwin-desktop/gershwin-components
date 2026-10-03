@@ -46,6 +46,20 @@ int gad_parse_accel_label(const char *text, const char *const names[5],
 /* Follows an index path through the children; NULL when it leaves the tree. */
 GadNode *gad_node_at_path(GadNode *root, const int *path, int len);
 
+/* Hash of the menu structure and key equivalents and, with with_state, of the
+   enabled and checked state too.  Start with GAD_SIGNATURE_SEED. */
+#define GAD_SIGNATURE_SEED 14695981039346656037ULL
+unsigned long long gad_node_signature(const GadNode *node, int with_state,
+                                      unsigned long long hash);
+
+/* Runs fn(arg) on the GLib main loop of the toolkit, from any other thread, and
+   waits up to timeout_ms for its result.  A result that arrives after the
+   timeout is handed to destroy, so nothing leaks while the loop is busy.
+   idle_add is g_idle_add, which the toolkit module resolved itself. */
+void gad_main_call_init(unsigned (*idle_add)(int (*)(void *), void *));
+void *gad_main_call(void *(*fn)(void *), void *arg, void (*destroy)(void *result),
+                    int timeout_ms);
+
 /* bridge.m - callable from the GTK main thread */
 void gad_bridge_start(void);
 int gad_bridge_connected(void);

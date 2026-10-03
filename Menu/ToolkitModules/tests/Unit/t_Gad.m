@@ -6,8 +6,8 @@
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
-#include "../../src/node.c"
-#include "../../src/bridge.m"
+#include "../../core/node.c"
+#include "../../core/bridge.m"
 
 /* The module side is not under test here. */
 void gad_module_activate(unsigned long xid, const int *path, int len) {}
@@ -69,6 +69,21 @@ int main(void)
         PASS(gad_parse_accel_label("Foo+O", de, &k, &m) == 0, "unknown modifier");
         PASS(gad_parse_accel_label("", de, &k, &m) == 0 && gad_parse_accel_label(NULL, de, &k, &m) == 0, "no text");
       END_SET("accelerator text")
+
+      START_SET("signature")
+        GadNode *a = Item("Open", 1, 0);
+        GadNode *b = Item("Open", 0, 1);
+        GadNode *c = Item("Close", 1, 0);
+        PASS(gad_node_signature(a, 0, GAD_SIGNATURE_SEED) == gad_node_signature(b, 0, GAD_SIGNATURE_SEED),
+             "enabled and checked state do not change the structure signature");
+        PASS(gad_node_signature(a, 1, GAD_SIGNATURE_SEED) != gad_node_signature(b, 1, GAD_SIGNATURE_SEED),
+             "they change the signature that includes state");
+        PASS(gad_node_signature(a, 0, GAD_SIGNATURE_SEED) != gad_node_signature(c, 0, GAD_SIGNATURE_SEED),
+             "a different title does");
+        gad_node_free(a);
+        gad_node_free(b);
+        gad_node_free(c);
+      END_SET("signature")
 
       START_SET("tree")
         GadNode *root = gad_node_new();

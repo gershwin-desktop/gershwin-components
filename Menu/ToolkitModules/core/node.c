@@ -107,3 +107,27 @@ int gad_parse_accel_label(const char *text, const char *const names[5],
   *gdk_mods = mods;
   return 1;
 }
+
+unsigned long long gad_node_signature(const GadNode *n, int with_state,
+                                      unsigned long long h)
+{
+#define MIX(byte) (h = (h ^ (unsigned char)(byte)) * 1099511628211ULL)
+  for (const char *c = n->title; c && *c; c++)
+    MIX(*c);
+  MIX(n->separator);
+  MIX(n->has_submenu);
+  for (const char *c = n->key; *c; c++)
+    MIX(*c);
+  MIX(n->mods);
+  if (with_state)
+    {
+      MIX(n->enabled);
+      MIX(n->state);
+    }
+  MIX('(');
+  for (int i = 0; i < n->nchildren; i++)
+    h = gad_node_signature(n->children[i], with_state, h);
+  MIX(')');
+#undef MIX
+  return h;
+}

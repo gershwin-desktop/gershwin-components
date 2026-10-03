@@ -424,26 +424,6 @@ static GadNode *build_tree(Entry *e, int mode)
   return root;
 }
 
-/* Structure and key equivalents, not enabled or checked state, which Menu.app
-   gets through its own cheaper path. */
-static unsigned long long node_signature(const GadNode *n, unsigned long long h)
-{
-#define MIX(byte) (h = (h ^ (unsigned char)(byte)) * 1099511628211ULL)
-  for (const char *c = n->title; c && *c; c++)
-    MIX(*c);
-  MIX(n->separator);
-  MIX(n->has_submenu);
-  for (const char *c = n->key; *c; c++)
-    MIX(*c);
-  MIX(n->mods);
-  MIX('(');
-  for (int i = 0; i < n->nchildren; i++)
-    h = node_signature(n->children[i], h);
-  MIX(')');
-#undef MIX
-  return h;
-}
-
 /* ---- */
 
 static void apply_visibility(Entry *e)
@@ -472,7 +452,7 @@ static void push_entry(Entry *e)
   if (root == NULL)
     return;
   gad_bridge_push(e->xid, root);
-  e->sig = node_signature(root, 14695981039346656037ULL);
+  e->sig = gad_node_signature(root, 0, GAD_SIGNATURE_SEED);
   gad_node_free(root);
   e->last_connected = gad_bridge_connected();
   apply_visibility(e);
@@ -629,79 +609,54 @@ void gad_module_request(unsigned long xid)
 typedef struct
 {
   unsigned long xid;
-  GadNode *result;
   int refresh;
   int changed;
-  int done;
-  int abandoned;
-  pthread_mutex_t lock;
-  pthread_cond_t cond;
-} Snapshot;
+} SnapshotRequest;
 
-static gboolean snapshot_idle(void *data)
+typedef struct
 {
-  Snapshot *s = data;
+  GadNode *tree;
+  int changed;
+} SnapshotResult;
+
+static void *snapshot_call(void *arg)
+{
+  SnapshotRequest *s = arg;
+  SnapshotResult *r = calloc(1, sizeof *r);
   Entry *e = entry_for_xid(s->xid);
-  GadNode *tree = e ? build_tree(e, s->refresh ? BUILD_REFRESH : BUILD_PLAIN) : NULL;
-  if (tree && s->refresh)
+  if (r == NULL)
+    return NULL;
+  r->tree = e ? build_tree(e, s->refresh ? BUILD_REFRESH : BUILD_PLAIN) : NULL;
+  if (r->tree && s->refresh)
     {
-      unsigned long long sig = node_signature(tree, 14695981039346656037ULL);
-      s->changed = (sig != e->sig);
+      unsigned long long sig = gad_node_signature(r->tree, 0, GAD_SIGNATURE_SEED);
+      r->changed = (sig != e->sig);
       e->sig = sig;
     }
-  pthread_mutex_lock(&s->lock);
-  if (s->abandoned)
-    {
-      pthread_mutex_unlock(&s->lock);
-      gad_node_free(tree);
-      free(s);
-      return 0;
-    }
-  s->result = tree;
-  s->done = 1;
-  pthread_cond_signal(&s->cond);
-  pthread_mutex_unlock(&s->lock);
-  return 0;
+  return r;
+}
+
+static void snapshot_destroy(void *result)
+{
+  SnapshotResult *r = result;
+  if (r)
+    gad_node_free(r->tree);
+  free(r);
 }
 
 static GadNode *run_on_main(unsigned long xid, int refresh, int *changed)
 {
-  Snapshot *s = calloc(1, sizeof *s);
-  if (s == NULL)
-    return NULL;
-  s->xid = xid;
-  s->refresh = refresh;
-  pthread_mutex_init(&s->lock, NULL);
-  pthread_cond_init(&s->cond, NULL);
-
-  struct timespec deadline;
-  clock_gettime(CLOCK_REALTIME, &deadline);
-  deadline.tv_nsec += SNAPSHOT_TIMEOUT_MS * 1000000L;
-  deadline.tv_sec += deadline.tv_nsec / 1000000000L;
-  deadline.tv_nsec %= 1000000000L;
-
-  p_g_idle_add(snapshot_idle, s);
-  pthread_mutex_lock(&s->lock);
-  while (!s->done && pthread_cond_timedwait(&s->cond, &s->lock, &deadline) == 0)
-    ;
-  GadNode *result = NULL;
-  if (s->done)
+  SnapshotRequest s = { xid, refresh, 0 };
+  SnapshotResult *r = gad_main_call(snapshot_call, &s, snapshot_destroy, SNAPSHOT_TIMEOUT_MS);
+  GadNode *tree = NULL;
+  if (r)
     {
-      result = s->result;
+      tree = r->tree;
       if (changed)
-        *changed = s->changed;
-      pthread_mutex_unlock(&s->lock);
-      pthread_mutex_destroy(&s->lock);
-      pthread_cond_destroy(&s->cond);
-      free(s);
+        *changed = r->changed;
+      free(r);
     }
-  else
-    {
-      /* The main loop is busy (modal dialog, long handler); snapshot_idle frees. */
-      s->abandoned = 1;
-      pthread_mutex_unlock(&s->lock);
-    }
-  return result;
+  return tree;
 }
 
 GadNode *gad_module_snapshot(unsigned long xid)
@@ -759,6 +714,7 @@ void gtk_module_init(int *argc, char ***argv)
       fprintf(stderr, "gtk-appmenu-do: no map signal on GtkWidget\n");
       return;
     }
+  gad_main_call_init(p_g_idle_add);
   gad_bridge_start();
   p_g_signal_add_emission_hook(signal_id, 0, (void *)map_hook, NULL, NULL);
   p_g_timeout_add(2000, tick_cb, NULL);

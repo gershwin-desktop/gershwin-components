@@ -263,8 +263,8 @@ after-Menu-all::
 		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) $(AS_NEEDED_FLAG) all) || echo "  ($$d skipped - see the errors above)"; \
 	done
 	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) all || echo "  (wlanauth skipped)")
-	@echo "Building the GTK module..."
-	@(cd GTKModule && MAKEFLAGS= $(MAKE) all) || echo "  (GTK module skipped - see the errors above)"
+	@echo "Building the toolkit modules (GTK, Qt)..."
+	@(cd ToolkitModules && MAKEFLAGS= $(MAKE) all) || echo "  (toolkit modules skipped - see the errors above)"
 	@cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth Resources/ 2>/dev/null || true
 	@echo "Done building bundles."
 
@@ -298,9 +298,9 @@ custom-install: $(APP_NAME).app
 	@mkdir -p $(APP_NAME).app/Resources $(DESTDIR)$(INSTALL_APPS_DIR) $(DESTDIR)/System/Library/MenuExtras
 	@cp Menu.png $(APP_NAME).app/Resources/
 	@$(call replace_installed_bundle,$(APP_NAME).app,$(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app)
-	@echo "Installing the GTK module..."
-	@(cd GTKModule && MAKEFLAGS= $(MAKE) all) && \
-		(cd GTKModule && MAKEFLAGS= $(MAKE) install DESTDIR=$(DESTDIR)) || exit 1
+	@echo "Installing the toolkit modules (GTK, Qt)..."
+	@(cd ToolkitModules && MAKEFLAGS= $(MAKE) all) && \
+		(cd ToolkitModules && MAKEFLAGS= $(MAKE) install DESTDIR=$(DESTDIR)) || exit 1
 	@echo "Installing menu extra bundles..."
 	@for d in $(MENU_EXTRA_BUNDLES); do \
 		$(call replace_installed_bundle,MenuExtras/$$d.gsmenuextra,$(DESTDIR)/System/Library/MenuExtras/$$(basename $$d).gsmenuextra) || exit 1; \
@@ -309,7 +309,7 @@ custom-install: $(APP_NAME).app
 uninstall:: custom-uninstall
 
 custom-uninstall:
-	@rm -rf $(DESTDIR)/System/Library/Libraries/gtk-appmenu-do
+	@rm -rf $(DESTDIR)/System/Library/Libraries/appmenu-do
 	@if [ -n "$(DESTDIR)" ]; then \
 		echo "Uninstalling $(APP_NAME) from $(DESTDIR)$(INSTALL_APPS_DIR)"; \
 		rm -rf $(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app; \
