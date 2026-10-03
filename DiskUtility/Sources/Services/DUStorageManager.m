@@ -17,6 +17,10 @@
 #import "DUOperation.h"
 #import "DUOperationManager.h"
 #import "DUStorageBackend.h"
+#import "DUDiskImage.h"
+#import "DUPartition.h"
+#import "DUStorageDevice.h"
+#import "DUStorageVolume.h"
 #import "DURepairOperation.h"
 #import "DUVerifyOperation.h"
 
@@ -137,8 +141,15 @@
 
 // --- Refresh / reconcile -------------------------------------------------
 
-// Structural comparison keyed by stable identifiers; enough to spot
-// additions, removals and metadata changes without deep value semantics.
+/* Structural comparison keyed by stable identifiers, over EVERY object in
+ * the tree rather than the roots only. The old version looked at each root's
+ * own type/name/path and its children.count, which never changes when a
+ * partition is resized, deleted, added at a deeper level, or when a volume is
+ * mounted or unmounted - so the sidebar and the Information panel froze on
+ * the layout captured at launch. Worst case: swap one bridged drive for
+ * another of the same model while the app runs (same identifier, name, path
+ * and child count) and it kept presenting the previous disk's partitions to
+ * a user who is about to erase. */
 - (BOOL)differsFromSnapshot:(NSArray<DUStorageObject *> *)fresh
 {
     NSArray<DUStorageObject *> *old = _currentObjects;
@@ -146,24 +157,94 @@
         return YES;
     }
     NSMutableDictionary<NSString *, DUStorageObject *> *byId =
-        [NSMutableDictionary dictionaryWithCapacity:fresh.count];
-    for (DUStorageObject *object in fresh) {
+        [NSMutableDictionary dictionary];
+    for (DUStorageObject *object in [self flattenObjects:fresh]) {
         byId[object.identifier] = object;
     }
-    for (DUStorageObject *previous in old) {
-        DUStorageObject *next = byId[previous.identifier];
+    NSMutableDictionary<NSString *, DUStorageObject *> *previousById =
+        [NSMutableDictionary dictionary];
+    for (DUStorageObject *object in [self flattenObjects:old]) {
+        previousById[object.identifier] = object;
+    }
+    if (byId.count != previousById.count) {
+        return YES;
+    }
+    for (NSString *identifier in previousById) {
+        DUStorageObject *previous = previousById[identifier];
+        DUStorageObject *next = byId[identifier];
         if (next == nil) {
             return YES;
         }
         if (previous.type != next.type ||
             ![previous.displayName isEqualToString:next.displayName] ||
             !(previous.backendPath == next.backendPath ||
-              [previous.backendPath isEqualToString:next.backendPath]) ||
-            previous.children.count != next.children.count) {
+              [previous.backendPath isEqualToString:next.backendPath])) {
+            return YES;
+        }
+        if ([self mutableStateOfObject:previous] !=
+            [self mutableStateOfObject:next]) {
             return YES;
         }
     }
     return NO;
+}
+
+// The state that changes under a live disk without changing its identity or
+// name. Built as one comparable string per object so a single equality test
+// covers every field that moves.
+- (NSString *)mutableStateOfObject:(DUStorageObject *)object
+{
+    NSMutableString *state = [NSMutableString string];
+    [state appendFormat:@"c=%lu", (unsigned long)object.children.count];
+    if ([object isKindOfClass:[DUStorageDevice class]]) {
+        DUStorageDevice *device = (DUStorageDevice *)object;
+        [state appendFormat:@"|cap=%llu|s=%@|sm=%ld|h=%@|u=%d",
+                             device.capacityBytes,
+                             device.partitionScheme ?: @"-",
+                             (long)device.smartStatus,
+                             device.healthStatus ?: @"-",
+                             device.partitionTableUnreadable];
+    } else if ([object isKindOfClass:[DUPartition class]]) {
+        DUPartition *partition = (DUPartition *)object;
+        [state appendFormat:@"|i=%ld|o=%llu|z=%llu|t=%@|f=%@|n=%@",
+                             (long)partition.index, partition.offsetBytes,
+                             partition.sizeBytes,
+                             partition.partitionType ?: @"-",
+                             partition.filesystemType ?: @"-",
+                             partition.name ?: @"-"];
+    } else if ([object isKindOfClass:[DUStorageVolume class]]) {
+        DUStorageVolume *volume = (DUStorageVolume *)object;
+        [state appendFormat:@"|f=%@|cap=%llu|m=%@|mp=%@|av=%llu|us=%llu",
+                             volume.filesystemType ?: @"-",
+                             volume.capacityBytes,
+                             volume.mounted ? @"1" : @"0",
+                             volume.mountPoint ?: @"-",
+                             volume.availableBytes, volume.usedBytes];
+    } else if ([object isKindOfClass:[DUDiskImage class]]) {
+        DUDiskImage *image = (DUDiskImage *)object;
+        [state appendFormat:@"|p=%@|z=%llu", image.path ?: @"-",
+                             image.sizeBytes];
+    }
+    return state;
+}
+
+// Pre-order flatten, iterative so it cannot retain-cycle under ARC.
+- (NSArray<DUStorageObject *> *)flattenObjects:(NSArray<DUStorageObject *> *)roots
+{
+    NSMutableArray<DUStorageObject *> *all = [NSMutableArray array];
+    NSMutableArray<DUStorageObject *> *work = [NSMutableArray array];
+    for (DUStorageObject *root in [roots reverseObjectEnumerator]) {
+        [work addObject:root];
+    }
+    while (work.count > 0) {
+        DUStorageObject *object = work.lastObject;
+        [work removeLastObject];
+        [all addObject:object];
+        for (DUStorageObject *child in [object.children reverseObjectEnumerator]) {
+            [work addObject:child];
+        }
+    }
+    return all;
 }
 
 - (BOOL)refreshWithError:(NSError **)error
@@ -180,8 +261,14 @@
     }
 
     [_lock lock];
-    BOOL changed = [self differsFromSnapshot:discovered];
-    _currentObjects = [discovered copy];
+    /* Merge FIRST, then decide whether anything changed. Comparing against
+     * the raw discovery result would report a change on every poll for a disk
+     * an operation is busy with, reloading the browser for a difference the
+     * merge then papers over. */
+    NSArray<DUStorageObject *> *merged =
+        [self carryingForwardBusyObjectsFrom:_currentObjects into:discovered];
+    BOOL changed = [self differsFromSnapshot:merged];
+    _currentObjects = [merged copy];
     [_lock unlock];
 
     if (changed) {
@@ -195,6 +282,118 @@
                             waitUntilDone:NO];
     }
     return YES;
+}
+
+/* Keeps an object that an operation is working on visible in the snapshot.
+ *
+ * Discovery runs on a timer while a destructive operation is in flight, and
+ * the very act of the operation can make the object briefly unreadable: a
+ * whole-disk erase destroys the partition table, so one poll can find a disk
+ * with no table and the next finds it whole again. Without this the row
+ * disappears from the browser, -reloadWithPreferredSelection: cannot resolve
+ * the selection and falls back to the FIRST device in the list, and the
+ * Information panel then describes a different disk than the one being
+ * erased. The user is left looking at one disk while the app destroys
+ * another, and the next click acts on the wrong device.
+ *
+ * A busy object missing from the fresh tree is therefore carried forward with
+ * its last known subtree, so the row and the selection survive the poll. The
+ * next refresh after the lock is released replaces it with the real state.
+ * Objects that are merely CHANGED while busy are not carried forward: their
+ * row updates as normal, because the operation holds its own reference and
+ * does not depend on the snapshot.
+ *
+ * Must be called with _lock held. */
+- (NSArray<DUStorageObject *> *)carryingForwardBusyObjectsFrom:
+        (NSArray<DUStorageObject *> *)current
+                                                  into:
+        (NSArray<DUStorageObject *> *)fresh
+{
+    if (_busyIdentifiers.count == 0 || current.count == 0) {
+        return fresh;
+    }
+
+    // Index the fresh tree by identifier, so "is it still there?" is a
+    // dictionary lookup rather than a walk per busy object.
+    NSMutableSet<NSString *> *present = [NSMutableSet set];
+    NSMutableArray<DUStorageObject *> *work = [NSMutableArray array];
+    for (DUStorageObject *root in [fresh reverseObjectEnumerator]) {
+        [work addObject:root];
+    }
+    while (work.count > 0) {
+        DUStorageObject *object = work.lastObject;
+        [work removeLastObject];
+        if (object.identifier.length > 0) {
+            [present addObject:object.identifier];
+        }
+        for (DUStorageObject *child in [object.children reverseObjectEnumerator]) {
+            [work addObject:child];
+        }
+    }
+
+    // Find each missing busy object in the current tree, together with the
+    // parent it hung from, so it can be re-attached in the same place.
+    NSMutableDictionary<NSString *, DUStorageObject *> *carried =
+        [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, DUStorageObject *> *carriedParent =
+        [NSMutableDictionary dictionary];
+    NSMutableArray<DUStorageObject *> *pending = [NSMutableArray array];
+    for (DUStorageObject *root in [current reverseObjectEnumerator]) {
+        [pending addObject:root];
+    }
+    while (pending.count > 0) {
+        DUStorageObject *object = pending.lastObject;
+        [pending removeLastObject];
+        if (object.identifier.length > 0 &&
+            [_busyIdentifiers containsObject:object.identifier] &&
+            ![present containsObject:object.identifier]) {
+            carried[object.identifier] = object;
+            carriedParent[object.identifier] = object.parent;
+        }
+        for (DUStorageObject *child in [object.children reverseObjectEnumerator]) {
+            [pending addObject:child];
+        }
+    }
+    if (carried.count == 0) {
+        return fresh;
+    }
+
+    NSMutableArray<DUStorageObject *> *merged = [fresh mutableCopy];
+    for (NSString *identifier in carried) {
+        DUStorageObject *object = carried[identifier];
+        DUStorageObject *parent = carriedParent[identifier];
+        if (parent != nil && [present containsObject:parent.identifier]) {
+            DUStorageObject *freshParent = nil;
+            for (DUStorageObject *candidate in merged) {
+                freshParent = [self firstObjectWithIdentifier:candidate
+                                                       matching:parent.identifier];
+                if (freshParent != nil) {
+                    break;
+                }
+            }
+            [freshParent addChild:object];
+        } else {
+            [merged addObject:object];
+        }
+    }
+    return merged;
+}
+
+// Depth-first search for a descendant carrying `identifier`.
+- (DUStorageObject *)firstObjectWithIdentifier:(DUStorageObject *)root
+                                      matching:(NSString *)identifier
+{
+    if ([root.identifier isEqualToString:identifier]) {
+        return root;
+    }
+    for (DUStorageObject *child in root.children) {
+        DUStorageObject *hit = [self firstObjectWithIdentifier:child
+                                                       matching:identifier];
+        if (hit != nil) {
+            return hit;
+        }
+    }
+    return nil;
 }
 
 // Main-thread continuation of refreshWithError:; observers touch views.

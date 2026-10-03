@@ -7,8 +7,7 @@
  */
 
 #import "SoundController.h"
-#import "ALSABackend.h"
-#import "OSSBackend.h"
+#import "SoundBackendFactory.h"
 #import "AppearanceMetrics.h"
 
 // UI Constants. Content area matches the 640x480 window (24px side margins
@@ -88,41 +87,7 @@ static const CGFloat kTableRowHeight = 18.0;
    devices), so only called on backendQueue. */
 - (id<SoundBackend>)newAvailableBackend
 {
-    id<SoundBackend> found = nil;
-
-#if defined(__FreeBSD__) || defined(__DragonFly__)
-    // On FreeBSD/DragonFly, prefer OSS
-    OSSBackend *ossBackend = [[OSSBackend alloc] init];
-    if ([ossBackend isAvailable]) {
-        found = ossBackend;
-    } else {
-        [ossBackend release];
-    }
-#endif
-
-    // If no backend yet, try ALSA (Linux)
-    if (found == nil) {
-        ALSABackend *alsaBackend = [[ALSABackend alloc] init];
-        if ([alsaBackend isAvailable]) {
-            found = alsaBackend;
-        } else {
-            [alsaBackend release];
-        }
-    }
-
-#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__)
-    // On non-BSD systems, also try OSS as fallback (e.g., OSS4 on Linux)
-    // (OpenBSD excluded: no OSS there; sndio backend is a future addition.)
-    if (found == nil) {
-        OSSBackend *ossBackend = [[OSSBackend alloc] init];
-        if ([ossBackend isAvailable]) {
-            found = ossBackend;
-        } else {
-            [ossBackend release];
-        }
-    }
-#endif
-
+    id<SoundBackend> found = SoundBackendCreateDefault();
     if (found == nil) {
         NSDebugLLog(@"gwcomp", @"SoundController: No audio backend available");
     } else {

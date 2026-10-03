@@ -51,6 +51,19 @@ static int get_primary_ip(char *buf, size_t buflen)
 - (NSData *)txtRecordDataFromDictionary:(NSDictionary *)dict;
 @end
 
+/* The publishers outlive this process.  A descriptor they inherit - the
+ * connection to the distributed notification server gdnc among them - stays
+ * open with nobody reading it, and gdnc then stopped delivering workspace
+ * notifications (Hide Others, Show All, ...) for the whole session.  Called
+ * in the child between fork() and exec(), so only async-signal-safe calls;
+ * maxfd is taken before the fork. */
+static void close_inherited_descriptors(long maxfd)
+{
+    for (long fd = STDERR_FILENO + 1; fd < maxfd; fd++) {
+        close((int)fd);
+    }
+}
+
 @implementation GSServiceDiscoveryManager
 
 static GSServiceDiscoveryManager *sharedInstance = nil;
@@ -426,6 +439,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
     const char *typeC = [typeStr UTF8String];
     char portStr[16];
     snprintf(portStr, sizeof(portStr), "%ld", (long)port);
+    long maxfd = sysconf(_SC_OPEN_MAX);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -437,6 +451,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
             dup2(fd, STDERR_FILENO);
             close(fd);
         }
+        close_inherited_descriptors(maxfd);
         // Try avahi-publish-service first (supports -s to daemonize)
         execlp("avahi-publish-service", "avahi-publish-service", "-s",
                hostnameC, typeC, portStr, NULL);
@@ -477,6 +492,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
     const char *hostnameC = [hostname UTF8String];
     char ipStr[INET_ADDRSTRLEN] = "";
     get_primary_ip(ipStr, sizeof(ipStr));
+    long maxfd = sysconf(_SC_OPEN_MAX);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -488,6 +504,7 @@ static GSServiceDiscoveryManager *sharedInstance = nil;
             dup2(fd, STDERR_FILENO);
             close(fd);
         }
+        close_inherited_descriptors(maxfd);
         // Publish the hostname A record so hostname.local resolves.
         // avahi-publish-address -s daemonizes automatically.
         if (ipStr[0] != '\0') {

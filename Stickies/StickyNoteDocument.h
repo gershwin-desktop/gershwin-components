@@ -21,6 +21,7 @@
     NSDate *creationDate;
     NSDate *modificationDate;
     BOOL useAsDefault;
+    NSPoint scrollPosition;
 }
 
 @property (nonatomic, copy) NSString *text;
@@ -35,6 +36,9 @@
 @property (nonatomic, retain) NSDate *creationDate;
 @property (nonatomic, retain) NSDate *modificationDate;
 @property (nonatomic, assign) BOOL useAsDefault;
+// Where the note's text was scrolled to, so a long note reopens showing the
+// same lines instead of snapping back to the top.
+@property (nonatomic, assign) NSPoint scrollPosition;
 
 - (id)initWithText:(NSString *)text color:(NSColor *)color frame:(NSRect)frame font:(NSFont *)font floatOnTop:(BOOL)floatOnTop translucent:(BOOL)translucent collapsed:(BOOL)collapsed creationDate:(NSDate *)creationDate modificationDate:(NSDate *)modificationDate;
 - (NSDictionary *)dictionaryRepresentation;

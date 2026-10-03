@@ -9,6 +9,7 @@
 #import <PackageManager/GWHeaderDatabase.h>
 #import <PackageManager/GWPackageManager.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -1223,7 +1224,11 @@ static const CGFloat kSpace16 = 16.0;
     } else if (status == 0) {
         NSLog(@"buildFinished: OK");
         [self setProjectLabel:GWBuildFileLabelYellow];
-        [self cleanupTempDir];
+        NSString *revealed = [self revealBuiltProduct];
+        /* Deleting the temp copy would empty the viewer we just opened. */
+        if (!(revealed && _objDir && [revealed hasPrefix:_objDir])) {
+            [self cleanupTempDir];
+        }
         [self quitCleanly];
     } else if (status != 0 && button == NSAlertSecondButtonReturn) {
         NSLog(@"buildFinished: Show Build Log");
@@ -1268,6 +1273,26 @@ static const CGFloat kSpace16 = 16.0;
     if (!makefilePath) return;
 
     installShouldLaunch = shouldLaunch;
+
+    /* This runs from the result alert's button handler.  The Eau alert panel
+     * is still tearing down at this point, and ordering the progress window
+     * in underneath it churns the window list while the panel's own window
+     * is being destroyed: the desktop answers with BadPicture and the app
+     * dies with SIGSEGV a few milliseconds later.  Wait for the panel to go
+     * away first, the same way scheduleQuit does before terminating. */
+    [self performSelector:@selector(beginInstallWithLaunch)
+               withObject:nil
+               afterDelay:0.5
+                  inModes:[NSArray arrayWithObjects:
+                            NSDefaultRunLoopMode,
+                            NSModalPanelRunLoopMode,
+                            NSEventTrackingRunLoopMode,
+                            nil]];
+}
+
+- (void)beginInstallWithLaunch
+{
+    if (!makefilePath) return;
 
     if (_window) {
         [_window orderFront:nil];
@@ -1444,6 +1469,54 @@ static const CGFloat kSpace16 = 16.0;
     [self quitCleanly];
 }
 
+/* Path of the product this build just produced.  It sits next to the
+   GNUmakefile, or in the subproject directory that declares it; tools are
+   linked into obj/ instead of a bundle. */
+- (NSString *)builtProductPath
+{
+    NSString *name = [self productNameFromMakefile];
+    NSString *ext = [self productExtensionFromMakefile];
+    if ([name length] == 0 || [ext length] == 0) return nil;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [makefilePath stringByDeletingLastPathComponent];
+
+    if ([ext isEqualToString:@"tool"]) {
+        NSString *tool = [[dir stringByAppendingPathComponent:@"obj"]
+            stringByAppendingPathComponent:name];
+        return [fm fileExistsAtPath:tool] ? tool : nil;
+    }
+
+    NSString *leaf = [name stringByAppendingPathExtension:ext];
+    NSString *product = [dir stringByAppendingPathComponent:leaf];
+    if ([fm fileExistsAtPath:product]) return product;
+
+    for (NSString *entry in [fm contentsOfDirectoryAtPath:dir error:NULL]) {
+        NSString *nested = [[dir stringByAppendingPathComponent:entry]
+            stringByAppendingPathComponent:leaf];
+        if ([fm fileExistsAtPath:nested]) return nested;
+    }
+    return nil;
+}
+
+/* OK ends the session without installing, so the only thing left to do with
+   the result is to find it: select it in Workspace, like "Show In File
+   Viewer" does.  Returns the revealed path, or nil if there was none. */
+- (NSString *)revealBuiltProduct
+{
+    NSString *product = [self builtProductPath];
+    if (!product) {
+        NSLog(@"revealBuiltProduct: no product found for %@", makefilePath);
+        return nil;
+    }
+    if (![[NSWorkspace sharedWorkspace]
+            selectFile:product
+            inFileViewerRootedAtPath:[product stringByDeletingLastPathComponent]]) {
+        NSLog(@"revealBuiltProduct: Workspace did not show %@", product);
+    }
+    return product;
+}
+
 /* After `gmake install` the product sits in one of the standard Applications
    directories of the SYSTEM/LOCAL/USER/NETWORK domains (these external projects
    default to the LOCAL domain, i.e. /Local/Applications). The workspace
@@ -1495,6 +1568,25 @@ static const CGFloat kSpace16 = 16.0;
     return nil;
 }
 
+/* Close every inherited descriptor above stderr in a freshly forked child.
+   Build is an X client, so the child would otherwise inherit the display
+   connection (and its MIT-SHM segments) across exec.  openapp would then
+   share one X socket with Build: both processes read and write the same
+   connection, the reply stream desynchronises, and the desktop sees
+   BadPicture/BadWindow storms before Build dies with SIGSEGV.  Closing the
+   descriptors before exec is the standard fork/exec hygiene and leaves the
+   launched app to open its own connection. */
+static void closeInheritedDescriptors(void)
+{
+    /* Cap the walk so a huge RLIMIT_NOFILE cannot turn this into a long
+       loop; the descriptors Build actually holds are all low numbers. */
+    long max = sysconf(_SC_OPEN_MAX);
+    if (max <= 0 || max > 4096) max = 4096;
+    for (int fd = STDERR_FILENO + 1; fd < (int)max; fd++) {
+        close(fd);
+    }
+}
+
 /* Launch an installed product by its actual path.  For apps we fork/exec
    openapp in a new session (setsid) so the launched app is completely
    detached from Build.app.  The parent waits for the child to exec and
@@ -1507,24 +1599,42 @@ static const CGFloat kSpace16 = 16.0;
     NSString *openapp = [NSTask launchPathForTool:@"openapp"];
     if (!openapp) return NO;
 
+    /* Resolve the paths to C strings before forking: this runs on a
+       background thread of a process that has other threads, and only
+       async-signal-safe work may touch state between fork() and exec. */
+    const char *execPath = strdup([openapp fileSystemRepresentation]);
+    const char *execArg = strdup([productPath fileSystemRepresentation]);
+    if (!execPath || !execArg) {
+        free((void *)execPath);
+        free((void *)execArg);
+        return NO;
+    }
+
     pid_t pid = fork();
-    if (pid < 0) return NO;
+    if (pid < 0) {
+        free((void *)execPath);
+        free((void *)execArg);
+        return NO;
+    }
 
     if (pid == 0) {
         /* Child: new session so the launched app is fully detached. */
         setsid();
+        closeInheritedDescriptors();
         int fd = open("/dev/null", O_RDONLY);
         if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
-        const char *path = [openapp fileSystemRepresentation];
-        const char *arg = [productPath fileSystemRepresentation];
-        char *argv[] = {(char *)path, (char *)arg, NULL};
-        execvp(path, argv);
+        char *argv[] = {(char *)execPath, (char *)execArg, NULL};
+        execvp(execPath, argv);
         _exit(1);
     }
 
     /* Parent: wait for child to exec (it exits quickly after launching). */
     int status = 0;
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        /* a signal arrived; keep waiting for our child */
+    }
+    free((void *)execPath);
+    free((void *)execArg);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return YES;
     return NO;
 }

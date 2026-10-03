@@ -355,6 +355,10 @@ static const float SP_WINDOW_HEIGHT = 500.0;
     NSRect frame = NSMakeRect(100, 100, SP_WINDOW_WIDTH, SP_WINDOW_HEIGHT);
     unsigned int style = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
     _window = [[NSWindow alloc] initWithContentRect:frame styleMask:style backing:NSBackingStoreBuffered defer:NO];
+    /* ARC owns the window through _window.  Released when closed, -close would
+     * release it a second time: on quit NSApplication closes every window and
+     * the app crashed draining its autorelease pool. */
+    [_window setReleasedWhenClosed:NO];
     [_window setTitle:@"System Profiler"];
     [_window setMinSize:NSMakeSize(SP_WINDOW_WIDTH * 0.6, SP_WINDOW_HEIGHT * 0.6)];
     [_window setDelegate:(id)self];

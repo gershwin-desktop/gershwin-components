@@ -8,6 +8,7 @@
 #define WHISPER_CONTROLLER_H
 
 #import <AppKit/AppKit.h>
+#import "WRecordButton.h"
 
 typedef NS_ENUM(NSInteger, WhisperState) {
     WhisperStateIdle,
@@ -26,9 +27,8 @@ typedef NS_ENUM(NSInteger, WhisperState) {
     // File selection
     NSString *currentFilePath;
 
-    // Recording
-    NSButton *recordButton;
-    NSButton *stopButton;
+    // Recording: one button that both starts and stops
+    WRecordButton *recordButton;
     NSProgressIndicator *recordSpinner;
 
     // Model management
@@ -68,6 +68,8 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 
     // Recording state
     void *captureHandle;
+    // YES while Player is paused because this recording needs the sound
+    BOOL playerPausedForRecording;
     NSString *currentLangCode;
     NSTimer *recordTimer;
     NSTimer *streamTimer;
@@ -108,8 +110,14 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 - (BOOL)application:(NSApplication *)application openFile:(NSString *)filename;
 
 // Actions
+/// The one record button: starts a recording, or stops the one that is
+/// running, whichever applies when it is pressed.
+- (IBAction)toggleRecording:(id)sender;
 - (IBAction)recordAudio:(id)sender;
 - (IBAction)stopRecording:(id)sender;
+/// Gives Player back the pause -pausePlayerForRecording took, if it is
+/// still ours to give (never resumes a pause the user took themselves).
+- (void)resumePlayerIfPaused;
 - (IBAction)openFile:(id)sender;
 - (IBAction)modelSelected:(id)sender;
 - (IBAction)languageChanged:(id)sender;

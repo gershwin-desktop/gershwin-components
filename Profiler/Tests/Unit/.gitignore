@@ -1,0 +1,5 @@
+# Build output of the test tools: gnustep-make mirrors the paths of the
+# model sources it compiles from ../../Sources.
+obj/
+Sources/
+*.d

@@ -44,6 +44,13 @@ static NSString *const kPkgDeletePath = @"/usr/sbin/pkg_delete";
   return [self initWithExecutor:nil];
 }
 
+#pragma mark - GWPackageManagerBackend - Query
+
+- (BOOL)isPackageInstalled:(NSString *)packageName
+{
+  return [_executor execute:kPkgInfoPath arguments:@[@"-e", packageName]] == 0;
+}
+
 #pragma mark - GWPackageManagerBackend - Install
 
 - (BOOL)installPackages:(NSArray<NSString *> *)packageNames
@@ -57,11 +64,8 @@ static NSString *const kPkgDeletePath = @"/usr/sbin/pkg_delete";
 
   // Install local files first
   if ([filePaths count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kPkgAddPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kPkgAddPath];
-    [args addObjectsFromArray:filePaths];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kPkgAddPath, filePaths, &args);
 
     NSString *capturedStderr = nil;
     int status = [_executor execute:launchPath
@@ -93,12 +97,10 @@ static NSString *const kPkgDeletePath = @"/usr/sbin/pkg_delete";
 
   // Install packages from repositories
   if ([packageNames count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kPkgAddPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kPkgAddPath];
-    [args addObjectsFromArray:@[@"-V"]];
-    [args addObjectsFromArray:packageNames];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObject:@"-V"];
+    [toolArgs addObjectsFromArray:packageNames];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kPkgAddPath, toolArgs, &args);
 
     int status = 0;
     int retries = 0;
@@ -178,11 +180,8 @@ capturedErrorOutput:&capturedStderr];
   [progressHandler installDidProgress:0.5f message:@"Removing packages..."];
 
   if ([packageNames count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kPkgDeletePath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kPkgDeletePath];
-    [args addObjectsFromArray:packageNames];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kPkgDeletePath, packageNames, &args);
 
     int status = [_executor execute:launchPath arguments:args];
     if (status != 0) {

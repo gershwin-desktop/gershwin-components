@@ -22,6 +22,7 @@ DUWave1TestSupport_OBJC_FILES = \
     ../Sources/Models/DUPartitionPlan.m \
     ../Sources/Utilities/DUErrors.m \
     ../Sources/Utilities/DUParsing.m \
+    ../Sources/Utilities/DUProcessRunner.m \
     ../Sources/Models/DUDiskImage.m \
     ../Sources/Models/DUOpticalMedia.m \
     ../Sources/Models/DURAIDSet.m \

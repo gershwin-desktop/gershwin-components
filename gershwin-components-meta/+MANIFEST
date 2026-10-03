@@ -15,7 +15,6 @@ deps: {
   gershwin-globalshortcuts: {origin: sysutils/gershwin-globalshortcuts, version: "*"},
   gershwin-startupdisk: {origin: sysutils/gershwin-startupdisk, version: "*"},
   LoginWindow-pamwindow: {origin: sysutils/LoginWindow-pamwindow, version: "*"},
-  gershwin-globalshortcutsd: {origin: sysutils/gershwin-globalshortcutsd, version: "*"},
   gershwin-sudoaskpass: {origin: sysutils/gershwin-sudoaskpass, version: "*"},
   gershwin-initgfx: {origin: sysutils/gershwin-initgfx, version: "*"},
   gershwin-menu: {origin: sysutils/gershwin-menu, version: "*"},

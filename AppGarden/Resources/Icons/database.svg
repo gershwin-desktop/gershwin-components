@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+<!-- Copyright (c) 2026 Simon Peter. SPDX-License-Identifier: BSD-2-Clause -->
+<g fill="none" stroke="#3c3c3c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4 V12 C3 13.1 5.25 14 8 14 C10.75 14 13 13.1 13 12 V4"/><path d="M3 8 C3 9.1 5.25 10 8 10 C10.75 10 13 9.1 13 8"/>
+</g>
+</svg>

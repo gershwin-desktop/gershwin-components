@@ -145,8 +145,7 @@
         }
         return nil;
     }
-    if (!result.exitedNormally ||
-        WEXITSTATUS(result.terminationStatus) != 0) {
+    if (![result exitedWithStatus:0]) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:DUStorageErrorDomain
                                          code:DUErrorUnknown
@@ -275,7 +274,7 @@
                                                    error:NULL];
         return launchError;
     }
-    int status = WEXITSTATUS(result.terminationStatus);
+    int status = result.terminationStatus;
     if (!result.exitedNormally || status != 0) {
         [[NSFileManager defaultManager] removeItemAtPath:destinationPath
                                                    error:NULL];
@@ -320,7 +319,7 @@
     if (launchError != nil) {
         return launchError;
     }
-    int status = WEXITSTATUS(result.terminationStatus);
+    int status = result.terminationStatus;
     if (!result.exitedNormally || status != 0) {
         return [NSError errorWithDomain:DUStorageErrorDomain
                                    code:DUErrorUnknown

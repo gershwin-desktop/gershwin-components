@@ -28,6 +28,13 @@ typedef NS_ENUM(NSInteger, DUStorageSmartStatus) {
 // Partition table scheme identifier: "gpt", "mbr", "bsd" or nil.
 @property (nonatomic, copy) NSString *partitionScheme;
 
+// YES when the partition table could not be READ (a failed or unavailable
+// geom query), which is different from a disk that genuinely has no table.
+// While set, the sidebar shows no partitions because none could be listed,
+// and the destructive verbs stay off so the user is never invited to erase a
+// disk whose contents are merely invisible.
+@property (nonatomic) BOOL partitionTableUnreadable;
+
 @property (nonatomic, copy) NSString *healthStatus;
 
 // SMART self-assessment of the physical drive. Only meaningful for whole
@@ -42,6 +49,11 @@ typedef NS_ENUM(NSInteger, DUStorageSmartStatus) {
 
 // Localized label for a DUStorageSmartStatus value.
 + (NSString *)localizedSmartStatus:(DUStorageSmartStatus)status;
+
+// The Information panel's "Health Status:" row derived from the SMART verdict.
+// nil when there is no verdict (Not Supported), so the row can be left blank
+// instead of asserting a health claim that was never made.
++ (NSString *)healthStatusForSmartStatus:(DUStorageSmartStatus)status;
 
 @property (nonatomic) BOOL optical;
 // Only meaningful when optical is YES.

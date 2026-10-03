@@ -13,7 +13,7 @@ to the SYSTEM domain unless noted.
 - Build one component: `cd <dir> && gmake`
 - Install all: `sudo gmake install` — installs `Libraries` and the
   `PackageManager` framework first, then builds the **library consumers**
-  (`Build Menu Network Sound Whisper`) and `PackageManager/OnDemand`, which
+  (`AppGarden Build Menu Network Sound Whisper`) and `PackageManager/OnDemand`, which
   `gmake` alone skips because they link the shared libs. So a changed
   component only compiles during `install` if it links a backend from
   `Libraries/` or the `PackageManager` framework.
@@ -31,8 +31,9 @@ to the SYSTEM domain unless noted.
 - `Libraries/` holds shared backends (`SoundBackend`, `NetworkBackend`) that
   `Menu`, `Network`, `Sound`, `Whisper` link against.
 - `PackageManager/` builds the `PackageManager.framework` (cross-distro package
-  install/uninstall + the bundled header database in `Resources/headers.db`).
-  It installs to `/System/Library/Frameworks`; `Build` and
+  install/uninstall, AppImage download into the user's home, + the bundled
+  header database in `Resources/headers.db`).
+  It installs to `/System/Library/Frameworks`; `AppGarden`, `Build` and
   `PackageManager/OnDemand` link it system-wide (no embedding). `OnDemand` and
   `Placeholders` are built and installed only during `install`.
 - `make_appimage/` is a GNUstep tool (`make_appimage`, `make_standalone`) that
@@ -59,6 +60,26 @@ to the SYSTEM domain unless noted.
   `TEST_TOOL_NAME` + `test-tool.make`; `ICNSImageRep/test/` has `test_icns.m`;
   `Menu/` has `test.sh` / `test-menu-integration.sh`; `Assistants/BackupAssistant/`
   has shell+ObjC test tools. Inspect the component's `GNUmakefile` for the exact tool.
+- `Profiler/Tests/Unit/`: ObjectTesting tools for the profile model (symbol
+  demangling, the perf/folded/DTrace stack parsers, call trees and the flat
+  cost lists): `gmake`, then run `./obj/t_*`. `Profiler/Tests/*.uitest` drives
+  the app itself from a file of folded stacks, so it needs neither perf nor
+  root. `Profiler/Tests/cli_smoke.sh` checks the `profiler` command line tool
+  (`sh Tests/cli_smoke.sh` after `gmake`); it needs no display either.
+- `Profiler` builds two things from one engine: the app, and `profiler`, a
+  tool that answers the same questions in a terminal (`profiler memory <pid>`,
+  `profiler objects <program>`, `profiler report <file.folded>`, each with
+  `--json`). Anything the tool needs must stay free of AppKit - `PRFormat`
+  holds the number formatting for that reason, and only `PRAppearance` (the
+  colours and icons) may use AppKit.
+- `PackageManager/Tests/`: one tool, `PackageManagerTest`, which links the
+  freshly built framework rather than the installed copy;
+  `cd PackageManager && gmake test`. It also `#include`s
+  `AGAppImageAssetPickerTests.m` (deliberately not in `OBJC_FILES`: its cases
+  use the `TAssert` macros, which expand to a `return NO`).
+- `Player/Tests/Unit/`: ObjectTesting tools for the playlist, playback session,
+  FFmpeg player and menu (`gmake`, then run `./obj/t_*`; `t_PlayerMenu` needs a
+  `DISPLAY`). `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.
 - For GNUstep unit/red-green tests, follow the global `gnustep-red-green-tdd`
   skill (PASS macro set + wiring).
 - To drive/inspect a running GUI, use the driveui skill / `drive_ui`.

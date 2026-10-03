@@ -171,9 +171,9 @@ static double StageFractionForLine(NSString *line, double current)
 }
 
 // Runs a tool with its merged output streamed line-by-line to progressBlock
-// and blocks until exit. okExitMask is a bitmask of acceptable WEXITSTATUS
-// values; anything else maps to failCode with the output tail under
-// kDUBackendDetailKey.
+// and blocks until exit. okExitMask is a bitmask of acceptable exit codes
+// (bit n set means "code n is acceptable"); anything else maps to failCode
+// with the output tail under kDUBackendDetailKey.
 static NSError *RunStreamedTool(NSString *toolName,
                                 NSArray<NSString *> *aliasNames,
                                 NSArray<NSString *> *arguments,
@@ -220,11 +220,7 @@ static NSError *RunStreamedTool(NSString *toolName,
                progress(stage, line);
            }
             finishHandler:^(DUProcessResult *processResult) {
-                int status = 0;
-                if (processResult.exitedNormally) {
-                    status = WEXITSTATUS(processResult
-                                             .terminationStatus);
-                }
+                int status = processResult.terminationStatus;
                 if (!processResult.exitedNormally ||
                     (okExitMask & (1u << status)) == 0) {
                     // Output is merged into standardOutput by the streaming
@@ -404,7 +400,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     if (launchError != nil) {
         return launchError;
     }
-    if (!result.exitedNormally || WEXITSTATUS(result.terminationStatus) != 0) {
+    if (![result exitedWithStatus:0]) {
         return [NSError errorWithDomain:DUStorageErrorDomain
                                    code:DUErrorEraseFailed
                                userInfo:@{
@@ -465,8 +461,7 @@ static NSError *RunStreamedTool(NSString *toolName,
                             : line);
            }
             finishHandler:^(DUProcessResult *processResult) {
-                if (!processResult.exitedNormally ||
-                    WEXITSTATUS(processResult.terminationStatus) != 0) {
+                if (![processResult exitedWithStatus:0]) {
                     // Merged streaming puts the tool transcript (progress,
                     // summary, errors) in standardOutput.
                     result = [NSError errorWithDomain:DUStorageErrorDomain
@@ -560,8 +555,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     if (launchError != nil) {
         return launchError;
     }
-    if (!result.exitedNormally ||
-        WEXITSTATUS(result.terminationStatus) != 0) {
+    if (![result exitedWithStatus:0]) {
         return [NSError errorWithDomain:DUStorageErrorDomain
                                    code:DUErrorFilesystemError
                                userInfo:@{

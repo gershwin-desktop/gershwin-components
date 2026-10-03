@@ -80,8 +80,12 @@
 - (void)setupWindow {
     NSWindow *window = [self window];
     [window setTitle:_installerTitle ?: @"Installer"];
-    [window setMinSize:NSMakeSize(GSInstallerWindowWidth, GSInstallerWindowHeight)];
-    [window setMaxSize:NSMakeSize(GSInstallerWindowWidth, GSInstallerWindowHeight)];
+    /* minSize/maxSize are device pixels, not points: point constants here
+     * clamp the window to those pixel dimensions on map (see GSAssistantWindow
+     * -setupWindow).  Pin to the frame the window already has. */
+    NSSize frameSize = [window frame].size;
+    [window setMinSize:frameSize];
+    [window setMaxSize:frameSize];
     [window setResizable:NO];
     [window center];
     

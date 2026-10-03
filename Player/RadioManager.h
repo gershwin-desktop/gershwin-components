@@ -50,6 +50,7 @@
     StreamPlayer *_player;
     NSArray *_stations;               // RadioStation objects
     NSMutableDictionary *_stationImages;  // key: stationId → NSImage
+    NSMutableDictionary *_placeholderImages;  // the same stand-in every time
     NSString *_currentStationName;
     NSString *_currentStreamURL;
 
@@ -57,18 +58,28 @@
     NSMutableDictionary *_iconIndex;  // key: stationId → {filename, lastAccess, timestamp}
     NSString *_iconCachePath;
     NSMutableSet *_downloadingKeys;
-    dispatch_queue_t _iconQueue;
-    dispatch_semaphore_t _iconSemaphore;
+    NSOperationQueue *_iconQueue;
+    NSMutableSet *_fadingPlayers;    // stations fading out after a switch
+    StreamPlayer *_outgoing;         // audible old station while the new one connects
+    NSTimeInterval _fadeDuration;
+    BOOL _connecting;
+    NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
+    NSUInteger _listRequest;     // bumped by every station list asked for
     int _maxCacheEntries;
 }
 
 @property (nonatomic, assign) id<RadioManagerDelegate> delegate;
 @property (nonatomic, readonly) BOOL isPlaying;
+/// YES from choosing a station until it plays or fails
+@property (nonatomic, readonly) BOOL isConnecting;
 @property (nonatomic, readonly, copy) NSString *currentStationName;
 @property (nonatomic, readonly, copy) NSString *currentStreamURL;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
+/// How long stations fade in, out and into each other; 0 switches at once.
+@property (nonatomic, assign) NSTimeInterval fadeDuration;
 @property (nonatomic, readonly) NSArray *stations;
+/// The player of the current station, nil while nothing is tuned in
 @property (nonatomic, readonly) StreamPlayer *player;
 
 + (instancetype)sharedManager;
@@ -85,8 +96,10 @@
 /// Stream an arbitrary URL directly
 - (void)playURL:(NSString *)urlString;
 
-/// Stop streaming
+/// Stop streaming; the sound fades out
 - (void)stop;
+/// A new player for each station; subclasses may configure it
+- (StreamPlayer *)makePlayer;
 
 /// Return the cached icon for a station, or nil if not yet loaded
 - (NSImage *)imageForStation:(RadioStation *)station;

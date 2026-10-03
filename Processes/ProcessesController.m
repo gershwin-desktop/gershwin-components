@@ -16,10 +16,15 @@
 #endif
 #endif
 #import <unistd.h>
+#import <signal.h>
 
-// P_SYSTEM flags kernel processes on BSDs
-#ifndef P_SYSTEM
-#define P_SYSTEM 0x00000004
+/* Kernel processes are flagged P_SYSTEM, but the value differs between the
+ * BSDs, so it is only used where the system headers define it.  Guessing it
+ * would either hide real processes or list the kernel's own. */
+#ifdef P_SYSTEM
+#define PROCESSES_IS_KERNEL(flag) (((flag) & P_SYSTEM) != 0)
+#else
+#define PROCESSES_IS_KERNEL(flag) (0)
 #endif
 
 // OpenBSD struct kinfo_proc uses p_ prefix instead of ki_.  Map to ki_ names
@@ -57,11 +62,87 @@
 #endif
 #endif
 
-// NSTableView subclass that draws full-row alternating backgrounds (no per-cell gaps)
+/* Reading every process is not free, so a scan that takes longer than this is
+ * cut short rather than pegging a core. */
+static const double kMaxScanSeconds = 3.0;
+
+/* The inspector drawer. */
+static const CGFloat kDrawerWidth = 320.0;
+static const CGFloat kDrawerHeight = 480.0;
+static const CGFloat kSparklineHeight = 54.0;
+
+/* NSTableView subclass that draws full-row alternating backgrounds (no
+ * per-cell gaps) and lets a right-click act on the row under the pointer. */
 @interface ProcessTableView : NSTableView
+{
+    BOOL _fillingLastColumn;
+}
+- (void)fillLastColumnToWidth;
 @end
 
 @implementation ProcessTableView
+
+/* GNUstep leaves -setColumnAutoresizingStyle: unimplemented, and it only
+ * sizes the last column to fit when the table happened to fill the previous
+ * width exactly, so a narrower column anywhere leaves white space to the
+ * right of the last one.  Give that space to the last column, and only that
+ * way round: a table wider than the window scrolls as before. */
+- (void)fillLastColumnToWidth
+{
+    NSView *clip = [self superview];
+    NSTableColumn *last;
+    CGFloat visible, used, gap;
+
+    if (_fillingLastColumn || clip == nil || [self numberOfColumns] == 0) {
+        return;
+    }
+
+    last = [[self tableColumns] lastObject];
+    if ([last isResizable] == NO) {
+        return;
+    }
+
+    visible = [self convertRect:[clip bounds] fromView:clip].size.width;
+    used = NSWidth([self frame]);
+    gap = visible - used;
+
+    /* Below a point the gap is rounding, not a gap; acting on it would make
+     * the table and the scroll view chase each other. */
+    if (gap <= 1.0) {
+        return;
+    }
+
+    _fillingLastColumn = YES;
+    [last setWidth:[last width] + gap];
+    _fillingLastColumn = NO;
+}
+
+- (void)tile
+{
+    [super tile];
+    [self fillLastColumnToWidth];
+}
+
+- (void)viewDidMoveToSuperview
+{
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+
+    [super viewDidMoveToSuperview];
+    [nc removeObserver:self name:NSViewFrameDidChangeNotification object:nil];
+    if ([self superview] != nil) {
+        [[self superview] setPostsFrameChangedNotifications:YES];
+        [nc addObserver:self
+               selector:@selector(clipViewFrameChanged:)
+                   name:NSViewFrameDidChangeNotification
+                 object:[self superview]];
+    }
+    [self fillLastColumnToWidth];
+}
+
+- (void)clipViewFrameChanged:(NSNotification *)aNotification
+{
+    [self fillLastColumnToWidth];
+}
 
 - (void)drawRow:(NSInteger)row clipRect:(NSRect)clipRect
 {
@@ -79,12 +160,25 @@
     [super drawRow:row clipRect:clipRect];
 }
 
+- (NSMenu *)menuForEvent:(NSEvent *)event
+{
+    /* Without this the context menu would act on whatever was selected
+     * before, not on the row the user aimed at. */
+    NSPoint where = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSInteger row = [self rowAtPoint:where];
+    if (row >= 0) {
+        [self selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+          byExtendingSelection:NO];
+    }
+    return [super menuForEvent:event];
+}
+
 @end
 
 // Helper function to get total system memory in KB
 static long getTotalSystemMemoryKB(void) {
     long totalMemory = 0;
-    
+
 #ifdef __linux__
     // Linux: Read from /proc/meminfo
     FILE *memFile = fopen("/proc/meminfo", "r");
@@ -142,11 +236,410 @@ static long getTotalSystemMemoryKB(void) {
 #endif
 #endif
 #endif
-    
+
     return totalMemory;
 }
 
+/* Resolving a uid hits the name service, so the handful of distinct owners in
+ * a process list are looked up once per scan. */
+static NSString *userNameForUid(uid_t uid, NSMutableDictionary *cache)
+{
+    NSNumber *key = [NSNumber numberWithUnsignedInt:(unsigned int)uid];
+    NSString *name = [cache objectForKey:key];
+    if (name == nil) {
+        struct passwd *pw = getpwuid(uid);
+        if (pw != NULL && pw->pw_name != NULL) {
+            name = [NSString stringWithUTF8String:pw->pw_name];
+        } else {
+            name = [NSString stringWithFormat:@"%u", (unsigned int)uid];
+        }
+        [cache setObject:name forKey:key];
+    }
+    return name;
+}
 
+/* --------------------------------------------------------------------------
+ * The three ways to read the process list.  Each one fills "out" with
+ * ProcessInfo objects carrying raw readings; the percentages and the verdicts
+ * are derived later, in one place.
+ * ------------------------------------------------------------------------ */
+
+/* Reads /proc.  Returns NO when there is no /proc to read.  *truncated is set
+ * when the scan was cut short, in which case the list is incomplete. */
+static BOOL scanProcFilesystem(NSMutableArray *out, BOOL *truncated)
+{
+    DIR *procDir = opendir("/proc");
+    if (procDir == NULL) {
+        return NO;
+    }
+
+    NSMutableDictionary *userCache = [NSMutableDictionary dictionary];
+    long pageSizeKB = sysconf(_SC_PAGESIZE) / 1024;
+    NSTimeInterval startTime = [NSDate timeIntervalSinceReferenceDate];
+    struct dirent *entry;
+
+    while ((entry = readdir(procDir)) != NULL) {
+        if (([NSDate timeIntervalSinceReferenceDate] - startTime) > kMaxScanSeconds) {
+            *truncated = YES;
+            break;
+        }
+
+        char *endptr;
+        int pid = (int)strtol(entry->d_name, &endptr, 10);
+        if (*endptr != '\0' || pid <= 0) {
+            continue;
+        }
+
+        char statPath[256];
+        snprintf(statPath, sizeof(statPath), "/proc/%d/stat", pid);
+        FILE *statFile = fopen(statPath, "r");
+        if (statFile == NULL) {
+            continue;
+        }
+        char statLine[1024];
+        if (fgets(statLine, sizeof(statLine), statFile) == NULL) {
+            fclose(statFile);
+            continue;
+        }
+        fclose(statFile);
+
+        /* The executable name is in parentheses and may itself contain spaces
+         * and parentheses, so the fixed fields start after the LAST one. */
+        char *lparen = strchr(statLine, '(');
+        char *rparen = strrchr(statLine, ')');
+        if (lparen == NULL || rparen == NULL || rparen <= lparen) {
+            continue;
+        }
+        char comm[256];
+        size_t commLength = (size_t)(rparen - lparen - 1);
+        if (commLength >= sizeof(comm)) {
+            commLength = sizeof(comm) - 1;
+        }
+        memcpy(comm, lparen + 1, commLength);
+        comm[commLength] = '\0';
+
+        /* Field numbers counted from the state, which is the first field
+         * after the closing parenthesis (proc(5) field 3). */
+        char stateChar = '?';
+        int ppid = 0, threads = 0;
+        unsigned long long majorFaults = 0, utime = 0, stime = 0, startTicks = 0;
+        unsigned long vsizeBytes = 0;
+        long rssPages = 0;
+        char *saveptr = NULL;
+        char *token = strtok_r(rparen + 2, " ", &saveptr);
+        int field = 1;
+        while (token != NULL) {
+            switch (field) {
+                case 1: stateChar = token[0]; break;
+                case 2: ppid = atoi(token); break;
+                case 10: majorFaults = strtoull(token, NULL, 10); break;
+                case 12: utime = strtoull(token, NULL, 10); break;
+                case 13: stime = strtoull(token, NULL, 10); break;
+                case 18: threads = atoi(token); break;
+                case 20: startTicks = strtoull(token, NULL, 10); break;
+                case 21: vsizeBytes = strtoul(token, NULL, 10); break;
+                case 22: rssPages = atol(token); break;
+                default: break;
+            }
+            if (field >= 22) {
+                break;
+            }
+            token = strtok_r(NULL, " ", &saveptr);
+            field++;
+        }
+
+        ProcessInfo *info = [[ProcessInfo alloc] init];
+        info.pid = pid;
+        info.ppid = ppid;
+        info.state = [NSString stringWithFormat:@"%c", stateChar];
+        info.threads = threads;
+        info.majorFaults = majorFaults;
+        info.startToken = startTicks;
+        info.cpuTicks = utime + stime;
+        info.usesCPUTicks = YES;
+        info.virtualMemory = (long)(vsizeBytes / 1024);
+        info.residentMemory = rssPages * pageSizeKB;
+
+        /* Kernel threads have no command line; they are the kernel's business,
+         * not the user's.  A zombie has none either, and it is exactly what
+         * the user needs to see, so it is kept. */
+        BOOL hasCmdline = NO;
+        char cmdPath[256];
+        snprintf(cmdPath, sizeof(cmdPath), "/proc/%d/cmdline", pid);
+        FILE *cmdFile = fopen(cmdPath, "r");
+        if (cmdFile != NULL) {
+            char cmdLine[1024];
+            size_t length = fread(cmdLine, 1, sizeof(cmdLine) - 1, cmdFile);
+            if (length > 0) {
+                hasCmdline = YES;
+                cmdLine[length] = '\0';
+                size_t i;
+                for (i = 0; i < length; i++) {
+                    if (cmdLine[i] == '\0') {
+                        cmdLine[i] = ' ';
+                    }
+                }
+                info.command = [NSString stringWithUTF8String:cmdLine];
+            }
+            fclose(cmdFile);
+        }
+        if (!hasCmdline && stateChar != 'Z') {
+            continue;
+        }
+        if ([info.command length] == 0) {
+            info.command = [NSString stringWithUTF8String:comm];
+        }
+
+        /* The owner of the /proc entry is the owner of the process, which is
+         * one stat() instead of reading another file. */
+        char procPath[64];
+        snprintf(procPath, sizeof(procPath), "/proc/%d", pid);
+        struct stat procStat;
+        if (stat(procPath, &procStat) == 0) {
+            info.user = userNameForUid(procStat.st_uid, userCache);
+        } else {
+            info.user = @"unknown";
+        }
+
+        [out addObject:info];
+    }
+
+    closedir(procDir);
+    return YES;
+}
+
+/* Reads the process list through sysctl, the way the BSDs expose it.  Returns
+ * NO where that interface does not exist. */
+static BOOL scanSysctl(NSMutableArray *out)
+{
+/* Only the BSDs whose kinfo_proc field names are known are read this way:
+ * every BSD spells them differently, and wrong names would compile into
+ * wrong numbers instead of failing.  Everything else falls to "ps" below. */
+#if (defined(__FreeBSD__) || defined(__OpenBSD__)) && defined(CTL_KERN) && \
+    defined(KERN_PROC) && defined(KERN_PROC_ALL) && __has_include(<sys/user.h>)
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+    size_t length = 0;
+    if (sysctl(mib, 4, NULL, &length, NULL, 0) != 0 || length == 0) {
+        PC_INFO(@"sysctl could not size the process list");
+        return NO;
+    }
+    struct kinfo_proc *procs = malloc(length);
+    if (procs == NULL) {
+        PC_INFO(@"out of memory for the process list");
+        return NO;
+    }
+    if (sysctl(mib, 4, procs, &length, NULL, 0) != 0) {
+        PC_INFO(@"sysctl could not read the process list");
+        free(procs);
+        return NO;
+    }
+
+    NSMutableDictionary *userCache = [NSMutableDictionary dictionary];
+    long pageSizeKB = sysconf(_SC_PAGESIZE) / 1024;
+    long ticksPerSecond = sysconf(_SC_CLK_TCK);
+#ifdef __OpenBSD__
+    (void)ticksPerSecond;   /* OpenBSD reports CPU ticks directly */
+#endif
+    int count = (int)(length / sizeof(struct kinfo_proc));
+    int i;
+    for (i = 0; i < count; i++) {
+        struct kinfo_proc *p = &procs[i];
+        if (PROCESSES_IS_KERNEL(p->ki_flag)) {
+            continue;
+        }
+        ProcessInfo *info = [[ProcessInfo alloc] init];
+        info.pid = p->ki_pid;
+        info.ppid = p->ki_ppid;
+        info.command = (p->ki_comm[0] != '\0')
+                           ? [NSString stringWithUTF8String:p->ki_comm]
+                           : @"";
+        info.user = userNameForUid(p->ki_uid, userCache);
+        info.residentMemory = (long)p->ki_rssize * pageSizeKB;
+
+        char stateChar;
+        switch (p->ki_stat) {
+#ifdef __OpenBSD__
+            // OpenBSD does not expose state constants in userspace;
+            // use numeric values: 2=SRUN, 3=SSLEEP, 4=SSTOP, 5=SZOMB
+            case 5: stateChar = 'Z'; break;
+            case 4: stateChar = 'T'; break;
+            case 2: stateChar = 'R'; break;
+            case 3: stateChar = 'S'; break;
+            default: stateChar = 'R'; break;
+#else
+            case SZOMB: stateChar = 'Z'; break;
+            case SSTOP: stateChar = 'T'; break;
+            case SRUN: stateChar = 'R'; break;
+            case SSLEEP: stateChar = 'S'; break;
+            default: stateChar = 'R'; break;
+#endif
+        }
+        info.state = [NSString stringWithFormat:@"%c", stateChar];
+
+#ifdef __OpenBSD__
+        info.virtualMemory = 0;
+        info.startToken = (unsigned long long)p->p_ustart_sec;
+        info.threads = 0;
+        info.majorFaults = 0;
+        info.peakResidentMemory = (long)p->p_uru_maxrss;
+        unsigned long long ticks = (unsigned long long)p->p_uticks +
+                                   (unsigned long long)p->p_sticks;
+#else
+        info.virtualMemory = (long)(p->ki_size / 1024);
+        info.startToken = (unsigned long long)p->ki_start.tv_sec;
+        info.threads = p->ki_numthreads;
+        info.majorFaults = (unsigned long long)p->ki_rusage.ru_majflt;
+        /* ru_maxrss is the high-water mark over the whole life of the
+         * process, which is what the inspector reports as the peak. */
+        info.peakResidentMemory = (long)p->ki_rusage.ru_maxrss;
+        unsigned long long ticks =
+            (unsigned long long)(p->ki_rusage.ru_utime.tv_sec * ticksPerSecond +
+                                 p->ki_rusage.ru_utime.tv_usec * ticksPerSecond / 1000000) +
+            (unsigned long long)(p->ki_rusage.ru_stime.tv_sec * ticksPerSecond +
+                                 p->ki_rusage.ru_stime.tv_usec * ticksPerSecond / 1000000);
+#endif
+        info.cpuTicks = ticks;
+        info.usesCPUTicks = YES;
+
+        [out addObject:info];
+    }
+    free(procs);
+    return YES;
+#else
+    (void)out;
+    return NO;
+#endif
+}
+
+/* The last resort, and the only path on a system without /proc whose
+ * kinfo_proc we do not know: whatever "ps" can tell us.  Memory, state,
+ * owner, command and - through the cumulative CPU time it prints - the
+ * current CPU load all come through; thread count, page faults and the
+ * kernel's memory high-water mark do not, so the findings that need those
+ * simply never fire there. */
+static BOOL scanPsAux(NSMutableArray *out)
+{
+    FILE *ps = popen("LC_ALL=C ps aux", "r");
+    if (ps == NULL) {
+        PC_INFO(@"ps aux could not be started");
+        return NO;
+    }
+    char line[2048];
+    if (fgets(line, sizeof(line), ps) == NULL) {   // header
+        pclose(ps);
+        return NO;
+    }
+    while (fgets(line, sizeof(line), ps)) {
+        size_t length = strlen(line);
+        if (length > 0 && line[length - 1] == '\n') {
+            line[length - 1] = '\0';
+        }
+        @autoreleasepool {
+            NSString *text = [NSString stringWithUTF8String:line];
+            ProcessInfo *info = [[ProcessInfo alloc] initWithPsLine:text];
+            if (info != nil && info.pid > 0 && ![info.command hasPrefix:@"["]) {
+                [out addObject:info];
+            }
+        }
+    }
+    pclose(ps);
+    return YES;
+}
+
+/* --------------------------------------------------------------------------
+ * Appearance of a verdict.
+ * ------------------------------------------------------------------------ */
+
+static NSColor *levelTextColor(NSInteger level)
+{
+    if (level >= ProcessHealthLevelProblem) {
+        return [NSColor colorWithCalibratedRed:0.62 green:0.05 blue:0.05 alpha:1.0];
+    }
+    if (level >= ProcessHealthLevelWatch) {
+        return [NSColor colorWithCalibratedRed:0.60 green:0.34 blue:0.0 alpha:1.0];
+    }
+    return [NSColor controlTextColor];
+}
+
+/* A dot in the leftmost column, so a problem is visible without reading. */
+static NSImage *levelImage(NSInteger level)
+{
+    static NSImage *problemDot = nil;
+    static NSImage *watchDot = nil;
+
+    if (level < ProcessHealthLevelWatch) {
+        return nil;
+    }
+    BOOL problem = (level >= ProcessHealthLevelProblem);
+    if (problem && problemDot != nil) {
+        return problemDot;
+    }
+    if (!problem && watchDot != nil) {
+        return watchDot;
+    }
+
+    NSColor *color = problem
+        ? [NSColor colorWithCalibratedRed:0.80 green:0.10 blue:0.10 alpha:1.0]
+        : [NSColor colorWithCalibratedRed:0.95 green:0.65 blue:0.10 alpha:1.0];
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(10.0, 10.0)];
+    [image lockFocus];
+    NSBezierPath *circle =
+        [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(1.0, 1.0, 8.0, 8.0)];
+    [color setFill];
+    [circle fill];
+    [[NSColor colorWithCalibratedWhite:0.25 alpha:0.6] setStroke];
+    [circle setLineWidth:0.5];
+    [circle stroke];
+    [image unlockFocus];
+
+    if (problem) {
+        problemDot = image;
+    } else {
+        watchDot = image;
+    }
+    return image;
+}
+
+/* The drawer's content view.  The drawer resizes it to whatever height the
+ * window leaves, so the layout is recomputed rather than autoresized. */
+@interface ProcessesDrawerView : NSView
+{
+    /* The controller outlives every view it owns. */
+    __unsafe_unretained ProcessesController *_layoutOwner;
+}
+- (void)setLayoutOwner:(ProcessesController *)owner;
+@end
+
+@implementation ProcessesDrawerView
+
+- (void)setLayoutOwner:(ProcessesController *)owner
+{
+    _layoutOwner = owner;
+}
+
+- (void)setFrameSize:(NSSize)size
+{
+    [super setFrameSize:size];
+    [_layoutOwner layoutDrawerContent];
+}
+
+/* The drawer's box sets the frame directly, which does not go through
+ * -setFrameSize:. */
+- (void)setFrame:(NSRect)frame
+{
+    [super setFrame:frame];
+    [_layoutOwner layoutDrawerContent];
+}
+
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    [_layoutOwner layoutDrawerContent];
+}
+
+@end
+
+/* ------------------------------------------------------------------------ */
 
 @implementation ProcessesController
 
@@ -167,9 +660,12 @@ static ProcessesController *sharedController = nil;
     self = [super init];
     if (self) {
         _processes = [[NSMutableArray alloc] init];
+        _visibleProcesses = [NSArray array];
         _processesLock = [[NSLock alloc] init];
         _refreshInterval = 5.0; // Refresh every 5 seconds
-        _prevCpuTimes = [[NSMutableDictionary alloc] init];
+        _history = [[ProcessHistory alloc] init];
+        _totalMemoryKB = getTotalSystemMemoryKB();
+        [_history setTotalMemoryKB:_totalMemoryKB];
         _searchFilter = @"";
     }
     return self;
@@ -218,657 +714,421 @@ static ProcessesController *sharedController = nil;
         return;
     }
     _isRefreshing = YES;
-    PC_INFO(@"refreshProcesses entered");
-
-    // Snapshot previous CPU times safely
-    NSMutableDictionary *prevCpuSnapshot = nil;
-    [_processesLock lock];
-    prevCpuSnapshot = [NSMutableDictionary dictionaryWithDictionary:_prevCpuTimes];
-    [_processesLock unlock];
+    PC_DBG(@"refreshProcesses entered");
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        PC_DBG(@"background worker started");
-        PC_DBG(@"background refresh starting");
         NSMutableArray *newProcesses = [[NSMutableArray alloc] init];
-        NSMutableDictionary *updatedCpuTimes = [NSMutableDictionary dictionaryWithDictionary:prevCpuSnapshot];
+        BOOL truncated = NO;
 
-        // Get system info for calculations
-        long totalMemory = getTotalSystemMemoryKB();
-        PC_DBG(@"totalMemoryKB=%ld", totalMemory);
-
-        DIR *procDir = opendir("/proc");
-        if (procDir) {
-            PC_DBG(@"Using /proc for enumeration");
-            struct dirent *entry;
-            int procDirEntries = 0;
-            int procAdded = 0;
-#if !PROCESSES_DEBUG
-            (void)procDirEntries; (void)procAdded;
-#endif
-            NSTimeInterval startTime = [[NSDate date] timeIntervalSince1970];
-            double maxDuration = 3.0; // seconds
-            while ((entry = readdir(procDir)) != NULL) {
-                procDirEntries++;
-                // Stop if we've been running for too long to avoid pegging CPU
-                if (([[NSDate date] timeIntervalSince1970] - startTime) > maxDuration) {
-                    break;
-                }
-                // Check if entry is a number (PID)
-                char *endptr;
-                int pid = (int)strtol(entry->d_name, &endptr, 10);
-                if (*endptr == '\0' && pid > 0) {
-                    // Read /proc/pid/stat
-                    char statPath[256];
-                    snprintf(statPath, sizeof(statPath), "/proc/%d/stat", pid);
-
-                    FILE *statFile = fopen(statPath, "r");
-                    if (statFile) {
-                        char statLine[1024];
-                        if (fgets(statLine, sizeof(statLine), statFile)) {
-                            ProcessInfo *info = [[ProcessInfo alloc] init];
-                            info.pid = pid;
-
-                            // Parse stat line: pid (comm) state ppid ... uid vsize rss ...
-                            char comm[256];
-
-                            // Simplified parsing - find the fields we need
-                            int parsedPid, parsedPpid;
-                            unsigned long parsedVsize, parsedRss;
-                            char parsedState;
-                            sscanf(statLine, "%d (%[^)]) %c %d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*d %*d %*d %*d %*d %*d %*u %*u %*d %*u %lu %lu", 
-                                   &parsedPid, comm, &parsedState, &parsedPpid, &parsedVsize, &parsedRss);
-
-                            info.pid = parsedPid;
-                            info.ppid = parsedPpid;
-                            info.state = [NSString stringWithFormat:@"%c", parsedState];
-                            // Parse fields after the closing parenthesis in /proc/[pid]/stat
-                            char *rparen = strrchr(statLine, ')');
-                            unsigned long utime = 0, stime = 0;
-                            unsigned long parsedVsizeUL = 0;
-                            long parsedRssLong = 0;
-                            int parsedPpidLocal = 0;
-                            if (rparen) {
-                                char *rest = rparen + 2; // skip ") "
-                                int field = 1;
-                                char *saveptr = NULL;
-                                char *token = strtok_r(rest, " ", &saveptr);
-                                while (token) {
-                                    if (field == 1) {
-                                        // state
-                                    } else if (field == 2) {
-                                        parsedPpidLocal = atoi(token);
-                                    } else if (field == 12) {
-                                        utime = strtoul(token, NULL, 10);
-                                    } else if (field == 13) {
-                                        stime = strtoul(token, NULL, 10);
-                                    } else if (field == 21) {
-                                        parsedVsizeUL = strtoul(token, NULL, 10);
-                                    } else if (field == 22) {
-                                        parsedRssLong = atol(token);
-                                        break; // we have what we need
-                                    }
-                                    token = strtok_r(NULL, " ", &saveptr);
-                                    field++;
-                                }
-                            }
-
-                            info.pid = parsedPid;
-                            info.ppid = parsedPpidLocal ? parsedPpidLocal : parsedPpid;
-                            info.state = [NSString stringWithFormat:@"%c", parsedState];
-                            long pageSize = sysconf(_SC_PAGESIZE);
-                            info.virtualMemory = parsedVsizeUL / 1024; // KB
-                            info.residentMemory = (parsedRssLong * pageSize) / 1024; // convert pages -> KB
-
-                            // Read command line
-                            BOOL hasCmdline = NO;
-                            char cmdPath[256];
-                            snprintf(cmdPath, sizeof(cmdPath), "/proc/%d/cmdline", pid);
-                            FILE *cmdFile = fopen(cmdPath, "r");
-                            if (cmdFile) {
-                                char cmdLine[1024];
-                                size_t len = fread(cmdLine, 1, sizeof(cmdLine) - 1, cmdFile);
-                                if (len > 0) {
-                                    hasCmdline = YES;
-                                    cmdLine[len] = '\0';
-                                    // Replace null bytes with spaces
-                                    for (size_t i = 0; i < len; i++) {
-                                        if (cmdLine[i] == '\0') cmdLine[i] = ' ';
-                                    }
-                                    info.command = [NSString stringWithUTF8String:cmdLine];
-                                }
-                                fclose(cmdFile);
-                            }
-
-                            // Kernel threads have empty cmdline - skip them
-                            if (!hasCmdline) {
-                                fclose(statFile);
-                                continue;
-                            }
-
-                            if (!info.command || [info.command length] == 0) {
-                                info.command = [NSString stringWithUTF8String:comm];
-                            }
-
-                            // Compute CPU% using previous samples
-                            NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-                            unsigned long totalTicks = utime + stime;
-                            NSString *pidKey = [NSString stringWithFormat:@"%d", info.pid];
-                            NSDictionary *prev = [prevCpuSnapshot objectForKey:pidKey];
-                            float cpuPercent = 0.0;
-                            long ticksPerSec = sysconf(_SC_CLK_TCK);
-                            if (prev) {
-                                unsigned long prevTicks = [[prev objectForKey:@"totalTicks"] unsignedLongValue];
-                                NSTimeInterval prevTime = [[prev objectForKey:@"time"] doubleValue];
-                                NSTimeInterval dt = now - prevTime;
-                                if (dt > 0 && totalTicks >= prevTicks) {
-                                    double dTicks = (double)(totalTicks - prevTicks);
-                                    double dSeconds = dTicks / (double)ticksPerSec;
-                                    cpuPercent = (float)((dSeconds / dt) * 100.0);
-                                    if (cpuPercent < 0) cpuPercent = 0.0;
-                                }
-                            }
-                            NSDictionary *sample = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithUnsignedLong:totalTicks], @"totalTicks", [NSNumber numberWithDouble:now], @"time", nil];
-                            [updatedCpuTimes setObject:sample forKey:pidKey];
-                            info.cpu = cpuPercent;
-
-                            // Memory percentage
-                            if (totalMemory > 0) {
-                                long rss_kb = info.residentMemory; // already KB
-                                info.memory = (float)(rss_kb * 100.0 / totalMemory);
-                            } else {
-                                info.memory = 0.0;
-                            }
-
-                            // Read uid from /proc/<pid>/status and map to username
-                            char statusPath[256];
-                            snprintf(statusPath, sizeof(statusPath), "/proc/%d/status", pid);
-                            FILE *statusFile = fopen(statusPath, "r");
-                            if (statusFile) {
-                                char sline[256];
-                                while (fgets(sline, sizeof(sline), statusFile)) {
-                                    uid_t uid;
-                                    if (sscanf(sline, "Uid: %u", &uid) == 1) {
-                                        struct passwd *pw = getpwuid(uid);
-                                        if (pw) {
-                                            info.user = [NSString stringWithUTF8String:pw->pw_name];
-                                        } else {
-                                            info.user = [NSString stringWithFormat:@"%u", uid];
-                                        }
-                                        break;
-                                    }
-                                }
-                                fclose(statusFile);
-                            }
-                            if (!info.user) {
-                                info.user = @"unknown";
-                            }
-
-                            [newProcesses addObject:info];
-                            procAdded++;
-                        }
-                        fclose(statFile);
-                    }
-                }
-            }
-            PC_DBG(@"/proc scanned entries=%d added=%d", procDirEntries, procAdded);
-            if ([newProcesses count] == 0) {
-                PC_INFO(@"/proc scan yielded no processes; attempting sysctl fallback");
-                // Fall back to sysctl KERN_PROC_ALL when /proc yields nothing
-#if defined(CTL_KERN) && defined(KERN_PROC) && defined(KERN_PROC_ALL) && __has_include(<sys/user.h>)
-                int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
-                size_t len2 = 0;
-                if (sysctl(mib, 4, NULL, &len2, NULL, 0) == 0 && len2 > 0) {
-                    struct kinfo_proc *procs2 = malloc(len2);
-                    if (procs2) {
-                        if (sysctl(mib, 4, procs2, &len2, NULL, 0) == 0) {
-                            int count2 = (int)(len2 / sizeof(struct kinfo_proc));
-                            PC_DBG(@"sysctl returned %d entries (fallback)", count2);
-                            long pageSize2 = sysconf(_SC_PAGESIZE);
-                            long ticksPerSec2 = sysconf(_SC_CLK_TCK);
-                            for (int i = 0; i < count2; i++) {
-                                struct kinfo_proc *p = &procs2[i];
-                                if (p->ki_flag & P_SYSTEM) continue;
-                                ProcessInfo *info = [[ProcessInfo alloc] init];
-                                info.pid = p->ki_pid;
-                                info.ppid = p->ki_ppid;
-                                info.command = (p->ki_comm[0] != '\0') ? [NSString stringWithUTF8String:p->ki_comm] : @"";
-                                struct passwd *pw = getpwuid(p->ki_uid);
-                                if (pw) info.user = [NSString stringWithUTF8String:pw->pw_name]; else info.user = @"unknown";
-                                info.residentMemory = (long)((long)p->ki_rssize * pageSize2 / 1024); // KB
-#ifdef __OpenBSD__
-                                info.virtualMemory = 0;
-#else
-                                info.virtualMemory = (long)(p->ki_size / 1024);
-#endif
-                                // CPU
-#ifdef __OpenBSD__
-                                unsigned long utime_ticks = p->p_uticks;
-                                unsigned long stime_ticks = p->p_sticks;
-#else
-                                unsigned long utime_ticks = (unsigned long)(p->ki_rusage.ru_utime.tv_sec * ticksPerSec2 + p->ki_rusage.ru_utime.tv_usec * ticksPerSec2 / 1000000);
-                                unsigned long stime_ticks = (unsigned long)(p->ki_rusage.ru_stime.tv_sec * ticksPerSec2 + p->ki_rusage.ru_stime.tv_usec * ticksPerSec2 / 1000000);
-#endif
-                                unsigned long totalTicks = utime_ticks + stime_ticks;
-                                NSTimeInterval now2 = [[NSDate date] timeIntervalSince1970];
-                                NSString *pidKey2 = [NSString stringWithFormat:@"%d", info.pid];
-                                NSDictionary *prev2 = [prevCpuSnapshot objectForKey:pidKey2];
-                                float cpuPercent2 = 0.0;
-                                if (prev2) {
-                                    unsigned long prevTicks = [[prev2 objectForKey:@"totalTicks"] unsignedLongValue];
-                                    NSTimeInterval prevTime = [[prev2 objectForKey:@"time"] doubleValue];
-                                    NSTimeInterval dt = now2 - prevTime;
-                                    if (dt > 0 && totalTicks >= prevTicks) {
-                                        double dTicks = (double)(totalTicks - prevTicks);
-                                        double dSeconds = dTicks / (double)ticksPerSec2;
-                                        cpuPercent2 = (float)((dSeconds / dt) * 100.0);
-                                        if (cpuPercent2 < 0) cpuPercent2 = 0.0;
-                                    }
-                                }
-                                NSDictionary *sample2 = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithUnsignedLong:totalTicks], @"totalTicks", [NSNumber numberWithDouble:now2], @"time", nil];
-                                [updatedCpuTimes setObject:sample2 forKey:pidKey2];
-                                info.cpu = cpuPercent2;
-                                if (totalMemory > 0) info.memory = (float)(info.residentMemory * 100.0 / totalMemory); else info.memory = 0.0;
-                                [newProcesses addObject:info];
-                            }
-                        } else {
-                            PC_INFO(@"sysctl second call failed (fallback)");
-                        }
-                        free(procs2);
-                    } else {
-                        PC_INFO(@"Failed to allocate memory for process list (fallback)");
-                    }
-                } else {
-                    PC_INFO(@"Failed to get process buffer size via sysctl or no processes found (fallback)");
-                }
-#endif
-            }
-
-            closedir(procDir);
-        } else {
-#if defined(CTL_KERN) && defined(KERN_PROC) && defined(KERN_PROC_ALL) && __has_include(<sys/user.h>)
-            // /proc not available - use sysctl
-            PC_DBG(@"/proc not available - attempting sysctl KERN_PROC_ALL");
-            int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
-            size_t len = 0;
-            if (sysctl(mib, 4, NULL, &len, NULL, 0) == 0 && len > 0) {
-                struct kinfo_proc *procs = malloc(len);
-                if (procs) {
-                    if (sysctl(mib, 4, procs, &len, NULL, 0) == 0) {
-                        int count = (int)(len / sizeof(struct kinfo_proc));
-                        PC_DBG(@"sysctl returned %d entries", count);
-                        long pageSize = sysconf(_SC_PAGESIZE);
-                        long ticksPerSec = sysconf(_SC_CLK_TCK);
-                        for (int i = 0; i < count; i++) {
-                            struct kinfo_proc *p = &procs[i];
-                            if (p->ki_flag & P_SYSTEM) continue;
-                            ProcessInfo *info = [[ProcessInfo alloc] init];
-                            info.pid = p->ki_pid;
-                            info.ppid = p->ki_ppid;
-
-                            // Command
-                            if (p->ki_comm[0] != '\0') {
-                                info.command = [NSString stringWithUTF8String:p->ki_comm];
-                            } else {
-                                info.command = @"";
-                            }
-
-                            // User
-                            struct passwd *pw = getpwuid(p->ki_uid);
-                            if (pw) info.user = [NSString stringWithUTF8String:pw->pw_name];
-                            else info.user = @"unknown";
-
-                            // Memory
-                            info.residentMemory = (long)((long)p->ki_rssize * pageSize / 1024); // KB
-#ifdef __OpenBSD__
-                            info.virtualMemory = 0;
-#else
-                            info.virtualMemory = (long)(p->ki_size / 1024);
-#endif
-
-                            // State
-                            char stateChar = '?';
-                            switch (p->ki_stat) {
-#ifdef __OpenBSD__
-                                // OpenBSD does not expose state constants in userspace;
-                                // use numeric values: 2=SRUN, 3=SSLEEP, 4=SSTOP, 5=SZOMB
-                                case 5: stateChar = 'Z'; break;
-                                case 4: stateChar = 'T'; break;
-                                case 2: stateChar = 'R'; break;
-                                case 3: stateChar = 'S'; break;
-                                default: stateChar = 'R'; break;
-#else
-                                case SZOMB: stateChar = 'Z'; break;
-                                case SSTOP: stateChar = 'T'; break;
-                                case SRUN: stateChar = 'R'; break;
-                                case SSLEEP: stateChar = 'S'; break;
-                                default: stateChar = 'R'; break;
-#endif
-                            }
-                            info.state = [NSString stringWithFormat:@"%c", stateChar];
-
-                            // CPU: use ki_rusage (utime + stime)
-#ifdef __OpenBSD__
-                            unsigned long utime_ticks = p->p_uticks;
-                            unsigned long stime_ticks = p->p_sticks;
-#else
-                            unsigned long utime_ticks = (unsigned long)(p->ki_rusage.ru_utime.tv_sec * ticksPerSec + p->ki_rusage.ru_utime.tv_usec * ticksPerSec / 1000000);
-                            unsigned long stime_ticks = (unsigned long)(p->ki_rusage.ru_stime.tv_sec * ticksPerSec + p->ki_rusage.ru_stime.tv_usec * ticksPerSec / 1000000);
-#endif
-                            unsigned long totalTicks = utime_ticks + stime_ticks;
-
-                            NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-                            NSString *pidKey = [NSString stringWithFormat:@"%d", info.pid];
-                            NSDictionary *prev = [prevCpuSnapshot objectForKey:pidKey];
-                            float cpuPercent = 0.0;
-                            if (prev) {
-                                unsigned long prevTicks = [[prev objectForKey:@"totalTicks"] unsignedLongValue];
-                                NSTimeInterval prevTime = [[prev objectForKey:@"time"] doubleValue];
-                                NSTimeInterval dt = now - prevTime;
-                                if (dt > 0 && totalTicks >= prevTicks) {
-                                    double dTicks = (double)(totalTicks - prevTicks);
-                                    double dSeconds = dTicks / (double)ticksPerSec;
-                                    cpuPercent = (float)((dSeconds / dt) * 100.0);
-                                    if (cpuPercent < 0) cpuPercent = 0.0;
-                                }
-                            }
-                            NSDictionary *sample = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithUnsignedLong:totalTicks], @"totalTicks", [NSNumber numberWithDouble:now], @"time", nil];
-                            [updatedCpuTimes setObject:sample forKey:pidKey];
-                            info.cpu = cpuPercent;
-
-                            // Memory percentage
-                            if (totalMemory > 0) {
-                                info.memory = (float)(info.residentMemory * 100.0 / totalMemory);
-                            } else {
-                                info.memory = 0.0;
-                            }
-
-                            [newProcesses addObject:info];
-                        }
-                    } else {
-                        PC_INFO(@"sysctl second call failed");
-                    }
-                    free(procs);
-                } else {
-                    PC_INFO(@"Failed to allocate memory for process list");
-                }
-            } else {
-                PC_INFO(@"Failed to get process buffer size via sysctl or no processes found");
-            }
-#endif
+        if (!scanProcFilesystem(newProcesses, &truncated)) {
+            PC_DBG(@"no /proc, asking sysctl");
+            scanSysctl(newProcesses);
+        } else if ([newProcesses count] == 0) {
+            PC_INFO(@"/proc yielded no processes, asking sysctl");
+            scanSysctl(newProcesses);
         }
-
-        // Fallback to parsing `ps aux` if no processes found
         if ([newProcesses count] == 0) {
-            PC_INFO(@"Falling back to parsing `ps aux`");
-            FILE *ps = popen("LC_ALL=C ps aux", "r");
-            if (ps) {
-                char line[2048];
-                // Skip header
-                if (fgets(line, sizeof(line), ps)) {
-                }
-                while (fgets(line, sizeof(line), ps)) {
-                    size_t l = strlen(line);
-                    if (l > 0 && line[l-1] == '\n') line[l-1] = '\0';
-                    @autoreleasepool {
-                        NSString *s = [NSString stringWithUTF8String:line];
-                        ProcessInfo *pi = [[ProcessInfo alloc] initWithPsLine:s];
-                        if (pi && pi.pid > 0) {
-                            if ([pi.command hasPrefix:@"["]) continue;
-                            [newProcesses addObject:pi];
-                        }
-                    }
-                }
-                pclose(ps);
-                PC_INFO(@"ps aux fallback added %lu processes", (unsigned long)[newProcesses count]);
-            } else {
-                PC_INFO(@"ps aux popen failed");
-            }
+            PC_INFO(@"falling back to parsing ps aux");
+            scanPsAux(newProcesses);
         }
+        PC_DBG(@"scanned %lu processes%@", (unsigned long)[newProcesses count],
+               truncated ? @" (cut short)" : @"");
+
+        NSDictionary *payload = [NSDictionary dictionaryWithObjectsAndKeys:
+            newProcesses, @"new",
+            [NSNumber numberWithBool:truncated], @"truncated", nil];
 
         // Apply results on main thread (or directly if app not running)
         if ([NSApp isRunning]) {
-            PC_DBG(@"scheduling apply-results on main thread newProcesses=%lu", (unsigned long)[newProcesses count]);
-            NSDictionary *payload = [NSDictionary dictionaryWithObjectsAndKeys:newProcesses, @"new", updatedCpuTimes, @"updated", nil];
-            [self performSelectorOnMainThread:@selector(_applyResultsOnMainThread:) withObject:payload waitUntilDone:NO];
+            [self performSelectorOnMainThread:@selector(_applyResultsOnMainThread:)
+                                   withObject:payload
+                                waitUntilDone:NO];
         } else {
-            // No runloop -> apply synchronously
-            [_processesLock lock];
-            PC_DBG(@"applying results synchronously (no runloop) newProcesses=%lu", (unsigned long)[newProcesses count]);
-            [_processes removeAllObjects];
-            [_processes addObjectsFromArray:newProcesses];
-            _prevCpuTimes = updatedCpuTimes;
-            [_processesLock unlock];
-
-            [_processesTableView reloadData];
-
-            [self sortProcesses];
-
-            _isRefreshing = NO;
+            [self _applyResultsOnMainThread:payload];
         }
     });
 }
 
+/* Turns the raw readings into percentages and verdicts.  Everything that
+ * needs the previous round lives here, on one thread, so the history needs no
+ * locking of its own. */
 - (void)_applyResultsOnMainThread:(NSDictionary *)payload
 {
     NSArray *newProcesses = [payload objectForKey:@"new"];
-    NSDictionary *updatedCpuTimes = [payload objectForKey:@"updated"];
-    PC_DBG(@"_applyResultsOnMainThread entered newProcesses=%lu", (unsigned long)[newProcesses count]);
+    BOOL truncated = [[payload objectForKey:@"truncated"] boolValue];
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    long ticksPerSecond = sysconf(_SC_CLK_TCK);
+
+    [_history beginRound];
+    for (ProcessInfo *info in newProcesses) {
+        if (info.usesCPUTicks) {
+            info.cpu = [_history cpuPercentForPid:info.pid
+                                            token:info.startToken
+                                       totalTicks:info.cpuTicks
+                                   ticksPerSecond:ticksPerSecond
+                                           atTime:now];
+        }
+        if (_totalMemoryKB > 0) {
+            info.memory = (float)(info.residentMemory * 100.0 / _totalMemoryKB);
+        }
+        [_history notePid:info.pid
+                    token:info.startToken
+               residentKB:info.residentMemory
+                      cpu:info.cpu
+                  threads:info.threads
+              majorFaults:info.majorFaults
+                    state:([info.state length] > 0
+                               ? [info.state characterAtIndex:0] : '?')
+                   atTime:now];
+        info.health = [_history healthForPid:info.pid];
+    }
+    /* A scan that was cut short has not seen every process, so forgetting the
+     * ones it missed would throw away their history. */
+    if (!truncated) {
+        [_history endRound];
+    }
 
     [_processesLock lock];
     [_processes removeAllObjects];
     [_processes addObjectsFromArray:newProcesses];
-    _prevCpuTimes = [NSMutableDictionary dictionaryWithDictionary:updatedCpuTimes];
     [_processesLock unlock];
 
-    [_processesTableView reloadData];
-
-    PC_INFO(@"applied newProcesses count=%lu (from _applyResultsOnMainThread)", (unsigned long)[_processes count]);
-
     [self sortProcesses];
+    if (_infoDrawer != nil && [_infoDrawer state] != NSDrawerClosedState) {
+        [self updateInfoDrawer];
+    }
+    PC_DBG(@"applied %lu processes", (unsigned long)[_processes count]);
 
     _isRefreshing = NO;
 }
 
-- (NSArray *)_filteredProcesses
+/* --- what the table shows ---------------------------------------------- */
+
+- (void)updateVisibleProcesses
 {
-    if (_searchFilter == nil || [_searchFilter length] == 0) {
-        return _processes;
-    }
-    NSMutableArray *filtered = [NSMutableArray array];
-    NSString *lowerFilter = [_searchFilter lowercaseString];
+    /* Read before the list is replaced: the same process should stay
+     * selected across a refresh, not whatever moves into its row. */
+    ProcessInfo *selected = [self selectedProcess];
+    NSMutableArray *visible = [NSMutableArray arrayWithCapacity:[_processes count]];
+    NSString *filter = ([_searchFilter length] > 0)
+                           ? [_searchFilter lowercaseString] : nil;
+
     for (ProcessInfo *info in _processes) {
-        if ([[info.command lowercaseString] containsString:lowerFilter] ||
-            [[info.user lowercaseString] containsString:lowerFilter]) {
-            [filtered addObject:info];
+        if (_problemsOnly && [info healthLevel] < ProcessHealthLevelWatch) {
+            continue;
+        }
+        if (filter != nil) {
+            BOOL matches =
+                [[info.command lowercaseString] containsString:filter] ||
+                [[info.user lowercaseString] containsString:filter] ||
+                [[NSString stringWithFormat:@"%d", info.pid] containsString:filter] ||
+                [[[info statusText] lowercaseString] containsString:filter];
+            if (!matches) {
+                continue;
+            }
+        }
+        [visible addObject:info];
+    }
+
+    _visibleProcesses = visible;
+    [self updateSummary];
+
+    [_processesTableView reloadData];
+    if (selected != nil) {
+        NSUInteger index = [_visibleProcesses indexOfObjectIdenticalTo:selected];
+        if (index != NSNotFound) {
+            [_processesTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                            byExtendingSelection:NO];
         }
     }
-    return filtered;
+}
+
+- (void)updateSummary
+{
+    NSUInteger problems = 0, watches = 0;
+    for (ProcessInfo *info in _processes) {
+        NSInteger level = [info healthLevel];
+        if (level >= ProcessHealthLevelProblem) {
+            problems++;
+        } else if (level >= ProcessHealthLevelWatch) {
+            watches++;
+        }
+    }
+
+    NSMutableString *text = [NSMutableString string];
+    if ([_visibleProcesses count] != [_processes count]) {
+        [text appendFormat:@"%lu of %lu processes shown",
+                           (unsigned long)[_visibleProcesses count],
+                           (unsigned long)[_processes count]];
+    } else {
+        [text appendFormat:@"%lu processes", (unsigned long)[_processes count]];
+    }
+    if (problems == 0 && watches == 0) {
+        [text appendString:@" - nothing looks wrong"];
+    } else {
+        [text appendString:@" - "];
+        if (problems > 0) {
+            [text appendFormat:@"%lu problem%@", (unsigned long)problems,
+                               (problems == 1 ? @"" : @"s")];
+        }
+        if (problems > 0 && watches > 0) {
+            [text appendString:@", "];
+        }
+        if (watches > 0) {
+            [text appendFormat:@"%lu worth watching", (unsigned long)watches];
+        }
+    }
+
+    [_summaryLabel setStringValue:text];
+    [_summaryLabel setTextColor:(problems > 0 ? levelTextColor(ProcessHealthLevelProblem)
+                                              : [NSColor controlTextColor])];
+}
+
+- (ProcessInfo *)selectedProcess
+{
+    NSInteger row = [_processesTableView selectedRow];
+    if (row < 0 || row >= (NSInteger)[_visibleProcesses count]) {
+        return nil;
+    }
+    return [_visibleProcesses objectAtIndex:row];
 }
 
 - (void)controlTextDidChange:(NSNotification *)notification
 {
-    if ([notification object] == _searchField) {
-        _searchFilter = [_searchField stringValue];
-        [_processesTableView reloadData];
+    if ([notification object] != _searchField) {
+        return;
     }
+    /* While the field is being edited its cell still holds the value from
+     * before the keystroke, so the filter has to come from the field editor
+     * or it lags one character behind. */
+    NSText *editor = [[notification userInfo] objectForKey:@"NSFieldEditor"];
+    NSString *text = (editor != nil) ? [editor string] : [_searchField stringValue];
+    _searchFilter = (text != nil) ? [text copy] : @"";
+    [self updateVisibleProcesses];
 }
 
 - (void)clearSearchFilter
 {
     _searchFilter = @"";
-    [_processesTableView reloadData];
+    [self updateVisibleProcesses];
 }
 
-- (void)handleSearchFieldClear:(NSNotification *)notification
+/* The search field's own action fires when Return is pressed and when its
+ * cancel button empties it; neither sends a text-did-change notification. */
+- (IBAction)searchFieldAction:(id)sender
 {
-    [self clearSearchFilter];
+    NSString *text = [_searchField stringValue];
+    _searchFilter = (text != nil) ? [text copy] : @"";
+    [self updateVisibleProcesses];
+}
+
+- (IBAction)toggleProblemsOnly:(id)sender
+{
+    _problemsOnly = ([_problemsOnlyCheckbox state] == NSOnState);
+    [self updateVisibleProcesses];
+}
+
+- (IBAction)refreshNow:(id)sender
+{
+    [self refreshProcesses];
+}
+
+/* --- acting on a process ----------------------------------------------- */
+
+/* Sends a signal, asking for the rights when the process belongs to somebody
+ * else.  Returns whether the signal went out. */
+- (BOOL)sendSignal:(int)signalNumber toProcess:(ProcessInfo *)info
+{
+    if (info == nil) {
+        return NO;
+    }
+    if (kill(info.pid, signalNumber) == 0) {
+        return YES;
+    }
+    if (errno != EPERM) {
+        PC_INFO(@"signal %d to pid %d failed: %s", signalNumber, info.pid,
+                strerror(errno));
+        return NO;
+    }
+
+    char pidString[16];
+    char signalString[16];
+    snprintf(pidString, sizeof(pidString), "%d", info.pid);
+    snprintf(signalString, sizeof(signalString), "-%d", signalNumber);
+    pid_t child = fork();
+    if (child == 0) {
+        execlp("sudo", "sudo", "-A", "-E", "kill", signalString, pidString,
+               (char *)NULL);
+        _exit(127);
+    } else if (child < 0) {
+        return NO;
+    }
+    int status = 0;
+    waitpid(child, &status, 0);
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+- (void)actOnSelectionWithSignal:(int)signalNumber
+{
+    ProcessInfo *info = [self selectedProcess];
+    if (info == nil) {
+        return;
+    }
+    [self sendSignal:signalNumber toProcess:info];
+    /* Show the result rather than the state from before the signal. */
+    [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:0.5];
+}
+
+- (IBAction)quitProcess:(id)sender
+{
+    [self actOnSelectionWithSignal:SIGTERM];
 }
 
 - (IBAction)forceQuitProcess:(id)sender
 {
-    NSInteger selectedRow = [_processesTableView selectedRow];
-    if (selectedRow >= 0) {
-        [_processesLock lock];
-        ProcessInfo *info = nil;
-        if (selectedRow < [_processes count]) {
-            info = [_processes objectAtIndex:selectedRow];
-        }
-        [_processesLock unlock];
-        
-        if (info) {
-            // First try to send SIGKILL directly
-            if (kill(info.pid, SIGKILL) == -1) {
-                if (errno == EPERM) {
-                    // Permission denied - try using sudo
-                    char pidstr[16];
-                    snprintf(pidstr, sizeof(pidstr), "%d", info.pid);
-                    pid_t child = fork();
-                    if (child == 0) {
-                        // In child
-                        execlp("sudo", "sudo", "-A", "-E", "kill", "-9", pidstr, (char *)NULL);
-                        _exit(127); // exec failed
-                    } else if (child > 0) {
-                        int status = 0;
-                        waitpid(child, &status, 0);
-                    } else {
-                        // fork failed
-                    }
-                } else {
-                    // Other errors - nothing to do
-                }
-            }
-            
-            // Refresh after a short delay
-            [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:0.5];
-        }
+    ProcessInfo *info = [self selectedProcess];
+    if (info == nil) {
+        return;
     }
+    /* Killing a process outright loses whatever it had not saved, so it is
+     * worth one question. */
+    NSInteger answer = NSRunAlertPanel(
+        @"Force Quit Process",
+        @"%@ (%d) will be killed immediately. Anything it has not saved is "
+         "lost, and programs it belongs to may misbehave afterwards.",
+        @"Cancel", @"Force Quit", nil, [info displayName], info.pid);
+    if (answer == NSAlertDefaultReturn) {
+        return;
+    }
+    [self actOnSelectionWithSignal:SIGKILL];
 }
+
+- (IBAction)suspendProcess:(id)sender
+{
+    [self actOnSelectionWithSignal:SIGSTOP];
+}
+
+- (IBAction)resumeProcess:(id)sender
+{
+    [self actOnSelectionWithSignal:SIGCONT];
+}
+
+- (IBAction)showProcessInfo:(id)sender
+{
+    if ([self selectedProcess] == nil) {
+        return;
+    }
+    [self ensureInfoDrawer];
+    [self updateInfoDrawer];
+    [_infoDrawer open];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    SEL action = [item action];
+    if (action == @selector(showProcessInfo:) ||
+        action == @selector(quitProcess:) ||
+        action == @selector(forceQuitProcess:) ||
+        action == @selector(suspendProcess:) ||
+        action == @selector(resumeProcess:)) {
+        return ([self selectedProcess] != nil);
+    }
+    return YES;
+}
+
+/* --- sorting ------------------------------------------------------------ */
 
 - (void)sortProcesses
 {
-    if (_sortDescriptors && [_sortDescriptors count] > 0) {
-        [_processes sortUsingDescriptors:_sortDescriptors];
+    if ([_sortDescriptors count] > 0) {
+        NSArray *descriptors = _sortDescriptors;
+        /* Sorting by severity alone leaves the order within a severity to
+         * chance; the busiest process is the interesting one there. */
+        if ([[[_sortDescriptors objectAtIndex:0] key] isEqualToString:@"healthLevel"]) {
+            NSSortDescriptor *byCPU = [[NSSortDescriptor alloc] initWithKey:@"cpu"
+                                                                  ascending:NO];
+            descriptors = [_sortDescriptors arrayByAddingObject:byCPU];
+        }
+        [_processesLock lock];
+        [_processes sortUsingDescriptors:descriptors];
+        [_processesLock unlock];
     }
+    [self updateVisibleProcesses];
 }
 
 // NSTableViewDataSource
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
-    [_processesLock lock];
-    NSArray *displayProcesses = [self _filteredProcesses];
-    NSInteger count = [displayProcesses count];
-    [_processesLock unlock];
-    PC_DBG(@"numberOfRowsInTableView returning %ld", (long)count);
-    return count;
+    return (NSInteger)[_visibleProcesses count];
 }
 
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
 {
-    [_processesLock lock];
-    NSArray *displayProcesses = [self _filteredProcesses];
-    if (row < 0 || row >= [displayProcesses count]) {
-        [_processesLock unlock];
+    if (row < 0 || row >= (NSInteger)[_visibleProcesses count]) {
         return @"";
     }
-    ProcessInfo *info = [displayProcesses objectAtIndex:row];
-    [_processesLock unlock];
-    
+    ProcessInfo *info = [_visibleProcesses objectAtIndex:row];
     NSString *identifier = [tableColumn identifier];
-    NSString *result = @"";
-    
-    if ([identifier isEqualToString:@"pid"]) {
-        result = [NSString stringWithFormat:@"%d", info.pid];
-    } else if ([identifier isEqualToString:@"user"]) {
-        result = info.user ? info.user : @"";
-    } else if ([identifier isEqualToString:@"cpu"]) {
-        result = [NSString stringWithFormat:@"%.1f", info.cpu];
-    } else if ([identifier isEqualToString:@"memory"]) {
-        result = [NSString stringWithFormat:@"%.1f", info.memory];
-    } else if ([identifier isEqualToString:@"command"]) {
-        result = info.command ? info.command : @"";
-    } else if ([identifier isEqualToString:@"state"]) {
-        result = info.state ? info.state : @"";
+
+    if ([identifier isEqualToString:@"health"]) {
+        return levelImage([info healthLevel]);
     }
-    
-    return result;
+    if ([identifier isEqualToString:@"pid"]) {
+        return [NSString stringWithFormat:@"%d", info.pid];
+    }
+    if ([identifier isEqualToString:@"user"]) {
+        return info.user ? info.user : @"";
+    }
+    if ([identifier isEqualToString:@"cpu"]) {
+        return [NSString stringWithFormat:@"%.1f", info.cpu];
+    }
+    if ([identifier isEqualToString:@"memory"]) {
+        return ProcessFormatMemoryKB(info.residentMemory);
+    }
+    if ([identifier isEqualToString:@"status"]) {
+        return [info statusText];
+    }
+    if ([identifier isEqualToString:@"command"]) {
+        return info.command ? info.command : @"";
+    }
+    return @"";
 }
 
 // NSTableViewDelegate
 - (void)tableViewSelectionDidChange:(NSNotification *)notification
 {
-    NSInteger selectedRow = [_processesTableView selectedRow];
-    if (selectedRow >= 0) {
-        [_processesLock lock];
-        NSArray *displayProcesses = [self _filteredProcesses];
-        ProcessInfo *info = nil;
-        if (selectedRow < [displayProcesses count]) {
-            info = [displayProcesses objectAtIndex:selectedRow];
-        }
-        [_processesLock unlock];
-        
-        if (info) {
-            // Create drawer lazily if needed
-            if (!_infoDrawer) {
-                _infoDrawer = [[NSDrawer alloc] initWithContentSize:NSMakeSize(300, 400) preferredEdge:NSMaxXEdge];
-                [_infoDrawer setParentWindow:_mainWindow];
-                [_infoDrawer setDelegate:self];
-                
-                NSView *drawerContent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 300, 400)];
-                [_infoDrawer setContentView:drawerContent];
-                
-                // Info text field
-                _infoTextField = [[NSTextField alloc] initWithFrame:NSMakeRect(10, 50, 280, 320)];
-                [_infoTextField setEditable:NO];
-                [_infoTextField setSelectable:YES];
-                [_infoTextField setBordered:YES];
-                [_infoTextField setBezeled:YES];
-                [[_infoDrawer contentView] addSubview:_infoTextField];
-                
-                // Force quit button
-                _forceQuitButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 10, 100, 24)];
-                [_forceQuitButton setTitle:@"Force Quit"];
-                [_forceQuitButton setTarget:self];
-                [_forceQuitButton setAction:@selector(forceQuitProcess:)];
-                [_forceQuitButton setEnabled:NO];
-                [[_infoDrawer contentView] addSubview:_forceQuitButton];
-            }
-            
-            // Populate drawer with safe access
-            NSMutableString *infoString = [NSMutableString string];
-            [infoString appendString:@"Process Information:\n\n"];
-            [infoString appendFormat:@"PID: %d\n", info.pid];
-            [infoString appendFormat:@"User: %@\n", (info.user ? info.user : @"N/A")];
-            [infoString appendFormat:@"CPU: %.1f%%\n", info.cpu];
-            [infoString appendFormat:@"Memory: %.1f%%\n", info.memory];
-            [infoString appendFormat:@"State: %@\n", (info.state ? info.state : @"N/A")];
-            [infoString appendFormat:@"Command: %@\n", (info.command ? info.command : @"N/A")];
-            
-            [_infoTextField setStringValue:infoString];
-
-            
-            [_forceQuitButton setEnabled:YES];
-            [_infoDrawer open];
-        } else {
-            [_processesLock unlock];
-            [_forceQuitButton setEnabled:NO];
-            if (_infoDrawer) [_infoDrawer close];
-        }
-    } else {
-        [_forceQuitButton setEnabled:NO];
-        if (_infoDrawer) [_infoDrawer close];
+    ProcessInfo *info = [self selectedProcess];
+    [self setActionButtonsEnabled:(info != nil)];
+    /* GNUstep revalidates only the submenus that are open on screen, so the
+     * Process menu would stay greyed out until it is opened twice - and a
+     * menu item the global menu bar believes to be disabled is dropped. */
+    for (NSMenuItem *item in [[NSApp mainMenu] itemArray]) {
+        [[item submenu] update];
+    }
+    if (info != nil && _infoDrawer != nil &&
+        [_infoDrawer state] != NSDrawerClosedState) {
+        [self updateInfoDrawer];
     }
     [_processesTableView setNeedsDisplay:YES];
 }
 
 - (void)tableView:(NSTableView *)tableView willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
 {
-    [cell setDrawsBackground:NO];
-
+    if ([cell respondsToSelector:@selector(setDrawsBackground:)]) {
+        [cell setDrawsBackground:NO];
+    }
+    if (![cell respondsToSelector:@selector(setTextColor:)]) {
+        return;
+    }
     if ([tableView isRowSelected:row]) {
         [cell setTextColor:[NSColor selectedTextColor]];
-    } else {
-        [cell setTextColor:[NSColor controlTextColor]];
+        return;
     }
+    NSInteger level = 0;
+    if (row >= 0 && row < (NSInteger)[_visibleProcesses count]) {
+        level = [[_visibleProcesses objectAtIndex:row] healthLevel];
+    }
+    [cell setTextColor:levelTextColor(level)];
 }
 
 - (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)tableColumn
@@ -879,27 +1139,329 @@ static ProcessesController *sharedController = nil;
 - (void)tableView:(NSTableView *)tableView sortDescriptorsDidChange:(NSArray *)oldDescriptors
 {
     _sortDescriptors = [tableView sortDescriptors];
-    [_processesLock lock];
     [self sortProcesses];
-    [_processesLock unlock];
-    [_processesTableView reloadData];
 }
 
-// NSApplicationDelegate
+- (void)tableViewDoubleClick:(id)sender
+{
+    [self showProcessInfo:sender];
+}
+
+/* --- the inspector ------------------------------------------------------ */
+
+- (NSString *)nameForPid:(int)pid
+{
+    for (ProcessInfo *info in _processes) {
+        if (info.pid == pid) {
+            return [info displayName];
+        }
+    }
+    return nil;
+}
+
+/* The drawer's labels: plain text on the drawer background. */
+- (NSTextField *)drawerLabelWithFont:(NSFont *)font
+{
+    NSTextField *label = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    [label setEditable:NO];
+    [label setSelectable:YES];
+    [label setBordered:NO];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setFont:font];
+    return label;
+}
+
+- (NSButton *)actionButtonWithTitle:(NSString *)title action:(SEL)action
+{
+    NSButton *button = [[NSButton alloc] initWithFrame:NSZeroRect];
+    [button setTitle:title];
+    [button setBezelStyle:NSRoundedBezelStyle];
+    [button setTarget:self];
+    [button setAction:action];
+    [button setEnabled:NO];
+    return button;
+}
+
+- (void)setActionButtonsEnabled:(BOOL)enabled
+{
+    [_quitButton setEnabled:enabled];
+    [_forceQuitButton setEnabled:enabled];
+    [_suspendButton setEnabled:enabled];
+    [_resumeButton setEnabled:enabled];
+}
+
+- (void)ensureInfoDrawer
+{
+    if (_infoDrawer != nil) {
+        return;
+    }
+
+    _infoDrawer = [[NSDrawer alloc]
+        initWithContentSize:NSMakeSize(kDrawerWidth, kDrawerHeight)
+              preferredEdge:NSMaxXEdge];
+    [_infoDrawer setParentWindow:_mainWindow];
+    [_infoDrawer setDelegate:self];
+    [_infoDrawer setMinContentSize:NSMakeSize(kDrawerWidth, 260.0)];
+
+    ProcessesDrawerView *content = [[ProcessesDrawerView alloc]
+        initWithFrame:NSMakeRect(0.0, 0.0, kDrawerWidth, kDrawerHeight)];
+    [content setLayoutOwner:self];
+    _drawerContentView = content;
+    [_infoDrawer setContentView:content];
+
+    _drawerTitleLabel = [self drawerLabelWithFont:
+        [NSFont boldSystemFontOfSize:[NSFont systemFontSize]]];
+    [content addSubview:_drawerTitleLabel];
+
+    _drawerStatusLabel = [self drawerLabelWithFont:
+        [NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
+    [content addSubview:_drawerStatusLabel];
+
+    _memorySparkline = [[SparklineView alloc] initWithFrame:NSZeroRect];
+    [_memorySparkline setCaption:@"Memory"];
+    [content addSubview:_memorySparkline];
+
+    _cpuSparkline = [[SparklineView alloc] initWithFrame:NSZeroRect];
+    [_cpuSparkline setCaption:@"CPU"];
+    /* One core fully busy is the yardstick, so the curve of a process using
+     * half a core looks like half a core. */
+    [_cpuSparkline setMaximum:100.0];
+    [_cpuSparkline setLineColor:[NSColor colorWithCalibratedRed:0.75
+                                                          green:0.40
+                                                           blue:0.10
+                                                          alpha:1.0]];
+    [content addSubview:_cpuSparkline];
+
+    _explanationScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    [_explanationScrollView setHasVerticalScroller:YES];
+    [_explanationScrollView setBorderType:NSBezelBorder];
+    _explanationTextView = [[NSTextView alloc]
+        initWithFrame:NSMakeRect(0.0, 0.0, kDrawerWidth, kDrawerHeight)];
+    [_explanationTextView setEditable:NO];
+    [_explanationTextView setSelectable:YES];
+    [_explanationTextView setFont:[NSFont systemFontOfSize:
+                                      [NSFont smallSystemFontSize]]];
+    [_explanationTextView setHorizontallyResizable:NO];
+    [_explanationTextView setVerticallyResizable:YES];
+    [[_explanationTextView textContainer] setWidthTracksTextView:YES];
+    [_explanationTextView setAutoresizingMask:NSViewWidthSizable];
+    [_explanationScrollView setDocumentView:_explanationTextView];
+    [content addSubview:_explanationScrollView];
+
+    _quitButton = [self actionButtonWithTitle:@"Quit"
+                                       action:@selector(quitProcess:)];
+    [content addSubview:_quitButton];
+    _forceQuitButton = [self actionButtonWithTitle:@"Force Quit"
+                                            action:@selector(forceQuitProcess:)];
+    [content addSubview:_forceQuitButton];
+    _suspendButton = [self actionButtonWithTitle:@"Suspend"
+                                          action:@selector(suspendProcess:)];
+    [content addSubview:_suspendButton];
+    _resumeButton = [self actionButtonWithTitle:@"Resume"
+                                         action:@selector(resumeProcess:)];
+    [content addSubview:_resumeButton];
+
+    [self setActionButtonsEnabled:([self selectedProcess] != nil)];
+    [self layoutDrawerContent];
+}
+
+/* Laid out in code rather than by autoresizing: GNUstep sizes the drawer's
+ * container box after the PARENT window, so the content view is far larger
+ * than the strip of it the drawer shows.  Everything is therefore placed
+ * inside that visible strip, and the oversized view around it stays empty. */
+- (NSRect)visibleDrawerRect
+{
+    NSRect bounds = [_drawerContentView bounds];
+    NSWindow *window = [_drawerContentView window];
+    NSView *windowContent = [window contentView];
+    if (window == nil || windowContent == nil || windowContent == _drawerContentView) {
+        return bounds;
+    }
+    NSRect visible = [_drawerContentView convertRect:[windowContent bounds]
+                                            fromView:windowContent];
+    visible = NSIntersectionRect(visible, bounds);
+    if (NSWidth(visible) < 80.0 || NSHeight(visible) < 80.0) {
+        return bounds;
+    }
+    return visible;
+}
+
+- (void)layoutDrawerContent
+{
+    if (_drawerTitleLabel == nil || _drawerContentView == nil) {
+        return;
+    }
+
+    const CGFloat margin = 12.0;
+    const CGFloat buttonHeight = 24.0;
+    const CGFloat gap = 6.0;
+
+    NSRect area = NSInsetRect([self visibleDrawerRect], margin, margin);
+    CGFloat left = NSMinX(area);
+    CGFloat width = NSWidth(area);
+    if (width < 80.0) {
+        width = 80.0;
+    }
+    CGFloat buttonWidth = (width - 8.0) / 2.0;
+
+    CGFloat y = NSMaxY(area) - 18.0;
+    [_drawerTitleLabel setFrame:NSMakeRect(left, y, width, 18.0)];
+    y -= 4.0 + 16.0;
+    [_drawerStatusLabel setFrame:NSMakeRect(left, y, width, 16.0)];
+
+    /* The two curves keep their height; the explanation takes what is left. */
+    y -= 10.0 + kSparklineHeight;
+    [_memorySparkline setFrame:NSMakeRect(left, y, width, kSparklineHeight)];
+    y -= gap + kSparklineHeight;
+    [_cpuSparkline setFrame:NSMakeRect(left, y, width, kSparklineHeight)];
+
+    CGFloat secondRow = NSMinY(area);
+    CGFloat firstRow = secondRow + buttonHeight + gap;
+    [_suspendButton setFrame:NSMakeRect(left, secondRow, buttonWidth, buttonHeight)];
+    [_resumeButton setFrame:NSMakeRect(left + buttonWidth + 8.0, secondRow,
+                                       buttonWidth, buttonHeight)];
+    [_quitButton setFrame:NSMakeRect(left, firstRow, buttonWidth, buttonHeight)];
+    [_forceQuitButton setFrame:NSMakeRect(left + buttonWidth + 8.0, firstRow,
+                                          buttonWidth, buttonHeight)];
+
+    CGFloat textBottom = firstRow + buttonHeight + 10.0;
+    CGFloat textHeight = y - gap - textBottom;
+    if (textHeight < 40.0) {
+        textHeight = 40.0;
+    }
+    [_explanationScrollView setFrame:NSMakeRect(left, textBottom, width,
+                                                textHeight)];
+}
+
+- (void)updateInfoDrawer
+{
+    ProcessInfo *info = [self selectedProcess];
+    if (info == nil || _infoDrawer == nil) {
+        return;
+    }
+
+    /* The drawer takes its size from the window only when it opens, and
+     * nothing tells the content view about it. */
+    [self layoutDrawerContent];
+
+    [_drawerTitleLabel setStringValue:[NSString stringWithFormat:@"%@ (%d)",
+                                                [info displayName], info.pid]];
+
+    ProcessHealth *health = info.health;
+    NSString *summary = [health summary];
+    [_drawerStatusLabel setStringValue:(summary != nil ? summary
+                                                       : @"Nothing looks wrong")];
+    [_drawerStatusLabel setTextColor:levelTextColor([info healthLevel])];
+
+    NSTimeInterval watched = [_history observedDurationForPid:info.pid];
+    NSString *span = ProcessFormatDuration(watched);
+    long watchedPeakKB = [_history peakResidentKBForPid:info.pid];
+
+    /* Both curves cover the watched window, so they say which window that
+     * is; the figure the kernel remembers is in the facts below. */
+    [_memorySparkline setCaption:
+        [NSString stringWithFormat:@"Memory, last %@", span]];
+    [_memorySparkline setValues:[_history residentMBSamplesForPid:info.pid]];
+    /* Headroom above the highest sample, so a flat line does not sit on the
+     * ceiling and read as a limit that has been reached. */
+    [_memorySparkline setMaximum:((double)watchedPeakKB / 1024.0) * 1.2];
+    [_memorySparkline setValueText:
+        [NSString stringWithFormat:@"%@ now, up to %@",
+                  ProcessFormatMemoryKB(info.residentMemory),
+                  ProcessFormatMemoryKB(watchedPeakKB)]];
+
+    [_cpuSparkline setCaption:
+        [NSString stringWithFormat:@"CPU, last %@", span]];
+    [_cpuSparkline setValues:[_history cpuSamplesForPid:info.pid]];
+    [_cpuSparkline setValueText:[NSString stringWithFormat:@"%.1f%% now", info.cpu]];
+
+    NSMutableString *text = [NSMutableString string];
+    if ([health explanation] != nil) {
+        [text appendString:[health explanation]];
+        [text appendString:@"\n\n"];
+    }
+    NSString *parentName = [self nameForPid:info.ppid];
+    [text appendFormat:@"Owner: %@\n", (info.user ? info.user : @"unknown")];
+    [text appendFormat:@"Started by: %d%@\n", info.ppid,
+                       (parentName != nil
+                            ? [NSString stringWithFormat:@" (%@)", parentName] : @"")];
+    [text appendFormat:@"State: %@\n", [info stateDescription]];
+    if (info.threads > 0) {
+        [text appendFormat:@"Threads: %d\n", info.threads];
+    }
+    [text appendFormat:@"Memory: %@ (%.1f%% of the machine)\n",
+                       ProcessFormatMemoryKB(info.residentMemory), info.memory];
+    /* The kernel's high-water mark reaches back to the start of the process,
+     * far beyond anything this application can have watched. */
+    long everKB = [info peakResidentMemory];
+    if (everKB > 0) {
+        [text appendFormat:@"Most it ever held: %@\n",
+                           ProcessFormatMemoryKB(everKB)];
+    }
+    if (info.virtualMemory > 0) {
+        [text appendFormat:@"Address space: %@\n",
+                           ProcessFormatMemoryKB(info.virtualMemory)];
+    }
+    double growth = [_history memoryGrowthMBPerMinuteForPid:info.pid];
+    if (growth > 0.05 || growth < -0.05) {
+        [text appendFormat:@"Memory trend: %+.2f MB per minute\n", growth];
+    }
+    [text appendFormat:@"Watched for: %@\n", span];
+    [text appendFormat:@"Command: %@\n", (info.command ? info.command : @"")];
+
+    [_explanationTextView setString:text];
+}
+
+/* --- application and window -------------------------------------------- */
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     PC_INFO(@"applicationDidFinishLaunching start");
     [self createUI];
-    PC_INFO(@"created UI");
     [self startMonitoring];
-    PC_INFO(@"started monitoring");
     [_mainWindow makeKeyAndOrderFront:self];
 
-    // Force a couple of refresh attempts to ensure background worker runs
-    [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:0.1];
-    [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:1.0];
-    // Also call refresh synchronously once as a last resort
+    /* The first round has no previous reading to compare against, so a second
+     * one follows right away to fill in the CPU figures. */
     [self refreshProcesses];
+    [self performSelector:@selector(refreshProcesses) withObject:nil afterDelay:1.0];
+}
+
+- (NSMenu *)buildProcessMenu
+{
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Process"];
+    NSMenuItem *item;
+
+    item = (NSMenuItem *)[menu addItemWithTitle:@"Get Info"
+                                         action:@selector(showProcessInfo:)
+                                  keyEquivalent:@"i"];
+    [item setTarget:self];
+    [menu addItem:[NSMenuItem separatorItem]];
+    item = (NSMenuItem *)[menu addItemWithTitle:@"Quit Process"
+                                         action:@selector(quitProcess:)
+                                  keyEquivalent:@""];
+    [item setTarget:self];
+    item = (NSMenuItem *)[menu addItemWithTitle:@"Force Quit Process"
+                                         action:@selector(forceQuitProcess:)
+                                  keyEquivalent:@""];
+    [item setTarget:self];
+    [menu addItem:[NSMenuItem separatorItem]];
+    item = (NSMenuItem *)[menu addItemWithTitle:@"Suspend"
+                                         action:@selector(suspendProcess:)
+                                  keyEquivalent:@""];
+    [item setTarget:self];
+    item = (NSMenuItem *)[menu addItemWithTitle:@"Resume"
+                                         action:@selector(resumeProcess:)
+                                  keyEquivalent:@""];
+    [item setTarget:self];
+    [menu addItem:[NSMenuItem separatorItem]];
+    item = (NSMenuItem *)[menu addItemWithTitle:@"Refresh Now"
+                                         action:@selector(refreshNow:)
+                                  keyEquivalent:@"r"];
+    [item setTarget:self];
+
+    return menu;
 }
 
 - (void)setupMenu
@@ -907,7 +1469,7 @@ static ProcessesController *sharedController = nil;
     NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"Processes"];
     NSMenuItem *appMenuItem = (NSMenuItem *)[mainMenu addItemWithTitle:@"Processes" action:NULL keyEquivalent:@""];
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Processes"];
-    
+
     [appMenu addItemWithTitle:@"About Processes" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Hide Processes" action:@selector(hide:) keyEquivalent:@"h"];
@@ -915,9 +1477,13 @@ static ProcessesController *sharedController = nil;
     [appMenu addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Quit Processes" action:@selector(terminate:) keyEquivalent:@"q"];
-    
+
     [mainMenu setSubmenu:appMenu forItem:appMenuItem];
-    
+
+    // Process Menu: what can be done with the selected process
+    NSMenuItem *processMenuItem = (NSMenuItem *)[mainMenu addItemWithTitle:@"Process" action:NULL keyEquivalent:@""];
+    [mainMenu setSubmenu:[self buildProcessMenu] forItem:processMenuItem];
+
     // Window Menu
     NSMenuItem *windowMenuItem = (NSMenuItem *)[mainMenu addItemWithTitle:@"Window" action:NULL keyEquivalent:@""];
     NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
@@ -926,34 +1492,96 @@ static ProcessesController *sharedController = nil;
     [windowMenu addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];
     [mainMenu setSubmenu:windowMenu forItem:windowMenuItem];
     [NSApp setWindowsMenu:windowMenu];
-    
+
     [NSApp setMainMenu:mainMenu];
+}
+
+- (NSTableColumn *)addColumnWithIdentifier:(NSString *)identifier
+                                     title:(NSString *)title
+                                     width:(CGFloat)width
+                                   sortKey:(NSString *)sortKey
+                                 ascending:(BOOL)ascending
+                                 alignment:(NSTextAlignment)alignment
+{
+    NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:identifier];
+    [[column headerCell] setStringValue:title];
+    [column setWidth:width];
+    if (sortKey != nil) {
+        [column setSortDescriptorPrototype:
+            [[NSSortDescriptor alloc] initWithKey:sortKey ascending:ascending]];
+    }
+    [[column dataCell] setAlignment:alignment];
+    [[column headerCell] setAlignment:alignment];
+    [_processesTableView addTableColumn:column];
+    return column;
 }
 
 - (void)createUI
 {
+    const CGFloat topStrip = 26.0;
+    const CGFloat bottomStrip = 22.0;
+
     // Create main window
-    _mainWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 800, 600)
+    _mainWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 840, 600)
                                                 styleMask:(NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask)
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
+    /* Owned by ARC through this reference; if it were also released on
+     * close, -close would release it a second time. */
+    [_mainWindow setReleasedWhenClosed:NO];
     [_mainWindow setTitle:@"Processes"];
     [_mainWindow setDelegate:self];
-    
+    [_mainWindow setMinSize:NSMakeSize(560.0, 320.0)];
+
     [self setupMenu];
-    
-    // Search field at the top
-    _searchField = [[NSSearchField alloc] initWithFrame:NSMakeRect(0, 0, 200, 22)];
+
+    NSRect bounds = [[_mainWindow contentView] bounds];
+
+    // Only the processes that look wrong, for when something is going on
+    _problemsOnlyCheckbox = [[NSButton alloc]
+        initWithFrame:NSMakeRect(8.0, NSHeight(bounds) - topStrip + 2.0, 200.0, 20.0)];
+    [_problemsOnlyCheckbox setButtonType:NSSwitchButton];
+    [_problemsOnlyCheckbox setTitle:@"Only what looks wrong"];
+    [_problemsOnlyCheckbox setTarget:self];
+    [_problemsOnlyCheckbox setAction:@selector(toggleProblemsOnly:)];
+    [_problemsOnlyCheckbox setAutoresizingMask:NSViewMinYMargin];
+    [[_mainWindow contentView] addSubview:_problemsOnlyCheckbox];
+
+    // Search field at the top right
+    _searchField = [[NSSearchField alloc]
+        initWithFrame:NSMakeRect(NSWidth(bounds) - 220.0,
+                                 NSHeight(bounds) - topStrip + 2.0, 200.0, 22.0)];
     [_searchField setPlaceholderString:@"Filter processes..."];
     [_searchField setDelegate:self];
+    [_searchField setTarget:self];
+    [_searchField setAction:@selector(searchFieldAction:)];
     [[_searchField cell] setRecentsAutosaveName:@"ProcessesFilter"];
-    
+    [_searchField setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
+    [[_mainWindow contentView] addSubview:_searchField];
+
+    // What the whole list adds up to
+    _summaryLabel = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(8.0, 3.0, NSWidth(bounds) - 16.0, 16.0)];
+    [_summaryLabel setEditable:NO];
+    [_summaryLabel setSelectable:NO];
+    [_summaryLabel setBordered:NO];
+    [_summaryLabel setBezeled:NO];
+    [_summaryLabel setDrawsBackground:NO];
+    [_summaryLabel setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
+    [_summaryLabel setStringValue:@"Reading the process list..."];
+    [_summaryLabel setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
+    [[_mainWindow contentView] addSubview:_summaryLabel];
+
     // Create scroll view for table
-    NSRect contentViewBounds = [[_mainWindow contentView] bounds];
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(contentViewBounds), NSHeight(contentViewBounds) - 26)];
+    NSScrollView *scrollView = [[NSScrollView alloc]
+        initWithFrame:NSMakeRect(0.0, bottomStrip, NSWidth(bounds),
+                                 NSHeight(bounds) - topStrip - bottomStrip)];
     [scrollView setHasVerticalScroller:YES];
     [scrollView setHasHorizontalScroller:YES];
-    [scrollView setAutohidesScrollers:YES];
+    /* Keep the scrollers' space reserved.  Hiding them makes the visible
+     * area change size the moment a column is dragged past the window
+     * width, and every row jumps by the height of the horizontal scroller. */
+    [scrollView setAutohidesScrollers:NO];
     [scrollView setBorderType:NSBezelBorder];
     [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
@@ -964,93 +1592,53 @@ static ProcessesController *sharedController = nil;
     [_processesTableView setDataSource:self];
     [_processesTableView setDelegate:self];
     [_processesTableView setAllowsMultipleSelection:NO];
-    [_processesTableView setIntercellSpacing:NSMakeSize(0, 0)];
+    /* Rows stay tight, but columns need a gap: a right aligned number would
+     * otherwise end flush against the next column's text. */
+    [_processesTableView setIntercellSpacing:NSMakeSize(6.0, 0.0)];
     [_processesTableView setGridStyleMask:NSTableViewGridNone];
+    [_processesTableView setTarget:self];
+    [_processesTableView setDoubleAction:@selector(tableViewDoubleClick:)];
+    [_processesTableView setMenu:[self buildProcessMenu]];
 
-    NSTableColumn *pidColumn = [[NSTableColumn alloc] initWithIdentifier:@"pid"];
-    [[pidColumn headerCell] setStringValue:@"PID"];
-    [pidColumn setWidth:60];
-    [pidColumn setSortDescriptorPrototype:[[NSSortDescriptor alloc] initWithKey:@"pid" ascending:YES]];
-    [_processesTableView addTableColumn:pidColumn];
-    
-    NSTableColumn *userColumn = [[NSTableColumn alloc] initWithIdentifier:@"user"];
-    [[userColumn headerCell] setStringValue:@"User"];
-    [userColumn setWidth:80];
-    [userColumn setSortDescriptorPrototype:[[NSSortDescriptor alloc] initWithKey:@"user" ascending:YES]];
-    [_processesTableView addTableColumn:userColumn];
-    
-    NSTableColumn *cpuColumn = [[NSTableColumn alloc] initWithIdentifier:@"cpu"];
-    [[cpuColumn headerCell] setStringValue:@"CPU %"];
-    [cpuColumn setWidth:60];
-    [cpuColumn setSortDescriptorPrototype:[[NSSortDescriptor alloc] initWithKey:@"cpu" ascending:NO]];
-    [_processesTableView addTableColumn:cpuColumn];
-    
-    NSTableColumn *memColumn = [[NSTableColumn alloc] initWithIdentifier:@"memory"];
-    [[memColumn headerCell] setStringValue:@"Memory %"];
-    [memColumn setWidth:80];
-    [memColumn setSortDescriptorPrototype:[[NSSortDescriptor alloc] initWithKey:@"memory" ascending:YES]];
-    [_processesTableView addTableColumn:memColumn];
-    
-    NSTableColumn *stateColumn = [[NSTableColumn alloc] initWithIdentifier:@"state"];
-    [[stateColumn headerCell] setStringValue:@"State"];
-    [stateColumn setWidth:50];
-    [stateColumn setSortDescriptorPrototype:[[NSSortDescriptor alloc] initWithKey:@"state" ascending:YES]];
-    [_processesTableView addTableColumn:stateColumn];
-    
-    NSTableColumn *commandColumn = [[NSTableColumn alloc] initWithIdentifier:@"command"];
-    [[commandColumn headerCell] setStringValue:@"Command"];
-    [commandColumn setWidth:300];
-    [commandColumn setSortDescriptorPrototype:[[NSSortDescriptor alloc] initWithKey:@"command" ascending:YES]];
-    [_processesTableView addTableColumn:commandColumn];
-    
-    // Default sort: CPU descending (highest first) ✅
-    NSSortDescriptor *cpuDesc = [[NSSortDescriptor alloc] initWithKey:@"cpu" ascending:NO];
-    _sortDescriptors = @[cpuDesc];
+    /* A dot, so that a process in trouble is visible before anything is
+     * read. */
+    NSTableColumn *healthColumn = [self addColumnWithIdentifier:@"health"
+                                                          title:@""
+                                                          width:18.0
+                                                        sortKey:@"healthLevel"
+                                                      ascending:NO
+                                                      alignment:NSCenterTextAlignment];
+    [healthColumn setDataCell:[[NSImageCell alloc] init]];
+    [healthColumn setMinWidth:18.0];
+    [healthColumn setMaxWidth:18.0];
+
+    [self addColumnWithIdentifier:@"pid" title:@"PID" width:56.0
+                          sortKey:@"pid" ascending:YES
+                        alignment:NSRightTextAlignment];
+    [self addColumnWithIdentifier:@"user" title:@"User" width:80.0
+                          sortKey:@"user" ascending:YES
+                        alignment:NSLeftTextAlignment];
+    [self addColumnWithIdentifier:@"cpu" title:@"CPU %" width:56.0
+                          sortKey:@"cpu" ascending:NO
+                        alignment:NSRightTextAlignment];
+    [self addColumnWithIdentifier:@"memory" title:@"Memory" width:80.0
+                          sortKey:@"residentMemory" ascending:NO
+                        alignment:NSRightTextAlignment];
+    [self addColumnWithIdentifier:@"status" title:@"Status" width:180.0
+                          sortKey:@"healthLevel" ascending:NO
+                        alignment:NSLeftTextAlignment];
+    [self addColumnWithIdentifier:@"command" title:@"Command" width:340.0
+                          sortKey:@"command" ascending:YES
+                        alignment:NSLeftTextAlignment];
+
+    /* Default order: whatever looks wrong first, then the busiest, which is
+     * the order the user came to look for. */
+    _sortDescriptors = [NSArray arrayWithObject:
+        [[NSSortDescriptor alloc] initWithKey:@"healthLevel" ascending:NO]];
     [_processesTableView setSortDescriptors:_sortDescriptors];
-    
+
     [scrollView setDocumentView:_processesTableView];
     [[_mainWindow contentView] addSubview:scrollView];
-
-    // Position search field at top-right
-    [_searchField setFrame:NSMakeRect(NSWidth(contentViewBounds) - 220, NSHeight(contentViewBounds) - 26, 200, 22)];
-    [[_mainWindow contentView] addSubview:_searchField];
-
-#if PROCESSES_DEBUG
-    // Diagnostic: log frames and column count to ensure table is visible and sized correctly
-    NSString *svFrameStr = NSStringFromRect([scrollView frame]);
-    NSString *tvFrameStr = NSStringFromRect([_processesTableView frame]);
-    PC_DBG(@"createUI: scrollView frame=%s table frame=%s columns=%lu", [svFrameStr UTF8String], [tvFrameStr UTF8String], (unsigned long)[[_processesTableView tableColumns] count]);
-#else
-    (void)scrollView; (void)_processesTableView;
-#endif
-
-    // Buttons removed as requested
-    
-    // Create drawer - temporarily disabled to debug crash
-    /*
-    _infoDrawer = [[NSDrawer alloc] initWithContentSize:NSMakeSize(300, 400) preferredEdge:NSMaxXEdge];
-    [_infoDrawer setParentWindow:_mainWindow];
-    [_infoDrawer setDelegate:self];
-    
-    NSView *drawerContent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 300, 400)];
-    [_infoDrawer setContentView:drawerContent];
-    
-    // Info text field
-    _infoTextField = [[NSTextField alloc] initWithFrame:NSMakeRect(10, 50, 280, 320)];
-    [_infoTextField setEditable:NO];
-    [_infoTextField setSelectable:YES];
-    [_infoTextField setBordered:YES];
-    [_infoTextField setBezeled:YES];
-    [drawerContent addSubview:_infoTextField];
-    
-    // Force quit button
-    _forceQuitButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 10, 100, 24)];
-    [_forceQuitButton setTitle:@"Force Quit"];
-    [_forceQuitButton setTarget:self];
-    [_forceQuitButton setAction:@selector(forceQuitProcess:)];
-    [_forceQuitButton setEnabled:NO];
-    [drawerContent addSubview:_forceQuitButton];
-    */
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender

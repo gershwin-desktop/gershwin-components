@@ -5,6 +5,7 @@
  */
 
 #import "MenuExtraManager.h"
+#import "GSExtrasMenuView.h"
 #import "GSMenuExtra.h"
 #import "GSMenuExtraContext.h"
 #import "GSMenuExtraBundle.h"
@@ -25,78 +26,107 @@
 
 
 
-static char kExtrasMenuViewTag;
-static char kWidthIndexKey;
 static char kExtrasSubmenuIdentifierKey;
 
-#pragma mark - GSTheme hook (horizontal menus only, never vertical dropdowns)
-
-@interface GSTheme (FixedWidthExtras)
-@end
+/* The gap between the extras and the end of the bar.
+ *
+ * One number, used by both the manager (which places the extras) and the
+ * controller (which lays the app titles out in what is left), because the two
+ * have to agree: a margin that differed between them would show up as the
+ * titles and the extras not lining up.
+ *
+ * The value is chosen so the gap at this end of the bar matches the gap at
+ * the other one.  The app titles start at the very edge of the bar and their
+ * first item carries its own inset, which is what the eye reads as the
+ * margin on that side; without a matching gap here the two ends look
+ * uneven, and the difference grows with whatever is leftmost. */
+const CGFloat GSExtrasEdgeMargin = 8.0;
 
 static NSMutableDictionary<NSString *, GSMenuExtraInstance *> *GSMenuExtraInstanceDictionary = nil;
-
-@implementation GSTheme (FixedWidthExtras)
-
-- (CGFloat)proposedTitleWidth:(CGFloat)proposedWidth forMenuView:(NSMenuView *)aMenuView
-{
-    if (!objc_getAssociatedObject(aMenuView, &kExtrasMenuViewTag)) {
-        return proposedWidth;
-    }
-
-    NSNumber *idx = objc_getAssociatedObject(aMenuView, &kWidthIndexKey);
-    NSUInteger index = [idx unsignedIntegerValue];
-    NSMenu *menu = [aMenuView menu];
-    NSArray *items = [menu itemArray];
-    if (index >= [items count]) {
-        index = 0;
-        objc_setAssociatedObject(aMenuView, &kWidthIndexKey, @1, OBJC_ASSOCIATION_RETAIN);
-    } else {
-        objc_setAssociatedObject(aMenuView, &kWidthIndexKey, @(index + 1), OBJC_ASSOCIATION_RETAIN);
-    }
-
-    NSMenuItem *item = [items objectAtIndex:index];
-    NSString *ident = [item representedObject];
-    CGFloat result = proposedWidth;
-    if (ident && GSMenuExtraInstanceDictionary) {
-        GSMenuExtraInstance *inst = [GSMenuExtraInstanceDictionary objectForKey:ident];
-        if (inst) {
-            @try {
-                result = [inst width];
-            } @catch (NSException *e) {
-                NSLog(@"GSMenuExtra: exception in proposedTitleWidth for %@: %@", ident, e);
-            }
-        }
-    }
-    return result;
-}
-
-@end
 
 #pragma mark - MenuExtraManager
 
 static NSString *const GSMenuExtraEnabledKey = @"GSMenuExtraEnabled";
 static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 
-@interface MenuExtraManager ()
+@interface MenuExtraManager () <GSExtrasMenuViewWidthProvider>
 {
     MenuExtrasPrefPanel *_prefPanel;
     NSMutableDictionary<NSString *, GSMenuExtraInstance *> *_instances;
     dispatch_source_t _fsMonitorSource;
     NSMutableSet<NSString *> *_knownBundlePaths;
     NSMenu *_extrasMenu;
-    NSMenuView *_extrasMenuView;
+    GSExtrasMenuView *_extrasMenuView;
     NSMutableDictionary *_extrasMenuItems;
+
+    /* The items of extras that are enabled but have nothing to show, keyed
+       by identifier, so they can go back into the bar where they were. */
+    NSMutableDictionary *_hiddenExtraItems;
     NSMutableArray<GSMenuExtraInstance *> *_allExtras;
     NSConnection *_doConnection;
     BOOL _needsUpdateGuard;
     BOOL _needsReload;
     NSTimer *_reloadTimer;
     NSArray *_pendingIdentifiers;
+
+    /* The single leading item currently standing in for whatever extras
+       are folded away, or nil when nothing is folded. */
+    NSMenuItem *_extrasOverflowItem;
+
+    /* How many leading entries of _menuExtras are currently folded behind
+       _extrasOverflowItem.  Lets setCollapsedExtraCount: no-op on a repeat
+       call with the same count. */
+    NSUInteger _currentCollapsedExtraCount;
 }
 @end
 
 @implementation MenuExtraManager
+
+/* The width provider of the extras view (GSExtrasMenuView.h says why the
+   view, not a counter, names the item being measured).
+
+   -preferredWidth is the width of the extra's TITLE plus its own padding; the
+   view adds the icon and the bar's padding on top of it, which is how every
+   titled extra has always been drawn.  An extra that wants the WHOLE item
+   measured otherwise says so with -totalWidthInMenuBar, and the chrome is
+   taken off that instead - returning it as-is would make the item wider
+   than asked for by the icon and the padding, and push everything to its
+   left along. */
+- (CGFloat)extrasMenuView:(GSExtrasMenuView *)aMenuView
+       proposedTitleWidth:(CGFloat)proposedWidth
+           forItemAtIndex:(NSInteger)index
+{
+    NSArray *items = [[aMenuView menu] itemArray];
+    if (index < 0 || (NSUInteger)index >= [items count]) {
+        return proposedWidth;
+    }
+    NSMenuItem *item = [items objectAtIndex:(NSUInteger)index];
+    NSString *ident = [item representedObject];
+    if (!ident || !GSMenuExtraInstanceDictionary) {
+        return proposedWidth;
+    }
+    GSMenuExtraInstance *inst = [GSMenuExtraInstanceDictionary objectForKey:ident];
+    if (!inst) {
+        return proposedWidth;
+    }
+    CGFloat result = proposedWidth;
+    @try {
+        CGFloat wanted = [inst width];
+        if ([inst statesTotalWidthInMenuBar]) {
+            NSMenuItemCell *cell = [aMenuView menuItemCellForItemAtIndex:index];
+            CGFloat chrome = 2.0 * [aMenuView horizontalEdgePadding];
+            if (cell && [cell imageWidth]) {
+                chrome += [cell imageWidth] + GSCellTextImageXDist;
+            }
+            result = MAX(0.0, wanted - chrome);
+        } else {
+            result = wanted;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"GSMenuExtra: exception in proposedTitleWidth for %@: %@", ident, e);
+    }
+    return result;
+}
 
 - (instancetype)initWithScreenWidth:(CGFloat)width
                       menuBarHeight:(CGFloat)height
@@ -108,6 +138,7 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         _menuExtras = [NSMutableArray array];
         _allExtras = [NSMutableArray array];
         _extrasMenuItems = [NSMutableDictionary dictionary];
+        _hiddenExtraItems = [NSMutableDictionary dictionary];
         _instances = [NSMutableDictionary dictionary];
         GSMenuExtraInstanceDictionary = [NSMutableDictionary dictionary];
         _knownBundlePaths = [NSMutableSet set];
@@ -410,6 +441,15 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         NSLog(@"GSMenuExtra: created new _extrasMenu");
     }
 
+    /* The incremental add/remove logic below walks _extrasMenu's top-level
+       items by identifier; an active collapse hides some of them inside
+       the overflow item's submenu instead, where this method would not see
+       them.  Restore to unfolded first so it always edits a consistent,
+       fully-expanded menu. */
+    if (_extrasOverflowItem) {
+        [self setCollapsedExtraCount:0];
+    }
+
     /* Remove items no longer wanted */
     NSMutableArray *identsToRemove = [NSMutableArray array];
     for (NSString *ident in _extrasMenuItems) {
@@ -432,6 +472,10 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
             [_extrasMenu removeItemAtIndex:idx];
         }
         [_extrasMenuItems removeObjectForKey:ident];
+        /* An extra that was hidden is not in the menu to be removed, but if
+           it is being switched off its remembered item has to go too, or it
+           would come back to a bar it is no longer part of. */
+        [_hiddenExtraItems removeObjectForKey:ident];
     }
 
     /* Add items that are new */
@@ -439,6 +483,21 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     for (GSMenuExtraInstance * provider in _menuExtras) {
         NSString *ident = [provider identifier];
         if ([_extrasMenuItems objectForKey:ident]) continue;
+
+        /* An extra with nothing to show is not in the bar, and a rebuild is
+           not a reason to put it back: that would undo the very state the
+           extra is in.  Its item is remembered so it can return by itself. */
+        if ([provider isHiddenFromMenuBar]) {
+            if ([_hiddenExtraItems objectForKey:ident] == nil) {
+                NSMenuItem *hidden =
+                    [[NSMenuItem alloc] initWithTitle:[provider title] ?: ident
+                                               action:NULL
+                                        keyEquivalent:@""];
+                [hidden setRepresentedObject:ident];
+                [_hiddenExtraItems setObject:hidden forKey:ident];
+            }
+            continue;
+        }
         NSLog(@"GSMenuExtra:   adding item %@", ident);
 
         NSString *title = [provider title] ? [provider title] : ident;
@@ -492,28 +551,25 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     /* Update view */
     NSLog(@"GSMenuExtra: updating view");
     if (!_extrasMenuView) {
-        _extrasMenuView = [[NSMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
+        _extrasMenuView = [[GSExtrasMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
         [_extrasMenuView setHorizontal:YES];
-        objc_setAssociatedObject(_extrasMenuView, &kExtrasMenuViewTag, @YES, OBJC_ASSOCIATION_RETAIN);
+        [_extrasMenuView setWidthProvider:self];
+
         [_extrasMenuView setMenu:_extrasMenu];
-    } else {
+    } else if ([_extrasMenuView menu] != _extrasMenu) {
+        /* Only a NEW menu is attached: attaching the one the view already
+           has adds a second set of cells behind the first (-setMenu: makes a
+           cell per item and keeps the old ones), and from then on the view
+           has cells no item accounts for. */
         [_extrasMenuView setMenu:_extrasMenu];
     }
     NSLog(@"GSMenuExtra: view menu set");
 
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [_extrasMenuView sizeToFit];
     CGFloat width = [self extrasMenuWidth];
     NSLog(@"GSMenuExtra: width=%g", width);
 
-    NSView *superview = [_extrasMenuView superview];
-    if (superview) {
-        CGFloat menuBarW = NSWidth([superview bounds]);
-        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - 8, 0, width, _menuBarHeight)];
-        [superview setNeedsDisplay:YES];
-    } else {
-        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
-    }
+    [self placeExtrasViewWithWidth:width];
     NSLog(@"GSMenuExtra: rebuildExtrasMenu done");
 }
 
@@ -624,6 +680,12 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 NSLog(@"GSMenuExtra: exception in menu for %@: %@", ident, e);
             }
             if (submenu) {
+                /* Same as the other two build paths: without the delegate the
+                   submenu never gets menuNeedsUpdate:/menuWillOpen again, so
+                   this extra's menu would stop refreshing on open (and lose
+                   its Customize... item) the moment the user toggles anything
+                   in the preferences panel. */
+                [self configureSubmenu:submenu forIdentifier:ident];
                 [item setSubmenu:submenu];
             }
         }
@@ -632,18 +694,21 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         [_extrasMenuItems setObject:item forKey:ident];
     }
 
+    /* Every item above is freshly created and placed at top level, so any
+       collapse that was applied before this rebuild no longer describes
+       reality - the overflow item it made is gone (detached above) and its
+       submenu's items were never re-created.  Without this,
+       setCollapsedExtraCount: would see the same count requested again
+       right after this and treat it as already applied, leaving every
+       extra shown uncollapsed. */
+    _extrasOverflowItem = nil;
+    _currentCollapsedExtraCount = 0;
+
     if (_extrasMenuView) {
         [_extrasMenuView setFrameSize:NSMakeSize(0, _menuBarHeight)];
         [_extrasMenuView sizeToFit];
         CGFloat width = [self extrasMenuWidth];
-        NSView *superview = [_extrasMenuView superview];
-        if (superview) {
-            CGFloat menuBarW = NSWidth([superview bounds]);
-            [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - 8, 0, width, _menuBarHeight)];
-            [superview setNeedsDisplay:YES];
-        } else {
-            [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
-        }
+        [self placeExtrasViewWithWidth:width];
     }
 
     [[NSNotificationCenter defaultCenter] postNotificationName:@"GSMenuExtraEnabledSetDidChange"
@@ -771,10 +836,9 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
         [_extrasMenu addItem:item];
         [_extrasMenuItems setObject:item forKey:ident];
     }
-    _extrasMenuView = [[NSMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
+    _extrasMenuView = [[GSExtrasMenuView alloc] initWithFrame:NSMakeRect(0, 0, 0, _menuBarHeight)];
     [_extrasMenuView setHorizontal:YES];
-    objc_setAssociatedObject(_extrasMenuView, &kExtrasMenuViewTag, @YES, OBJC_ASSOCIATION_RETAIN);
-    objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
+    [_extrasMenuView setWidthProvider:self];
     [_extrasMenuView setMenu:_extrasMenu];
 
     CGFloat width = [self extrasMenuWidth];
@@ -783,27 +847,119 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     return _extrasMenuView;
 }
 
-- (CGFloat)extrasMenuWidthForView:(NSMenuView *)view menu:(NSMenu *)menu
+/* Puts the extras group at the right end of the bar and pins its right edge
+   there, so the view keeps it through every later resize of its own. */
+- (void)placeExtrasViewWithWidth:(CGFloat)width
+{
+    NSView *superview = [_extrasMenuView superview];
+    if (superview) {
+        CGFloat menuBarW = NSWidth([superview bounds]);
+        [_extrasMenuView setAnchoredRightEdge:menuBarW - GSExtrasEdgeMargin];
+        [_extrasMenuView setFrame:NSMakeRect(menuBarW - width - GSExtrasEdgeMargin, 0, width, _menuBarHeight)];
+        [superview setNeedsDisplay:YES];
+    } else {
+        [_extrasMenuView setFrameSize:NSMakeSize(width, _menuBarHeight)];
+    }
+}
+
+- (CGFloat)extrasMenuWidthForView:(GSExtrasMenuView *)view menu:(NSMenu *)menu
 {
     if (!view || !menu || [[menu itemArray] count] == 0) return 0;
 
-    objc_setAssociatedObject(view, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
     [view sizeToFit];
-
-    __block CGFloat maxX = 0;
-    [[menu itemArray] enumerateObjectsUsingBlock:
-        ^(NSMenuItem *item, NSUInteger idx, BOOL *stop) {
-            NSRect r = [view rectOfItemAtIndex: idx];
-            CGFloat right = NSMaxX(r);
-            if (right > maxX) maxX = right;
-        }];
-
-    return maxX;
+    /* The resting width: while items slide, the rects they are drawn at are
+       off their places, and the bar is laid out around where they will come
+       to rest. */
+    return [view itemsWidth];
 }
 
 - (CGFloat)extrasMenuWidth
 {
     return [self extrasMenuWidthForView:_extrasMenuView menu:_extrasMenu];
+}
+
+#pragma mark - Menu bar layout (extras collapse)
+
+- (NSArray<NSNumber *> *)naturalExtraWidthsLeastImportantFirst
+{
+    NSUInteger total = [_menuExtras count];
+    if (total == 0) return @[];
+
+    /* Measure against the fully unfolded state, then restore whatever fold
+       was in effect - the caller is expected to immediately apply the
+       fresh layout decision anyway, but leaving the view in a half-measured
+       state if it does not would be a foot-gun. */
+    NSUInteger savedCollapse = _currentCollapsedExtraCount;
+    [self setCollapsedExtraCount:0];
+
+    [_extrasMenuView sizeToFit];
+
+    /* One width per extra, in _menuExtras order, taken from the item that
+       extra has in the menu: an extra with nothing to show has no item and
+       takes no room, so it is 0 rather than the rect of whatever item sits
+       at its index - past the end of the menu once one extra is hidden. */
+    NSMutableArray *widths = [NSMutableArray arrayWithCapacity:total];
+    for (NSUInteger i = 0; i < total; i++) {
+        NSMenuItem *item = [_extrasMenuItems objectForKey:[_menuExtras[i] identifier]];
+        NSInteger idx = item ? [_extrasMenu indexOfItem:item] : -1;
+        CGFloat width = 0.0;
+        if (idx >= 0) {
+            width = NSWidth([_extrasMenuView restingRectOfItemAtIndex:idx]);
+        }
+        [widths addObject:@(width)];
+    }
+
+    [self setCollapsedExtraCount:savedCollapse];
+    return widths;
+}
+
+- (void)setCollapsedExtraCount:(NSUInteger)count
+{
+    NSUInteger total = [_menuExtras count];
+    if (count > total) count = total;
+    if (count == _currentCollapsedExtraCount) return;
+    if (!_extrasMenu) return;
+
+    /* Detach the current overflow wrapper (if any) so its submenu's items
+       are free to be redistributed below; the NSMenuItem objects themselves
+       are never rebuilt here (they stay in _extrasMenuItems by identity),
+       so a title update by identifier (the periodic tick) keeps working
+       whichever slot an extra currently occupies. */
+    if (_extrasOverflowItem) {
+        [_extrasOverflowItem setSubmenu:nil];
+        _extrasOverflowItem = nil;
+    }
+    while ([_extrasMenu numberOfItems] > 0) {
+        [_extrasMenu removeItemAtIndex:0];
+    }
+
+    NSUInteger idx = 0;
+    if (count > 0) {
+        NSMenu *overflowMenu = [[NSMenu alloc] initWithTitle:@"More"];
+        [overflowMenu setAutoenablesItems:NO];
+        for (; idx < count; idx++) {
+            NSMenuItem *item = [_extrasMenuItems objectForKey:[_menuExtras[idx] identifier]];
+            if (item) [overflowMenu addItem:item];
+        }
+        /* A left-pointing chevron: this sits at the LEFT of the extras
+           cluster (nearest the app's own titles), the opposite end from
+           the app menu's own trailing ">>" overflow, so the two are never
+           mistaken for each other. */
+        NSMenuItem *overflow = [[NSMenuItem alloc] initWithTitle:@"«" action:NULL keyEquivalent:@""];
+        [overflow setSubmenu:overflowMenu];
+        [_extrasMenu addItem:overflow];
+        _extrasOverflowItem = overflow;
+    }
+    for (; idx < total; idx++) {
+        NSMenuItem *item = [_extrasMenuItems objectForKey:[_menuExtras[idx] identifier]];
+        if (item) [_extrasMenu addItem:item];
+    }
+
+    _currentCollapsedExtraCount = count;
+
+    [_extrasMenuView sizeToFit];
+    CGFloat width = [self extrasMenuWidth];
+    [self placeExtrasViewWithWidth:width];
 }
 
 #pragma mark - Update timers
@@ -821,8 +977,34 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 - (void)updateTimerFired:(NSTimer *)timer
 {
     @try {
-        objc_setAssociatedObject(_extrasMenuView, &kWidthIndexKey, @0, OBJC_ASSOCIATION_RETAIN);
-        NSArray *items = [timer userInfo];
+        /* The list is taken live, not from the timer's userInfo: enabling or
+           disabling an extra from the preferences panel replaces _menuExtras,
+           and the snapshot taken when the timer started would leave every
+           newly enabled extra unticked (its readings frozen at load, exactly
+           the bug this shared timer exists to prevent) while removed ones
+           kept ticking forever. */
+        NSArray *items = [_menuExtras copy];
+
+        /* Work out first what has to change, so the items are moved in one
+           go and the bar is laid out once afterwards.  The view keeps its
+           right edge on the bar's through every pass of its own, so an item
+           leaving or arriving never shows the group anywhere else. */
+        NSMutableArray *toHide = [NSMutableArray array];
+        NSMutableArray *toShow = [NSMutableArray array];
+        for (GSMenuExtraInstance * item in items) {
+            NSString *ident = [item identifier];
+            if (!ident) continue;
+            BOOL wantHidden = [item isHiddenFromMenuBar];
+            BOOL isHidden = ([_extrasMenuItems objectForKey:ident] == nil);
+            if (wantHidden == isHidden) continue;
+            if (wantHidden) {
+                [toHide addObject:ident];
+            } else {
+                [toShow addObject:ident];
+            }
+        }
+        BOOL visibilityChanged = ([toHide count] > 0 || [toShow count] > 0);
+
         for (GSMenuExtraInstance * item in items) {
             @try {
                 [item tick];
@@ -836,9 +1018,118 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 NSLog(@"GSMenuExtra: exception updating item %@: %@", [item identifier], e);
             }
         }
+
+        NSUInteger ci;
+        for (ci = 0; ci < [toHide count]; ci++) {
+            [self setExtraHidden:YES forIdentifier:[toHide objectAtIndex:ci]];
+        }
+        for (ci = 0; ci < [toShow count]; ci++) {
+            [self setExtraHidden:NO forIdentifier:[toShow objectAtIndex:ci]];
+        }
+
+        if (visibilityChanged) {
+            /* The view followed the items out of and into the menu through
+               NSMenu's notifications, which are posted as they happen, so it
+               can be laid out and placed right away. */
+            [self relayoutExtras];
+        }
     } @catch (NSException *e) {
         NSLog(@"GSMenuExtra: exception in updateTimerFired: %@", e);
     }
+}
+
+/* Takes one extra's item out of, or puts it back into, the bar's menu.
+ *
+ * The view lays out every item it is given and adds its own padding to each,
+ * so an extra that wants no room cannot get none while it is still in the
+ * menu - it would leave a gap the width of that padding.  Removing the item
+ * is what actually gives the space back, and the extras either side of it
+ * close up because they are laid out from the menu's own contents.
+ *
+ * Returns YES if the item actually moved, so the caller can lay out once
+ * rather than on every tick. */
+- (BOOL)setExtraHidden:(BOOL)hidden forIdentifier:(NSString *)identifier
+{
+    if (!identifier) return NO;
+    NSMenuItem *inMenu = [_extrasMenuItems objectForKey:identifier];
+
+    if (hidden) {
+        if (!inMenu) return NO;
+        NSInteger idx = [_extrasMenu indexOfItem:inMenu];
+        if (idx < 0) return NO;
+        [_extrasMenu removeItemAtIndex:idx];
+        /* Kept out of _extrasMenuItems on purpose: that is what tells the
+           rebuild below this item is not in the menu, so it does not try to
+           remove it a second time.  It is remembered here instead, so it can
+           go back into the bar where it was when the extra has something to
+           show again. */
+        [_extrasMenuItems removeObjectForKey:identifier];
+        [_hiddenExtraItems setObject:inMenu forKey:identifier];
+        return YES;
+    }
+
+    /* Already showing: nothing to do.  This also covers an extra that was
+       never hidden, so the common case costs one dictionary lookup. */
+    if (inMenu) return NO;
+
+    NSMenuItem *remembered = [_hiddenExtraItems objectForKey:identifier];
+    if (!remembered) {
+        /* Hidden by something other than us (or a rebuild dropped it), so it
+           is not ours to put back - the next rebuild will make it. */
+        return NO;
+    }
+    [_hiddenExtraItems removeObjectForKey:identifier];
+
+    /* Back where the enabled-extras order says it belongs, counting only the
+       items that are actually in the menu - a hidden extra before it must
+       not push it along. */
+    NSInteger insertIdx = (NSInteger)[_extrasMenu numberOfItems];
+    NSUInteger want = [_menuExtras indexOfObject:
+        [self instanceForIdentifier:identifier]];
+    if (want != NSNotFound) {
+        NSUInteger before = 0;
+        for (NSUInteger i = 0; i < want; i++) {
+            NSString *otherId = [[_menuExtras objectAtIndex: i] identifier];
+            if ([_extrasMenuItems objectForKey:otherId] != nil) {
+                before++;
+            }
+        }
+        if ((NSUInteger)insertIdx > before) insertIdx = (NSInteger)before;
+    }
+    [_extrasMenu insertItem:remembered atIndex:insertIdx];
+    [_extrasMenuItems setObject:remembered forKey:identifier];
+
+    /* The item goes back carrying whatever it had when it left, and an extra
+       that hides itself usually had no icon at that moment - it had nothing
+       to show.  By now it has been asked to draw again, so the icon has to be
+       put on the item here: without this the extra returns as a blank gap
+       the width of an icon, which is the one thing it was meant to stop
+       being. */
+    [self refreshExtraWithIdentifier:identifier];
+    return YES;
+}
+
+- (GSMenuExtraInstance *)instanceForIdentifier:(NSString *)identifier
+{
+    for (GSMenuExtraInstance *inst in _menuExtras) {
+        if ([[inst identifier] isEqualToString:identifier]) return inst;
+    }
+    return nil;
+}
+
+/* Lays the extras out again after their number or their widths changed, and
+   tells the bar so the app titles make room. */
+- (void)relayoutExtras
+{
+    [_extrasMenuView sizeToFit];
+
+    CGFloat width = [self extrasMenuWidth];
+    [self placeExtrasViewWithWidth:width];
+    [_extrasMenuView setNeedsDisplay:YES];
+
+    /* The app titles share the bar with the extras and are laid out from the
+       width the extras leave them, so they have to be told. */
+    [_layoutDelegate menuExtraManagerNeedsLayout:self];
 }
 
 - (void)stopUpdateTimers
@@ -861,6 +1152,20 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
     [item setMenuBarImage:icon];
 }
 
+- (void)invalidateWidthForExtraWithIdentifier:(NSString *)identifier
+{
+    if (!identifier) return;
+    for (GSMenuExtraInstance *provider in _menuExtras) {
+        if (![[provider identifier] isEqualToString:identifier]) continue;
+        @try {
+            [provider invalidateWidth];
+        } @catch (NSException *e) {
+            NSLog(@"GSMenuExtra: exception in invalidateWidth for %@: %@", identifier, e);
+        }
+        break;
+    }
+}
+
 - (void)refreshExtraWithIdentifier:(NSString *)identifier
 {
     NSMenuItem *menuItem = [_extrasMenuItems objectForKey:identifier];
@@ -875,28 +1180,22 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
                 if ([provider respondsToSelector:@selector(icon)]) {
                     [self showIconOfExtra:provider inItem:menuItem];
                     if (_extrasMenuView) {
+                        /* Every extra ticks in the same timer pass, and each
+                           queued redraw of the whole bar ran on its own. */
+                        [NSObject cancelPreviousPerformRequestsWithTarget:_extrasMenuView
+                                                                 selector:@selector(display)
+                                                                   object:nil];
                         [_extrasMenuView performSelector:@selector(display)
                                              withObject:nil
                                              afterDelay:0];
                     }
                 }
-                if ([provider respondsToSelector:@selector(menu)]
-                    && ![self isMenuOnScreen:[menuItem submenu]]) {
-                    if ([provider respondsToSelector:@selector(menuWillOpen)]) {
-                        [provider menuWillOpen];
-                    }
-                    NSMenu *freshSubmenu = [provider menu];
-                    if (freshSubmenu) {
-                        NSMenu *existingSubmenu = [menuItem submenu];
-                        if (existingSubmenu) {
-                            [self configureSubmenu:existingSubmenu forIdentifier:identifier];
-                            [self replaceMenu:existingSubmenu withMenu:freshSubmenu];
-                        } else {
-                            [self configureSubmenu:freshSubmenu forIdentifier:identifier];
-                            [menuItem setSubmenu:freshSubmenu];
-                        }
-                    }
-                }
+                /* The submenu is deliberately left alone here. An extra
+                   reports a new value every second, and building its menu
+                   again means a whole menu with two windows of its own for
+                   something nobody is looking at. What is on screen is the
+                   title and the icon above, and the submenu is built afresh
+                   in menuNeedsUpdate: at the moment it is opened. */
             } @catch (NSException *e) {
                 NSLog(@"GSMenuExtra: exception refreshing %@: %@", identifier, e);
             }
@@ -973,8 +1272,51 @@ static NSString *const GSMenuExtraOrderKey = @"GSMenuExtraOrder";
 - (NSSet *)loadEnabledPreference
 {
     NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:GSMenuExtraEnabledKey];
-    if ([saved isKindOfClass:[NSArray class]]) return [NSSet setWithArray:saved];
-    return nil;
+    if (![saved isKindOfClass:[NSArray class]]) return nil;
+
+    NSMutableSet *enabled = [NSMutableSet setWithArray:saved];
+    /* An extra that asked to be there from the start (MediaExtra, which a
+       media key acts on) is put into the saved set the first time it is
+       seen, so that it appears in the menu bar without the user having to
+       go looking for it.  It is added to the user's own set, not shown in
+       spite of it: unticking it afterwards removes it for good, exactly as
+       unticking any other extra does. */
+    BOOL addedAny = NO;
+    NSUInteger addedCount = 0;
+    for (NSString *identifier in [self defaultsEnabledExtraIdentifiers]) {
+        if (![enabled containsObject:identifier]) {
+            [enabled addObject:identifier];
+            addedCount++;
+            addedAny = YES;
+        }
+    }
+    if (addedAny) {
+        [[NSUserDefaults standardUserDefaults] setObject:[enabled allObjects]
+                                                  forKey:GSMenuExtraEnabledKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        NSLog(@"GSMenuExtra: added %lu default-enabled extra(s) to the saved set (%lu enabled in all)",
+              (unsigned long)addedCount, (unsigned long)[enabled count]);
+    }
+    return enabled;
+}
+
+/* The identifiers of the loaded extras that asked to be enabled by default.
+   Read from the instances rather than from a list here, so that an extra
+   which is not installed - MediaExtra without libdbus, say - is never put
+   into a set it cannot be shown from. */
+- (NSArray<NSString *> *)defaultsEnabledExtraIdentifiers
+{
+    NSMutableArray<NSString *> *identifiers = [NSMutableArray array];
+    for (GSMenuExtraInstance *instance in [_instances allValues]) {
+        @try {
+            if ([instance enabledByDefault]) {
+                [identifiers addObject:[instance identifier]];
+            }
+        } @catch (NSException *e) {
+            NSLog(@"GSMenuExtra: exception in enabledByDefault for %@: %@", [instance identifier], e);
+        }
+    }
+    return identifiers;
 }
 
 #pragma mark - Configuration panel
