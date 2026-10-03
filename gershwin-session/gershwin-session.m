@@ -32,6 +32,7 @@
  *   kill -USR2 <gershwin-session pid>   enable auto restart
  */
 #import <Foundation/Foundation.h>
+#import "GWPasteboardRecovery.h"
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
@@ -327,6 +328,23 @@ int main(int argc, const char *argv[])
     (int)getpid(),
     [[[NSProcessInfo processInfo] environment] objectForKey: @"DISPLAY"]
     ?: @"(none)", apps);
+
+  /* gpbs can be left registered but wedged from an earlier session: its
+   * X11 clipboard bridge blocks on a plain XNextEvent() with no timeout
+   * while receiving a large (INCR) X selection, so a stalled X peer
+   * freezes gpbs's run loop forever - yet the process and its listening
+   * socket stay alive, which is all NSMessagePortNameServer checks before
+   * refusing to let a fresh gpbs register.  Every app then either hangs
+   * or silently fails the very first time it touches the pasteboard,
+   * and stays broken until something kills the wedged process by hand.
+   * Do that automatically, before any supervised app gets a chance to
+   * hit it, so a login is never left in that state. */
+  if (GWEnsureResponsivePasteboardServer(@"GNUstepGSPasteboardServer",
+	"gpbs", 3.0) == NO)
+    {
+      NSLog(@"Cleaned up an unresponsive pasteboard server left over from"
+	@" an earlier session.");
+    }
 
   while (keepRunning)
     {

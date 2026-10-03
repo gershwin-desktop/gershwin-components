@@ -69,6 +69,7 @@
 /**
  * Unregister shortcuts that were registered from DBus/app menus (non-direct shortcuts).
  * This preserves direct shortcuts (those registered with registerDirectShortcutForMenuItem:)
+ * and the XF86 hardware keys (registerXF86Key:...)
  * so global hotkeys like Cmd/Alt+Space remain active across application switches.
  */
 - (void)unregisterNonDirectShortcuts;

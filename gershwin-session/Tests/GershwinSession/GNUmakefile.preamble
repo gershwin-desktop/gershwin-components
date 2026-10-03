@@ -1,0 +1,8 @@
+ADDITIONAL_INCLUDE_DIRS += -I../..
+
+# GWPasteboardRecovery.m is built with ARC in the real tool; the
+# ObjectTesting PASS macros are not ARC-safe, so only this one linked
+# collaborator gets the ARC flags, keyed by the exact path it is listed
+# with below.
+t_GWPasteRecov_OBJC_FILES += ../../GWPasteboardRecovery.m
+../../GWPasteboardRecovery.m_FILE_FLAGS += -fobjc-arc

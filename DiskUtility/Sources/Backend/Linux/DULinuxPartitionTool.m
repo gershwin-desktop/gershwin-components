@@ -305,8 +305,7 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
     if (launchError != nil) {
         return launchError;
     }
-    int status = WEXITSTATUS(result.terminationStatus);
-    if (!result.exitedNormally || status != 0) {
+    if (![result exitedWithStatus:0]) {
         return [NSError errorWithDomain:DUStorageErrorDomain
                                    code:DUErrorPartitionError
                                userInfo:@{
@@ -372,8 +371,7 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
         if (launchError != nil) {
             return launchError;
         }
-        int status = WEXITSTATUS(result.terminationStatus);
-        if (!result.exitedNormally || status != 0) {
+        if (![result exitedWithStatus:0]) {
             return [NSError errorWithDomain:DUStorageErrorDomain
                                        code:DUErrorPartitionError
                                    userInfo:@{

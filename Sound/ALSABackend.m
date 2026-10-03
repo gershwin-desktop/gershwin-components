@@ -1375,7 +1375,9 @@ static NSString *const kMicControl = @"Mic";
 - (BOOL)setInputMuted:(BOOL)muted
 {
     NSDebugLLog(@"gwcomp", @"ALSABackend: setInputMuted: %@", muted ? @"YES" : @"NO");
-    NSString *value = muted ? @"mute" : @"unmute";
+    /* amixer rejects "mute" on capture controls ("Invalid command!");
+       their switch is set with "nocap" and "cap". */
+    NSString *value = muted ? @"nocap" : @"cap";
     NSDebugLLog(@"gwcomp", @"ALSABackend:   setting to %@, card %d", value, currentInputCard);
 
     NSString *controlName = [self preferredMixerControlNameForDevice:defaultInput isOutput:NO];

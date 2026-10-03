@@ -20,6 +20,9 @@
                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
                                                backing:NSBackingStoreBuffered
                                                  defer:NO];
+    /* Owned by ARC through this reference; if it were also released on
+     * close, -close would release it a second time. */
+    [self.window setReleasedWhenClosed:NO];
     [self.window setTitle:@"ItemFlow Demo"];
     
     self.flowView = [[ItemFlowView alloc] initWithFrame:[[self.window contentView] bounds]];

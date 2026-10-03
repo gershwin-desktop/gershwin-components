@@ -5,43 +5,12 @@
  */
 
 #import "SoundExtra.h"
-#import "ALSABackend.h"
-#import "OSSBackend.h"
-#import "SoundBackend.h"
+#import "SoundBackendFactory.h"
 #import "GSMenuExtraContext.h"
+#import "MediaKeyController.h"
 
 
 static const BOOL kShowTextInMenuBar = NO;
-
-static id<SoundBackend> CreateSoundBackend(void)
-{
-    id<SoundBackend> backend = nil;
-
-#if defined(__FreeBSD__) || defined(__DragonFly__)
-    OSSBackend *ossBackend = [[OSSBackend alloc] init];
-    if ([ossBackend isAvailable]) {
-        backend = ossBackend;
-    }
-#endif
-
-    if (backend == nil) {
-        ALSABackend *alsaBackend = [[ALSABackend alloc] init];
-        if ([alsaBackend isAvailable]) {
-            backend = alsaBackend;
-        }
-    }
-
-#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__)
-    if (backend == nil) {
-        OSSBackend *ossBackend = [[OSSBackend alloc] init];
-        if ([ossBackend isAvailable]) {
-            backend = ossBackend;
-        }
-    }
-#endif
-
-    return backend;
-}
 
 @implementation SoundExtra
 {
@@ -184,25 +153,25 @@ static id<SoundBackend> CreateSoundBackend(void)
 {
     @try {
         _running = YES;
-        _backend = CreateSoundBackend();
+        _backend = SoundBackendCreateDefault();
         [self updateState];
+        /* The volume keys are handled by Menu itself, so they keep working
+           when this extra is not shown; it only has to reflect the change. */
         [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(volUp:)
-                                                     name:@"GSMenuExtraVolumeUp"
-                                                   object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(volDown:)
-                                                     name:@"GSMenuExtraVolumeDown"
-                                                   object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(toggleMute:)
-                                                     name:@"GSMenuExtraMute"
+                                                 selector:@selector(soundVolumeChanged:)
+                                                     name:MediaKeySoundVolumeChangedNotification
                                                    object:nil];
     } @catch (NSException *e) {
         NSLog(@"SoundExtra: exception in menuExtraDidLoad: %@", e);
         _running = NO;
-        _backend = nil;
+        DESTROY(_backend);
     }
+}
+
+- (void)soundVolumeChanged:(NSNotification *)notification
+{
+    (void)notification;
+    [self updateState];
 }
 
 - (void)menuExtraWillOpenMenu
@@ -235,7 +204,7 @@ static id<SoundBackend> CreateSoundBackend(void)
 - (void)menuExtraWillUnload
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
-    _backend = nil;
+    DESTROY(_backend);
 }
 
 - (void)refreshTimerFired:(NSTimer *)timer

@@ -3,7 +3,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 TOOL_NAME = gershwin-session
-gershwin-session_OBJC_FILES = gershwin-session.m
+gershwin-session_OBJC_FILES = gershwin-session.m GWPasteboardRecovery.m
 gershwin-session_TOOL_LIBS = -lgnustep-base -lobjc
 
 ADDITIONAL_OBJCFLAGS = -Wall -Wextra -fobjc-arc

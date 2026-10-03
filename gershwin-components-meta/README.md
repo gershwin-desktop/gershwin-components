@@ -5,7 +5,7 @@ This is a metapackage that installs all Gershwin Desktop Environment components.
 ## What it includes:
 
 - **Preference Panes**: BootEnvironments, Display, GlobalShortcuts, StartupDisk
-- **System Tools**: LoginWindow, globalshortcutsd, SudoAskPass, initgfx, Menu, fontconfig
+- **System Tools**: LoginWindow, SudoAskPass, initgfx, Menu, fontconfig
 - **Assistant Framework**: Base framework for assistant applications
 - **Assistant Applications**: BhyveAssistant, CreateLiveMediaAssistant, DebianRuntimeInstaller
 

@@ -56,6 +56,18 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
     ];
 }
 
+// Without these the app cannot read the disk list, check, format, mount or
+// write an image. qemu-img, the cdrecord family and eject each gate exactly
+// one menu item and are reported per-feature in the capabilities report.
+- (NSArray<NSString *> *)requiredToolNames
+{
+    return @[
+        @"disklabel", @"sysctl", @"mount", @"umount", @"newfs",
+        @"newfs_msdos", @"fsck_ffs", @"fsck_msdos", @"dd", @"sha256",
+        @"gzip", @"cat",
+    ];
+}
+
 #pragma mark - Discovery
 
 - (NSArray *)discoverStorageObjects:(NSError **)error
@@ -296,7 +308,7 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
 - (BOOL)runSucceeded:(DUProcessResult *)result
 {
     return result != nil && result.exitedNormally &&
-        WEXITSTATUS(result.terminationStatus) == 0 && !result.timedOut;
+        [result exitedWithStatus:0] && !result.timedOut;
 }
 
 // dd progress lines ("123456789 bytes transferred ..." / GNU-style copies)
@@ -1114,7 +1126,7 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
                 arguments:@[ device.backendPath.lastPathComponent ]
                     error:NULL];
         currentLabel = probe != nil && probe.exitedNormally &&
-                               WEXITSTATUS(probe.terminationStatus) == 0
+                               [probe exitedWithStatus:0]
             ? [DUNetBKSDisklabelParser parseDisklabelOutput:
                                            probe.standardOutput]
             : nil;

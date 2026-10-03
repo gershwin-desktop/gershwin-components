@@ -34,29 +34,73 @@
 static const NSUInteger kMaxUFSLabelLength = 15;
 static const NSUInteger kMaxFATLabelLength = 11;
 
-// Disk nodes end in digits ("ada0", "da0", "nvme0n1"); partition and slice
-// names carry a letter after the digit run ("ada0p2", "ada0s1a"). Testing
-// for that letter-after-digits shape is what tells a whole disk apart from
-// its children - every real FreeBSD disk name contains a digit, so a
-// "contains a digit" test would classify nothing as a disk.
+/* Whether a bare device name is a whole disk rather than one of its
+ * partitions or slices.
+ *
+ * FreeBSD disk names are letters followed by digits: "ada0", "da12",
+ * "nvme0", "mmcsd0", "nvd0", "md0", "nda0", "vtbd0". Partition and slice
+ * names append a letter and more digits after that: "ada0p2", "ada0s1a",
+ * "mmcsd0p2".
+ *
+ * NVMe namespace names are the one shape that does not fit that rule:
+ * "nvme0n1" is a whole disk, and the "n" between the two digit runs is
+ * what a naive trailing-digit scan trips over. Both forms are matched
+ * explicitly rather than with a digit-stripping heuristic, so the
+ * busy-guard cannot miss an NVMe disk or mistake a partition for one. */
 static BOOL IsWholeDiskNodeName(NSString *name)
 {
-    NSUInteger stemEnd = name.length;
-    NSCharacterSet *digits = [NSCharacterSet decimalDigitCharacterSet];
-    while (stemEnd > 0 &&
-           [digits characterIsMember:[name characterAtIndex:stemEnd - 1]]) {
-        stemEnd--;
-    }
-    if (stemEnd == 0 || stemEnd == name.length) {
+    if (name.length == 0) {
         return NO;
     }
     NSCharacterSet *letters = [NSCharacterSet letterCharacterSet];
-    for (NSUInteger i = 0; i < stemEnd; i++) {
-        if (![letters characterIsMember:[name characterAtIndex:i]]) {
-            return NO;
-        }
+    NSCharacterSet *digits = [NSCharacterSet decimalDigitCharacterSet];
+    NSUInteger i = 0;
+    while (i < name.length &&
+           [letters characterIsMember:[name characterAtIndex:i]]) {
+        i++;
     }
-    return YES;
+    if (i == 0 || i == name.length) {
+        return NO;
+    }
+    NSUInteger firstDigit = i;
+    while (i < name.length &&
+           [digits characterIsMember:[name characterAtIndex:i]]) {
+        i++;
+    }
+    if (i == firstDigit) {
+        return NO;
+    }
+    if (i == name.length) {
+        return YES;  // da0, nvd0, mmcsd0
+    }
+    // A letter after the digit run starts a partition or slice name, except
+    // for the "nvme<N>n<M>" namespace form, which repeats digits afterwards.
+    if (i + 1 >= name.length ||
+        [name characterAtIndex:i] != 'n') {
+        return NO;
+    }
+    NSUInteger j = i + 1;
+    if (j >= name.length ||
+        ![digits characterIsMember:[name characterAtIndex:j]]) {
+        return NO;
+    }
+    while (j < name.length &&
+           [digits characterIsMember:[name characterAtIndex:j]]) {
+        j++;
+    }
+    return j == name.length;
+}
+
+/* Whether a device node name belongs to a partition or slice of the given
+ * whole-disk name. "da1" owns "da1p2" and "da1s1a" but not "da10p2", so a
+ * bare hasPrefix: would report a neighbouring disk as a child. */
+static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
+{
+    if (![nodeName hasPrefix:diskName] || nodeName.length <= diskName.length) {
+        return NO;
+    }
+    unichar separator = [nodeName characterAtIndex:diskName.length];
+    return separator == 'p' || separator == 's';
 }
 
 @implementation DUFreeBSDStorageBackend
@@ -68,6 +112,20 @@ static BOOL IsWholeDiskNodeName(NSString *name)
         @"fsck_ffs", @"fsck_msdosfs", @"dd", @"gmirror", @"gstripe",
         @"gconcat", @"sha256", @"gzip", @"qemu-img", @"cdrecord", @"wodim",
         @"xorriso", @"growisofs", @"eject", @"camcontrol", @"cat"
+    ];
+}
+
+// Without these the app cannot read the disk list, check, format, mount or
+// write an image, so the startup check treats them as blocking. Everything
+// else the backend mentions is optional: the geom RAID classes, the
+// qemu-img image formats, the cdrecord-family burners, and the eject tools
+// each gate exactly one menu item and are already reported per-feature in
+// the capabilities report.
+- (NSArray<NSString *> *)requiredToolNames
+{
+    return @[
+        @"geom", @"mount", @"umount", @"gpart", @"newfs", @"newfs_msdos",
+        @"fsck_ffs", @"fsck_msdosfs", @"dd", @"sha256", @"gzip",
     ];
 }
 
@@ -226,6 +284,36 @@ static BOOL IsWholeDiskNodeName(NSString *name)
     return NO;
 }
 
+// Whether a partition table currently exists on the node. Asked with
+// `gpart show` rather than inferred from a failed `gpart destroy`: the
+// wording of "no table here" differs between gpart builds ("No such geom:
+// da1" on some, "arg0 'da1': Invalid argument" on this one), and both
+// spellings would otherwise be read as a failure to remove a table that
+// never existed - which is exactly what partitioning an unlabelled disk
+// needs to do.
+- (BOOL)partitionTableExistsOn:(NSString *)nodeName
+                     gpartPath:(NSString *)gpartPath
+{
+    DUProcessResult *result =
+        [[DUAuthorizationManager sharedManager]
+            runPrivileged:gpartPath
+                     args:@[ @"show", nodeName ]
+                  timeout:120.0
+                    error:NULL];
+    if ([self runSucceeded:result]) {
+        return YES;
+    }
+    NSString *complaint = [NSString
+        stringWithFormat:@"%@ %@", result.standardError,
+                          result.standardOutput];
+    return !([DUParsing caseInsensitiveContains:complaint
+                                       needle:@"no such geom"] ||
+             [DUParsing caseInsensitiveContains:complaint
+                                       needle:@"invalid argument"] ||
+             [DUParsing caseInsensitiveContains:complaint
+                                       needle:@"no space"]);
+}
+
 - (NSError *)gateForOperation:(NSString *)op onObject:(DUStorageObject *)object
 {
     if (object == nil) {
@@ -322,7 +410,7 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 - (BOOL)runSucceeded:(DUProcessResult *)result
 {
     return result != nil && result.exitedNormally &&
-        WEXITSTATUS(result.terminationStatus) == 0 && !result.timedOut;
+        [result exitedWithStatus:0] && !result.timedOut;
 }
 
 // dd progress lines ("123456789 bytes transferred ..." / GNU-style copies)
@@ -330,6 +418,7 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 // single buffered line and are split here.
 - (unsigned long long)byteCountFromProgressLine:(NSString *)line
 {
+    unsigned long long highest = 0;
     for (NSString *chunk in [line componentsSeparatedByString:@"\r"]) {
         NSString *text = [DUParsing trimmedString:
                                    [chunk stringByReplacingOccurrencesOfString:@"\r"
@@ -347,11 +436,14 @@ static BOOL IsWholeDiskNodeName(NSString *name)
         unsigned long long bytes =
             [DUParsing unsignedLongLongFromString:
                            [text substringToIndex:suffix.location]];
-        if (bytes > 0) {
-            return bytes;
+        if (bytes > highest) {
+            highest = bytes;
         }
     }
-    return 0;
+    // The latest count, not the first: a line can carry several ticks, and
+    // returning the earliest one pinned the progress bar near 0% for the
+    // whole copy.
+    return highest;
 }
 
 #pragma mark - Filesystem classification
@@ -536,14 +628,17 @@ static BOOL IsWholeDiskNodeName(NSString *name)
     }
     // Whole-disk work must also catch mounted slices like /dev/ada0p2 whose
     // names extend the disk node; partition nodes are matched exactly above.
+    // The node name has to be checked with the partition separator, or a
+    // mounted /dev/da10p1 reads as a child of /dev/da1.
     for (NSString *node in nodes) {
         NSString *base = node.lastPathComponent;
         if (!IsWholeDiskNodeName(base)) {
             continue;
         }
         for (NSString *mountedNode in table) {
-            if ([mountedNode.lastPathComponent hasPrefix:base] &&
-                ![mountedNode.lastPathComponent isEqualToString:base]) {
+            NSString *mounted = mountedNode.lastPathComponent;
+            if (![mounted isEqualToString:base] &&
+                IsNodeOnDisk(mounted, base)) {
                 return mountedNode;
             }
         }
@@ -565,11 +660,22 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 {
     NSMutableArray<DUPartition *> *verifiable = [NSMutableArray new];
     NSMutableArray<DUPartition *> *skipped = [NSMutableArray new];
-    for (DUStorageObject *child in device.children) {
-        if (![child isKindOfClass:[DUPartition class]]) {
-            continue;
+    /* The whole SUBTREE, not just the disk's direct children: a BSD label
+     * nests its partitions one level below their slice (ada0s1a hangs off
+     * ada0s1), so walking only the children found nothing to check on those
+     * disks and then reported "All partitions verified clean." */
+    NSMutableArray<DUPartition *> *partitions = [NSMutableArray array];
+    NSMutableArray<DUStorageObject *> *pending =
+        [NSMutableArray arrayWithArray:device.children];
+    while (pending.count > 0) {
+        DUStorageObject *child = pending.lastObject;
+        [pending removeLastObject];
+        if ([child isKindOfClass:[DUPartition class]]) {
+            [partitions addObject:(DUPartition *)child];
         }
-        DUPartition *partition = (DUPartition *)child;
+        [pending addObjectsFromArray:child.children];
+    }
+    for (DUPartition *partition in partitions) {
         NSString *checker =
             [self checkerNameForFilesystem:
                       partition.filesystemType ?: @""];
@@ -580,11 +686,27 @@ static BOOL IsWholeDiskNodeName(NSString *name)
         }
     }
 
-    if (verifiable.count == 0 && skipped.count == 0) {
+    /* Nothing was actually checked. Saying "verified clean" here is a lie
+     * that matters: the user is told their disk is sound when no checker
+     * ever ran. */
+    if (verifiable.count == 0) {
+        /* A whole-disk erase leaves a filesystem on the device node itself
+         * and no partition table at all, so "no partitions" does not mean
+         * "nothing to check" - it is the normal end state of Erase. Verify
+         * the device's own filesystem in that case. */
+        if (partitions.count == 0) {
+            [self verifyFilesystemAtNode:device.backendPath
+                                    named:device.displayName
+                                  progress:progress
+                                completion:completion];
+            return;
+        }
         completion(DUErrorMake(
             DUErrorUnsupportedOperation,
-            NSLocalizedString(@"This disk has no partitions to verify.",
-                              nil)));
+            NSLocalizedString(
+                @"None of this disk's filesystems can be verified with the "
+                @"tools installed.",
+                nil)));
         return;
     }
 
@@ -686,6 +808,110 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 }
 
 #pragma mark - Verify
+
+/* Checks a filesystem that lives directly on a node, with no partition
+ * involved. This is the state a whole-disk erase leaves behind, and it is
+ * also what a freshly created image file is before it is partitioned, so
+ * verifying the device itself has to be a first-class path rather than a
+ * "no partitions" refusal. */
+- (void)verifyFilesystemAtNode:(NSString *)node
+                         named:(NSString *)name
+                      progress:(void (^)(double progress,
+                                         NSString *message))progress
+                    completion:(void (^)(NSError *error))completion
+{
+    if (node.length == 0) {
+        if (completion != NULL) {
+            completion(DUErrorMake(DUErrorInvalidArgument,
+                                   NSLocalizedString(@"The item has no device "
+                                                     @"node.", nil)));
+        }
+        return;
+    }
+    NSString *fstype = [self filesystemTypeAtNode:node];
+    NSString *checker = fstype != nil
+        ? [self checkerNameForFilesystem:fstype] : nil;
+    NSString *checkerPath = checker == nil
+        ? nil : [DUFreeBSDToolCache pathForTool:checker];
+    if (checkerPath == nil) {
+        if (completion != NULL) {
+            completion(DUErrorMake(
+                DUErrorUnsupportedOperation,
+                NSLocalizedString(@"No filesystem checker for this item is "
+                                  @"installed.", nil)));
+        }
+        return;
+    }
+
+    [self spawnWork:^{
+        if (progress != NULL) {
+            progress(0.0, [NSString stringWithFormat:
+                               NSLocalizedString(@"Checking filesystem on %@...",
+                                                 nil),
+                               name ?: node]);
+        }
+        NSMutableArray<NSString *> *arguments =
+            [NSMutableArray arrayWithArray:
+                               [self readonlyArgumentsForChecker:checker]];
+        [arguments addObject:node];
+        __block NSUInteger lineCount = 0;
+        DUProcessResult *result = [self blockingStreamedRun:checkerPath
+                                                  arguments:arguments
+                                                lineHandler:^(NSString *line) {
+            NSString *text = [DUParsing trimmedString:line];
+            if (text.length == 0) {
+                return;
+            }
+            lineCount++;
+            if (progress != NULL) {
+                progress((1.0 - 1.0 / (double)(lineCount + 1)) * 0.95, text);
+            }
+        }];
+        if (![self runSucceeded:result]) {
+            if (completion != NULL) {
+                completion([self toolFailure:DUErrorVerificationFailed
+                                     message:NSLocalizedString(
+                                                  @"The filesystem was found "
+                                                  @"to be damaged.", nil)
+                                      result:result]);
+            }
+            return;
+        }
+        if (progress != NULL) {
+            progress(1.0, NSLocalizedString(@"Volume verified.", nil));
+        }
+        if (completion != NULL) {
+            completion(nil);
+        }
+    }];
+}
+
+// The filesystem on a bare node, or nil when it cannot be identified. Probed
+// rather than remembered: after an erase the model's filesystemType is gone.
+- (NSString *)filesystemTypeAtNode:(NSString *)node
+{
+    for (NSString *candidate in @[ @"ufs", @"msdosfs" ]) {
+        NSString *checker = [self checkerNameForFilesystem:candidate];
+        NSString *checkerPath =
+            [DUFreeBSDToolCache pathForTool:checker ?: @""];
+        if (checkerPath == nil) {
+            continue;
+        }
+        NSMutableArray<NSString *> *arguments =
+            [NSMutableArray arrayWithArray:
+                               [self readonlyArgumentsForChecker:checker]];
+        [arguments addObject:node];
+        DUProcessResult *result =
+            [DUProcessRunner runExecutable:checkerPath
+                                 arguments:arguments
+                                     error:NULL];
+        if (result != nil && result.exitedNormally &&
+            [result exitedWithStatus:0]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
 
 - (void)verifyObject:(DUStorageObject *)object
               progress:(void (^)(double progress, NSString *message))progress
@@ -1015,6 +1241,17 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                 @"bs=1M",
                 @"status=progress",
             ]];
+            /* An explicit count is required, not an optimisation. Left to run
+             * until the device is full, dd's final block write is short, the
+             * tool exits nonzero and the app reported "Zeroing the device
+             * failed" on a volume it had in fact just wiped. Counting the
+             * blocks makes the copy end cleanly and the verdict honest. */
+            if (totalBytes > 0) {
+                [ddArguments addObject:
+                    [NSString stringWithFormat:@"count=%llu",
+                                               (totalBytes + (1024 * 1024) - 1) /
+                                                   (1024 * 1024)]];
+            }
             DUProcessResult *wipe = [self
                 blockingStreamedRun:ddPath
                           arguments:ddArguments
@@ -1055,19 +1292,23 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                          NSLocalizedString(@"Removing the partition "
                                            @"table...", nil));
             }
-            // gpart destroy rewrites the table; needs root.
-            DUProcessResult *destroy =
-                [[DUAuthorizationManager sharedManager]
-                    runPrivileged:gpartPath
-                             args:@[ @"destroy", @"-F", node ]
-                          timeout:300.0
-                            error:NULL];
-            BOOL tableWasAbsent =
-                [DUParsing caseInsensitiveContains:destroy.standardError
-                                             needle:@"no such geom"] ||
-                [DUParsing caseInsensitiveContains:destroy.standardOutput
-                                             needle:@"no such geom"];
-            if (![self runSucceeded:destroy] && !tableWasAbsent) {
+            // gpart destroy rewrites the table; needs root. Only run it when
+            // there IS a table: on an already-blank disk gpart exits nonzero
+            // with a wording that is not the same on every build, and
+            // matching one spelling read a normal "nothing to remove" as a
+            // failure to remove the table - which is what a second Erase of
+            // the same disk is.
+            DUProcessResult *destroy = nil;
+            NSString *nodeName = node.lastPathComponent;
+            if ([self partitionTableExistsOn:nodeName gpartPath:gpartPath]) {
+                destroy =
+                    [[DUAuthorizationManager sharedManager]
+                        runPrivileged:gpartPath
+                                 args:@[ @"destroy", @"-F", nodeName ]
+                              timeout:300.0
+                                error:NULL];
+            }
+            if (destroy != nil && ![self runSucceeded:destroy]) {
                 if (completion != NULL) {
                     completion([self toolFailure:DUErrorEraseFailed
                                          message:NSLocalizedString(
@@ -1215,20 +1456,48 @@ static BOOL IsWholeDiskNodeName(NSString *name)
         return;
     }
 
-    // Sector geometry comes from the live provider data, not from the
-    // discovery snapshot, so plans stay correct across re-plugs.
+    /* Sector size comes from the DISK provider, not from the part class: a
+     * disk with no table yet has no part providers at all, so the old lookup
+     * silently fell back to 512 - which makes every partition 8x too large on
+     * a 4Kn drive (gpart add -s counts media sectors, not bytes) and the first
+     * partition then swallows the disk. */
     NSString *nodeName = device.backendPath.lastPathComponent;
-    unsigned long long sectorSize = 512;
-    NSArray<NSDictionary<NSString *, id> *> *geometry =
-        [DUFreeBSDGEOMAdapter listClass:@"part" name:nodeName error:NULL];
-    for (NSDictionary *provider in geometry) {
-        unsigned long long reported = [DUParsing
-            unsignedLongLongFromString:[DUParsing trimmedString:
-                                                   provider[@"sectorsize"]]];
-        if (reported > 0) {
-            sectorSize = reported;
+    unsigned long long sectorSize = 0;
+    for (NSDictionary *provider in [DUFreeBSDGEOMAdapter listClass:@"disk"
+                                                              name:nodeName
+                                                              error:NULL]) {
+        sectorSize = [DUParsing unsignedLongLongFromString:
+                                 [DUParsing trimmedString:
+                                            provider[@"sectorsize"]]];
+        if (sectorSize > 0) {
             break;
         }
+    }
+    if (sectorSize == 0) {
+        for (NSDictionary *provider in
+                 [DUFreeBSDGEOMAdapter listClass:@"part"
+                                           name:nodeName
+                                           error:NULL]) {
+            sectorSize = [DUParsing unsignedLongLongFromString:
+                                     [DUParsing trimmedString:
+                                                provider[@"sectorsize"]]];
+            if (sectorSize > 0) {
+                break;
+            }
+        }
+    }
+    if (sectorSize == 0) {
+        // Refuse rather than guess a sector size: the wrong one produces a
+        // table whose partitions do not match what the user asked for, on a
+        // disk whose old table has already been destroyed.
+        if (completion != NULL) {
+            completion(DUErrorMake(
+                DUErrorBackendUnavailable,
+                NSLocalizedString(@"The sector size of this disk could not be "
+                                  @"read, so the partition sizes cannot be "
+                                  @"computed safely.", nil)));
+        }
+        return;
     }
 
     [self spawnWork:^{
@@ -1237,6 +1506,38 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                      NSLocalizedString(@"Creating partition table...",
                                        nil));
         }
+        /* Applying a plan rewrites the whole table, so an existing one has to
+         * go first: gpart(8) leaves the entries of a table it recognises
+         * alone, which silently merges the old partitions into the new
+         * scheme and then makes every gpart add -i land on an occupied slot.
+         *
+         * Whether there IS a table is asked first rather than inferred from
+         * the destroy's exit code: gpart(8) reports an unlabelled disk
+         * differently across builds ("No such geom: da1" on some, "arg0
+         * 'da1': Invalid argument" on this one), and both are a normal
+         * "nothing to remove" rather than a failure. */
+        BOOL tableExists = [self partitionTableExistsOn:nodeName
+                                               gpartPath:gpartPath];
+        if (tableExists) {
+            DUProcessResult *destroyed =
+                [[DUAuthorizationManager sharedManager]
+                    runPrivileged:gpartPath
+                             args:@[ @"destroy", @"-F", nodeName ]
+                          timeout:300.0
+                            error:NULL];
+            if (![self runSucceeded:destroyed]) {
+                if (completion != NULL) {
+                    completion([self toolFailure:DUErrorPartitionError
+                                         message:NSLocalizedString(
+                                                      @"Removing the old "
+                                                      @"partition table "
+                                                      @"failed.", nil)
+                                          result:destroyed]);
+                }
+                return;
+            }
+        }
+
         // gpart create rewrites the table; needs root.
         DUProcessResult *created =
             [[DUAuthorizationManager sharedManager]
@@ -1272,12 +1573,11 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                                    [NSString stringWithFormat:@"%llu",
                                                               sectors] ]];
             }
-            if ([scheme isEqualToString:@"gpt"] && entry.index >= 1) {
-                [arguments addObjectsFromArray:
-                                @[ @"-i",
-                                   [NSString stringWithFormat:@"%ld",
-                                                              (long)entry.index] ]];
-            }
+            /* No -i: gpart numbers the table from 1 and the layout numbers its
+             * entries from 0, so passing the layout index made every add after
+             * the first collide with a slot gpart had just used. Entries arrive
+             * in ascending offset order and gpart appends in call order, so
+             * letting gpart assign the index reproduces the layout exactly. */
             if ([scheme isEqualToString:@"gpt"] &&
                 entry.name.length > 0) {
                 NSString *label =
@@ -1326,15 +1626,46 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 
 #pragma mark - Mount management
 
+// Where a volume is mounted when the app mounts it: under the user's own
+// directory, because the app is not root and cannot create a directory
+// directly under /media. Created on demand; the caller reports the failure.
+- (NSString *)mountPointForNode:(NSString *)node
+{
+    NSString *home = NSHomeDirectory();
+    if (home.length == 0) {
+        home = NSTemporaryDirectory();
+    }
+    NSString *root = [home stringByAppendingPathComponent:@".disk-utility"
+                                                            "/mounts"];
+    NSString *directory =
+        [root stringByAppendingPathComponent:node.lastPathComponent];
+    NSError *directoryError = nil;
+    if ([[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:&directoryError] == NO &&
+        directoryError != nil) {
+        return nil;
+    }
+    return directory;
+}
+
 - (void)mountObject:(DUStorageObject *)object
           completion:(void (^)(NSError *error, NSString *mountPoint))completion
 {
-    NSError *gate =
-        [self gateForOperation:kDUOperationMount onObject:object];
-    if (gate == nil && object.backendPath.length == 0) {
+    NSError *gate = nil;
+    if (object == nil || object.backendPath.length == 0) {
         gate = DUErrorMake(DUErrorInvalidArgument,
                            NSLocalizedString(@"The item has no device node.",
                                              nil));
+    } else {
+        /* Not gated on -supportsOperation:kDUOperationMount: for the same
+         * reason unmount is not gated on its flag. canMount is computed from
+         * the mount state at snapshot time, so a freshly created partition
+         * that is not in any snapshot yet - or a volume mounted and then
+         * unmounted - arrives with canMount = NO and Mount is refused even
+         * though mount(8) would succeed. The real preconditions (a tool, a
+         * known filesystem, an unmounted node) are checked below. */
     }
 
     NSString *mountPath = gate == nil
@@ -1378,22 +1709,19 @@ static BOOL IsWholeDiskNodeName(NSString *name)
         return;
     }
 
-    NSString *directory =
-        [@"/media/" stringByAppendingString:node.lastPathComponent];
-    NSError *directoryError = nil;
-    if ([[NSFileManager defaultManager] createDirectoryAtPath:directory
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:&directoryError] == NO &&
-        directoryError != nil) {
+    /* The mount point has to live somewhere the unprivileged GUI process can
+     * create it. /media is root-owned, so mkdir /media/<node> failed with
+     * EACCES and every Mount in the app died with "the mount point could not
+     * be created". The user's own data directory always works and keeps the
+     * volume reachable between sessions. */
+    NSString *directory = [self mountPointForNode:node];
+    if (directory == nil) {
         if (completion != NULL) {
-            completion(DUErrorMake(DUErrorMountError,
-                                   [NSString stringWithFormat:
-                                        NSLocalizedString(
-                                            @"The mount point %@ could not "
-                                            @"be created.", nil),
-                                        directory]),
-                      nil);
+            completion(DUErrorMake(
+                DUErrorMountError,
+                NSLocalizedString(@"A mount point for this volume could not be "
+                                  @"created in your home directory.", nil)),
+                       nil);
         }
         return;
     }
@@ -1416,8 +1744,27 @@ static BOOL IsWholeDiskNodeName(NSString *name)
             }
             return;
         }
+        /* Report the mount point the SYSTEM recorded, and only if something
+         * really is mounted there: mount(8) can exit 0 while the requested
+         * directory stays an ordinary directory, and handing that path back
+         * is what made the unmount right afterwards fail with "This item is
+         * not mounted." while the browser showed a mounted volume. */
+        NSString *recorded =
+            [DUFreeBSDGEOMAdapter currentMountTable][node][@"mountPoint"];
+        if (recorded.length == 0) {
+            [self unmountQuietly:directory];
+            if (completion != NULL) {
+                completion([self toolFailure:DUErrorMountError
+                                     message:NSLocalizedString(
+                                                  @"Mounting failed: nothing "
+                                                  @"was attached at %@.", nil)
+                                      result:result],
+                           nil);
+            }
+            return;
+        }
         if (completion != NULL) {
-            completion(nil, directory);
+            completion(nil, recorded);
         }
     }];
 }
@@ -1425,12 +1772,20 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 - (void)unmountObject:(DUStorageObject *)object
             completion:(void (^)(NSError *error))completion
 {
-    NSError *gate =
-        [self gateForOperation:kDUOperationUnmount onObject:object];
-    if (gate == nil && object.backendPath.length == 0) {
+    NSError *gate = nil;
+    if (object == nil || object.backendPath.length == 0) {
         gate = DUErrorMake(DUErrorInvalidArgument,
                            NSLocalizedString(@"The item has no device node.",
                                              nil));
+    } else {
+        /* Deliberately NOT gated on -supportsOperation:kDUOperationUnmount:.
+         * Discovery sets canUnmount from the mount state captured when the
+         * snapshot was built, so a volume mounted since then arrives with
+         * canUnmount = NO and every Unmount was refused as
+         * "\"unmount\" cannot be performed on <volume>" - the user could
+         * mount a volume and then not be able to unmount it. The real
+         * precondition is the live mount table, which is checked below and
+         * produces the honest "This item is not mounted." when it applies. */
     }
 
     NSString *umountPath = gate == nil
@@ -1444,12 +1799,14 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 
     NSString *target = nil;
     if (gate == nil) {
-        if ([object isKindOfClass:[DUStorageVolume class]] &&
-            ((DUStorageVolume *)object).mountPoint.length > 0) {
+        // The live mount table is authoritative, with the snapshot's recorded
+        // mount point only as a fallback: it is what tells us where the
+        // filesystem is now.
+        target =
+            [DUFreeBSDGEOMAdapter currentMountTable][object.backendPath][@"mountPoint"];
+        if (target.length == 0 &&
+            [object isKindOfClass:[DUStorageVolume class]]) {
             target = ((DUStorageVolume *)object).mountPoint;
-        } else {
-            target =
-                [DUFreeBSDGEOMAdapter currentMountTable][object.backendPath][@"mountPoint"];
         }
         if (target.length == 0) {
             gate = DUErrorMake(DUErrorUnmountError,
@@ -1613,6 +1970,23 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                            NSLocalizedString(@"Source and destination are "
                                              @"the same device.", nil));
     }
+    /* Overlapping nodes, not just identical ones: restoring a whole disk onto
+     * one of its own partitions (or a partition onto its parent disk) passes
+     * an equality test, and dd then reads and overwrites the same bytes. */
+    if (gate == nil) {
+        NSString *sourceBase = source.backendPath.lastPathComponent;
+        NSString *destinationBase = destination.backendPath.lastPathComponent;
+        if ((IsWholeDiskNodeName(destinationBase) &&
+             IsNodeOnDisk(sourceBase, destinationBase)) ||
+            (IsWholeDiskNodeName(sourceBase) &&
+             IsNodeOnDisk(destinationBase, sourceBase))) {
+            gate = DUErrorMake(
+                DUErrorInvalidArgument,
+                NSLocalizedString(@"The destination is part of the source, so "
+                                  @"restoring would overwrite the data it is "
+                                  @"copying from.", nil));
+        }
+    }
     unsigned long long totalBytes =
         gate == nil ? [self sizeOfObject:destination] : 0;
     if (gate == nil && totalBytes == 0) {
@@ -1620,6 +1994,34 @@ static BOOL IsWholeDiskNodeName(NSString *name)
             DUErrorUnsupportedOperation,
             NSLocalizedString(@"The destination size is unknown, so restore "
                               @"cannot proceed safely.", nil));
+    }
+    /* The source has to FIT. Without this check dd happily overwrites a small
+     * destination from a large image and only fails when it runs off the end,
+     * by which point the destination's table and data are already gone. */
+    unsigned long long sourceBytes = 0;
+    if (gate == nil) {
+        sourceBytes = [self sizeOfObject:source];
+        if (sourceBytes == 0 && [source isKindOfClass:[DUDiskImage class]]) {
+            sourceBytes = [[[NSFileManager defaultManager]
+                attributesOfItemAtPath:((DUDiskImage *)source).path
+                                 error:NULL][NSFileSize] unsignedLongLongValue];
+        }
+        if (sourceBytes == 0) {
+            gate = DUErrorMake(
+                DUErrorUnsupportedOperation,
+                NSLocalizedString(@"The size of the restore source is unknown, "
+                                  @"so it cannot be checked against the "
+                                  @"destination.", nil));
+        } else if (sourceBytes > totalBytes) {
+            gate = DUErrorMake(
+                DUErrorInvalidArgument,
+                [NSString stringWithFormat:
+                     NSLocalizedString(
+                         @"The source is %.1f GB but the destination is only "
+                         @"%.1f GB, so it does not fit.", nil),
+                     sourceBytes / (1024.0 * 1024.0 * 1024.0),
+                     totalBytes / (1024.0 * 1024.0 * 1024.0)]);
+        }
     }
 
     NSString *busyNode = gate == nil
@@ -1665,9 +2067,22 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                 @"bs=1M",
                 @"status=progress",
             ]];
+        /* Stop at the source's length, not at the destination's: dd reading
+         * past the end of the image either fails or, worse, keeps writing
+         * whatever the device returns. count= keeps the copy honest. */
+        [arguments addObject:[NSString stringWithFormat:@"count=%llu",
+                                                       sourceBytes / (1024 * 1024)]];
+        if (sourceBytes % (1024 * 1024) != 0) {
+            [arguments addObject:[NSString stringWithFormat:@"count=%llu",
+                                                           (sourceBytes +
+                                                            (1024 * 1024) - 1) /
+                                                               (1024 * 1024)]];
+        }
 
-        // The streamed lines carry running byte counts; compare them with
-        // the destination size for the fraction.
+        // The streamed lines carry running byte counts; the SOURCE size is
+        // the denominator, so a small image into a large disk fills the bar
+        // instead of stalling near zero and then jumping to full.
+        unsigned long long copyBytes = sourceBytes;
         DUProcessResult *result = [self
             blockingStreamedRun:ddPath
                       arguments:arguments
@@ -1678,7 +2093,7 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                             return;
                         }
                         double ratio =
-                            (double)copied / (double)totalBytes;
+                            (double)copied / (double)copyBytes;
                         if (ratio > 1.0) {
                             ratio = 1.0;
                         }
@@ -1959,9 +2374,24 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 
       BOOL compressed = [format isEqualToString: @"gz"];
       BOOL convertAfter = ![format isEqualToString: @"raw"] && !compressed;
-      NSString *rawPath = convertAfter
-          ? [targetPath stringByAppendingPathExtension: @"tmp-raw"]
-          : targetPath;
+      /* Every non-raw target is produced from a raw intermediate, then
+       * finished. For "gz" that means a sibling raw file is compressed into
+       * the real target afterwards: writing dd's output straight to the
+       * .img.gz left uncompressed bytes in a file named as a gzip archive,
+       * which then failed its own gzip -t and reported a checksum mismatch
+       * after copying the entire source. */
+      NSString *rawPath = [targetPath stringByAppendingPathExtension:
+                                               @"tmp-raw"];
+      NSString *gzip = compressed
+          ? [DUFreeBSDToolCache pathForTool: @"gzip"]
+          : nil;
+      if (compressed && gzip == nil)
+        {
+          completion(DUErrorMake(DUErrorUnsupportedOperation,
+              NSLocalizedString(@"The gzip tool is not installed, so a "
+                                @"compressed image cannot be created.", nil)));
+          return;
+        }
 
       NSString *dd = [DUFreeBSDToolCache pathForTool: @"dd"];
       if (dd == nil)
@@ -2008,12 +2438,10 @@ static BOOL IsWholeDiskNodeName(NSString *name)
           return;
         }
 
-      /* Verify before declaring success: hash the source, then re-read
-       * the written file and compare digests. For gzip targets only the
-       * archive integrity can be checked cheaply (gzip -t); converted
-       * formats verify the raw intermediate before qemu-img runs. */
-      NSString *verifyTarget = convertAfter ? rawPath : targetPath;
-
+      /* Verify the raw intermediate against the source before spending time
+       * on the final format: a byte-for-byte match here is the strongest
+       * statement the flow can make, and it holds for raw, gzip and
+       * converted targets alike. */
       progress(0.5, NSLocalizedString(@"Hashing the source...", nil));
       NSString *sourceDigest =
           [self sha256HexForPath: sourcePath
@@ -2025,41 +2453,17 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                                       @"Hashing the source...", nil));
                           }];
 
-      NSString *writtenDigest = nil;
-      if (compressed)
-        {
-          progress(0.75,
-              NSLocalizedString(@"Verifying archive integrity...", nil));
-          NSString *gzip =
-              [DUFreeBSDToolCache pathForTool: @"gzip"];
-          DUProcessResult *test =
-              [self blockingStreamedRun: gzip
-                              arguments: @[ @"-t", verifyTarget ]
-                            lineHandler: nil];
-          if (![self runSucceeded: test])
-            {
-              writtenDigest = @"";
-            }
-          else
-            {
-              writtenDigest = sourceDigest;
-            }
-        }
-      else
-        {
-          progress(0.75,
-              NSLocalizedString(@"Re-reading written data...", nil));
-          writtenDigest =
-              [self sha256HexForPath: verifyTarget
-                           sizeBytes: sourceBytes
-                            progress: ^(double fraction) {
-                                if (progress != NULL)
-                                  progress(0.625 + fraction * 0.375,
-                                      NSLocalizedString(
-                                          @"Re-reading written data...",
-                                          nil));
-                            }];
-        }
+      progress(0.75,
+          NSLocalizedString(@"Re-reading written data...", nil));
+      NSString *writtenDigest =
+          [self sha256HexForPath: rawPath
+                       sizeBytes: sourceBytes
+                        progress: ^(double fraction) {
+                            if (progress != NULL)
+                              progress(0.75 + fraction * 0.15,
+                                  NSLocalizedString(
+                                      @"Re-reading written data...", nil));
+                        }];
 
       if (writtenDigest == nil ||
           ![writtenDigest isEqualToString: sourceDigest])
@@ -2073,11 +2477,58 @@ static BOOL IsWholeDiskNodeName(NSString *name)
           return;
         }
 
-      if (convertAfter)
+      /* Finish the target: compress, convert, or keep the raw file. */
+      if (compressed)
         {
-          progress(0.95, NSLocalizedString(@"Converting image...", nil));
+          progress(0.9, NSLocalizedString(@"Compressing image...", nil));
+          NSData *archive = [self binaryStandardOutputOf: gzip
+                                               arguments: @[ @"-c", rawPath ]];
+          [[NSFileManager defaultManager] removeItemAtPath:
+              rawPath error: NULL];
+          if (archive.length == 0)
+            {
+              completion(DUErrorMake(DUErrorUnknown,
+                  NSLocalizedString(@"Compressing the image failed.", nil)));
+              return;
+            }
+          if (![archive writeToFile: targetPath atomically: YES])
+            {
+              completion(DUErrorMake(DUErrorFilesystemError,
+                  NSLocalizedString(@"The compressed image could not be "
+                                    @"written to the chosen location.", nil)));
+              return;
+            }
+          progress(0.97,
+              NSLocalizedString(@"Verifying archive integrity...", nil));
+          DUProcessResult *test =
+              [self blockingStreamedRun: gzip
+                              arguments: @[ @"-t", targetPath ]
+                            lineHandler: nil];
+          if (![self runSucceeded: test])
+            {
+              completion([self toolFailure: DUErrorVerificationFailed
+                                   message: NSLocalizedString(
+                                                @"The compressed image is not "
+                                                @"a valid archive.", nil)
+                                    result: test]);
+              return;
+            }
+        }
+      else if (convertAfter)
+        {
+          progress(0.9, NSLocalizedString(@"Converting image...", nil));
           NSString *qemuImg =
               [DUFreeBSDToolCache pathForTool: @"qemu-img"];
+          if (qemuImg == nil)
+            {
+              [[NSFileManager defaultManager] removeItemAtPath:
+                  rawPath error: NULL];
+              completion(DUErrorMake(DUErrorUnsupportedOperation,
+                  NSLocalizedString(@"The qemu-img tool is not installed, so "
+                                    @"this image format cannot be produced.",
+                                    nil)));
+              return;
+            }
           DUProcessResult *conversion =
               [self blockingStreamedRun: qemuImg
                               arguments: @[ @"convert", @"-O", format,
@@ -2095,11 +2546,49 @@ static BOOL IsWholeDiskNodeName(NSString *name)
               return;
             }
         }
+      else
+        {
+          /* Plain raw: the intermediate IS the target. */
+          if (![[NSFileManager defaultManager] moveItemAtPath: rawPath
+                                                      toPath: targetPath
+                                                       error: NULL])
+            {
+              completion(DUErrorMake(DUErrorFilesystemError,
+                  NSLocalizedString(@"The image could not be moved into "
+                                    @"place.", nil)));
+              return;
+            }
+        }
 
       progress(1.0,
           NSLocalizedString(@"Image created successfully.", nil));
       completion(nil);
     }];
+}
+
+// Re-runs a compressor and returns its BINARY stdout. gzip -c writes the
+// archive to stdout, which the streaming runner merges with stderr and so
+// cannot hand back as bytes; the copy is only ever a temporary artifact.
+- (NSData *)binaryStandardOutputOf:(NSString *)path
+                        arguments:(NSArray<NSString *> *)arguments
+{
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = path;
+    task.arguments = arguments;
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = [NSPipe pipe];
+    if (![task launchAndReturnError: NULL])
+      {
+        return nil;
+      }
+    NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    if (task.terminationStatus != 0)
+      {
+        return nil;
+      }
+    return data;
 }
 
 #pragma mark - Image conversion, resizing, burning
@@ -2161,29 +2650,38 @@ static BOOL IsWholeDiskNodeName(NSString *name)
 
 // Attaches a raw image file via mdconfig and returns the /dev/mdN node, or
 // nil on failure. The caller mounts, copies and later detaches it.
+// mdconfig(8) creates a memory-backed disk provider, which needs root; run
+// unprivileged it fails with "must be superuser" and every image-mount path
+// in the app dies at this one call.
 - (NSString *)attachImageFile:(NSString *)path
 {
     NSString *mdconfig = [DUFreeBSDToolCache pathForTool:@"mdconfig"];
     if (mdconfig == nil) {
         return nil;
     }
-    NSError *runError = nil;
     DUProcessResult *result =
-        [DUProcessRunner runExecutable:mdconfig
-                             arguments:@[ @"-a", @"-f", path ]
-                                 error:&runError];
-    if (result == nil || !result.exitedNormally ||
-        result.terminationStatus != 0) {
+        [[DUAuthorizationManager sharedManager]
+            runPrivileged:mdconfig
+                     args:@[ @"-a", @"-f", path ]
+                  timeout:120.0
+                    error:NULL];
+    if (![self runSucceeded:result]) {
         return nil;
     }
-    NSString *node = [result.standardOutput
-        stringByTrimmingCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    /* mdconfig(8) prints a bare device name ("md5") with no newline on some
+     * builds and "md5\n" on others; mdconfig -l on a loaded system lists
+     * already-attached devices too, so the newest name the command reported
+     * is what belongs to this file. */
+    NSString *node = [DUParsing trimmedString:result.standardOutput];
     if (node.length == 0) {
         return nil;
     }
     if (![node hasPrefix:@"/dev/"]) {
         node = [@"/dev/" stringByAppendingString:node];
+    }
+    if (![[NSFileManager defaultManager]
+            fileExistsAtPath:node]) {
+        return nil;
     }
     return node;
 }
@@ -2194,9 +2692,48 @@ static BOOL IsWholeDiskNodeName(NSString *name)
     if (mdconfig == nil) {
         return;
     }
-    [DUProcessRunner runExecutable:mdconfig
-                         arguments:@[ @"-d", @"-u", node ]
-                             error:nil];
+    [[DUAuthorizationManager sharedManager]
+        runPrivileged:mdconfig
+                 args:@[ @"-d", @"-u", node ]
+              timeout:120.0
+                error:NULL];
+}
+
+// Whether `path` is a filesystem root right now. A path that only LOOKS
+// like a mount point is an ordinary directory as far as any copy into it is
+// concerned, so every attach/mount/copy sequence has to check this before it
+// writes anything.
+- (BOOL)pathIsMountRoot:(NSString *)path
+{
+    if (path.length == 0) {
+        return NO;
+    }
+    // Fast enumeration over a dictionary yields its KEYS, which here are
+    // device paths; the values are the records that carry the mount point, so
+    // the table is read once and its values enumerated.
+    NSDictionary<NSString *, NSDictionary *> *table =
+        [DUFreeBSDGEOMAdapter currentMountTable];
+    for (NSDictionary *entry in [table allValues]) {
+        if ([entry[@"mountPoint"] isEqualToString:path]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+// Detach a path that may or may not be mounted; used on the error paths so a
+// half-attached image does not leak a filesystem.
+- (void)unmountQuietly:(NSString *)path
+{
+    NSString *umount = [DUFreeBSDToolCache pathForTool:@"umount"];
+    if (umount == nil || path.length == 0) {
+        return;
+    }
+    [[DUAuthorizationManager sharedManager]
+        runPrivileged:umount
+                 args:@[ path ]
+              timeout:120.0
+                error:NULL];
 }
 
 - (void)createBlankImageAtPath:(NSString *)path
@@ -2346,7 +2883,7 @@ static BOOL IsWholeDiskNodeName(NSString *name)
             completion([self toolFailure:DUErrorMountError
                                   message:NSLocalizedString(
                                               @"The folder image could not "
-                                              @"be mounted.",
+                                              @"be attached.",
                                               nil)
                                    result:nil]);
             return;
@@ -2361,10 +2898,23 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                              attributes:nil
                                   error:nil];
         NSString *mount = [DUFreeBSDToolCache pathForTool:@"mount"];
-        DUProcessResult *mountResult = [DUProcessRunner
-            runExecutable:mount
-               arguments:@[ node, mountPoint ]
-                   error:&launchError];
+        /* mdconfig reports the device as a bare name ("md5"), and mount(8)
+         * needs the full node: given "md5" it reports "No such file or
+         * directory", exits nonzero, and the mount point stays a plain
+         * directory - so the copy that follows silently writes the folder
+         * into /tmp instead of into the image. */
+        NSString *device = [node hasPrefix:@"/dev/"]
+            ? node
+            : [@"/dev/" stringByAppendingString:node];
+        NSArray<NSString *> *mountArguments =
+            @[ device, mountPoint ];
+        // mount(8) attaches a filesystem for the whole session; needs root.
+        DUProcessResult *mountResult =
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:mount
+                         args:mountArguments
+                      timeout:300.0
+                        error:&launchError];
         if (![self runSucceeded:mountResult] || launchError != nil) {
             [self detachImageNode:node];
             completion(launchError
@@ -2374,6 +2924,26 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                                                      @"not be mounted.",
                                                      nil)
                                           result:mountResult]);
+            return;
+        }
+        /* mount(8) can exit 0 while nothing is attached - a device node the
+         * kernel does not recognise is reported as "No such file or
+         * directory" by some paths and the mount point stays a plain
+         * directory. `cp -a` into a plain directory succeeds and writes
+         * everything into the temporary folder, so the image is then
+         * declared created with an empty filesystem and the user's data is
+         * gone. Refuse before copying unless the path really is a mount
+         * root. */
+        if (![self pathIsMountRoot:mountPoint]) {
+            [self unmountQuietly:mountPoint];
+            [self detachImageNode:node];
+            completion([self toolFailure:DUErrorMountError
+                                 message:NSLocalizedString(
+                                             @"The folder image could not be "
+                                             @"mounted: nothing was attached "
+                                             @"at the mount point.",
+                                             nil)
+                                  result:mountResult]);
             return;
         }
         progress(0.5,
@@ -2387,11 +2957,15 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                    mountPoint
                ]
                    error:&launchError];
-        [DUProcessRunner runExecutable:
-                              [DUFreeBSDToolCache pathForTool:@"umount"]
-                             ?: @"umount"
-                             arguments:@[ mountPoint ]
-                                 error:nil];
+        // umount detaches the image again; needs root like the mount did.
+        NSString *umount = [DUFreeBSDToolCache pathForTool:@"umount"];
+        if (umount != nil) {
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:umount
+                         args:@[ mountPoint ]
+                      timeout:300.0
+                        error:NULL];
+        }
         [self detachImageNode:node];
         if (![self runSucceeded:copyResult] || launchError != nil) {
             completion(launchError
@@ -2434,10 +3008,22 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                              attributes:nil
                                   error:nil];
         NSError *launchError = nil;
-        DUProcessResult *mountResult = [DUProcessRunner
-            runExecutable:[DUFreeBSDToolCache pathForTool:@"mount"]
-               arguments:@[ @"-t", @"msdos", node, mountPoint ]
-                   error:&launchError];
+        /* mdconfig(8) prints a bare name ("md5") and mount(8) needs the full
+         * node: given the bare name it exits nonzero with "No such file or
+         * directory" and the mount point stays a plain directory. The name is
+         * normalised once, in -attachImageFile:, so this path already has a
+         * /dev/... node. */
+        /* No -t: the image may hold UFS, FAT or an ISO, and hardcoding
+         * "msdos" made mount(8) fail on every other filesystem (the FreeBSD
+         * spelling is msdosfs anyway, so the old argument could not work at
+         * all). Let mount(8) probe the medium. */
+        // mount(8) attaches a filesystem for the whole session; needs root.
+        DUProcessResult *mountResult =
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:[DUFreeBSDToolCache pathForTool:@"mount"]
+                         args:@[ node, mountPoint ]
+                      timeout:300.0
+                        error:&launchError];
         if (![self runSucceeded:mountResult] || launchError != nil) {
             [self detachImageNode:node];
             completion(
@@ -2448,6 +3034,25 @@ static BOOL IsWholeDiskNodeName(NSString *name)
                                               @"mounted.",
                                               nil)
                                    result:mountResult],
+                nil);
+            return;
+        }
+        /* mount(8) exiting 0 is not proof that anything was attached: a
+         * device node the kernel cannot resolve leaves the mount point a
+         * plain directory, which then reads as an empty volume in the
+         * browser. Detach and report rather than hand back a path that is
+         * not a filesystem. */
+        if (![self pathIsMountRoot:mountPoint]) {
+            [self unmountQuietly:mountPoint];
+            [self detachImageNode:node];
+            completion(
+                [self toolFailure:DUErrorMountError
+                          message:NSLocalizedString(
+                                      @"The disk image could not be mounted: "
+                                      @"nothing was attached at the mount "
+                                      @"point.",
+                                      nil)
+                           result:mountResult],
                 nil);
             return;
         }

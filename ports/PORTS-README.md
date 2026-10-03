@@ -17,11 +17,10 @@ A GNUstep preference pane for display and monitor configuration.
 - **Installation**: `/System/Library/Bundles/Display.prefPane`
 
 ### sysutils/gershwin-globalshortcuts
-A GNUstep preference pane and daemon for global keyboard shortcuts.
-- **Features**: Configure system-wide hotkeys, lightweight daemon
+A GNUstep preference pane for global keyboard shortcuts.
+- **Features**: Configure system-wide hotkeys
 - **Dependencies**: X11 libraries for event monitoring
-- **Installation**: `/System/Library/Bundles/GlobalShortcuts.prefPane` + `/usr/local/bin/globalshortcutsd`
-- **Daemon**: Includes RC script for automatic startup
+- **Installation**: `/System/Library/Bundles/GlobalShortcuts.prefPane`
 
 ### sysutils/gershwin-startupdisk
 A GNUstep preference pane for managing EFI boot selection.
@@ -108,9 +107,7 @@ sysutils/
 │   └── pkg-descr
 ├── gershwin-globalshortcuts/
 │   ├── Makefile
-│   ├── pkg-descr
-│   └── files/
-│       └── globalshortcutsd.in
+│   └── pkg-descr
 └── gershwin-startupdisk/
     ├── Makefile
     └── pkg-descr

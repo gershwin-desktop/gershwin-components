@@ -171,10 +171,20 @@ static NSString * const kDefaultsConfirmDestructive =
         [_view addSubview:subview];
     }
 
+    /* BOTH notifications: DUOperation posts DidFail (a different name) for
+     * every failure, and this controller observed only DidFinish. A failed
+     * restore therefore left operationRunning = YES, the Restore button
+     * disabled for good, and nothing in the log - the user could not retry
+     * until some other operation happened to finish. */
     [[NSNotificationCenter defaultCenter]
         addObserver:self
            selector:@selector(operationDidFinish:)
                name:DUOperationDidFinishNotification
+             object:nil];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(operationDidFinish:)
+               name:DUOperationDidFailNotification
              object:nil];
 
     [self layoutForWidth:NSWidth(_view.frame) height:NSHeight(_view.frame)];

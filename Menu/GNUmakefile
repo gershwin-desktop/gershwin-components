@@ -29,8 +29,11 @@ Menu_OBJC_FILES = \
 	DBusMenuImporter.m \
 	GTKMenuImporter.m \
 	DBusMenuParser.m \
+	DBusMenuLayout.m \
+	MenuItemSubmenuSwizzle.m \
 	GTKMenuParser.m \
 	DBusMenuShortcutParser.m \
+	MenuShortcutItems.m \
 	GNUStepMenuActionHandler.m \
 	DBusMenuActionHandler.m \
 	GTKActionHandler.m \
@@ -38,6 +41,7 @@ Menu_OBJC_FILES = \
 	GTKSubmenuManager.m \
 	DBusConnection.m \
 	MenuUtils.m \
+	MenuBarLayout.m \
 	X11ShortcutManager.m \
 	RoundedCornersView.m \
 	ActionSearch.m \
@@ -45,6 +49,7 @@ Menu_OBJC_FILES = \
 	RunningApplicationList.m \
 	ForceQuitPanel.m \
 	MenuExtraManager.m \
+	GSExtrasMenuView.m \
 	GSMenuExtraContext.m \
 	GSMenuExtraBundle.m \
 	GSMenuExtraInstance.m \
@@ -52,8 +57,13 @@ Menu_OBJC_FILES = \
 	WindowMonitor.m \
 	AppMenuImporter.m \
 	WindowSwitchContext.m \
+	BacklightBackend.m \
 	SysfsBacklightBackend.m \
-	EvdevBrightnessKeySource.m \
+	FreeBSDBacklightBackend.m \
+	WsconsBacklightBackend.m \
+	MediaKeyController.m \
+	MPRISMediaController.m \
+	MediaHub.m \
 	TintedMenuItemCell.m
 
 # Header files
@@ -71,6 +81,7 @@ Menu_HEADER_FILES = \
 	DBusMenuImporter.h \
 	GTKMenuImporter.h \
 	DBusMenuParser.h \
+	DBusMenuLayout.h \
 	GTKMenuParser.h \
 	DBusMenuShortcutParser.h \
 	GNUStepMenuActionHandler.h \
@@ -96,10 +107,12 @@ Menu_HEADER_FILES = \
 	AppMenuImporter.h \
 	WindowSwitchContext.h \
 	BacklightBackend.h \
-	BrightnessKeySource.h \
 	SysfsBacklightBackend.h \
-	EvdevBrightnessKeySource.h \
-	SoundVolume.h \
+	FreeBSDBacklightBackend.h \
+	WsconsBacklightBackend.h \
+	MediaKeyController.h \
+	MPRISMediaController.h \
+	MediaHub.h \
 	TintedMenuItemCell.h
 
 # Resources
@@ -121,6 +134,11 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/wlan-disabled.tiff \
 	Resources/Icons/wlan-off.tiff \
 	Resources/Icons/brightness.tiff \
+	Resources/Icons/media-play.tiff \
+	Resources/Icons/media-pause.tiff \
+	Resources/Icons/media-stop.tiff \
+	Resources/Icons/media-next.tiff \
+	Resources/Icons/media-previous.tiff \
 	Resources/Icons/clock.tiff \
 	Resources/Icons/cpu.tiff \
 	Resources/Icons/ram.tiff \
@@ -134,7 +152,8 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/wlan-weak-locked.tiff
 
 # Libraries and frameworks - configured by configure script
-Menu_TOOL_LIBS += -ldbus-1 -lX11
+DBUS_LIBS = -ldbus-1
+Menu_TOOL_LIBS += $(DBUS_LIBS) -lX11
 Menu_GUI_LIBS += -L/System/Library/Libraries -lgnustep-gui -lgnustep-base -lobjc -ldispatch -lSoundBackend -lNetworkBackend
 Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/System/Library/Libraries -Wl,--no-as-needed
 
@@ -172,10 +191,39 @@ ifeq ($(PROFILE),1)
 ADDITIONAL_OBJCFLAGS += -DMENU_PROFILING=1
 endif
 
-ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I../Libraries/NetworkBackend -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
+ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I../MediaRemote -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
 # --as-needed avoids unnecessary libm dependency (needed on FreeBSD)
 ADDITIONAL_LDFLAGS = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo '-Wl,--as-needed' || echo '')
 AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo 'ADDITIONAL_LDFLAGS=-Wl,--as-needed' || echo '')
+
+# ── libdbus, and the menu extras that need it ─────────────────────────────
+# Menu's own bus connection needs libdbus, and configure will not write a
+# makefile without it.  The MediaExtra is a separate matter: it steers
+# media players over MPRIS2, so where libdbus is not there it has nothing
+# to steer anything with, and it is left out of the build and out of the
+# installation instead of failing either.
+#
+# The answer comes from has-libdbus.sh, which compiles a program using both
+# the header and the library rather than trusting pkg-config to be there.
+# That matters because being wrong in the "no" direction costs the extra
+# silently: it drops out of both lists below, so it is neither built nor
+# installed and nothing says so.  An install run from the top of the tree
+# runs under sudo, which may not have pkg-config on its path at all, and the
+# hard-coded include path a fallback would need is not the same on every
+# system - so the probe asks pkg-config, then the flags already worked out
+# here, then looks for the header where it actually is.  Run it with -v to
+# hear which of those it settled on.
+HAVE_LIBDBUS := $(shell CC="$(CC)" sh has-libdbus.sh "$(DBUS_CFLAGS) $(DBUS_LIBS)" 2>/dev/null)
+
+# Every menu extra that Menu builds, and the bundle each one leaves behind,
+# in one place so that the two lists cannot disagree about what there is.
+MENU_EXTRA_DIRS = ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra
+MENU_EXTRA_BUNDLES = ClockExtra/Clock BatteryExtra/Battery CPUExtra/CPU RAMExtra/RAM \
+	WLANExtra/WLAN SoundExtra/Sound BrightnessExtra/Brightness BuildMonitorExtra/BuildMonitor
+ifeq ($(HAVE_LIBDBUS),yes)
+MENU_EXTRA_DIRS += MediaExtra
+MENU_EXTRA_BUNDLES += MediaExtra/Media
+endif
 
 # Canonical install location for Menu.app
 INSTALL_APPS_DIR = /System/Library/CoreServices/Applications
@@ -200,15 +248,33 @@ icons:
 	  rm -f $$tiff.1x.png $$tiff.2x.png; \
 	done
 
-# Build standalone .gsmenuextra bundles after main app is compiled
+# Build standalone .gsmenuextra bundles after main app is compiled.
+# This runs inside Menu's own nested build, whose GNUSTEP_TYPE/INSTANCE/
+# OPERATION overrides ride along in MAKEFLAGS.  Handed to an extra's makefile
+# they say "you are building the Menu application", so it defines no `all`
+# target and every extra was skipped - invisibly, because stderr was thrown
+# away.  MAKEFLAGS= gives each sub-make a clean slate.  The install target
+# below needs the same thing: an install started from the top of the tree is
+# a deeper nest again, and an extra skipped there is not built and not
+# installed, which is how the Media extra went missing from an install.
 after-Menu-all::
 	@echo "Building standalone menu extra bundles..."
-	@for d in ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra; do \
-		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) $(AS_NEEDED_FLAG) all 2>/dev/null) || echo "  ($$d skipped)"; \
+	@for d in $(MENU_EXTRA_DIRS); do \
+		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) $(AS_NEEDED_FLAG) all) || echo "  ($$d skipped - see the errors above)"; \
 	done
-	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) all 2>/dev/null || echo "  (wlanauth skipped)")
+	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) all || echo "  (wlanauth skipped)")
 	@cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth Resources/ 2>/dev/null || true
 	@echo "Done building bundles."
+
+# A running Menu has the installed binaries of itself and of every extra
+# mapped, and cp rewrites an existing file in place, which crashed Menu on
+# every install.  The new copy is therefore built under another name and
+# renamed into place: the old files live on unchanged until Menu restarts,
+# and the bundle path is missing only between two renames, far shorter than
+# the extras rescan interval.
+replace_installed_bundle = rm -rf "$(2).new" "$(2).old" && cp -R "$(1)" "$(2).new" && \
+	{ if [ -e "$(2)" ]; then mv "$(2)" "$(2).old"; fi; } && \
+	mv "$(2).new" "$(2)" && rm -rf "$(2).old"
 
 # Custom install target that completely overrides built-in behavior
 .PHONY: custom-install custom-uninstall
@@ -217,51 +283,23 @@ install:: custom-install
 
 custom-install: $(APP_NAME).app
 	@echo "Building menu extra bundles..."
-	@for d in ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra; do \
-		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) $(AS_NEEDED_FLAG) all) || exit 1; \
+	@for d in $(MENU_EXTRA_DIRS); do \
+		(cd MenuExtras/$$d && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) MAKEFLAGS= $(MAKE) $(AS_NEEDED_FLAG) all) || exit 1; \
 	done
 	@(cd MenuExtras/WLANExtra/wlanauth && GNUSTEP_MAKEFILES=$(GNUSTEP_MAKEFILES) $(MAKE) all)
 	@if [ -f MenuExtras/WLANExtra/wlanauth/obj/wlanauth ]; then \
 		cp MenuExtras/WLANExtra/wlanauth/obj/wlanauth $(APP_NAME).app/Resources/; \
 	fi
 	@echo "Menu extra bundles built successfully"
-	@if [ -n "$(DESTDIR)" ]; then \
-		echo "Installing $(APP_NAME) to $(DESTDIR)$(INSTALL_APPS_DIR)"; \
-		rm -rf $(DESTDIR)/System/Applications/$(APP_NAME).app || true; \
-		rm -rf $(DESTDIR)/System/CoreServices/Applications/$(APP_NAME).app || true; \
-		rm -rf $(DESTDIR)/System/Library/CoreServices/Applications/$(APP_NAME).app || true; \
-		mkdir -p $(DESTDIR)$(INSTALL_APPS_DIR); \
-		cp -R $(APP_NAME).app $(DESTDIR)$(INSTALL_APPS_DIR)/; \
-		mkdir -p $(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources; \
-		cp Menu.png $(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources/; \
-		echo "Installing menu extra bundles..."; \
-		mkdir -p $(DESTDIR)/System/Library/MenuExtras; \
-		cp -R MenuExtras/ClockExtra/Clock.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/BatteryExtra/Battery.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/CPUExtra/CPU.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/RAMExtra/RAM.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/WLANExtra/WLAN.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/SoundExtra/Sound.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/BrightnessExtra/Brightness.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-		cp -R MenuExtras/BuildMonitorExtra/BuildMonitor.gsmenuextra $(DESTDIR)/System/Library/MenuExtras/ || true; \
-	else \
-		echo "Installing $(APP_NAME) to $(INSTALL_APPS_DIR)"; \
-		rm -rf /System/Applications/$(APP_NAME).app || true; \
-		mkdir -p $(INSTALL_APPS_DIR); \
-		cp -R $(APP_NAME).app $(INSTALL_APPS_DIR)/; \
-		mkdir -p $(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources; \
-		cp Menu.png $(INSTALL_APPS_DIR)/$(APP_NAME).app/Resources/; \
-		echo "Installing menu extra bundles..."; \
-			mkdir -p /System/Library/MenuExtras; \
-			cp -R MenuExtras/ClockExtra/Clock.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/BatteryExtra/Battery.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/CPUExtra/CPU.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/RAMExtra/RAM.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/WLANExtra/WLAN.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/SoundExtra/Sound.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/BrightnessExtra/Brightness.gsmenuextra /System/Library/MenuExtras/ || true; \
-			cp -R MenuExtras/BuildMonitorExtra/BuildMonitor.gsmenuextra /System/Library/MenuExtras/ || true; \
-	fi
+	@echo "Installing $(APP_NAME) to $(DESTDIR)$(INSTALL_APPS_DIR)"
+	@rm -rf $(DESTDIR)/System/Applications/$(APP_NAME).app $(DESTDIR)/System/CoreServices/Applications/$(APP_NAME).app
+	@mkdir -p $(APP_NAME).app/Resources $(DESTDIR)$(INSTALL_APPS_DIR) $(DESTDIR)/System/Library/MenuExtras
+	@cp Menu.png $(APP_NAME).app/Resources/
+	@$(call replace_installed_bundle,$(APP_NAME).app,$(DESTDIR)$(INSTALL_APPS_DIR)/$(APP_NAME).app)
+	@echo "Installing menu extra bundles..."
+	@for d in $(MENU_EXTRA_BUNDLES); do \
+		$(call replace_installed_bundle,MenuExtras/$$d.gsmenuextra,$(DESTDIR)/System/Library/MenuExtras/$$(basename $$d).gsmenuextra) || exit 1; \
+	done
 # Override uninstall target to properly support DESTDIR and PREFIX
 uninstall:: custom-uninstall
 

@@ -20,18 +20,52 @@
     Window _rootWindow;
     Atom _netActiveWindowAtom;
     Atom _gershwinActiveAppAtom;
-    Atom _gstepAppAtom;
     unsigned long _currentActiveWindow;
+    unsigned long _viewableActiveWindow;
+    BOOL _activeWindowUnviewable;
     BOOL _monitoring;
     BOOL _stopMonitoring;
 }
 - (void)_postWindowNotification:(NSDictionary *)userInfo;
+- (void)_noteActiveWindow:(unsigned long)window
+                 viewable:(BOOL)viewable;
 @end
 
 @implementation WindowMonitor
 
 NSString * const WindowMonitorActiveWindowChangedNotification = @"WindowMonitorActiveWindowChangedNotification";
 NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorRootPropertyChangedNotification";
+NSString * const WindowMonitorViewableActiveWindowNotification = @"WindowMonitorViewableActiveWindowNotification";
+
+- (void)_postViewableWindowNotification:(NSDictionary *)userInfo
+{
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:WindowMonitorViewableActiveWindowNotification
+                      object:self
+                    userInfo:userInfo];
+}
+
+/* Reports _NET_ACTIVE_WINDOW unfiltered, as soon as it can be seen.  The
+   controller used to read it every 100 ms on the main thread for this, and
+   those two round trips per tick were most of what an idle Menu did and
+   woke the X server twenty times a second. */
+- (void)_noteActiveWindow:(unsigned long)window
+                 viewable:(BOOL)viewable
+{
+    /* An active window that is not mapped yet shows up by a MapNotify of
+       its own or of its frame, with no change of the root property. */
+    _activeWindowUnviewable = (window != 0 && !viewable);
+    unsigned long shown = viewable ? window : 0;
+    if (shown == _viewableActiveWindow) {
+        return;
+    }
+    _viewableActiveWindow = shown;
+    if (shown != 0) {
+        [self performSelectorOnMainThread:@selector(_postViewableWindowNotification:)
+                               withObject:@{@"windowId": @(shown)}
+                            waitUntilDone:NO];
+    }
+}
 
 - (void)_postRootPropertyNotification:(NSDictionary *)userInfo
 {
@@ -68,8 +102,9 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         _rootWindow = 0;
         _netActiveWindowAtom = 0;
         _gershwinActiveAppAtom = 0;
-        _gstepAppAtom = 0;
         _currentActiveWindow = 0;
+        _viewableActiveWindow = 0;
+        _activeWindowUnviewable = NO;
         _monitoring = NO;
         _stopMonitoring = NO;
         
@@ -118,7 +153,6 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         _rootWindow = DefaultRootWindow(_display);
         _netActiveWindowAtom = XInternAtom(_display, "_NET_ACTIVE_WINDOW", False);
         _gershwinActiveAppAtom = XInternAtom(_display, "_GERSHWIN_ACTIVE_APP", False);
-        _gstepAppAtom = XInternAtom(_display, "_GNUSTEP_WM_ATTR", False);
         Atom netSupportedAtom = XInternAtom(_display, "_NET_SUPPORTED", False);
         XSelectInput(_display, _rootWindow, PropertyChangeMask | SubstructureNotifyMask);
         XSync(_display, False);
@@ -127,37 +161,46 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
         [self checkInitialActiveWindow];
 
         while (!_stopMonitoring) {
-            XEvent event;
-            XNextEvent(_display, &event);
-            if (event.type == PropertyNotify
-                && event.xproperty.window == _rootWindow
-                && event.xproperty.atom == _netActiveWindowAtom) {
-                [self checkActiveWindow];
-            } else if (event.type == PropertyNotify
-                && event.xproperty.window == _rootWindow
-                && event.xproperty.atom == _gershwinActiveAppAtom) {
-                /* The frontmost application changed without a window change
-                   (e.g. Alt-Tab between two windowless apps).  Re-post the
-                   current active window (0 when windowless) so the widget
-                   re-evaluates its application-level menu. */
-                NSDictionary *userInfo = @{@"windowId": @(_currentActiveWindow)};
-                [self performSelectorOnMainThread:@selector(_postWindowNotification:)
-                                       withObject:userInfo
-                                    waitUntilDone:NO];
-            } else if (event.type == PropertyNotify
-                && event.xproperty.window == _rootWindow
-                && event.xproperty.atom == netSupportedAtom) {
-                /* Something rewrote the WM-owned _NET_SUPPORTED list (e.g. a
-                   window-manager property-reassertion timer); let the
-                   controller restore our merged global-menu atoms. */
-                NSDictionary *userInfo = @{@"atom": @"_NET_SUPPORTED"};
-                [self performSelectorOnMainThread:@selector(_postRootPropertyNotification:)
-                                       withObject:userInfo
-                                    waitUntilDone:NO];
-            } else if (event.type == DestroyNotify || event.type == UnmapNotify) {
-                Window affected = (event.type == DestroyNotify)
-                    ? event.xdestroywindow.window : event.xunmap.window;
-                if (affected != 0 && affected == _currentActiveWindow) {
+            /* One pool per event, not one for the whole loop: this thread
+               never leaves the loop, so a pool around it would hold every
+               object autoreleased for every X event until the session ends,
+               and a busy desktop sends them by the thousand per minute. */
+            @autoreleasepool {
+                XEvent event;
+                XNextEvent(_display, &event);
+                if (event.type == PropertyNotify
+                    && event.xproperty.window == _rootWindow
+                    && event.xproperty.atom == _netActiveWindowAtom) {
+                    [self checkActiveWindow];
+                } else if (event.type == PropertyNotify
+                    && event.xproperty.window == _rootWindow
+                    && event.xproperty.atom == _gershwinActiveAppAtom) {
+                    /* The frontmost application changed without a window change
+                       (e.g. Alt-Tab between two windowless apps).  Re-post the
+                       current active window (0 when windowless) so the widget
+                       re-evaluates its application-level menu. */
+                    NSDictionary *userInfo = @{@"windowId": @(_currentActiveWindow)};
+                    [self performSelectorOnMainThread:@selector(_postWindowNotification:)
+                                           withObject:userInfo
+                                        waitUntilDone:NO];
+                } else if (event.type == PropertyNotify
+                    && event.xproperty.window == _rootWindow
+                    && event.xproperty.atom == netSupportedAtom) {
+                    /* Something rewrote the WM-owned _NET_SUPPORTED list (e.g. a
+                       window-manager property-reassertion timer); let the
+                       controller restore our merged global-menu atoms. */
+                    NSDictionary *userInfo = @{@"atom": @"_NET_SUPPORTED"};
+                    [self performSelectorOnMainThread:@selector(_postRootPropertyNotification:)
+                                           withObject:userInfo
+                                        waitUntilDone:NO];
+                } else if (event.type == DestroyNotify || event.type == UnmapNotify) {
+                    Window affected = (event.type == DestroyNotify)
+                        ? event.xdestroywindow.window : event.xunmap.window;
+                    if (affected != 0 && (affected == _currentActiveWindow
+                                          || affected == _viewableActiveWindow)) {
+                        [self checkActiveWindow];
+                    }
+                } else if (event.type == MapNotify && _activeWindowUnviewable) {
                     [self checkActiveWindow];
                 }
             }
@@ -194,11 +237,16 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     }
 
     // Same logic as checkActiveWindow - trust WM unless window is explicitly unmapped
-    if (newActiveWindow != 0) {
+    if (newActiveWindow == 0) {
+        [self _noteActiveWindow:0 viewable:NO];
+    } else {
         XWindowAttributes attrs;
         BOOL canGetAttrs = XGetWindowAttributes(_display, (Window)newActiveWindow, &attrs);
+        [self _noteActiveWindow:newActiveWindow
+                       viewable:(canGetAttrs && attrs.map_state == IsViewable)];
         
         if (canGetAttrs && attrs.map_state != IsViewable) {
+            XSelectInput(_display, (Window)newActiveWindow, StructureNotifyMask | PropertyChangeMask);
             // Require IsViewable: reject both IsUnmapped and IsUnviewable (mapped but ancestor unmapped).
             NSDebugLLog(@"gwcomp", @"WindowMonitor: Initial active window %lu is not viewable (map_state %d)", newActiveWindow, attrs.map_state);
             newActiveWindow = 0;
@@ -213,8 +261,8 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     
     // Same ICCCM/EWMH filter as checkActiveWindow - ignore internal windows.
     if (newActiveWindow != 0
-        && ![MenuUtils isDesktopWindow:newActiveWindow]
-        && ![MenuUtils isRealApplicationWindow:newActiveWindow]) {
+        && ![MenuUtils isDesktopWindow:newActiveWindow onDisplay:_display]
+        && ![MenuUtils isRealApplicationWindow:newActiveWindow onDisplay:_display]) {
         NSDebugLLog(@"gwcomp", @"WindowMonitor: Initial active window %lu is not a real app window - ignoring", newActiveWindow);
         newActiveWindow = 0;
     }
@@ -258,13 +306,18 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     // FIX: Don't report window==0 unless X11 truly says there's no active window
     // If XGetWindowProperty returns a window ID, trust it - even if we can't query its attributes
     // Window attributes can fail during WM operations (reparenting, etc) but the window is still valid
-    if (newActiveWindow != 0) {
+    if (newActiveWindow == 0) {
+        [self _noteActiveWindow:0 viewable:NO];
+    } else {
         XWindowAttributes attrs;
         // Try to get attributes, but don't reject the window if this fails
         // The window manager set this as active, so trust it
         BOOL canGetAttrs = XGetWindowAttributes(_display, (Window)newActiveWindow, &attrs);
+        [self _noteActiveWindow:newActiveWindow
+                       viewable:(canGetAttrs && attrs.map_state == IsViewable)];
         
         if (canGetAttrs && attrs.map_state != IsViewable) {
+            XSelectInput(_display, (Window)newActiveWindow, StructureNotifyMask | PropertyChangeMask);
             // Require IsViewable: reject both IsUnmapped (minimized/hidden) and
             // IsUnviewable (mapped but an ancestor is not). Neither can have focus.
             NSDebugLLog(@"gwcomp", @"WindowMonitor: Active window %lu is not viewable (map_state %d) - treating as no active window", newActiveWindow, attrs.map_state);
@@ -289,8 +342,8 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     // clearing to system-only.  The desktop is still reported as-is so the
     // menu can go to its system-only state.
     if (newActiveWindow != 0
-        && ![MenuUtils isDesktopWindow:newActiveWindow]
-        && ![MenuUtils isRealApplicationWindow:newActiveWindow]) {
+        && ![MenuUtils isDesktopWindow:newActiveWindow onDisplay:_display]
+        && ![MenuUtils isRealApplicationWindow:newActiveWindow onDisplay:_display]) {
         NSDebugLLog(@"gwcomp", @"WindowMonitor: Active window %lu is not a real app window - keeping current %lu", newActiveWindow, _currentActiveWindow);
         newActiveWindow = _currentActiveWindow;
     }
@@ -319,15 +372,23 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
     /* Signal the event-loop thread to exit; it owns _display and closes it. */
     _stopMonitoring = YES;
     if (_display) {
-        /* Wake the thread out of XNextEvent with a client message. */
-        XEvent e;
-        memset(&e, 0, sizeof(e));
-        e.type = ClientMessage;
-        e.xclient.window = _rootWindow;
-        e.xclient.message_type = _netActiveWindowAtom;
-        XSendEvent(_display, _rootWindow, False,
-                   SubstructureRedirectMask | SubstructureNotifyMask, &e);
-        XSync(_display, False);
+        /* Wake the thread out of XNextEvent with a client message.  It is sent
+         * on a connection of our own: _display belongs to the event-loop
+         * thread, and Xlib aborts when two threads use one connection. */
+        Display *waker = XOpenDisplay(NULL);
+        if (waker) {
+            XEvent e;
+            memset(&e, 0, sizeof(e));
+            e.type = ClientMessage;
+            e.xclient.window = _rootWindow;
+            e.xclient.message_type = _netActiveWindowAtom;
+            XSendEvent(waker, _rootWindow, False,
+                       SubstructureRedirectMask | SubstructureNotifyMask, &e);
+            XSync(waker, False);
+            XCloseDisplay(waker);
+        } else {
+            NSLog(@"WindowMonitor: Cannot open X display to stop the event loop");
+        }
     }
     for (int i = 0; i < 100 && _monitoring; i++) {
         [NSThread sleepForTimeInterval:0.02];
@@ -336,28 +397,7 @@ NSString * const WindowMonitorRootPropertyChangedNotification = @"WindowMonitorR
 }
 
 // Compatibility Accessors
-- (Display *)display { return _display; }
 - (Window)rootWindow { return _rootWindow; }
-- (BOOL)isGNUstepWindow:(unsigned long)windowId {
-    if (!_display || windowId == 0) return NO;
-    
-    Atom actualType;
-    int actualFormat;
-    unsigned long nitems, bytesAfter;
-    unsigned char *prop = NULL;
-    BOOL isGNUstep = NO;
-    
-    if (XGetWindowProperty(_display, (Window)windowId, _gstepAppAtom,
-                          0, 1, False, AnyPropertyType,
-                          &actualType, &actualFormat, &nitems, &bytesAfter,
-                          &prop) == Success && prop) {
-        isGNUstep = YES;
-        XFree(prop);
-    }
-    
-    return isGNUstep;
-}
-
 - (unsigned long)currentActiveWindow
 {
     return _currentActiveWindow;

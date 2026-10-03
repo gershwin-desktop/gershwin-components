@@ -5,32 +5,18 @@
  */
 
 #import <AppKit/AppKit.h>
-#import <string.h>
 #import "AppDelegate.h"
 
-int main(int argc, const char *argv[])
+int main(int argc, const char **argv)
 {
+    (void)argc;
+    (void)argv;
+
     @autoreleasepool {
-        if (getenv("GNUSTEP_SYSTEM_ROOT") == NULL) {
-            setenv("GNUSTEP_SYSTEM_ROOT", "/System", 1);
-        }
-        if (getenv("GNUSTEP_SYSTEM_LIBRARY") == NULL) {
-            setenv("GNUSTEP_SYSTEM_LIBRARY", "/System/Library", 1);
-        }
-
-        const char *ld = getenv("LD_LIBRARY_PATH");
-        if (!ld || strstr(ld, "/System/Library/Libraries") == NULL) {
-            NSMutableString *newLd = [NSMutableString stringWithString:@"/System/Library/Libraries"];
-            if (ld && strlen(ld) > 0) {
-                [newLd appendFormat:@":%s", ld];
-            }
-            setenv("LD_LIBRARY_PATH", [newLd UTF8String], 1);
-        }
-
-        [NSApplication sharedApplication];
+        NSApplication *application = [NSApplication sharedApplication];
         AppDelegate *delegate = [[AppDelegate alloc] init];
-        [NSApp setDelegate:delegate];
-        [NSApp run];
+        [application setDelegate:delegate];
+        [application run];
     }
     return 0;
 }

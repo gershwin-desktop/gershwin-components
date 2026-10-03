@@ -1,0 +1,73 @@
+/* Setup Assistant Localizable Strings */
+/* German */
+
+"Setup Assistant" = "Einrichtungsassistent";
+"Welcome" = "Willkommen";
+"Welcome to the Setup Assistant. This assistant will help you configure your system." = "Willkommen beim Einrichtungsassistenten. Dieser Assistent hilft Ihnen, Ihr System zu konfigurieren.";
+"Welcome to Gershwin" = "Willkommen bei Gershwin";
+"This assistant will help you set up your new Gershwin system. You will be asked to configure your language, keyboard, regional settings, create a user account, and set your computer name." = "Dieser Assistent hilft Ihnen, Ihr neues Gershwin-System einzurichten. Sie werden gebeten, Ihre Sprache, Tastatur, regionale Einstellungen, ein Benutzerkonto und Ihren Computernamen zu konfigurieren.";
+"Click Continue to begin." = "Klicken Sie auf Fortfahren, um zu beginnen.";
+
+/* Language */
+"Language" = "Sprache";
+"Select your preferred language for the system." = "Wählen Sie Ihre bevorzugte Sprache für das System.";
+"Language:" = "Sprache:";
+"The selected language will be used for the system interface and applications." = "Die ausgewählte Sprache wird für die Systemoberfläche und Anwendungen verwendet.";
+
+/* Keyboard */
+"Keyboard" = "Tastatur";
+"Select your keyboard layout." = "Wählen Sie Ihr Tastaturlayout.";
+"Keyboard Layout:" = "Tastaturlayout:";
+"Select the keyboard layout that matches your physical keyboard." = "Wählen Sie das Tastaturlayout, das Ihrer physischen Tastatur entspricht.";
+
+/* Language + Keyboard */
+"Language and Keyboard" = "Sprache und Tastatur";
+"Select your language and keyboard layout." = "Wählen Sie Ihre Sprache und Ihr Tastaturlayout.";
+
+/* Region and Formats */
+"Region and Formats" = "Region und Formate";
+"Select your region and formatting preferences." = "Wählen Sie Ihre regionalen Einstellungen und Formatierungspräferenzen.";
+"Region:" = "Region:";
+"Currency:" = "Währung:";
+"Measurement:" = "Maßeinheit:";
+"Imperial (miles, pounds)" = "Imperial (Meilen, Pfund)";
+"Metric (kilometers, kilograms)" = "Metrisch (Kilometer, Kilogramm)";
+
+/* Date and Time */
+"Date and Time" = "Datum und Zeit";
+"Set your date, time, and timezone." = "Stellen Sie Ihr Datum, Ihre Zeit und Zeitzone ein.";
+"Timezone:" = "Zeitzone:";
+"Date:" = "Datum:";
+"Time:" = "Zeit:";
+"Set date and time automatically via network" = "Datum und Zeit automatisch abrufen";
+
+/* User Account */
+"User Account" = "Benutzerkonto";
+"Create a user account for yourself." = "Erstellen Sie ein Benutzerkonto für sich selbst.";
+"Full Name:" = "Vollständiger Name:";
+"Username:" = "Benutzername:";
+"Password:" = "Passwort:";
+"Confirm:" = "Bestätigen:";
+"Full Name is required" = "Vollständiger Name ist erforderlich";
+"Username is required" = "Benutzername ist erforderlich";
+"Username may only contain letters, numbers, and underscores" = "Der Benutzername darf nur Buchstaben, Zahlen und Unterstriche enthalten";
+"Passwords do not match" = "Die Passwörter stimmen nicht überein";
+"Account will be created using the Gershwin Directory Service." = "Das Konto wird mit dem Gershwin-Verzeichnisdienst erstellt.";
+"Account will be created using standard Unix tools." = "Das Konto wird mit standardmäßigen Unix-Werkzeugen erstellt.";
+
+/* Computer Name */
+"Computer Name" = "Computername";
+"Set your computer name." = "Legen Sie Ihren Computernamen fest.";
+"Computer Name:" = "Computername:";
+"Local Host Name:" = "Lokaler Hostname:";
+"The computer name is how your device appears on the network. The local host name is used for local networking and file sharing." = "Der Computername ist, wie Ihr Gerät im Netzwerk erscheint. Der lokale Hostname wird für lokale Netzwerk- und Dateifreigabe verwendet.";
+
+/* Common */
+"Continue" = "Fortfahren";
+"Cancel Setup?" = "Einrichtung abbrechen?";
+"Are you sure you want to cancel the setup? Any progress will be lost." = "Sind Sie sicher, dass Sie die Einrichtung abbrechen möchten? Der gesamte Fortschritt geht verloren.";
+"Cancel Setup" = "Einrichtung abbrechen";
+"Continue Setup" = "Einrichtung fortsetzen";
+"Applying Settings" = "Einstellungen anwenden";
+"Please wait while we apply your settings..." = "Bitte warten Sie, während wir Ihre Einstellungen anwenden...";
+"Setup completed successfully! Your system is now ready to use." = "Die Einrichtung war erfolgreich! Ihr System ist jetzt einsatzbereit.";

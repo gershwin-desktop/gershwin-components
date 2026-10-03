@@ -71,6 +71,39 @@ include $(GNUSTEP_MAKEFILES)/bundle.make
 
 Identifier is set by the bundle name, not from Info.plist.
 
+## Enabled by default
+
+An extra that a media key or a hardware button acts on belongs in the menu
+bar from the moment it is installed, rather than waiting to be found in the
+preferences. Such an extra implements:
+
+```objc
+- (BOOL)enabledByDefault;   // YES
+```
+
+and `MenuExtraManager` puts its identifier into the saved `GSMenuExtraEnabled`
+set the first time it sees it, and writes the user's own set back. It is
+added to the set, not shown in spite of it: unticking it afterwards removes
+it for good, exactly like unticking any other extra. `MediaExtra` is the one
+that asks.
+
+## Extras that are built only where they can work
+
+An extra that cannot do anything without a library is left out of the build
+and out of the installation where that library is missing, and is skipped
+quietly rather than failing. `MediaExtra` steers media players over MPRIS2,
+so it is built only where `libdbus` is; Menu's own `GNUmakefile` compiles a
+one-line program against `<dbus/dbus.h>` and `$(DBUS_LIBS)` to find out, and
+the two lists of extras - the directories to build and the bundles to
+install - are kept in `MENU_EXTRA_DIRS` and `MENU_EXTRA_BUNDLES` so they
+cannot disagree.
+
+The rest of the media hub is not conditional: `MediaHub` is part of Menu
+itself, so where libdbus is missing the Distributed Objects interface still
+answers and still steers the native Gershwin player. Only the menu bar item
+is lost, which is the right thing to lose - an item that can do nothing is
+worse than no item.
+
 ## Available Extras
 
 - **ClockExtra** — Time display
@@ -79,4 +112,5 @@ Identifier is set by the bundle name, not from Info.plist.
 - **SoundExtra** — Volume level
 - **BrightnessExtra** — Display brightness
 - **BuildMonitorExtra** — Build system monitor
+- **MediaExtra** — Play/pause, next, previous, and which player is playing
 - **TimeDisplay** — Digital clock (TimeExtra)

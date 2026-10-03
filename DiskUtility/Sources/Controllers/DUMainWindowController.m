@@ -38,7 +38,16 @@ static const CGFloat kMinimumWindowWidth = 650.0;
 static const CGFloat kMinimumWindowHeight = 450.0;
 static const CGFloat kBrowserWidth = 190.0;
 static const CGFloat kToolbarHeight = 44.0;
-static const CGFloat kInfoPanelHeight = 120.0;
+/* The information footer has to hold the widest row set the panel ever
+ * produces - a disk reports 9 rows (Device, Connection, Connection Type,
+ * Capacity, Partition Scheme, Read Status, Write Status, Health Status, SMART
+ * Status). In two columns that is 5 rows, so the height is
+ *   5 * 18 (row pitch) + 16 (type icon) + 8 (below the icon) + 8 (top and
+ *   bottom margins) = 122
+ * plus the slack that keeps the last row clear of the window edge. At 120
+ * the fifth row sat at y = -2, outside its own view: the Partition Scheme
+ * line was cut off against the bottom of the window. */
+static const CGFloat kInfoPanelHeight = 140.0;
 static const CGFloat kSeparatorThickness = 1.0;
 // Operation status strip above the info footer: visible while any storage
 // operation runs, so long work never needs a modal dialog (ARCHITECTURE.md

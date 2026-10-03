@@ -5,6 +5,7 @@
  */
 
 #import "WhisperController.h"
+#import "GSMediaPlayer2.h"
 #import "AppearanceMetrics.h"
 #import "WAudioLoader.h"
 #import "WCapture.h"
@@ -274,6 +275,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
         currentFilePath = nil;
         downloadingModel = nil;
         captureHandle = NULL;
+        playerPausedForRecording = NO;
         currentLangCode = nil;
         recordTimer = nil;
         streamTimer = nil;
@@ -298,6 +300,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 
 - (void)dealloc
 {
+    [self resumePlayerIfPaused];
     [self unloadModel];
     [segments release];
     [availableModels release];
@@ -420,6 +423,8 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
+    // Never leave Player silent because of us (MediaRemote/PROTOCOL.md)
+    [self resumePlayerIfPaused];
     [self unloadModel];
     if (downloadTask && [downloadTask isRunning]) {
         [downloadTask terminate];
@@ -953,6 +958,9 @@ static const unsigned long long modelMinSizes[] = {
 - (void)transcriptionProgress:(NSNumber *)progress
 {
     int p = [progress intValue];
+    if (p > 0) {
+        [progressBar setHidden:NO];
+    }
     [progressBar setDoubleValue:(double)p];
     if (p < 100) {
         NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate]
@@ -966,6 +974,7 @@ static const unsigned long long modelMinSizes[] = {
 - (void)transcriptionFinished:(NSString *)result
 {
     [progressBar setDoubleValue:100.0];
+    [progressBar setHidden:YES];
     [self setState:WhisperStateDone];
     [statusLabel setStringValue:@"Done"];
 
@@ -995,6 +1004,7 @@ static const unsigned long long modelMinSizes[] = {
 
 - (void)transcriptionFailed:(NSString *)error
 {
+    [progressBar setHidden:YES];
     [self setState:WhisperStateError];
     [statusLabel setStringValue:error];
 }
@@ -1015,6 +1025,7 @@ static const unsigned long long modelMinSizes[] = {
 
     if (isRecording) {
         [recordSpinner startAnimation:nil];
+        [progressBar setHidden:NO];
         [progressBar setIndeterminate:YES];
         [progressBar startAnimation:nil];
     } else {
@@ -1023,20 +1034,23 @@ static const unsigned long long modelMinSizes[] = {
         [progressBar setIndeterminate:NO];
         if (!isWorking) {
             [progressBar setDoubleValue:0.0];
+            [progressBar setHidden:YES];
         }
     }
 
     // enModel check is done in modelSelected:
     // [translateCheckbox setEnabled:(!isWorking && !isRecording)];
-    [recordButton setEnabled:(!isRecording && !isWorking)];
-    [stopButton setEnabled:isRecording];
+    /* One button for both directions: it shows the stop square while the
+       microphone is open, and stays enabled then so it can stop the recording
+       again.  Only a busy transcription locks it out. */
+    [recordButton setRecording:isRecording];
+    [recordButton setEnabled:(!isWorking)];
 
     BOOL hasResults = [segments count] > 0;
     [copyTextButton setEnabled:hasResults];
 
     // No button responds to Enter (avoids accidental re-trigger after alerts)
     [recordButton setKeyEquivalent:@""];
-    [stopButton setKeyEquivalent:@""];
     [copyTextButton setKeyEquivalent:@""];
     [mainWindow setDefaultButtonCell:nil];
 
@@ -1063,6 +1077,39 @@ static const unsigned long long modelMinSizes[] = {
 }
 
 #pragma mark - Actions
+
+/* The one button is both record and stop: it starts a recording when none is
+   running and stops the one that is.  The capture handle, not the state,
+   decides, because it is what actually holds the microphone open. */
+- (IBAction)toggleRecording:(id)sender
+{
+    if (captureHandle) {
+        [self stopRecording:sender];
+    } else {
+        [self recordAudio:sender];
+    }
+}
+
+/* Ask Player to fall silent for us before the microphone opens, and
+   remember that it did, so -resumePlayerIfPaused can tell our pause apart
+   from one the user asked for in Player directly.  A Player that is not
+   running, is busy or is already paused does not pause; recording goes
+   ahead either way. */
+- (void)pausePlayerForRecording
+{
+    playerPausedForRecording = [GSMediaPlayer2Client pausePlayer];
+}
+
+/* Undo -pausePlayerForRecording: Player plays again if it can.  A pause
+   the user took themselves, or one Player already dropped because it moved
+   on, is not ours to give back, and the Player side says so. */
+- (void)resumePlayerIfPaused
+{
+    if (!playerPausedForRecording)
+        return;
+    playerPausedForRecording = NO;
+    [GSMediaPlayer2Client resumePlayer];
+}
 
 - (IBAction)recordAudio:(id)sender
 {
@@ -1134,6 +1181,10 @@ static const unsigned long long modelMinSizes[] = {
         return;
     }
 
+    /* The microphone is really open now: from here the recording can
+       produce audio, so Player has to be quiet from here on. */
+    [self pausePlayerForRecording];
+
     // Ensure model is loaded before recording
     if (!whisperCtx) {
         NSLog(@"recordAudio: no model loaded, loading now...");
@@ -1143,6 +1194,7 @@ static const unsigned long long modelMinSizes[] = {
             NSLog(@"recordAudio: no model selected, canceling capture");
             wcapture_cancel(captureHandle);
             captureHandle = NULL;
+            [self resumePlayerIfPaused];
             [statusLabel setStringValue:@"Please select a model from the Whisper menu"];
             return;
         }
@@ -1151,6 +1203,8 @@ static const unsigned long long modelMinSizes[] = {
             NSLog(@"recordAudio: model '%@' not downloaded", selectedName);
             wcapture_cancel(captureHandle);
             captureHandle = NULL;
+            // Player comes back while the user decides about downloading
+            [self resumePlayerIfPaused];
 
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"Model not downloaded"];
@@ -1170,6 +1224,7 @@ static const unsigned long long modelMinSizes[] = {
             NSLog(@"recordAudio: model loading failed, canceling capture");
             wcapture_cancel(captureHandle);
             captureHandle = NULL;
+            [self resumePlayerIfPaused];
             return;
         }
     }
@@ -1241,6 +1296,10 @@ static const unsigned long long modelMinSizes[] = {
     WCaptureData *capData = wcapture_stop(captureHandle);
     captureHandle = NULL;
     [self playSubmarineSound];
+
+    /* The cue has sounded on its own: let Player carry on again if it
+       was us who paused it. */
+    [self resumePlayerIfPaused];
 
     if (!capData || capData->n_samples == 0) {
         NSLog(@"stopRecording: no audio captured");
@@ -1464,7 +1523,6 @@ static const unsigned long long modelMinSizes[] = {
     [self rebuildTextView];
     NSLog(@"appendStreamingResult: rebuilt text view (%lu segments)",
           (unsigned long)[segments count]);
-    [self updateUIForState];
 }
 
 // Transcribe raw PCM data and append only new segments to the UI.
@@ -2063,24 +2121,16 @@ static const unsigned long long modelMinSizes[] = {
 
     NSView *contentView = [mainWindow contentView];
 
-    // Recording row
-    recordButton = [[NSButton alloc] initWithFrame:NSZeroRect];
-    [recordButton setTitle:@"Record"];
+    // Recording row: one button, centred in the window.  It shows the
+    // application icon at rest and a stop square while recording.
+    recordButton = [[WRecordButton alloc]
+                     initWithFrame:NSMakeRect(0, 0,
+                                              METRICS_ICON_BUTTON_SIDE,
+                                              METRICS_ICON_BUTTON_SIDE)];
     [recordButton setTarget:self];
-    [recordButton setAction:@selector(recordAudio:)];
-    [recordButton setBezelStyle:NSRoundedBezelStyle];
-    [recordButton setKeyEquivalentModifierMask:NSAlternateKeyMask];
-    [recordButton sizeToFit];
+    [recordButton setAction:@selector(toggleRecording:)];
+    [recordButton setKeyEquivalent:@""];
     [contentView addSubview:recordButton];
-
-    stopButton = [[NSButton alloc] initWithFrame:NSZeroRect];
-    [stopButton setTitle:@"Stop"];
-    [stopButton setTarget:self];
-    [stopButton setAction:@selector(stopRecording:)];
-    [stopButton setBezelStyle:NSRoundedBezelStyle];
-    [stopButton setEnabled:NO];
-    [stopButton sizeToFit];
-    [contentView addSubview:stopButton];
 
     recordSpinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     [recordSpinner setStyle:NSProgressIndicatorSpinningStyle];
@@ -2116,6 +2166,7 @@ static const unsigned long long modelMinSizes[] = {
     [progressBar setMinValue:0.0];
     [progressBar setMaxValue:100.0];
     [progressBar setDoubleValue:0.0];
+    [progressBar setHidden:YES];
     [contentView addSubview:progressBar];
 
     statusLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
@@ -2188,30 +2239,24 @@ static const unsigned long long modelMinSizes[] = {
     CGFloat s8  = METRICS_SPACE_8;
     CGFloat s16 = METRICS_SPACE_16;
 
-    // ---- Row 1: Recording + file open ----
-    NSSize recSize  = [recordButton frame].size;
-    NSSize stopSize = [stopButton frame].size;
+    // ---- Row 1: the one record/stop button, horizontally centred ----
+    CGFloat btnSide = METRICS_ICON_BUTTON_SIDE;
+    [recordButton setFrame:NSMakeRect(NSMidX(bounds) - btnSide / 2.0,
+                                      y - btnSide, btnSide, btnSide)];
+    y -= btnSide + s16;
 
-    [recordButton setFrame:NSMakeRect(mx, y - bh, recSize.width, bh)];
-    [stopButton setFrame:NSMakeRect(mx + recSize.width + s8, y - bh,
-                                    stopSize.width, bh)];
-
+    // ---- Row 2: recording spinner + status text ----
     [statusLabel setAlignment:NSRightTextAlignment];
-
     CGFloat spinnerW = [recordSpinner frame].size.width;
-    CGFloat afterStop = mx + recSize.width + s8 + stopSize.width + s8;
-    [recordSpinner setFrame:NSMakeRect(afterStop, y - bh + (bh - spinnerW) / 2,
+    [recordSpinner setFrame:NSMakeRect(mx, y - bh + (bh - spinnerW) / 2,
                                         spinnerW, spinnerW)];
-    CGFloat statusX2 = afterStop + spinnerW + s8;
-    CGFloat statusW2 = w - (statusX2 - mx);
+    CGFloat statusX2 = mx + spinnerW + s8;
+    CGFloat statusW2 = mx + w - statusX2;
     if (statusW2 < 60) statusW2 = 60;
     [statusLabel setFrame:NSMakeRect(statusX2, y - bh, statusW2, bh)];
     y -= bh + s16;
 
-    // ---- Row 4: Settings ----
-    y -= bh + s16;
-
-    // ---- Row 5: Progress bar ----
+    // ---- Row 3: Progress bar ----
     [progressBar setFrame:NSMakeRect(mx, y, w, bh)];
     y -= bh + s8;
 
