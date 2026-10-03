@@ -1280,7 +1280,7 @@ static const CGFloat kSpace16 = 16.0;
      * is being destroyed: the desktop answers with BadPicture and the app
      * dies with SIGSEGV a few milliseconds later.  Wait for the panel to go
      * away first, the same way scheduleQuit does before terminating. */
-    [self performSelector:@selector(beginInstallWithLaunch:)
+    [self performSelector:@selector(beginInstallWithLaunch)
                withObject:nil
                afterDelay:0.5
                   inModes:[NSArray arrayWithObjects:
