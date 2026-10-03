@@ -67,8 +67,9 @@ if which Menu >/dev/null 2>&1; then
   i=0; while [ ! -S "$MINIBUS_SOCKET" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$MINIBUS_SOCKET"
   export DBUS_SESSION_BUS_PID=$!
-  # Make GTK applications use Menu; this requires e.g., on Debian:
-  # sudo apt-get -y install appmenu-gtk2-module appmenu-gtk3-module
-  export GTK_MODULES=appmenu-gtk-module
+  # Make GTK 2 and GTK 3 applications show their menus in Menu, through the
+  # module installed together with Menu (Menu/GTKModule)
+  export GTK_PATH=/System/Library/Libraries/gtk-appmenu-do${GTK_PATH:+:$GTK_PATH}
+  export GTK_MODULES=gtk-appmenu-do
 fi
 ```

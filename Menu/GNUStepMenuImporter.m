@@ -8,6 +8,8 @@
 #import "GNUStepMenuActionHandler.h"
 #import "AppMenuWidget.h"
 #import "MenuUtils.h"
+#import "MenuShortcutItems.h"
+#import "X11ShortcutManager.h"
 #import <Foundation/NSConnection.h>
 #import <AppKit/NSMenu.h>
 #import <AppKit/NSMenuItem.h>
@@ -141,6 +143,38 @@ static id _menuStructure(NSDictionary *menuData)
     }
     return structure;
 }
+
+/* Carries one menu item's action for a global shortcut: the client is asked
+   to activate the item exactly as if it had been chosen in the menu bar. */
+@interface GNUStepShortcutTarget : NSObject
+{
+    NSString *_title;
+    NSDictionary *_info;
+}
+- (instancetype)initWithTitle:(NSString *)title info:(NSDictionary *)info;
+- (void)fire:(id)sender;
+@end
+
+@implementation GNUStepShortcutTarget
+
+- (instancetype)initWithTitle:(NSString *)title info:(NSDictionary *)info
+{
+    if ((self = [super init])) {
+        _title = [title copy];
+        _info = [info copy];
+    }
+    return self;
+}
+
+- (void)fire:(id)sender
+{
+    (void)sender;
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:_title ?: @"" action:NULL keyEquivalent:@""];
+    [item setRepresentedObject:_info];
+    [GNUStepMenuActionHandler performMenuAction:item];
+}
+
+@end
 
 @implementation GNUStepMenuImporter
 
@@ -1542,6 +1576,146 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     }
 }
 
+/* Clients that returned menu data from refreshedMenuDataForWindow:, and
+   clients that turned out not to implement it.  Guarded by @synchronized. */
+static NSMutableSet *_clientsWithDynamicMenus(void)
+{
+    static NSMutableSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [[NSMutableSet alloc] init]; });
+    return set;
+}
+
+static NSMutableSet *_clientsWithoutDynamicMenuSupport(void)
+{
+    static NSMutableSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [[NSMutableSet alloc] init]; });
+    return set;
+}
+
+/* Asks a client whose submenus are filled when they are used (GTK programs)
+   to fill them again, and puts any change into the menu in place.  Runs when
+   the user starts using the menu bar, before a dropdown exists, so the items
+   can be exchanged without disturbing a menu that is being tracked. */
+- (void)refreshDynamicMenusViaProxy:(id)proxy
+                          forWindow:(unsigned long)windowId
+                         clientName:(NSString *)clientName
+{
+    if (clientName == nil) return;
+    @synchronized (self) {
+        if ([_clientsWithoutDynamicMenuSupport() containsObject:clientName]) return;
+    }
+
+    id result = nil;
+    @try {
+        result = [(id<GSGNUstepMenuClient>)proxy refreshedMenuDataForWindow:@(windowId)];
+        if (result && [result isProxy]) {
+            NSData *plist = [NSPropertyListSerialization dataWithPropertyList:result
+                                                                       format:NSPropertyListBinaryFormat_v1_0
+                                                                      options:0
+                                                                        error:NULL];
+            result = plist ? [NSPropertyListSerialization propertyListWithData:plist
+                                                                       options:NSPropertyListImmutable
+                                                                        format:NULL
+                                                                         error:NULL] : nil;
+        }
+    } @catch (NSException *e) {
+        /* A timeout says nothing about support; only a client that does not
+           know the method is left alone from now on. */
+        if ([[e name] isEqualToString:NSInvalidArgumentException]) {
+            @synchronized (self) {
+                [_clientsWithoutDynamicMenuSupport() addObject:clientName];
+            }
+        }
+        return;
+    }
+
+    @synchronized (self) {
+        if (result == nil) {
+            [_clientsWithDynamicMenus() removeObject:clientName];
+        } else {
+            [_clientsWithDynamicMenus() addObject:clientName];
+        }
+    }
+    if ([result isKindOfClass:[NSDictionary class]] && [(NSDictionary *)result count] > 0) {
+        [self applyRefreshedMenuData:result forWindow:windowId clientName:clientName];
+    }
+}
+
+/* Exchanges the items of the submenus whose structure differs from the menu
+   shown, keeping the NSMenu objects (and the menu bar's items) in place. */
+- (void)applyRefreshedMenuData:(NSDictionary *)data
+                     forWindow:(unsigned long)windowId
+                    clientName:(NSString *)clientName
+{
+    NSNumber *key = @(windowId);
+    NSDictionary *fresh = [self promoteAboutItemFromMenuData:data];
+    NSDictionary *old = [self.lastMenuDataByWindow objectForKey:key];
+    NSMenu *menu = [self.menusByWindow objectForKey:key];
+    NSArray *oldItems = [old objectForKey:@"items"];
+    NSArray *newItems = [fresh objectForKey:@"items"];
+    if (!menu || !oldItems || [oldItems count] != [newItems count]) {
+        /* Top-level items came or went: a full rebuild is the only way. */
+        NSDictionary *payload = @{ @"windowId": key, @"menuData": fresh, @"clientName": clientName };
+        [self processMenuUpdateWithPayload:payload];
+        return;
+    }
+
+    NSMenu *shown = (self.appMenuWidget && self.appMenuWidget.currentWindowId == windowId)
+                    ? self.appMenuWidget.currentMenu : nil;
+    for (NSUInteger i = 0; i < [newItems count]; i++) {
+        NSDictionary *oldSub = [[oldItems objectAtIndex:i] objectForKey:@"submenu"];
+        NSDictionary *newSub = [[newItems objectAtIndex:i] objectForKey:@"submenu"];
+        if (!newSub || [_menuStructure(oldSub ?: @{}) isEqual:_menuStructure(newSub)]) continue;
+
+        NSString *title = [[newItems objectAtIndex:i] objectForKey:@"title"];
+        for (NSMenu *candidate in @[menu, shown ?: (id)[NSNull null]]) {
+            if (![candidate isKindOfClass:[NSMenu class]]) continue;
+            /* Matched by title: Menu.app adds items of its own at the front. */
+            for (NSMenuItem *item in [candidate itemArray]) {
+                if (![[item title] isEqualToString:title] || ![item hasSubmenu]) continue;
+                NSMenu *target = [item submenu];
+                /* Built per target: an item can belong to one menu only. */
+                NSMenu *built = [self menuFromData:newSub
+                                          windowId:windowId
+                                        clientName:clientName
+                                              path:@[@(i)]];
+                while ([target numberOfItems] > 0) [target removeItemAtIndex:0];
+                for (NSMenuItem *moved in [[built itemArray] copy]) {
+                    [built removeItem:moved];
+                    [target addItem:moved];
+                }
+                break;
+            }
+        }
+    }
+    self.lastMenuDataByWindow[key] = [fresh copy];
+}
+
+/* Called when this window's menu comes to the front, after the grabs of the
+   previous application were released. */
+- (void)reregisterShortcutsForMenu:(NSMenu *)menu windowId:(unsigned long)windowId
+{
+    (void)windowId;
+    for (NSMenuItem *item in MenuItemsWithShortcutsHandledBy([menu itemArray], [GNUStepMenuActionHandler class])) {
+        NSDictionary *info = [item representedObject];
+        if (![info isKindOfClass:[NSDictionary class]] || ![[info objectForKey:@"shortcutViaMenu"] boolValue]) {
+            continue;
+        }
+        if ([item keyEquivalentModifierMask] == 0) {
+            continue;
+        }
+        GNUStepShortcutTarget *target = [[GNUStepShortcutTarget alloc] initWithTitle:[item title] info:info];
+        NSString *identifier = [NSString stringWithFormat:@"%@_%@", [info objectForKey:@"windowId"],
+                                [[info objectForKey:@"indexPath"] componentsJoinedByString:@"."]];
+        [[X11ShortcutManager sharedManager] registerAppShortcutForMenuItem:item
+                                                                    target:target
+                                                                    action:@selector(fire:)
+                                                                identifier:identifier];
+    }
+}
+
 - (BOOL)refreshMenuStateForWindow:(unsigned long)windowId
 {
     NSNumber *key = @(windowId);
@@ -1599,6 +1773,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
                     if (!rawResult) rawResult = [rawResult copy];
                 }
             } @catch (NSException *e) {}
+            [self refreshDynamicMenusViaProxy:proxy forWindow:windowId clientName:clientName];
         }
     }
 
@@ -1634,6 +1809,10 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     NSMenu *menu = nil;
     @synchronized (self) {
         menu = [self.menusByWindow objectForKey:key];
+        /* Submenus the client rebuilds when they are used are never fresh. */
+        if (menu && [_clientsWithDynamicMenus() containsObject:[self.clientNamesByWindow objectForKey:key]]) {
+            return NO;
+        }
         if (menu) {
             NSNumber *ts = [self.lastStateRefreshByWindow objectForKey:key];
             if (!ts) return NO;
@@ -1840,9 +2019,15 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
             // Build a safe representedObject using simple types
             NSArray *safeIndexPath = [NSArray arrayWithArray:itemPath];
-            NSDictionary *repObj = @{ @"windowId": @(windowId),
-                                      @"clientName": clientName ?: @"",
-                                      @"indexPath": safeIndexPath };
+            NSMutableDictionary *repObj = [@{ @"windowId": @(windowId),
+                                              @"clientName": clientName ?: @"",
+                                              @"indexPath": safeIndexPath } mutableCopy];
+            /* A client whose program does not react to the key combination
+               shown here (GTK shows Command for its Control) lets Menu grab
+               the shortcut and activate the item itself. */
+            if ([[itemData objectForKey:@"shortcutViaMenu"] boolValue]) {
+                repObj[@"shortcutViaMenu"] = @YES;
+            }
             [menuItem setRepresentedObject:repObj];
         }
 

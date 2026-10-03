@@ -1519,4 +1519,108 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     return YES;
 }
 
+/* Like registerDirectShortcutForMenuItem:, for the shortcuts of the frontmost
+ * application's own menu: the grab is released by unregisterNonDirectShortcuts
+ * when another application comes to the front.  identifier tells apart items
+ * with the same key in different windows or menus. */
+- (BOOL)registerAppShortcutForMenuItem:(NSMenuItem *)menuItem
+                           target:(id)target
+                           action:(SEL)action
+                       identifier:(NSString *)identifier
+{
+    if (!_display) {
+        NSLog(@"X11ShortcutManager: Cannot register app shortcut - no X11 display");
+        return NO;
+    }
+
+    NSString *keyEquivalent = [menuItem keyEquivalent];
+    NSUInteger modifierMask = [menuItem keyEquivalentModifierMask];
+
+    if ([keyEquivalent length] == 0 || modifierMask == 0) {
+        NSLog(@"X11ShortcutManager: Cannot register app shortcut - no key equivalent or modifier");
+        return NO;
+    }
+
+    // Create a stable key for app shortcuts using window ID, title, and key
+    NSString *windowIdString = @"0";
+    /* Not a "direct_" key: these grabs belong to one application and are
+       dropped on an app switch, then made again for the next one. */
+    NSString *menuItemKey = [NSString stringWithFormat:@"app_%@_%@", identifier ?: @"", [menuItem keyEquivalent] ?: @"none"];
+
+    [_menuItemToServiceMap setObject:windowIdString forKey:menuItemKey]; // Store window ID
+    [_menuItemToObjectPathMap setObject:NSStringFromSelector(action) forKey:menuItemKey]; // Store action selector
+    [_menuItemToConnectionMap setObject:target forKey:menuItemKey]; // Store target
+
+    // Convert key to X11 KeySym and KeyCode
+    KeySym keysym = [self parseKeyString:keyEquivalent];
+    if (keysym == NoSymbol) {
+        NSLog(@"X11ShortcutManager: Failed to convert key '%@' to X11 KeySym", keyEquivalent);
+        return NO;
+    }
+
+    KeyCode keycode = XKeysymToKeycode(_display, keysym);
+    if (keycode == 0) {
+        NSLog(@"X11ShortcutManager: Failed to convert KeySym to KeyCode for '%@'", keyEquivalent);
+        return NO;
+    }
+
+    unsigned int x11_modifier = [self convertToX11Modifier:modifierMask];
+
+    NSDebugLog(@"X11ShortcutManager: Registering app shortcut %@ with modifier 0x%x (keycode %d) for window %@",
+          keyEquivalent, x11_modifier, keycode, windowIdString);
+
+    BOOL anyRegistered = NO;
+
+    // Try primary modifier first
+    if ([self grabX11Key:keycode modifier:x11_modifier]) {
+        // Store the mapping for later lookup using the same format as existing shortcuts
+        NSString *keycodeModifierKey = [NSString stringWithFormat:@"%d_%u", keycode, x11_modifier];
+        [_shortcutToMenuItemMap setObject:menuItemKey forKey:keycodeModifierKey];
+        [_grabbedKeys setObject:menuItemKey forKey:keycodeModifierKey];
+        NSDebugLog(@"X11ShortcutManager: Successfully registered app shortcut for %@ (modifier 0x%x)", keyEquivalent, x11_modifier);
+        anyRegistered = YES;
+    } else {
+        NSLog(@"X11ShortcutManager: Failed to grab X11 key for app shortcut %@ with modifier 0x%x", keyEquivalent, x11_modifier);
+    }
+
+    // If the requested modifier was Command (Super), also attempt an Alt fallback (many environments use Alt for menus)
+    if ((modifierMask & NSCommandKeyMask)) {
+        NSUInteger altModifierMask = (modifierMask & ~NSCommandKeyMask) | NSAlternateKeyMask;
+        unsigned int altX11Modifier = [self convertToX11Modifier:altModifierMask];
+
+        NSDebugLog(@"X11ShortcutManager: Attempting Alt fallback for app shortcut %@ with modifier 0x%x", keyEquivalent, altX11Modifier);
+        if ([self grabX11Key:keycode modifier:altX11Modifier]) {
+            NSString *altKeycodeModifierKey = [NSString stringWithFormat:@"%d_%u", keycode, altX11Modifier];
+            [_shortcutToMenuItemMap setObject:menuItemKey forKey:altKeycodeModifierKey];
+            [_grabbedKeys setObject:menuItemKey forKey:altKeycodeModifierKey];
+            NSDebugLog(@"X11ShortcutManager: Successfully registered app shortcut for %@ (Alt fallback, modifier 0x%x)", keyEquivalent, altX11Modifier);
+            anyRegistered = YES;
+        } else {
+            NSLog(@"X11ShortcutManager: Alt fallback failed to grab X11 key for app shortcut %@", keyEquivalent);
+        }
+    }
+
+    if (!anyRegistered) {
+        // Nothing worked - return failure
+        return NO;
+    }
+
+    // Debug: Check the state after registration
+    NSDebugLog(@"X11ShortcutManager: After registration - _grabbedKeys count: %lu, _eventMonitorThread: %@", 
+          (unsigned long)[_grabbedKeys count], _eventMonitorThread ? @"EXISTS" : @"nil");
+
+    // Start X11 event monitoring if this is the first shortcut
+    if ([_grabbedKeys count] > 0 && !_eventMonitorThread) {
+        NSLog(@"X11ShortcutManager: Starting event monitoring for app shortcuts - have %lu grabbed keys", 
+              (unsigned long)[_grabbedKeys count]);
+        [self startX11EventMonitoring];
+    } else {
+        NSDebugLog(@"X11ShortcutManager: Not starting event monitoring - count: %lu, thread: %@", 
+              (unsigned long)[_grabbedKeys count], _eventMonitorThread ? @"EXISTS" : @"nil");
+    }
+
+    // Success - we registered at least one shortcut
+    return YES;
+}
+
 @end
