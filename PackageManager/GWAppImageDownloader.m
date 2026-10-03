@@ -29,6 +29,84 @@ static const float kGWProgressDownloadFirst = 0.05f;
 static const float kGWProgressDownloadLast = 0.95f;
 static const float kGWProgressSaving = 0.97f;
 
+/* Channels: a repository can publish each channel of an application as a
+ * release of its own (tags "stable", "esr", "nightly", ...). The repo of a
+ * spec may name one after a "#": "owner/repo#nightly". Only releases (and,
+ * within a release, AppImages) whose tag or file name has that word are
+ * considered. Without one, those of the other well-known channels are left
+ * out as long as there are others. */
+static NSString *const GWKnownChannelsPattern =
+  @"esr|nightly|beta|devedition|developer[-_ ]?edition|aurora|canary";
+
+/* Splits "owner/repo#Channel" into the repository and the channel (nil when
+ * there is none). The channel is limited to letters, digits and ". _ -", and
+ * the "." is escaped, so that it is safe to put into a regular expression. */
+static NSString *GWSplitChannel(NSString *spec, NSString **channel)
+{
+  *channel = nil;
+  NSRange hash = [spec rangeOfString:@"#"];
+  if (hash.location == NSNotFound)
+    return spec;
+
+  NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:
+    @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"];
+  NSString *raw = [spec substringFromIndex:hash.location + 1];
+  NSMutableString *clean = [NSMutableString string];
+  for (NSUInteger i = 0; i < [raw length]; i++)
+    {
+      unichar c = [raw characterAtIndex:i];
+      if ([allowed characterIsMember:c])
+        [clean appendFormat:@"%C", c];
+    }
+  if ([clean length] > 0)
+    *channel = [clean stringByReplacingOccurrencesOfString:@"." withString:@"\\."];
+  return [spec substringToIndex:hash.location];
+}
+
+/* Does text contain one of the words (a regular expression) as a whole word,
+ * ignoring case ("esr" in "Firefox_ESR-140.3.AppImage", not in "resource")? */
+static BOOL GWTextHasWord(NSString *text, NSString *wordPattern)
+{
+  if ([text length] == 0 || [wordPattern length] == 0)
+    return NO;
+  NSString *pattern = [NSString stringWithFormat:
+                       @"(^|[^a-z0-9])(%@)([^a-z0-9]|$)", wordPattern];
+  NSRegularExpression *re =
+    [NSRegularExpression regularExpressionWithPattern:pattern
+                                              options:NSRegularExpressionCaseInsensitive
+                                                error:NULL];
+  return re != nil
+    && [re firstMatchInString:text options:0 range:NSMakeRange(0, [text length])] != nil;
+}
+
+/* Does the tag, or the file name of one of the AppImages, have the word? */
+static BOOL GWReleaseHasWord(NSString *tag, NSArray<NSString *> *names,
+                             NSString *wordPattern)
+{
+  if (GWTextHasWord(tag, wordPattern))
+    return YES;
+  for (NSString *name in names)
+    {
+      if (GWTextHasWord(name, wordPattern))
+        return YES;
+    }
+  return NO;
+}
+
+/* Keeps the names that have the word (match YES) or do not (match NO), unless
+ * that would leave none. */
+static NSArray<NSString *> *GWNarrowNames(NSArray<NSString *> *names,
+                                          NSString *wordPattern, BOOL match)
+{
+  NSMutableArray<NSString *> *kept = [NSMutableArray array];
+  for (NSString *name in names)
+    {
+      if (GWTextHasWord(name, wordPattern) == match)
+        [kept addObject:name];
+    }
+  return [kept count] > 0 ? kept : names;
+}
+
 /* How a download directory could not be read. Three different faults, because
  * the user's next move differs for each: a network problem is worth retrying,
  * a URL that is not a directory is a wrong link in the catalog, and an empty
@@ -78,8 +156,10 @@ typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
                            candidates:(NSArray<NSString *> *)candidates;
 
 /* The tag to use: the newest release that is not a pre-release and does hold
- * an AppImage, failing that the newest that holds one at all. */
+ * an AppImage, failing that the newest that holds one at all. With a channel,
+ * the newest release of that channel and no other. */
 + (NSString *)preferredTagForRepo:(NSString *)repo
+                           channel:(nullable NSString *)channel
                           progress:(nullable id<GWInstallProgressHandler>)progress;
 
 /* The tag releases/latest redirects to, or nil when it names none (a
@@ -425,6 +505,9 @@ typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
                                       error:(NSError **)error
                                startingAtTag:(NSString *)startTag
 {
+  NSString *channel = nil;
+  repo = GWSplitChannel(repo, &channel);
+
   // The web site instead of api.github.com: the API allows 60 anonymous
   // requests per hour per address, and once a desktop had used them up every
   // Get in AppGarden and every Software Update check failed with 403 for the
@@ -442,16 +525,19 @@ typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
   NSString *tag = startTag;
   if (tag == nil)
     {
-      tag = [self preferredTagForRepo:repo progress:progress];
+      tag = [self preferredTagForRepo:repo channel:channel progress:progress];
       if (tag == nil)
         {
           if (error)
             *error = [NSError errorWithDomain:GWPackageManagerErrorDomain
                                          code:GWPackageManagerErrorCommandFailed
                                      userInfo:@{
-                                       NSLocalizedDescriptionKey:
-                                         [NSString stringWithFormat:
-                                           @"No release of %@ has an AppImage", repo],
+                                       NSLocalizedDescriptionKey: channel
+                                         ? [NSString stringWithFormat:
+                                             @"No release of %@ has an AppImage for the channel \"%@\"",
+                                             repo, [channel stringByReplacingOccurrencesOfString:@"\\." withString:@"."]]
+                                         : [NSString stringWithFormat:
+                                             @"No release of %@ has an AppImage", repo],
                                        }];
           return nil;
         }
@@ -565,6 +651,11 @@ typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
   // here what it means on appimage.github.io.
   GWAppImagePickOutcome outcome = GWAppImagePickNoAppImage;
   NSArray<NSString *> *candidates = nil;
+  // Several channels in one release: the files of the channel, or, without
+  // one, not those of the other channels.
+  names = channel != nil
+    ? GWNarrowNames(names, channel, YES)
+    : GWNarrowNames(names, GWKnownChannelsPattern, NO);
   NSString *chosen = [GWAppImageAssetPicker pickAssetFromNames:names
                                                       appName:appName
                                                       outcome:&outcome
@@ -819,32 +910,52 @@ static const NSUInteger kGWMaxReleasesToWalk = 6;
  * to look past a release that merely exists, and qTox publishes only
  * pre-releases, so it has to accept one when nothing else is on offer. */
 + (NSString *)preferredTagForRepo:(NSString *)repo
+                           channel:(nullable NSString *)channel
                           progress:(nullable id<GWInstallProgressHandler>)progress
 {
   /* releases/latest is the web site's own answer to "the newest real
    * release", so following its redirect gives the newest non-prerelease
    * without a second request to find out which entries are pre-releases
    * (the Atom feed does not say, and the releases page would have to be
-   * fetched and parsed to find out). */
-  NSString *stable = [self latestStableTagForRepo:repo progress:progress];
-
-  if (stable != nil
-      && [self namesContainAppImage:[self assetNamesForRepo:repo
-                                                        tag:stable
-                                                    progress:progress]])
-    return stable;
-
+   * fetched and parsed to find out). A channel is not the latest release
+   * of anything, so it goes through the feed alone. */
+  NSString *stable = channel == nil
+    ? [self latestStableTagForRepo:repo progress:progress] : nil;
   NSArray<NSString *> *tags = [self releaseTagsForRepo:repo progress:progress];
   NSUInteger count = MIN([tags count], kGWMaxReleasesToWalk);
+
+  NSMutableArray<NSString *> *order = [NSMutableArray array];
+  if (stable != nil)
+    [order addObject:stable];
   for (NSUInteger i = 0; i < count; i++)
     {
-      NSString *tag = [tags objectAtIndex:i];
-      if ([tag isEqualToString:stable])
-        continue;
-      if ([self namesContainAppImage:[self assetNamesForRepo:repo
-                                                       tag:tag
-                                                   progress:progress]])
-        return tag;
+      if (![[tags objectAtIndex:i] isEqualToString:stable])
+        [order addObject:[tags objectAtIndex:i]];
+    }
+
+  /* Releases of the other well-known channels only count when the
+   * repository has no others: a plain "owner/repo" must not install the
+   * nightly just because it is the newest. */
+  for (int pass = 0; pass < (channel == nil ? 2 : 1); pass++)
+    {
+      BOOL skipOtherChannels = (channel == nil && pass == 0);
+      for (NSString *tag in order)
+        {
+          NSArray<NSString *> *names = [self assetNamesForRepo:repo
+                                                           tag:tag
+                                                      progress:progress];
+          if (![self namesContainAppImage:names])
+            continue;
+          if (channel != nil)
+            {
+              if (!GWReleaseHasWord(tag, names, channel))
+                continue;
+            }
+          else if (skipOtherChannels
+                   && GWReleaseHasWord(tag, names, GWKnownChannelsPattern))
+            continue;
+          return tag;
+        }
     }
   return nil;
 }

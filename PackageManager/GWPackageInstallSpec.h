@@ -38,7 +38,8 @@ typedef NS_ENUM(NSInteger, GWPackageInstallSpecType) {
 // Resolved direct download URL for the current architecture, if a direct
 // `appimage` map lists the current arch.  nil otherwise.
 @property (readonly, copy, nullable) NSString *appImageDirectURL;
-// "owner/repo" GitHub repository whose latest release provides the AppImage,
+// "owner/repo" (or "owner/repo#Channel", see GWAppImageDownloader.h) GitHub
+// repository whose latest release provides the AppImage,
 // or nil if not a GitHub-sourced AppImage.
 @property (readonly, copy, nullable) NSString *appImageGitHubRepo;
 

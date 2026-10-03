@@ -26,6 +26,13 @@
 // AppImage, preferring the newest that is not a pre-release, and "the
 // AppImage" is the one file in it that GWAppImageAssetPicker picks.
 //
+// repo may end in "#Channel" ("owner/repo#nightly") for a repository that
+// publishes each channel of an application as a release of its own (tags such
+// as stable, esr, beta, nightly): then the newest release (and AppImage) whose
+// tag or file name has that word is used, and it is an error if there is none.
+// Without a channel, releases and AppImages of the well-known other channels
+// (esr, nightly, beta, devedition, ...) are left out if there are others.
+//
 // appName is the catalog's name for the application, not the repository's:
 // one release can hold AppImages of several programs, and this is what tells
 // them apart. Pass nil when there is only one candidate.
