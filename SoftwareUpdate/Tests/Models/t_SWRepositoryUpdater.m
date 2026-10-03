@@ -50,9 +50,28 @@ int main(void)
      "esac\n", markerDir, markerDir];
   [fakeScript writeToFile:installScript atomically:YES encoding:NSUTF8StringEncoding error:NULL];
   runShell([NSString stringWithFormat:@"chmod +x %@", installScript]);
-  // Several cases below swap in a different script and put this one back, so
-  // it is kept here rather than scoped to the block that writes it.
-  NSString *savedScript = [installScript copy];
+
+  // Several cases below swap in a different script and have to put this one
+  // back, so a copy of it is kept rather than just its path.
+  //
+  // It has to be a real copy. Two separate mistakes hid in what used to be
+  // here: naming the path is not saving the file, and on GNUstep
+  // -copyItemAtPath:toPath: refuses a destination that already exists, saying
+  // so only through an out-parameter that a call written as one line throws
+  // away. Together they made every "put the real script back" a no-op that
+  // silently left the previous case's script installed - so a case could
+  // rebuild with the "build fails" script, or with no script at all, and pass
+  // or fail on the previous case's wreckage.
+  NSString *savedScript = [scriptsDir stringByAppendingPathComponent:
+    @"install-system-domain.sh.saved"];
+  [[NSFileManager defaultManager] copyItemAtPath:installScript
+                                         toPath:savedScript error:NULL];
+  runShell([NSString stringWithFormat:@"chmod +x %@", savedScript]);
+  void (^restoreScript)(void) = ^{
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:installScript error:NULL];
+    [fm copyItemAtPath:savedScript toPath:installScript error:NULL];
+  };
 
   // A real scratch repo, one commit behind origin/main, matching t_SWGitTool's fixture shape.
   NSString *originDir = [base stringByAppendingPathComponent:@"origin"];
@@ -194,8 +213,7 @@ int main(void)
     PASS(seen >= 4000,
          "output far larger than the pipe buffer is delivered in full (no deadlock)");
 
-    [[NSFileManager defaultManager] removeItemAtPath:installScript error:NULL];
-    [[NSFileManager defaultManager] copyItemAtPath:savedScript toPath:installScript error:NULL];
+    restoreScript();
   }
 
   // --- a build that dirties tracked files must not break the stash pop ---
@@ -264,7 +282,7 @@ int main(void)
     PASS([statusText rangeOfString:@"autoconf"].location == NSNotFound,
          "the build's regenerated content is not left behind for the next run");
 
-    [[NSFileManager defaultManager] copyItemAtPath:savedScript toPath:installScript error:NULL];
+    restoreScript();
   }
 
   // --- Rebuild: build and install what is checked out, touching no git state ---
@@ -446,7 +464,255 @@ int main(void)
     PASS([updater rebuildRepository:repo stepHandler:nil] ==
            SWRepositoryUpdateOutcomeBuildFailed,
          "a rebuild whose build fails reports BuildFailed");
-    [[NSFileManager defaultManager] copyItemAtPath:savedScript toPath:installScript error:NULL];
+    restoreScript();
+  }
+
+  // --- an untracked file in the way of the fast-forward ---
+  //
+  // Reproduces the reported failure. gershwin-components had six files under
+  // DiskUtility/Tests/ that had reached the checkout without git knowing about
+  // them, and a commit upstream added exactly those six paths. The repository
+  // was sixteen commits behind and had never diverged - git said so itself -
+  // but `git merge --ff-only` refuses to overwrite an untracked file, so the
+  // run reported "diverged, not updated" and did so on every single attempt,
+  // for ever. Untracked files are never stashed, which is why nothing else in
+  // the run noticed them either.
+  {
+    NSString *origin2 = [base stringByAppendingPathComponent:@"origin2"];
+    NSString *du = [sourcesDir stringByAppendingPathComponent:@"gershwin-diskutility"];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
+       "git config user.name T && echo a > f.txt && git add f.txt && "
+       "git commit -q -m first", origin2, origin2]);
+    runShell([NSString stringWithFormat:@"git clone -q %@ %@", origin2, du]);
+    runShell([NSString stringWithFormat:
+      @"cd %@ && mkdir -p Tests && echo 'upstream test' > Tests/TestLiveBackend.m && "
+       "git add Tests && git commit -q -m 'adds a test'", origin2]);
+    // The same file, byte for byte, sitting untracked in the working tree -
+    // which is exactly what was found on the box.
+    runShell([NSString stringWithFormat:
+      @"cd %@ && mkdir -p Tests && echo 'upstream test' > Tests/TestLiveBackend.m", du]);
+    runShell([NSString stringWithFormat:@"cd %@ && git fetch -q origin", du]);
+
+    SWRepository *duRepo = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"gershwin-diskutility", @"URL": @"u"}];
+    SWRepositoryUpdateOutcome duOutcome = [updater updateRepository:duRepo
+                                                      targetBranch:@"main"
+                                                       stepHandler:nil];
+
+    // The assertion the reported failure turns on: this used to be Diverged.
+    PASS(duOutcome == SWRepositoryUpdateOutcomeUpdated,
+         "an untracked file the update would create no longer makes the run "
+         "report a divergence");
+
+    NSTask *duHead = [[NSTask alloc] init];
+    [duHead setLaunchPath:@"/usr/bin/env"];
+    [duHead setArguments:@[@"git", @"-C", du, @"rev-parse", @"HEAD"]];
+    NSPipe *duHeadPipe = [NSPipe pipe];
+    [duHead setStandardOutput:duHeadPipe];
+    [duHead launch];
+    NSData *duHeadData = [[duHeadPipe fileHandleForReading] readDataToEndOfFile];
+    [duHead waitUntilExit];
+    NSString *duHeadText = [[[NSString alloc] initWithData:duHeadData
+                                                 encoding:NSUTF8StringEncoding]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+    NSTask *duOriginHead = [[NSTask alloc] init];
+    [duOriginHead setLaunchPath:@"/usr/bin/env"];
+    [duOriginHead setArguments:@[@"git", @"-C", origin2, @"rev-parse", @"main"]];
+    NSPipe *duOriginPipe = [NSPipe pipe];
+    [duOriginHead setStandardOutput:duOriginPipe];
+    [duOriginHead launch];
+    NSData *duOriginData = [[duOriginPipe fileHandleForReading] readDataToEndOfFile];
+    [duOriginHead waitUntilExit];
+    NSString *duOriginText = [[[NSString alloc] initWithData:duOriginData
+                                                    encoding:NSUTF8StringEncoding]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    PASS_EQUAL(duHeadText, duOriginText,
+               "the working copy really did fast-forward to origin/main's tip");
+
+    // The file the update produced must be a tracked file now, and the
+    // identical copy that was set aside to make room for it must be gone -
+    // otherwise every run leaves another one behind.
+    NSTask *duTracked = [[NSTask alloc] init];
+    [duTracked setLaunchPath:@"/usr/bin/env"];
+    [duTracked setArguments:@[@"git", @"-C", du, @"ls-files", @"--error-unmatch",
+                              @"Tests/TestLiveBackend.m"]];
+    NSPipe *duTrackedPipe = [NSPipe pipe];
+    [duTracked setStandardOutput:duTrackedPipe];
+    [duTracked launch];
+    [[duTrackedPipe fileHandleForReading] readDataToEndOfFile];
+    [duTracked waitUntilExit];
+    PASS([duTracked terminationStatus] == 0,
+         "the path the update created is now tracked by git");
+
+    NSTask *duStatus = [[NSTask alloc] init];
+    [duStatus setLaunchPath:@"/usr/bin/env"];
+    [duStatus setArguments:@[@"git", @"-C", du, @"status", @"--porcelain"]];
+    NSPipe *duStatusPipe = [NSPipe pipe];
+    [duStatus setStandardOutput:duStatusPipe];
+    [duStatus launch];
+    NSData *duStatusData = [[duStatusPipe fileHandleForReading] readDataToEndOfFile];
+    [duStatus waitUntilExit];
+    NSString *duStatusText = [[[NSString alloc] initWithData:duStatusData
+                                                    encoding:NSUTF8StringEncoding]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+    PASS([duStatusText length] == 0,
+         "the repository is left clean, with no untracked leftovers of its own");
+
+    PASS(![[NSFileManager defaultManager] fileExistsAtPath:
+             [du stringByAppendingPathComponent:
+               @".git/software-update-aside/Tests/TestLiveBackend.m"]],
+         "the identical copy that was set aside is not left behind to clutter "
+         "the next run");
+
+    // And when the file that was moved aside is NOT what the update brings,
+    // the run has to say so and say where the user's version is - otherwise
+    // the file is simply gone from where they left it, with no way to find it.
+    __block NSMutableArray *logLines = [NSMutableArray array];
+    NSString *origin3 = [base stringByAppendingPathComponent:@"origin3"];
+    NSString *dw = [sourcesDir stringByAppendingPathComponent:@"gershwin-dw"];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
+       "git config user.name T && echo a > f.txt && git add f.txt && "
+       "git commit -q -m first", origin3, origin3]);
+    runShell([NSString stringWithFormat:@"git clone -q %@ %@", origin3, dw]);
+    runShell([NSString stringWithFormat:
+      @"cd %@ && echo upstream > Notes.txt && git add Notes.txt && "
+       "git commit -q -m adds", origin3]);
+    runShell([NSString stringWithFormat:@"cd %@ && echo 'my version' > Notes.txt", dw]);
+    runShell([NSString stringWithFormat:@"cd %@ && git fetch -q origin", dw]);
+
+    SWRepositoryUpdater *logged = [[SWRepositoryUpdater alloc]
+      initWithSourcesDirectory:sourcesDir
+             installScriptPath:installScript
+                    logHandler:^(NSString *line) {
+      @synchronized (logLines) { [logLines addObject:line]; }
+    }];
+    SWRepositoryUpdateOutcome dwOutcome = [logged updateRepository:
+      [[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-dw", @"URL": @"u"}]
+                                      targetBranch:@"main"
+                                       stepHandler:nil];
+    PASS(dwOutcome == SWRepositoryUpdateOutcomeUpdated,
+         "an untracked file that differs from the update still updates the repository");
+
+    NSString *keptCopy = nil;
+    @synchronized (logLines) {
+      for (NSString *line in logLines) {
+        if ([line rangeOfString:@"Notes.txt"].location != NSNotFound &&
+            [line rangeOfString:@"software-update-aside"].location != NSNotFound) {
+          keptCopy = line;
+        }
+      }
+    }
+    PASS(keptCopy != nil,
+         "the log names the file that was set aside and where its content went");
+
+    // The user's own version must actually be at the place the log named.
+    NSString *saved = [NSString stringWithContentsOfFile:
+      [dw stringByAppendingPathComponent:
+        @".git/software-update-aside/Notes.txt"]
+                                             encoding:NSUTF8StringEncoding error:NULL];
+    PASS_EQUAL(saved, @"my version\n",
+               "the file the log points at really holds what the user wrote");
+  }
+
+  // --- a blocking file that cannot be moved out of the way ---
+  //
+  // The remaining half of the reported failure: the file is in the way and it
+  // cannot be put anywhere, because a copy of it is already being kept from an
+  // earlier run and overwriting that copy would throw away the only version of
+  // the file there is. The repository then genuinely cannot be updated - and it
+  // must say THAT. Diverged was what this used to report, which sends the user
+  // hunting for local commits that do not exist: git had said, in as many
+  // words, that the branch could be fast-forwarded.
+  {
+    NSString *origin4 = [base stringByAppendingPathComponent:@"origin4"];
+    NSString *dn = [sourcesDir stringByAppendingPathComponent:@"gershwin-netutils"];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
+       "git config user.name T && echo a > f.txt && git add f.txt && "
+       "git commit -q -m first", origin4, origin4]);
+    runShell([NSString stringWithFormat:@"git clone -q %@ %@", origin4, dn]);
+    runShell([NSString stringWithFormat:
+      @"cd %@ && echo upstream > Helper.c && git add Helper.c && "
+       "git commit -q -m adds", origin4]);
+    runShell([NSString stringWithFormat:@"cd %@ && echo 'in the tree' > Helper.c", dn]);
+    runShell([NSString stringWithFormat:@"cd %@ && git fetch -q origin", dn]);
+
+    // A copy is already being kept here - from a run that could not finish.
+    NSString *alreadyKept = [dn stringByAppendingPathComponent:
+      @".git/software-update-aside/Helper.c"];
+    runShell([NSString stringWithFormat:@"mkdir -p %@ && echo 'kept from before' > %@",
+      [alreadyKept stringByDeletingLastPathComponent], alreadyKept]);
+
+    __block NSMutableArray *blockedLog = [NSMutableArray array];
+    SWRepositoryUpdater *blocking = [[SWRepositoryUpdater alloc]
+      initWithSourcesDirectory:sourcesDir
+             installScriptPath:installScript
+                    logHandler:^(NSString *line) {
+      @synchronized (blockedLog) { [blockedLog addObject:line]; }
+    }];
+    SWRepositoryUpdateOutcome blockedOutcome = [blocking updateRepository:
+      [[SWRepository alloc] initWithPlistEntry:
+        @{@"Name": @"gershwin-netutils", @"URL": @"u"}]
+                                         targetBranch:@"main"
+                                          stepHandler:nil];
+
+    PASS(blockedOutcome == SWRepositoryUpdateOutcomeBlocked,
+         "a file that cannot be moved out of the way is reported as blocking, "
+         "not as a divergence");
+
+    // Nothing may be touched when the answer is "no": the working tree keeps
+    // its file, and the copy already being kept is not replaced by it.
+    NSString *inTree = [NSString stringWithContentsOfFile:
+      [dn stringByAppendingPathComponent:@"Helper.c"]
+                                               encoding:NSUTF8StringEncoding error:NULL];
+    PASS_EQUAL(inTree, @"in the tree\n",
+               "the file in the working tree is left exactly as it was");
+    NSString *keptBefore = [NSString stringWithContentsOfFile:alreadyKept
+                                                    encoding:NSUTF8StringEncoding error:NULL];
+    PASS_EQUAL(keptBefore, @"kept from before\n",
+               "the copy already being kept is not overwritten");
+
+    NSTask *dnHead = [[NSTask alloc] init];
+    [dnHead setLaunchPath:@"/usr/bin/env"];
+    [dnHead setArguments:@[@"git", @"-C", dn, @"rev-parse", @"HEAD"]];
+    NSPipe *dnHeadPipe = [NSPipe pipe];
+    [dnHead setStandardOutput:dnHeadPipe];
+    [dnHead launch];
+    NSData *dnHeadData = [[dnHeadPipe fileHandleForReading] readDataToEndOfFile];
+    [dnHead waitUntilExit];
+    NSString *dnHeadText = [[[NSString alloc] initWithData:dnHeadData
+                                                 encoding:NSUTF8StringEncoding]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSTask *dnOriginHead = [[NSTask alloc] init];
+    [dnOriginHead setLaunchPath:@"/usr/bin/env"];
+    [dnOriginHead setArguments:@[@"git", @"-C", origin4, @"rev-parse", @"main"]];
+    NSPipe *dnOriginPipe = [NSPipe pipe];
+    [dnOriginHead setStandardOutput:dnOriginPipe];
+    [dnOriginHead launch];
+    NSData *dnOriginData = [[dnOriginPipe fileHandleForReading] readDataToEndOfFile];
+    [dnOriginHead waitUntilExit];
+    NSString *dnOriginText = [[[NSString alloc] initWithData:dnOriginData
+                                                    encoding:NSUTF8StringEncoding]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    PASS(![dnHeadText isEqualToString:dnOriginText],
+         "a repository that was not updated is not moved part way there");
+
+    // The log has to say what to do about it, since the note in the table only
+    // says the file is in the way.
+    BOOL saidWhatToDo = NO;
+    @synchronized (blockedLog) {
+      for (NSString *line in blockedLog) {
+        if ([line rangeOfString:@"Helper.c"].location != NSNotFound &&
+            [line rangeOfString:@"try again"].location != NSNotFound) {
+          saidWhatToDo = YES;
+        }
+      }
+    }
+    PASS(saidWhatToDo,
+         "the log names the file that is in the way and what to do about it");
   }
 
   runShell([NSString stringWithFormat:@"rm -rf %@", base]);

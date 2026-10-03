@@ -101,8 +101,72 @@ typedef void (^SWGitLogLine)(NSString *line);
 
 // `git -C <path> switch <branch>` (creating a tracking branch if needed),
 // then `git -C <path> merge --ff-only origin/<branch>`. Returns NO if the
-// fast-forward was not possible (local commits diverged).
+// fast-forward was not possible (local commits diverged) - or because
+// -untrackedPathsBlockingFastForwardTo: said a file is in the way, which is a
+// different problem and has to be cleared first.
 - (BOOL)switchAndFastForwardTo:(NSString *)branch;
+
+// The files in the working tree that a fast-forward to <target> would have to
+// create, and that therefore make `git merge --ff-only` abort with "the
+// following untracked working tree files would be overwritten by merge".
+//
+// Paths the incoming commits add, as git diff reports them (adds only, with
+// renames broken into a delete and an add, so a moved file's new name counts),
+// narrowed to the ones that exist on disk. A path HEAD already knows about is
+// tracked, so it is never in this list; a path that exists and is not tracked
+// is one git will refuse to overwrite, whatever it is - a user's new source
+// file, a build product that .gitignore does not cover, a whole directory.
+//
+// This matters because untracked files are never stashed: the tree looks clean
+// to -modifiedFileCount, nothing is moved out of the way, and the refusal was
+// reported to the user as a divergence on a repository git itself says can be
+// fast-forwarded. Empty when there is nothing in the way.
+- (NSArray<NSString *> *)untrackedPathsBlockingFastForwardTo:(NSString *)target;
+
+// Absolute path of the directory displaced files are moved into
+// (see -setAsideUntrackedPaths:failure:), and where one of them can be found
+// afterwards. Inside .git rather than beside the file, so nothing in the
+// working tree can mistake it for a checkout, no build sees it, and neither
+// `git checkout -- .`, `git reset --merge` nor a `git clean` of the worktree
+// can reach it.
+- (NSString *)setAsideDirectoryPath;
+- (NSString *)setAsidePathForRelativePath:(NSString *)relativePath;
+
+// Moves each of <paths> (relative to the repository root, as -untrackedPaths-
+// BlockingFastForwardTo: returns them) out of the working tree so the
+// fast-forward can write them, keeping the directory structure underneath
+// .git/software-update-aside. Never deletes and never overwrites: a displaced
+// file is the user's only copy of itself, so an existing set-aside copy at the
+// same path is a refusal, not something to replace. Returns NO on the first
+// path that could not be moved, with *outFailure naming it - and whatever
+// already moved stays moved, so the caller must reconcile rather than assume
+// the working tree is as it was.
+- (BOOL)setAsideUntrackedPaths:(NSArray<NSString *> *)paths
+                      failure:(NSString **)outFailure;
+
+// After the fast-forward: a set-aside copy of one of <paths> that is byte for
+// byte what the checkout produced is redundant - the file had reached the
+// repository by some route other than git - and is removed, because left behind
+// it would clutter every later run. A copy that differs is the user's own work
+// and stays where it is; its paths are returned so it can be reported. Anything
+// that is not a plain file (a directory the update would create, a symbolic
+// link) is kept and reported rather than compared: a tree is not a file, and
+// deciding it equivalent would mean walking both sides.
+//
+// <paths> are the ones -setAsideUntrackedPaths:failure: was given, not whatever
+// the directory happens to hold: only the files this run displaced are
+// reconciled, never one left behind by an earlier run that this knows nothing
+// about. It has side effects, so it is not a getter. Calling it again reports
+// a kept copy again - it is still the user's file and still has to be named -
+// but never resurrects one that was removed.
+- (NSArray<NSString *> *)reconcileSetAsidePaths:(NSArray<NSString *> *)paths;
+
+// Moves the set-aside copies of <paths> back to where they came from, for when
+// the update is abandoned and the working tree has to be exactly as it was.
+// Never overwrites: a path the working tree already has is left to the working
+// tree, and the copy stays put. Returns the paths that could not go back, so
+// the caller can say where the user's file still is.
+- (NSArray<NSString *> *)restoreSetAsidePaths:(NSArray<NSString *> *)paths;
 
 // `git -C <path> checkout <ref>` - used both to pin an upstream library and
 // to roll a repository back to the HEAD recorded before the update.

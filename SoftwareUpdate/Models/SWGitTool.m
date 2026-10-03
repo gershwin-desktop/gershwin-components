@@ -62,6 +62,35 @@ static int SWRunSudo(NSArray<NSString *> *args, NSString **outOutput)
   return [task terminationStatus];
 }
 
+// The directory displaced files are moved into, relative to the repository
+// root. Inside .git, not beside the file: nothing in the working tree can
+// mistake it for a checkout, no build sees it, and none of the git commands
+// this class runs to clean up after itself - `checkout -- .`, `reset --merge` -
+// can reach it.
+static NSString *const kSetAsideDirectoryName = @"software-update-aside";
+
+// Removes <path>, then any directories above it that this left empty, up to
+// but not including <root> - which is removed too if that empties it. A
+// set-aside directory with nothing left in it is what a clean run should leave
+// behind, not one that grows a subdirectory per displaced file and stays for
+// ever. Nothing above <root> is ever touched.
+static void SWPruneEmptyDirectories(NSString *root, NSString *path)
+{
+  NSString *prefix = [root stringByAppendingString:@"/"];
+  NSString *dir = [path stringByDeletingLastPathComponent];
+  while (![dir isEqualToString:root] && [dir hasPrefix:prefix]) {
+    // rmdir(2), not -removeItemAtPath:. A GNUstep -removeItemAtPath: on a
+    // directory deletes its contents recursively - it is rm -rf - so pruning
+    // what are meant to be empty directories with it destroys exactly the
+    // copies still being kept for the user, the first time a redundant copy
+    // and a kept one happen to share a subdirectory. rmdir fails on a
+    // directory that still holds anything, which is the stop condition wanted.
+    if (rmdir([dir fileSystemRepresentation]) != 0) return;
+    dir = [dir stringByDeletingLastPathComponent];
+  }
+  rmdir([root fileSystemRepresentation]);
+}
+
 // YES when path exists and belongs to somebody other than runAs - the exact
 // condition git's ownership check fails on, judged with lstat like git does.
 static BOOL SWOwnedByOtherUser(NSString *path, uid_t runAs)
@@ -486,6 +515,189 @@ static NSString *SWFirstErrorLine(NSString *output)
 
   NSString *target = [NSString stringWithFormat:@"origin/%@", branch];
   return [self runGit:@[@"merge", @"--ff-only", target] output:NULL] == 0;
+}
+
+- (NSArray<NSString *> *)untrackedPathsBlockingFastForwardTo:(NSString *)target
+{
+  // The paths the incoming commits create, not the paths they change: a path
+  // HEAD already holds is tracked in the working tree, so only a path HEAD does
+  // not have can be something untracked sitting in the way. --no-renames makes
+  // a rename report as a delete plus an add, so the file's new name is included
+  // - with rename detection on it would be reported as a rename and filtered
+  // out, and that move would go on blocking the update. -z, because a path may
+  // contain a newline and git's own porcelain output says to ask for it that
+  // way; the list is then split on NUL instead of on lines.
+  NSString *output = nil;
+  if ([self runGit:@[@"diff", @"--name-only", @"--no-renames", @"--diff-filter=A",
+                     @"-z", @"HEAD", [NSString stringWithFormat:@"origin/%@", target]]
+               output:&output] != 0) {
+    return @[];
+  }
+
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSMutableArray *paths = [NSMutableArray array];
+  for (NSString *path in [output componentsSeparatedByString:@"\0"]) {
+    if ([path length] == 0) continue;
+    // Present on disk but absent from HEAD's tree: exactly the state git
+    // refuses to overwrite. A directory counts, and counts as one path, which
+    // is how git itself reports it.
+    if ([fm fileExistsAtPath:[_path stringByAppendingPathComponent:path]]) {
+      [paths addObject:path];
+    }
+  }
+  return [paths copy];
+}
+
+- (NSString *)setAsideDirectoryPath
+{
+  return [[_path stringByAppendingPathComponent:@".git"]
+    stringByAppendingPathComponent:kSetAsideDirectoryName];
+}
+
+- (NSString *)setAsidePathForRelativePath:(NSString *)relativePath
+{
+  return [[self setAsideDirectoryPath] stringByAppendingPathComponent:relativePath];
+}
+
+- (BOOL)setAsideUntrackedPaths:(NSArray<NSString *> *)paths
+                      failure:(NSString **)outFailure
+{
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSString *aside = [self setAsideDirectoryPath];
+
+  for (NSString *path in paths) {
+    NSString *from = [_path stringByAppendingPathComponent:path];
+    NSString *to = [aside stringByAppendingPathComponent:path];
+
+    // Refuse rather than replace: the copy already sitting here may be the
+    // only remaining copy of a file that was moved aside on an earlier run and
+    // never put back, and there is no version of overwriting it that is safe.
+    if ([fm fileExistsAtPath:to]) {
+      if (_logHandler) {
+        _logHandler([self logTagForOutputLine:
+          [NSString stringWithFormat:@"not moving %@ aside: a copy is already "
+            @"kept at %@ - move it out of the way yourself", path, to]]);
+      }
+      if (outFailure) *outFailure = path;
+      return NO;
+    }
+
+    NSError *error = nil;
+    if (![fm createDirectoryAtPath:[to stringByDeletingLastPathComponent]
+        withIntermediateDirectories:YES attributes:nil error:&error]) {
+      if (_logHandler) {
+        _logHandler([self logTagForOutputLine:
+          [NSString stringWithFormat:@"not moving %@ aside: %@", path,
+            [error localizedDescription] ?: @"could not create the directory for it"]]);
+      }
+      if (outFailure) *outFailure = path;
+      return NO;
+    }
+
+    if (![fm moveItemAtPath:from toPath:to error:&error]) {
+      if (_logHandler) {
+        _logHandler([self logTagForOutputLine:
+          [NSString stringWithFormat:@"not moving %@ aside: %@", path,
+            [error localizedDescription] ?: @"the move failed"]]);
+      }
+      if (outFailure) *outFailure = path;
+      return NO;
+    }
+
+    if (_logHandler) {
+      _logHandler([self logTagForOutputLine:
+        [NSString stringWithFormat:@"moved %@ out of the way of the update, to %@ "
+          @"(not deleted: the update wants to create that path itself)", path, to]]);
+    }
+  }
+  return YES;
+}
+
+- (NSArray<NSString *> *)reconcileSetAsidePaths:(NSArray<NSString *> *)paths
+{
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSString *aside = [self setAsideDirectoryPath];
+  NSMutableArray *kept = [NSMutableArray array];
+
+  for (NSString *path in paths) {
+    NSString *copy = [aside stringByAppendingPathComponent:path];
+    NSString *checkedOut = [_path stringByAppendingPathComponent:path];
+
+    // Already dealt with on an earlier call: a copy that is not there has
+    // nothing to compare and nothing to report, and saying so again would name
+    // a file that does not exist.
+    if (![fm fileExistsAtPath:copy]) continue;
+
+    NSData *mine = [NSData dataWithContentsOfFile:copy];
+    NSData *theirs = [NSData dataWithContentsOfFile:checkedOut];
+    BOOL plainFiles = mine != nil && theirs != nil;
+    if (plainFiles && [mine isEqualToData:theirs]) {
+      // Exactly what the checkout produced: the file had reached the
+      // repository by some route other than git, and the update has now
+      // brought the same bytes in properly. Keeping the copy would only be
+      // clutter for a later run to trip over again.
+      [fm removeItemAtPath:copy error:NULL];
+      SWPruneEmptyDirectories(aside, copy);
+      if (_logHandler) {
+        _logHandler([self logTagForOutputLine:
+          [NSString stringWithFormat:@"%@ was identical to the file the update "
+            @"checked out, so the copy that was moved aside is gone", path]]);
+      }
+      continue;
+    }
+
+    // Either the user's own version of the file, or something that is not a
+    // plain file at all - a directory the update would create, a link. Either
+    // way it stays where it is and is named, so it can be found and merged
+    // back by hand; nothing is ever thrown away.
+    [kept addObject:path];
+    if (_logHandler) {
+      NSString *why = plainFiles
+        ? @"your version is not what the update checked out"
+        : @"the update did not produce a plain file at that path";
+      _logHandler([self logTagForOutputLine:
+        [NSString stringWithFormat:@"%@ is kept at %@ - %@", path,
+          [self setAsidePathForRelativePath:path], why]]);
+    }
+  }
+  return [kept copy];
+}
+
+- (NSArray<NSString *> *)restoreSetAsidePaths:(NSArray<NSString *> *)paths
+{
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSString *aside = [self setAsideDirectoryPath];
+  NSMutableArray *leftBehind = [NSMutableArray array];
+
+  for (NSString *path in paths) {
+    NSString *from = [aside stringByAppendingPathComponent:path];
+    NSString *to = [_path stringByAppendingPathComponent:path];
+
+    NSError *error = nil;
+    // The working tree keeps the path if it already has it. Overwriting a
+    // checked-out file with the copy taken from before the update would throw
+    // away the version the update chose and hand back a stale one instead.
+    if (![fm fileExistsAtPath:to] &&
+        [fm createDirectoryAtPath:[to stringByDeletingLastPathComponent]
+            withIntermediateDirectories:YES attributes:nil error:&error] &&
+        [fm moveItemAtPath:from toPath:to error:&error]) {
+      SWPruneEmptyDirectories(aside, from);
+      if (_logHandler) {
+        _logHandler([self logTagForOutputLine:
+          [NSString stringWithFormat:@"put %@ back where it was", path]]);
+      }
+      continue;
+    }
+
+    [leftBehind addObject:path];
+    if (_logHandler) {
+      _logHandler([self logTagForOutputLine:
+        [NSString stringWithFormat:@"%@ could not be put back - the working tree "
+          @"has that path now. Your copy is kept at %@", path,
+          [self setAsidePathForRelativePath:path]]]);
+    }
+  }
+  return [leftBehind copy];
 }
 
 - (BOOL)checkoutRef:(NSString *)ref

@@ -179,7 +179,60 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
   if ([repository isPinned]) {
     checkedOut = [git checkoutRef:[repository pin]];
   } else if (targetBranch) {
+    // Untracked files are never stashed, and -modifiedFileCount asks git not to
+    // mention them, so a file that the incoming commits create is still sitting
+    // in the working tree when the fast-forward runs - and git refuses to
+    // overwrite it:
+    //
+    //   error: The following untracked working tree files would be overwritten
+    //   by merge:
+    //   	DiskUtility/Tests/Live/GNUmakefile
+    //   Please move or remove them before you merge.
+    //   Aborting
+    //
+    // Nothing had diverged: the repository was plain behind, and every run
+    // reported "diverged, not updated" and then failed the same way again, for
+    // ever, on a repository git itself says can be fast-forwarded. So the files
+    // that would be overwritten are found here and moved out of the way before
+    // the merge runs. Nothing is deleted: each one is the user's only copy of
+    // itself, and they are put back untouched if the checkout does not happen.
+    NSArray<NSString *> *blockers = [git untrackedPathsBlockingFastForwardTo:targetBranch];
+    if ([blockers count] > 0) {
+      _logHandler([NSString stringWithFormat:
+        @"%@: %lu file(s) in the working tree are in the way of this update",
+        name, (unsigned long)[blockers count]]);
+    }
+    NSString *failure = nil;
+    if ([blockers count] > 0 && ![git setAsideUntrackedPaths:blockers failure:&failure]) {
+      // Whatever did move before the failure is still moved, so put it back:
+      // the checkout is not going to happen, and the working tree has to be
+      // exactly as it was.
+      [git restoreSetAsidePaths:blockers];
+      if (stashed) [git stashPop];
+      _logHandler([NSString stringWithFormat:
+        @"%@ was not updated: %@ is in the way of the update and could not be "
+         "moved out of it. Move it out of the repository, or commit it, and "
+         "try again.", name, failure]);
+      return SWRepositoryUpdateOutcomeBlocked;
+    }
+
     checkedOut = [git switchAndFastForwardTo:targetBranch];
+    if (!checkedOut) {
+      [git restoreSetAsidePaths:blockers];
+      if (stashed) [git stashPop];
+      return SWRepositoryUpdateOutcomeDiverged;
+    }
+
+    // The update wrote those paths, so each moved file can now be compared
+    // against what it replaced: identical ones are redundant and go, and one
+    // that differs is the user's own work, still kept and still named.
+    NSArray<NSString *> *kept = [git reconcileSetAsidePaths:blockers];
+    if ([kept count] > 0) {
+      _logHandler([NSString stringWithFormat:
+        @"%@: %lu file(s) were set aside to let this update through and are kept "
+         @"in %@ - see the Log window", name, (unsigned long)[kept count],
+        [git setAsideDirectoryPath]]);
+    }
   } else {
     // No target branch could be determined for a non-pinned repository (e.g.
     // the checking phase could not resolve origin's default branch) - treat

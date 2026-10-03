@@ -38,12 +38,13 @@
     }
     // StashKept is deliberately not a failure. The software was built and
     // installed; only the user's own local edits could not be put back, which
-    // the row says and the stash alert has already explained. The other three
+    // the row says and the stash alert has already explained. The other four
     // outcomes mean the repository was not updated at all.
     switch ([row outcome]) {
       case SWRepositoryUpdateOutcomeBuildFailed:
       case SWRepositoryUpdateOutcomeInstallFailed:
       case SWRepositoryUpdateOutcomeDiverged:
+      case SWRepositoryUpdateOutcomeBlocked:
         anyFailed = YES;
         break;
       default:

@@ -19,6 +19,12 @@ typedef NS_ENUM(NSInteger, SWRepositoryUpdateOutcome) {
   SWRepositoryUpdateOutcomeDiverged,          // local commits made a fast-forward impossible; skipped
   SWRepositoryUpdateOutcomeBuildFailed,       // patch or build failed; rolled back
   SWRepositoryUpdateOutcomeInstallFailed,     // install failed; rolled back
+  // The update would create files that are in the way in the working tree, and
+  // they could not be moved out of it. Deliberately not Diverged: nothing
+  // diverged, the repository is simply behind, and telling the user otherwise
+  // sends them looking for local commits that do not exist. New at the end of
+  // the list because main.m and the app exchange these as plain integers.
+  SWRepositoryUpdateOutcomeBlocked,
 };
 
 @interface SWRepositoryUpdater : NSObject

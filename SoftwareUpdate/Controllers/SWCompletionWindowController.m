@@ -166,6 +166,7 @@ static const float kBottomBarHeight = 60.0;
     case SWRepositoryUpdateOutcomeUpdated: return @"";
     case SWRepositoryUpdateOutcomeStashKept: return @"local changes kept in stash";
     case SWRepositoryUpdateOutcomeDiverged: return @"diverged, not updated";
+    case SWRepositoryUpdateOutcomeBlocked: return @"local files in the way";
     case SWRepositoryUpdateOutcomeBuildFailed: return @"build failed";
     case SWRepositoryUpdateOutcomeInstallFailed: return @"install failed";
     default: return @"";
@@ -177,7 +178,8 @@ static const float kBottomBarHeight = 60.0;
   switch (outcome) {
     case SWRepositoryUpdateOutcomeUpdated: return [NSImage imageNamed:@"StatusDone"];
     case SWRepositoryUpdateOutcomeStashKept: return [NSImage imageNamed:@"StatusWarning"];
-    case SWRepositoryUpdateOutcomeDiverged: return [NSImage imageNamed:@"StatusSkipped"];
+    case SWRepositoryUpdateOutcomeDiverged:
+    case SWRepositoryUpdateOutcomeBlocked: return [NSImage imageNamed:@"StatusSkipped"];
     case SWRepositoryUpdateOutcomeBuildFailed:
     case SWRepositoryUpdateOutcomeInstallFailed:
     default: return [NSImage imageNamed:@"Caution"];

@@ -46,6 +46,42 @@ static void setUpFixture(NSString *base)
      "echo three >> file.txt && git commit -q -am 'third commit'", origin]);
 }
 
+// Sets up: <base>/origin2 and <base>/work2 (one commit behind it), where the
+// two incoming commits add two files that already exist in the clone's working
+// tree as untracked files - one with different content, one with exactly the
+// content the update brings - plus a third untracked file the update does not
+// touch at all. That is the condition found on the test box, where six files
+// under DiskUtility/Tests/ had reached the checkout by some route other than
+// git and were then reported as "diverged" on every single run.
+static void setUpUntrackedFixture(NSString *base, NSString *work)
+{
+  NSString *origin = [base stringByAppendingPathComponent:@"origin2"];
+  runShell([NSString stringWithFormat:@"rm -rf %@ && mkdir -p %@", origin, origin]);
+  runShell([NSString stringWithFormat:
+    @"git init -q -b main %@ && cd %@ && "
+     "git config user.email t@example.invalid && git config user.name Test && "
+     "echo one > file.txt && git add file.txt && git commit -q -m 'first commit'",
+    origin, origin]);
+  runShell([NSString stringWithFormat:@"git clone -q %@ %@", origin, work]);
+  runShell([NSString stringWithFormat:
+    @"cd %@ && git config user.email t@example.invalid && git config user.name Test", work]);
+
+  // The two commits origin is about to make, each adding one file.
+  runShell([NSString stringWithFormat:
+    @"cd %@ && mkdir -p added && echo 'from upstream' > added/different.txt && "
+     "echo 'from upstream' > added/same.txt && git add added && "
+     "git commit -q -m 'adds two files'", origin]);
+
+  // ...both of which are already sitting in the clone, untracked. git counts
+  // this working tree as clean (-modifiedFileCount is 0, because
+  // --untracked-files=no) and then refuses to fast-forward over them.
+  runShell([NSString stringWithFormat:
+    @"cd %@ && mkdir -p added mine && "
+     "echo 'my own work' > added/different.txt && "
+     "echo 'from upstream' > added/same.txt && "
+     "echo 'unrelated' > mine/notes.txt", work]);
+}
+
 int main(void)
 {
   NSAutoreleasePool *arp = [NSAutoreleasePool new];
@@ -244,6 +280,124 @@ int main(void)
     PASS(![SWGitTool needsElevationForPath:
              [gBaseDir stringByAppendingPathComponent:@"no-such-repository"]],
          "a path that does not exist at all needs no elevation");
+  }
+
+  /* --- untracked files that a fast-forward would have to overwrite --- */
+  //
+  // Reproduces the reported failure. The repository is not behind by a
+  // divergence, it simply has files in the working tree that the incoming
+  // commits add, so `git merge --ff-only` aborts with "the following untracked
+  // working tree files would be overwritten by merge" - and a caller that maps
+  // a refused fast-forward onto "diverged" reports that on every run, for ever,
+  // for a repository that git itself says can be fast-forwarded.
+  {
+    NSString *work2 = [gBaseDir stringByAppendingPathComponent:@"work2"];
+    setUpUntrackedFixture(gBaseDir, work2);
+    SWGitTool *git2 = [[SWGitTool alloc] initWithRepositoryPath:work2];
+    [git2 fetchPruneOrigin:NULL];
+
+    // The tree looks clean to the check that decides whether to stash, which is
+    // exactly why nothing was done about it and why -modifiedFileCount cannot
+    // be the thing that notices.
+    PASS([git2 modifiedFileCount] == 0,
+         "untracked files do not make a tree dirty as far as the stash check knows");
+
+    // Documentation of the bug, not proof of the fix: this is what a run did
+    // with the repository 16 commits behind and no divergence anywhere.
+    PASS(![git2 switchAndFastForwardTo:@"main"],
+         "a fast-forward is refused while untracked files are in the way");
+
+    NSArray *wantBlockers = @[@"added/different.txt", @"added/same.txt"];
+    PASS_EQUAL([git2 untrackedPathsBlockingFastForwardTo:@"main"], wantBlockers,
+               "both incoming files that already exist in the working tree are "
+               "named, and an unrelated untracked file is not");
+
+    NSString *failure = nil;
+    NSArray *blockers = [git2 untrackedPathsBlockingFastForwardTo:@"main"];
+    PASS([git2 setAsideUntrackedPaths:blockers failure:&failure],
+         "the blocking files are moved aside rather than deleted");
+    PASS(failure == nil, "no path failed to move");
+    PASS(![NSFileManager.defaultManager fileExistsAtPath:
+            [work2 stringByAppendingPathComponent:@"added/different.txt"]],
+         "the working tree path is free for the update to write");
+    PASS([NSFileManager.defaultManager fileExistsAtPath:
+            [git2 setAsidePathForRelativePath:@"added/different.txt"]],
+         "the user's copy is kept, inside .git, under its original path");
+
+    PASS([git2 switchAndFastForwardTo:@"main"],
+         "the fast-forward succeeds once the blocking file is out of the way");
+
+    // The unrelated untracked file must have been left exactly where it was.
+    PASS([NSFileManager.defaultManager fileExistsAtPath:
+            [work2 stringByAppendingPathComponent:@"mine/notes.txt"]],
+         "an untracked file the update does not touch is never moved");
+
+    // added/same.txt was identical to what the update brought, added/different.txt
+    // was the user's own work and is not: the first copy is redundant and goes,
+    // the second is kept and named so it can be found and merged back.
+    NSArray *wantKept = @[@"added/different.txt"];
+    PASS_EQUAL([git2 reconcileSetAsidePaths:blockers], wantKept,
+               "reconciling keeps the copy that differs from the update and "
+               "discards the one it is identical to");
+    PASS(![NSFileManager.defaultManager fileExistsAtPath:
+            [git2 setAsidePathForRelativePath:@"added/same.txt"]],
+         "the redundant copy of an identical file is removed");
+    NSString *keptBytes = [NSString stringWithContentsOfFile:
+      [git2 setAsidePathForRelativePath:@"added/different.txt"]
+                                                encoding:NSUTF8StringEncoding error:NULL];
+    PASS_EQUAL(keptBytes, @"my own work\n", "the kept copy still holds what the user wrote");
+
+    // Reconciling again finds the kept copy still there and reports it again -
+    // it is still the user's file and still has to be named - while the copy
+    // that was removed is not resurrected and not reported a second time.
+    NSArray *wantStillKept = @[@"added/different.txt"];
+    PASS_EQUAL([git2 reconcileSetAsidePaths:blockers], wantStillKept,
+               "reconciling again reports only what is still kept");
+  }
+
+  /* --- moving files aside and putting them straight back --- */
+  //
+  // The update can still fail after the files are moved (a real divergence, a
+  // build error), and then the working tree has to be exactly as it was. The
+  // copy that was displaced is the user's only copy of it.
+  {
+    NSString *work2 = [gBaseDir stringByAppendingPathComponent:@"work2"];
+    SWGitTool *git2 = [[SWGitTool alloc] initWithRepositoryPath:work2];
+    // The block above deliberately leaves one copy behind - a user's own file
+    // that the update is not allowed to throw away. This block is about files
+    // that go straight back out again, so it starts from an empty directory.
+    runShell([NSString stringWithFormat:@"rm -rf %@", [git2 setAsideDirectoryPath]]);
+    NSString *notes = [work2 stringByAppendingPathComponent:@"mine/notes.txt"];
+    runShell([NSString stringWithFormat:@"echo 'mine again' > %@", notes]);
+
+    NSArray *onePath = @[@"mine/notes.txt"];
+    PASS([git2 setAsideUntrackedPaths:onePath failure:NULL],
+         "a displaced file moves aside");
+    PASS(![NSFileManager.defaultManager fileExistsAtPath:notes],
+         "and the working tree path it came from is empty");
+
+    PASS_EQUAL([git2 restoreSetAsidePaths:onePath], @[],
+               "putting the files back leaves nothing set aside");
+    NSString *restored = [NSString stringWithContentsOfFile:notes
+                                                   encoding:NSUTF8StringEncoding error:NULL];
+    PASS_EQUAL(restored, @"mine again\n", "the file is back in the working tree unchanged");
+
+    // The case where putting a file back would destroy something: the update
+    // already checked that path out, so the working tree owns it now.
+    // Overwriting it with the set-aside copy would throw away the version the
+    // update chose and hand back a stale one instead, so the copy stays put and
+    // is reported as left behind rather than forced back over it.
+    PASS([git2 setAsideUntrackedPaths:onePath failure:NULL],
+         "the file can be set aside a second time");
+    runShell([NSString stringWithFormat:@"echo 'checked out' > %@", notes]);
+    NSArray *wantLeft = @[@"mine/notes.txt"];
+    PASS_EQUAL([git2 restoreSetAsidePaths:onePath], wantLeft,
+               "a path the working tree now has is not overwritten on the way back");
+    NSString *stillSetAside = [NSString stringWithContentsOfFile:
+      [git2 setAsidePathForRelativePath:@"mine/notes.txt"]
+                                                  encoding:NSUTF8StringEncoding error:NULL];
+    PASS_EQUAL(stillSetAside, @"mine again\n",
+               "and the copy that could not go back is still intact");
   }
 
   runShell([NSString stringWithFormat:@"rm -rf %@", gBaseDir]);
