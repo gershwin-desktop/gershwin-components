@@ -899,10 +899,12 @@
 		<string>https://github.com/danjboyd/ObjcMarkdown</string>
 		<key>Description</key>
 		<string>Read, edit and preview Markdown documents with a rendered view, a syntax-highlighted source editor and a file explorer</string>
-		<key>MakefilePath</key>
-		<string>ObjcMarkdownViewer/GNUmakefile</string>
 		<key>Submodules</key>
 		<true/>
+		<key>MakeArgs</key>
+		<array>
+			<string>OMD_SKIP_TESTS=1</string>
+		</array>
 	</dict>
 </array>
 </plist>

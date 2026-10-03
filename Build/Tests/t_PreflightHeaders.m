@@ -7,6 +7,7 @@
 #import <AppKit/AppKit.h>
 #import "Testing.h"
 #import "GWBuildPreflight.h"
+#import <PackageManager/GWHeaderDatabase.h>
 #include "../GWBuildPreflight.m"
 
 int main(void)
@@ -26,6 +27,30 @@ int main(void)
        "curl/curl.h does not ship with gnustep-make");
   PASS(![GWBuildPreflight headerIsShippedWithGnustepMake: @"TestingX.h"],
         "unknown headers are not claimed as gnustep-make headers");
+
+  /* Headers the stack itself ships live in /System/Library/Headers and are in
+     no distro package database, so the database must find them there.  Without
+     this, a project including <dispatch/dispatch.h> is told to install a
+     package that does not exist.  The header is only asserted when this
+     machine really has it, so the test stays honest elsewhere. */
+  {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dispatch = @"/System/Library/Headers/dispatch/dispatch.h";
+    if (![fm fileExistsAtPath: dispatch]) {
+      PASS(YES, "no /System/Library/Headers; skipped dispatch/dispatch.h case");
+    } else {
+      GWHeaderDatabase *db = [GWHeaderDatabase sharedDatabase];
+      if (![db isOpen]) {
+        PASS(YES, "headers.db not readable; skipped dispatch/dispatch.h case");
+      } else {
+        NSString *distro = [db databaseDistroForCurrentOS];
+        BOOL found = [db isHeaderInstalled: @"dispatch/dispatch.h" distro: distro];
+        BOOL absent = ![db isHeaderInstalled: @"NoSuchHeaderXYZ.h" distro: distro];
+        PASS(found, "dispatch/dispatch.h resolves from /System/Library/Headers");
+        PASS(absent, "a genuinely absent header is still reported as missing");
+      }
+    }
+  }
 
   /* A header guarded by a foreign-OS macro that is never defined on this host
      (e.g. windows.h under #ifdef __MINGW32__) is dead code and must be

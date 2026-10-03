@@ -169,6 +169,12 @@ int main(int argc, const char *argv[])
                 }
                 fprintf(stderr, "Found makefile: %s\n", [makefilePath UTF8String]);
 
+                /* An explicit gmake argument on the command line wins; otherwise
+                   honour whatever the catalog entry asks for. */
+                if ([extraArgs count] == 0 && entry.makeArgs) {
+                    [extraArgs addObjectsFromArray: entry.makeArgs];
+                }
+
                 // Fall through to the makefilePath build logic below
             }
 

@@ -170,7 +170,12 @@ static NSString *toolPath(NSString *name)
 
     BuildController *controller = [[BuildController alloc] init];
     [controller setMakefilePath:guessedMakefile];
-    [controller setExtraArgs:self.extraArgs ? self.extraArgs : @[]];
+    /* Explicit command-line arguments win; otherwise use whatever the catalog
+       entry asks for (e.g. OMD_SKIP_TESTS=1 to skip an unbuildable test
+       subproject in an aggregate). */
+    NSArray *args = self.extraArgs;
+    if (!args || [args count] == 0) args = entry.makeArgs;
+    [controller setExtraArgs:args ?: @[]];
     [controller setAutoInstallLaunch:self.autoInstallLaunch];
     [controller setKeepBuildDir:self.keepBuildDir];
     [controller setBuildDir:cloneDir];
