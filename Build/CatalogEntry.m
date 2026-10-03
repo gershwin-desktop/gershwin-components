@@ -64,6 +64,9 @@
         entry.gitURL = gitURL;
         entry.desc = [item objectForKey:@"Description"];
         entry.makefilePath = [item objectForKey:@"MakefilePath"];
+        /* Absent or false means no submodules; the key is only set for the
+           handful of repos that vendor their dependencies as submodules. */
+        entry.submodules = [[item objectForKey:@"Submodules"] boolValue];
         [result addObject:entry];
     }
 

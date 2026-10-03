@@ -25,6 +25,20 @@ static NSString *toolPath(NSString *name)
     return nil;
 }
 
+/* Shallow clone by default; repos that vendor their dependencies as git
+   submodules get --recurse-submodules so the third_party trees exist before
+   the make runs. */
+static NSArray *cloneArgumentsForEntry(CatalogEntry *entry, NSString *url, NSString *dir)
+{
+    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"clone", @"--depth=1", nil];
+    if (entry.submodules) {
+        [args addObject:@"--recurse-submodules"];
+    }
+    [args addObject:url];
+    [args addObject:dir];
+    return args;
+}
+
 int main(int argc, const char *argv[])
 {
     @autoreleasepool {
@@ -118,7 +132,7 @@ int main(int argc, const char *argv[])
                 fprintf(stderr, "Cloning %s...\n", [entry.gitURL UTF8String]);
                 NSTask *gitTask = [[NSTask alloc] init];
                 [gitTask setLaunchPath:toolPath(@"git")];
-                [gitTask setArguments:@[@"clone", @"--depth=1", entry.gitURL, cloneDir]];
+                [gitTask setArguments:cloneArgumentsForEntry(entry, entry.gitURL, cloneDir)];
                 [gitTask setStandardOutput:[NSFileHandle fileHandleWithNullDevice]];
                 [gitTask setStandardError:[NSFileHandle fileHandleWithNullDevice]];
                 @try {

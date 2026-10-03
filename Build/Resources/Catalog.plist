@@ -892,5 +892,17 @@
 		<key>Description</key>
 		<string>View molecules as ball-and-stick models with rotation, zoom, atom labels, and automatic animation</string>
 	</dict>
+	<dict>
+		<key>Name</key>
+		<string>MarkdownViewer</string>
+		<key>GitURL</key>
+		<string>https://github.com/danjboyd/ObjcMarkdown</string>
+		<key>Description</key>
+		<string>Read, edit and preview Markdown documents with a rendered view, a syntax-highlighted source editor and a file explorer</string>
+		<key>MakefilePath</key>
+		<string>ObjcMarkdownViewer/GNUmakefile</string>
+		<key>Submodules</key>
+		<true/>
+	</dict>
 </array>
 </plist>

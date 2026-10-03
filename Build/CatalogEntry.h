@@ -12,6 +12,9 @@
 @property (copy) NSString *gitURL;
 @property (copy) NSString *desc;
 @property (copy) NSString *makefilePath;
+/* YES when the repository ships git submodules that the build needs; the
+   clone then passes --recurse-submodules so third_party trees are present. */
+@property (assign) BOOL submodules;
 
 + (NSArray *)loadCatalog;
 + (NSArray *)loadCatalogFromPath:(NSString *)catalogPath;
