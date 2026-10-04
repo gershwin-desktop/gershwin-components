@@ -626,8 +626,10 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
     CGFloat barHeight = NSHeight([self.menuBarView bounds]);
     if (extrasMenuView) {
-        [extrasMenuView setFrame:NSMakeRect(barWidth - extrasWidth - GSExtrasEdgeMargin, 0,
-                                            extrasWidth, barHeight)];
+        /* Not a plain setFrame: the group keeps its right edge pinned for its
+         * own later resizes, and that pin still has the old bar width after a
+         * scale factor change, which left the extras off the right edge. */
+        [self.menuExtraManager placeExtrasViewWithWidth:extrasWidth];
     }
 
     CGFloat widgetWidth = barWidth - extrasWidth - GSExtrasEdgeMargin;

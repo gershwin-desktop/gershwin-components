@@ -42,6 +42,10 @@ extern const CGFloat GSExtrasEdgeMargin;
 - (void)loadMenuExtras;
 - (NSView *)createExtrasMenuView;
 - (CGFloat)extrasMenuWidth;
+
+/* Puts the extras group at the right end of its bar, for a bar that was
+   resized, and pins its right edge there for later resizes of the group. */
+- (void)placeExtrasViewWithWidth:(CGFloat)width;
 - (void)startUpdateTimers;
 - (void)stopUpdateTimers;
 - (void)unloadAllMenuExtras;
