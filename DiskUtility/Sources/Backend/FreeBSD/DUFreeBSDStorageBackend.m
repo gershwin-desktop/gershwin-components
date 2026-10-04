@@ -232,22 +232,18 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
     BOOL fatPossible = [DUFreeBSDToolCache haveTool:@"newfs_msdos"];
 
     NSMutableArray<NSDictionary *> *formats = [NSMutableArray array];
-    if (ufsPossible) {
-        [formats addObject:@{
-            kDUFormatIdentifierKey : @"ufs",
-            kDUFormatDisplayNameKey :
-                [DUPartitionTableParser filesystemDisplayName:@"ufs"],
-            kDUFormatCanFormatKey : @YES,
-        }];
-    }
-    if (fatPossible) {
-        [formats addObject:@{
-            kDUFormatIdentifierKey : @"fat32",
-            kDUFormatDisplayNameKey :
-                [DUPartitionTableParser filesystemDisplayName:@"vfat"],
-            kDUFormatCanFormatKey : @YES,
-        }];
-    }
+    [formats addObject:@{
+        kDUFormatIdentifierKey : @"ufs",
+        kDUFormatDisplayNameKey :
+            [DUPartitionTableParser filesystemDisplayName:@"ufs"],
+        kDUFormatCanFormatKey : @(ufsPossible),
+    }];
+    [formats addObject:@{
+        kDUFormatIdentifierKey : @"fat32",
+        kDUFormatDisplayNameKey :
+            [DUPartitionTableParser filesystemDisplayName:@"vfat"],
+        kDUFormatCanFormatKey : @(fatPossible),
+    }];
     // Swap partitions are marked in the table, not formatted by a tool, so
     // the entry exists for planning but honestly reports cannot-format.
     [formats addObject:@{
@@ -617,13 +613,14 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
     return nodes;
 }
 
-- (NSString *)mountedNodeAmong:(NSArray<NSString *> *)nodes
+- (NSArray<NSString *> *)mountedNodesAmong:(NSArray<NSString *> *)nodes
 {
     NSDictionary<NSString *, NSDictionary *> *table =
         [DUFreeBSDGEOMAdapter currentMountTable];
+    NSMutableArray<NSString *> *found = [NSMutableArray array];
     for (NSString *node in nodes) {
-        if (table[node] != nil) {
-            return node;
+        if (table[node] != nil && ![found containsObject:node]) {
+            [found addObject:node];
         }
     }
     // Whole-disk work must also catch mounted slices like /dev/ada0p2 whose
@@ -638,9 +635,67 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         for (NSString *mountedNode in table) {
             NSString *mounted = mountedNode.lastPathComponent;
             if (![mounted isEqualToString:base] &&
-                IsNodeOnDisk(mounted, base)) {
-                return mountedNode;
+                IsNodeOnDisk(mounted, base) &&
+                ![found containsObject:mountedNode]) {
+                [found addObject:mountedNode];
             }
+        }
+    }
+    return found;
+}
+
+- (NSString *)mountedNodeAmong:(NSArray<NSString *> *)nodes
+{
+    return [self mountedNodesAmong:nodes].firstObject;
+}
+
+// newfs and gpart refuse a device that is in use, so Erase and Partition
+// detach every mounted filesystem of the target first. Blocking; worker
+// threads only. Nested mounts go first so a parent is never busy because of
+// its own child.
+- (NSError *)unmountMountsAmong:(NSArray<NSString *> *)nodes
+{
+    NSArray<NSString *> *mounted = [self mountedNodesAmong:nodes];
+    if (mounted.count == 0) {
+        return nil;
+    }
+    NSString *umountPath = [DUFreeBSDToolCache pathForTool:@"umount"];
+    if (umountPath == nil) {
+        return DUErrorMake(DUErrorUnsupportedOperation,
+                           NSLocalizedString(@"The umount tool is not "
+                                             @"installed.", nil));
+    }
+    NSDictionary<NSString *, NSDictionary *> *table =
+        [DUFreeBSDGEOMAdapter currentMountTable];
+    NSArray<NSString *> *ordered = [mounted sortedArrayUsingComparator:
+        ^NSComparisonResult(NSString *a, NSString *b) {
+            NSUInteger la = [table[a][@"mountPoint"] length];
+            NSUInteger lb = [table[b][@"mountPoint"] length];
+            if (la == lb) {
+                return NSOrderedSame;
+            }
+            return la > lb ? NSOrderedAscending : NSOrderedDescending;
+        }];
+    for (NSString *node in ordered) {
+        NSString *mountPoint = table[node][@"mountPoint"];
+        if (mountPoint.length == 0) {
+            continue;
+        }
+        // umount detaches a filesystem for the whole session; needs root.
+        DUProcessResult *result =
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:umountPath
+                         args:@[ mountPoint ]
+                      timeout:300.0
+                        error:NULL];
+        if (![self runSucceeded:result]) {
+            return [self toolFailure:DUErrorUnmountError
+                             message:[NSString stringWithFormat:
+                                          NSLocalizedString(
+                                              @"%@ could not be unmounted.",
+                                              nil),
+                                      node]
+                              result:result];
         }
     }
     return nil;
@@ -1129,6 +1184,24 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
     return label;
 }
 
+// newfs and newfs_msdos share the -L label spelling. Blocking; they write the
+// raw device, so they run elevated.
+- (DUProcessResult *)runFormatter:(NSString *)formatterPath
+                             node:(NSString *)node
+                            label:(NSString *)label
+{
+    NSMutableArray<NSString *> *arguments = [NSMutableArray array];
+    if (label.length > 0) {
+        [arguments addObjectsFromArray:@[ @"-L", label ]];
+    }
+    [arguments addObject:node];
+    return [[DUAuthorizationManager sharedManager]
+        runPrivileged:formatterPath
+                 args:arguments
+              timeout:300.0
+                error:NULL];
+}
+
 - (void)eraseObject:(DUStorageObject *)object
              options:(NSDictionary *)options
             progress:(void (^)(double progress, NSString *message))progress
@@ -1141,18 +1214,6 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
                            NSLocalizedString(@"The item has no device node.",
                                              nil));
     }
-    NSString *busyNode = gate == nil
-        ? [self mountedNodeAmong:[self nodesOfSubtree:object]]
-        : nil;
-    if (gate == nil && busyNode != nil) {
-        gate = DUErrorMake(DUErrorDeviceBusy,
-                           [NSString stringWithFormat:
-                                NSLocalizedString(
-                                    @"%@ is mounted and must be unmounted "
-                                    @"before erasing.", nil),
-                            busyNode]);
-    }
-
     NSString *formatIdentifier =
         [DUParsing trimmedString:options[kDUFormatIdentifierKey]];
     if (gate == nil && formatIdentifier.length == 0) {
@@ -1224,8 +1285,18 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         [DUParsing trimmedString:options[@"name"]] ?: @"";
     NSString *label = [self sanitizedLabel:volumeName limit:labelLimit];
 
+    NSArray<NSString *> *subtreeNodes = [self nodesOfSubtree:object];
+
     [self spawnWork:^{
         double fraction = 0.0;
+
+        NSError *unmountError = [self unmountMountsAmong:subtreeNodes];
+        if (unmountError != nil) {
+            if (completion != NULL) {
+                completion(unmountError);
+            }
+            return;
+        }
 
         if (wipeWithZeros) {
             if (progress != NULL) {
@@ -1326,19 +1397,9 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
             progress(fraction + 0.1,
                      NSLocalizedString(@"Creating filesystem...", nil));
         }
-        NSMutableArray<NSString *> *formatArguments =
-            [NSMutableArray array];
-        if (label.length > 0) {
-            [formatArguments addObjectsFromArray:@[ @"-L", label ]];
-        }
-        [formatArguments addObject:node];
-        // newfs writes the raw device; needs root.
-        DUProcessResult *created =
-            [[DUAuthorizationManager sharedManager]
-                runPrivileged:formatterPath
-                         args:formatArguments
-                      timeout:300.0
-                        error:NULL];
+        DUProcessResult *created = [self runFormatter:formatterPath
+                                                 node:node
+                                                label:label];
         if (![self runSucceeded:created]) {
             if (completion != NULL) {
                 completion([self toolFailure:DUErrorEraseFailed
@@ -1378,19 +1439,6 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         gate = DUErrorMake(DUErrorInvalidArgument,
                            NSLocalizedString(@"The device has no device "
                                              @"node.", nil));
-    }
-
-    // Rewriting the table under mounted filesystems loses their contents.
-    NSString *busyNode = gate == nil
-        ? [self mountedNodeAmong:[self nodesOfSubtree:device]]
-        : nil;
-    if (gate == nil && busyNode != nil) {
-        gate = DUErrorMake(DUErrorDeviceBusy,
-                           [NSString stringWithFormat:
-                                NSLocalizedString(
-                                    @"%@ is mounted and must be unmounted "
-                                    @"before partitioning.", nil),
-                            busyNode]);
     }
 
     NSString *scheme = gate == nil
@@ -1500,7 +1548,19 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         return;
     }
 
+    NSArray<NSString *> *subtreeNodes = [self nodesOfSubtree:device];
+    unsigned long long diskBytes = [self sizeOfObject:device];
+
     [self spawnWork:^{
+        // Rewriting the table under mounted filesystems would lose their
+        // contents and gpart refuses a busy provider, so detach them first.
+        NSError *unmountError = [self unmountMountsAmong:subtreeNodes];
+        if (unmountError != nil) {
+            if (completion != NULL) {
+                completion(unmountError);
+            }
+            return;
+        }
         if (progress != NULL) {
             progress(0.02,
                      NSLocalizedString(@"Creating partition table...",
@@ -1557,13 +1617,28 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         }
 
         NSUInteger count = entries.count;
+        NSUInteger labelLimit = 0;
+        NSMutableArray<NSString *> *newNodes =
+            [NSMutableArray arrayWithCapacity:count];
         for (NSUInteger i = 0; i < count; i++) {
             DUPartition *entry = entries[i];
             NSMutableArray<NSString *> *arguments =
                 [NSMutableArray arrayWithObject:@"add"];
             [arguments addObjectsFromArray:@[ @"-t", types[i] ]];
 
-            if (entry.sizeBytes > 0) {
+            // 1 MiB alignment keeps partitions on flash erase blocks and
+            // 4Kn sector boundaries.
+            [arguments addObjectsFromArray:@[ @"-a", @"1m" ]];
+
+            /* The last entry that reaches the end of the disk gets no -s:
+             * gpart then takes exactly what is left of the usable area, which
+             * excludes the backup table and the alignment slack. An explicit
+             * size computed from the plan runs past that and gpart rejects
+             * the add after the table was already rewritten. */
+            BOOL reachesDiskEnd = i + 1 == count && diskBytes > 0 &&
+                entry.offsetBytes + entry.sizeBytes + (1024ull * 1024ull) >
+                    diskBytes;
+            if (entry.sizeBytes > 0 && !reachesDiskEnd) {
                 // Round up so rounding can never swallow part of the last
                 // partition into unallocated space.
                 unsigned long long sectors =
@@ -1609,6 +1684,77 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
                                                       @"Adding a partition "
                                                       @"failed.", nil)
                                           result:added]);
+                }
+                return;
+            }
+            // gpart names the new provider itself ("da0p1 added"); asking it
+            // is the only way to know the node under every scheme.
+            NSString *addedLine =
+                [DUParsing trimmedString:added.standardOutput] ?: @"";
+            NSString *newName = [[addedLine
+                componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                firstObject];
+            BOOL parsed = newName.length > 0 && [addedLine hasSuffix:@"added"];
+            [newNodes addObject:parsed
+                     ? [@"/dev" stringByAppendingPathComponent:newName]
+                     : @""];
+        }
+
+        // gpart only records the type; without newfs every new partition
+        // stays blank although the user chose a format and a name for it.
+        for (NSUInteger i = 0; i < count; i++) {
+            DUPartition *entry = entries[i];
+            NSString *formatter = [self
+                formatterNameForFormatIdentifier:entry.filesystemType
+                                   labelCapacity:&labelLimit];
+            if (formatter == nil) {
+                continue;
+            }
+            if ([newNodes[i] length] == 0) {
+                if (completion != NULL) {
+                    completion(DUErrorMake(
+                        DUErrorPartitionError,
+                        NSLocalizedString(@"gpart did not report the name "
+                                          @"of a new partition, so it cannot "
+                                          @"be formatted.", nil)));
+                }
+                return;
+            }
+            NSString *formatterPath =
+                [DUFreeBSDToolCache pathForTool:formatter];
+            if (formatterPath == nil) {
+                if (completion != NULL) {
+                    completion(DUErrorMake(
+                        DUErrorUnsupportedOperation,
+                        [NSString stringWithFormat:
+                             NSLocalizedString(@"The %@ formatting tool is "
+                                               @"not installed.", nil),
+                             formatter]));
+                }
+                return;
+            }
+            if (progress != NULL) {
+                progress(0.95,
+                         [NSString stringWithFormat:
+                              NSLocalizedString(@"Formatting partition %lu "
+                                                @"of %lu...", nil),
+                              (unsigned long)(i + 1), (unsigned long)count]);
+            }
+            DUProcessResult *formatted = [self
+                runFormatter:formatterPath
+                        node:newNodes[i]
+                       label:[self sanitizedLabel:entry.name ?: @""
+                                            limit:labelLimit]];
+            if (![self runSucceeded:formatted]) {
+                if (completion != NULL) {
+                    completion([self toolFailure:DUErrorPartitionError
+                                         message:NSLocalizedString(
+                                                      @"Creating the "
+                                                      @"filesystem on a new "
+                                                      @"partition failed.",
+                                                      nil)
+                                          result:formatted]);
                 }
                 return;
             }
