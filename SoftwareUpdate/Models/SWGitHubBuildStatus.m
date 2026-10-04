@@ -76,10 +76,16 @@
   return status;
 }
 
-// Parses a check-runs response: no runs -> unknown; any run not yet
-// completed -> running; any completed run that failed -> failed; otherwise
-// passed. A response that cannot be parsed (network failure, rate limit) is
-// treated as unknown - never as a false pass or fail.
+// Parses a check-runs response: no runs -> unknown; any check that has not
+// passed and is still running -> running; any check that failed -> failed;
+// otherwise passed. A response that cannot be parsed (network failure, rate
+// limit) is treated as unknown - never as a false pass or fail.
+//
+// A commit usually has the same check twice: a workflow starts on the push
+// and again on the pull request, and a failed job may have been run again.
+// One run of a check that passed is enough for that check, so a flaky job in
+// one of the runs does not block an update the other run proved good; runs
+// without a name are told apart by their position.
 - (SWBuildStatus)statusFromResponseData:(NSData *)data
 {
   if (!data) return SWBuildStatusUnknown;
@@ -93,20 +99,37 @@
     return SWBuildStatusUnknown;
   }
 
-  BOOL sawFailure = NO;
+  NSMutableSet *passedChecks = [NSMutableSet set];
+  NSMutableSet *runningChecks = [NSMutableSet set];
+  NSMutableSet *failedChecks = [NSMutableSet set];
+
+  NSUInteger position = 0;
   for (NSDictionary *run in checkRuns) {
+    NSString *name = [run objectForKey:@"name"];
+    NSString *key = [name length] > 0 ? name : [NSString stringWithFormat:@"#%lu", (unsigned long)position];
+    position++;
+
     NSString *runStatus = [run objectForKey:@"status"];
     if (![runStatus isEqualToString:@"completed"]) {
-      return SWBuildStatusRunning; // queued or in_progress
+      [runningChecks addObject:key]; // queued or in_progress
+      continue;
     }
     NSString *conclusion = [run objectForKey:@"conclusion"];
     if ([conclusion isEqualToString:@"failure"] ||
         [conclusion isEqualToString:@"timed_out"] ||
         [conclusion isEqualToString:@"cancelled"]) {
-      sawFailure = YES;
+      [failedChecks addObject:key];
+    } else {
+      [passedChecks addObject:key];
     }
   }
-  return sawFailure ? SWBuildStatusFailed : SWBuildStatusPassed;
+
+  [failedChecks minusSet:passedChecks];
+  [runningChecks minusSet:passedChecks];
+
+  if ([failedChecks count] > 0) return SWBuildStatusFailed;
+  if ([runningChecks count] > 0) return SWBuildStatusRunning;
+  return SWBuildStatusPassed;
 }
 
 @end

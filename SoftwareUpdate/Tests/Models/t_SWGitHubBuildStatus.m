@@ -51,6 +51,35 @@ int main(void)
          "a failed completed run reports failed even alongside a passing one");
   }
 
+  /* --- the same check run twice: one passing run is enough --- */
+  {
+    SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      return jsonData(@"{\"total_count\":2,\"check_runs\":["
+                        "{\"name\":\"FreeBSD\",\"status\":\"completed\",\"conclusion\":\"failure\"},"
+                        "{\"name\":\"FreeBSD\",\"status\":\"completed\",\"conclusion\":\"success\"}]}");
+    }];
+    PASS([status statusForRepositoryNamed:@"gershwin-developer" sha:@"rerun1"] == SWBuildStatusPassed,
+         "a check that failed in one run and passed in another reports passed");
+  }
+  {
+    SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      return jsonData(@"{\"total_count\":2,\"check_runs\":["
+                        "{\"name\":\"Arch\",\"status\":\"completed\",\"conclusion\":\"success\"},"
+                        "{\"name\":\"FreeBSD\",\"status\":\"completed\",\"conclusion\":\"failure\"}]}");
+    }];
+    PASS([status statusForRepositoryNamed:@"gershwin-developer" sha:@"distinct1"] == SWBuildStatusFailed,
+         "a different check that failed still reports failed");
+  }
+  {
+    SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      return jsonData(@"{\"total_count\":2,\"check_runs\":["
+                        "{\"name\":\"Debian\",\"status\":\"in_progress\",\"conclusion\":null},"
+                        "{\"name\":\"Debian\",\"status\":\"completed\",\"conclusion\":\"success\"}]}");
+    }];
+    PASS([status statusForRepositoryNamed:@"gershwin-developer" sha:@"dup-running"] == SWBuildStatusPassed,
+         "a check still running in one run but passed in another reports passed");
+  }
+
   /* --- no check runs at all reports unknown, not failed --- */
   {
     SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
