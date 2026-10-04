@@ -330,8 +330,11 @@ void gad_bridge_push(unsigned long xid, const GadNode *root)
 {
   @autoreleasepool
     {
-      NSDictionary *args = @{ @"window" : @((unsigned int)xid),
-                              @"data" : DictionaryForNode(root, @"") };
+      /* The module reads the program's own menu bar, so this is the whole menu
+         of the window and Menu.app must not prefer another protocol for it. */
+      NSMutableDictionary *data = [DictionaryForNode(root, @"") mutableCopy];
+      data[@"authoritative"] = @YES;
+      NSDictionary *args = @{ @"window" : @((unsigned int)xid), @"data" : data };
       [[GADBridge shared] postPush:args];
     }
 }

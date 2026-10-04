@@ -144,6 +144,16 @@ static id _menuStructure(NSDictionary *menuData)
     return structure;
 }
 
+/* Windows whose menu the client says is complete (the toolkit modules for GTK and
+   Qt read the program's own menu bar).  Guarded by @synchronized. */
+static NSMutableSet *_authoritativeWindows(void)
+{
+    static NSMutableSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [[NSMutableSet alloc] init]; });
+    return set;
+}
+
 /* Carries one menu item's action for a global shortcut: the client is asked
    to activate the item exactly as if it had been chosen in the menu bar. */
 @interface GNUStepShortcutTarget : NSObject
@@ -536,6 +546,18 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
 /* A cached menu is only used while it still belongs to the process that owns
    the window (see forgetMenusOfPreviousOwnerOfWindow:). */
+/* Menu bars of GTK and Qt programs are also offered by the D-Bus and GTK protocols
+   (their windows carry the properties for those); the menu the toolkit module
+   pushed is the complete one and wins. */
+- (BOOL)menuIsAuthoritativeForWindow:(unsigned long)windowId
+{
+    BOOL authoritative;
+    @synchronized (_authoritativeWindows()) {
+        authoritative = [_authoritativeWindows() containsObject:@(windowId)];
+    }
+    return authoritative && [self findCachedMenuForWindow:windowId];
+}
+
 - (BOOL)hasMenuForWindow:(unsigned long)windowId
 {
     if ([self findCachedMenuForWindow:windowId]
@@ -757,6 +779,9 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
 - (void)unregisterWindow:(unsigned long)windowId
 {
+    @synchronized (_authoritativeWindows()) {
+        [_authoritativeWindows() removeObject:@(windowId)];
+    }
     [self forgetWindow:@(windowId)];
 
     if (self.appMenuWidget && self.appMenuWidget.currentWindowId == windowId) {
@@ -1015,6 +1040,14 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     }
 
     unsigned long windowValue = [windowId unsignedLongValue];
+
+    @synchronized (_authoritativeWindows()) {
+        if ([[menuData objectForKey:@"authoritative"] boolValue]) {
+            [_authoritativeWindows() addObject:windowId];
+        } else {
+            [_authoritativeWindows() removeObject:windowId];
+        }
+    }
 
     /* If the Info submenu contains an "Info Panel..." or Cmd-? item,
        move it to the parent menu and rename it "About...". */

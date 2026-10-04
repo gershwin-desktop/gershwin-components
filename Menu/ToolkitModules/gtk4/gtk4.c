@@ -428,6 +428,8 @@ static void enumerate_windows(void (*found)(void *, void *, unsigned long, void 
           surface = bar ? p_gtk_native_get_surface(window) : NULL;
           TRACE("window %p bar %p surface %p\n", window, bar, surface);
           if (bar && is_a(surface, t_x11_surface))
+            TRACE("menu bar of window 0x%lx\n", p_gdk_x11_surface_get_xid(surface));
+          if (bar && is_a(surface, t_x11_surface))
             found(bar, window, p_gdk_x11_surface_get_xid(surface), ctx);
         }
       p_g_object_unref(window);

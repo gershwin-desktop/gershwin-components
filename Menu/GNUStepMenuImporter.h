@@ -19,6 +19,7 @@
 // right before a submenu is shown, guaranteeing up-to-date item states.
 // Returns YES when the NSMenu was successfully refreshed.
 - (void)reregisterShortcutsForMenu:(NSMenu *)menu windowId:(unsigned long)windowId;
+- (BOOL)menuIsAuthoritativeForWindow:(unsigned long)windowId;
 - (BOOL)refreshMenuStateForWindow:(unsigned long)windowId;
 
 // Returns YES when the window's enabled/checkmark states are known to be
