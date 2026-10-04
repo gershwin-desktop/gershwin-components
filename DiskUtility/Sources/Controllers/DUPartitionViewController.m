@@ -14,7 +14,11 @@
 #import "DUOperationLogView.h"
 #import "DUPaneView.h"
 #import "DUParsing.h"
+#import "DUNotifications.h"
+#import "DUOperation.h"
+#import "DUOperationManager.h"
 #import "DUPartition.h"
+#import "DUPartitionOperation.h"
 #import "DUPartitionLayout.h"
 #import "DUPartitionPlan.h"
 #import "DUPartitionTableParser.h"
@@ -90,6 +94,22 @@ static NSString *const kDefaultsConfirmDestructive =
     _storageManager = manager;
     _logView = logView;
     _selectedIndex = -1;
+
+    // The apply runs as an operation so the main window's progress strip and
+    // its Stop button see it; its feedback arrives through notifications.
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(operationDidUpdate:)
+               name:DUOperationDidUpdateNotification
+             object:nil];
+    for (NSString *name in @[ DUOperationDidFinishNotification,
+                              DUOperationDidFailNotification ]) {
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(operationDidFinish:)
+                   name:name
+                 object:nil];
+    }
 
     // DUPaneView re-runs the layout whenever the tab view resizes us.
     CGFloat width = 400.0;
@@ -1168,51 +1188,61 @@ static NSString *const kDefaultsConfirmDestructive =
         return;
     }
 
-    NSError *lockError = nil;
-    if (![self.storageManager acquireLock:_device.identifier
-                                    error:&lockError]) {
-        [self showError:NSLocalizedString(@"The device is busy.", nil)
-                detail:lockError.localizedDescription];
-        return;
-    }
-
     [self.logView appendLine:[NSString stringWithFormat:
         NSLocalizedString(@"Applying partition changes to %@...", nil),
         _device.displayName ?: _device.identifier]];
 
+    DUPartitionOperation *operation = [[DUPartitionOperation alloc]
+        initWithBackend:self.storageManager.backend
+                 device:_device
+                   plan:plan];
+    NSError *startError = nil;
+    if (![self.storageManager.operationManager startOperation:operation
+                                                        error:&startError]) {
+        [self showError:NSLocalizedString(@"The device is busy.", nil)
+                detail:startError.localizedDescription];
+        return;
+    }
     _operationRunning = YES;
     [self updateEnabledStates];
+}
 
-    __weak typeof(self) weakSelf = self;
-    id<DUStorageBackend> backend = self.storageManager.backend;
-    DUStorageObject *target = _device;
-    NSString *lockIdentifier = _device.identifier;
-    void (^progressBlock)(double, NSString *) =
-        ^(double fraction, NSString *message) {
-            (void)fraction;
-            [weakSelf.logView appendLine:message ?: @""];
-        };
-    void (^completionBlock)(NSError *) =
-        ^(NSError *completionError) {
-            // Runs on an arbitrary thread: release the lock immediately,
-            // everything else marshals to the main thread.
-            [weakSelf.storageManager releaseLock:lockIdentifier];
-            NSDictionary *result =
-                @{ @"error" : completionError ?: [NSNull null] };
-            [weakSelf performSelectorOnMainThread:
-                @selector(applyFinishedWithResult:)
-                                   withObject:result
-                                waitUntilDone:NO];
-        };
+- (BOOL)isOwnOperationNotification:(NSNotification *)note
+{
+    DUStorageObject *target = note.userInfo[kDUUserInfoObjectKey];
+    return _operationRunning && target != nil && _device != nil &&
+        [target.identifier isEqualToString:_device.identifier] &&
+        [note.userInfo[kDUUserInfoOperationKey]
+            isKindOfClass:[DUPartitionOperation class]];
+}
 
-    NSThread *worker = [[NSThread alloc] initWithBlock:^{
-        [backend partitionDevice:target
-                         withPlan:plan
-                         progress:progressBlock
-                       completion:completionBlock];
-    }];
-    worker.name = @"DU-Partition-Apply";
-    [worker start];
+- (void)operationDidUpdate:(NSNotification *)note
+{
+    if ([self isOwnOperationNotification:note]) {
+        NSString *message = [note.userInfo[kDUUserInfoOperationKey] message];
+        if (message.length > 0) {
+            [self.logView appendLine:message];
+        }
+    }
+}
+
+- (void)operationDidFinish:(NSNotification *)note
+{
+    if (![self isOwnOperationNotification:note]) {
+        return;
+    }
+    DUOperation *operation = note.userInfo[kDUUserInfoOperationKey];
+    NSError *error = note.userInfo[kDUUserInfoErrorKey];
+    if (error == nil && operation.state == DUOperationStateCancelled) {
+        error = DUErrorMake(DUErrorCancelled, @"Cancelled");
+    }
+    [self applyFinishedWithResult:
+        @{ @"error" : error ?: [NSNull null] }];
+}
+
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 // Main-thread continuation of the apply flow.

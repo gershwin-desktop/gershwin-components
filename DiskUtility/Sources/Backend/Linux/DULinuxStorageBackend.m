@@ -446,6 +446,7 @@
          completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
+        [DULinuxFilesystemTool setCancelCheck:options[@"duCancelCheck"]];
         NSString *devicePath = object.backendPath;
         NSString *fstype = options[kDUFormatIdentifierKey];
         NSString *name = options[@"name"];
@@ -517,6 +518,7 @@
              completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
+        [DULinuxFilesystemTool setCancelCheck:plan.cancelCheck];
         NSError *result = [DULinuxFilesystemTool
             unmountAllMountsOfDevicePath:device.backendPath];
         if (result != nil) {
@@ -557,6 +559,10 @@
             .location != NSNotFound;
     for (NSUInteger i = 0; i < entries.count; i++) {
         DUPartition *entry = entries[i];
+        if ([DULinuxFilesystemTool cancelRequested]) {
+            return DUErrorMake(DUErrorCancelled,
+                               NSLocalizedString(@"Cancelled.", nil));
+        }
         if (entry.filesystemType.length == 0) {
             continue;
         }

@@ -185,7 +185,7 @@ static const int DUSudoCredentialFailure = 1;
      * result the caller receives - leaving it to runPrivileged: meant every
      * streamed verb reported "the filesystem was found to be damaged" while
      * no filesystem tool had ever run. */
-    return [DUProcessRunner
+    DUProcessHandle *handle = [DUProcessRunner
         streamExecutableMergingErrorOutput:launchPath
                                 arguments:arguments
                               environment:nil
@@ -197,6 +197,24 @@ static const int DUSudoCredentialFailure = 1;
         }
         finishHandler(raw);
     }];
+    if (![path isEqualToString:launchPath]) {
+        // sudo does not pass SIGTERM on to the command it runs, so the tool
+        // itself - sudo's child - is the one to signal.
+        NSString *pkill = [DUProcessRunner executablePathForName:@"pkill"];
+        handle.elevatedTerminate = ^(int processIdentifier) {
+            if (pkill == nil) {
+                return;
+            }
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:pkill
+                         args:@[ @"-TERM", @"-P",
+                                 [NSString stringWithFormat:@"%d",
+                                                            processIdentifier] ]
+                      timeout:15.0
+                        error:NULL];
+        };
+    }
+    return handle;
 }
 
 // Carries the permission-denied verdict through to the callers that only see

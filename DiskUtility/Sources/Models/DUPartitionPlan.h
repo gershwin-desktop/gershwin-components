@@ -25,6 +25,10 @@
 // Partition table edits always run privileged.
 @property (nonatomic, readonly) BOOL requiresPrivilege;
 
+// Set by the operation that carries the plan; the backend polls it so Stop
+// can end a long format instead of waiting for it.
+@property (nonatomic, copy) BOOL (^cancelCheck)(void);
+
 + (instancetype)planFromLayout:(DUPartitionLayout *)layout
                     forDevice:(DUStorageObject *)device
                    destructive:(BOOL)destructive;

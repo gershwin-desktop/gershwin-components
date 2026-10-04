@@ -167,6 +167,24 @@ static double StageFractionForLine(NSString *line, double current)
     return candidate;
 }
 
+// Blocks until the streamed tool has exited. When the operation is
+// cancelled meanwhile the tool is terminated through an elevated kill (see
+// DUProcessHandle), then the exit is awaited so no orphan keeps writing to
+// the disk.
+// Returns YES when the stop came from a cancellation.
+static BOOL WaitForStream(DUStreamWait *wait, DUProcessHandle *handle)
+{
+    BOOL cancelled = NO;
+    while (!wait.isFinished) {
+        if (!cancelled && [DULinuxFilesystemTool cancelRequested]) {
+            cancelled = YES;
+            [handle cancel];
+        }
+        usleep(20000);
+    }
+    return cancelled;
+}
+
 // Runs a tool with its merged output streamed line-by-line to progressBlock
 // and blocks until exit. okExitMask is a bitmask of acceptable exit codes
 // (bit n set means "code n is acceptable"); anything else maps to failCode
@@ -205,7 +223,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     // (sudo -A askpass when not root); long-running filesystem work is
     // unbounded by design and cancellable via handle.
     // No timeout parameter exists on the streaming runner.
-    [[DUAuthorizationManager sharedManager]
+    DUProcessHandle *handle = [[DUAuthorizationManager sharedManager]
         streamPrivileged:path
                     args:arguments
            stdoutHandler:^(NSString *line) {
@@ -246,13 +264,36 @@ static NSError *RunStreamedTool(NSString *toolName,
         return streamError;
     }
 
-    while (!wait.isFinished) {
-        usleep(20000);
+    if (WaitForStream(wait, handle)) {
+        return DUErrorMake(DUErrorCancelled,
+                           NSLocalizedString(@"Cancelled.", nil));
     }
     return result;
 }
 
 @implementation DULinuxFilesystemTool
+
+static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
+
+// The backend runs one operation per worker thread, so the operation's
+// cancellation probe travels with the thread instead of through every tool
+// signature.
++ (void)setCancelCheck:(BOOL (^)(void))check
+{
+    NSMutableDictionary *dictionary = [NSThread currentThread].threadDictionary;
+    if (check != nil) {
+        dictionary[kCancelCheckKey] = [check copy];
+    } else {
+        [dictionary removeObjectForKey:kCancelCheckKey];
+    }
+}
+
++ (BOOL)cancelRequested
+{
+    BOOL (^check)(void) =
+        [NSThread currentThread].threadDictionary[kCancelCheckKey];
+    return check != nil && check();
+}
 
 + (NSArray<NSString *> *)formattableFilesystemTypes
 {
@@ -536,7 +577,7 @@ static NSString *UnescapeMountField(NSString *field)
     __block NSError *result = nil;
     NSError *streamError = nil;
 
-    [[DUAuthorizationManager sharedManager]
+    DUProcessHandle *handle = [[DUAuthorizationManager sharedManager]
         streamPrivileged:dd
                     args:@[ @"if=/dev/zero",
                             [@"of=" stringByAppendingString:devicePath],
@@ -581,8 +622,9 @@ static NSString *UnescapeMountField(NSString *field)
         return streamError;
     }
 
-    while (!wait.isFinished) {
-        usleep(20000);
+    if (WaitForStream(wait, handle)) {
+        return DUErrorMake(DUErrorCancelled,
+                           NSLocalizedString(@"Cancelled.", nil));
     }
     if (result == nil && progress != NULL) {
         progress(1.0,

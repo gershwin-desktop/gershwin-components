@@ -60,11 +60,20 @@ static const NSTimeInterval kTerminateGraceSeconds = 5.0;
 
 @implementation DUProcessHandle
 
+- (int)processIdentifier
+{
+    return _task != nil ? _task.processIdentifier : 0;
+}
+
 - (void)cancel
 {
     @synchronized (self) {
         if (_task != nil && _task.isRunning) {
-            [_task terminate];
+            if (_elevatedTerminate != nil) {
+                _elevatedTerminate(_task.processIdentifier);
+            } else {
+                [_task terminate];
+            }
         }
     }
 }

@@ -45,6 +45,12 @@
 // thread; cancel is idempotent.
 @interface DUProcessHandle : NSObject
 
+// A process started through sudo runs as root, and the unprivileged app may
+// not signal it; the authorization layer installs this to deliver the
+// signal through an elevated kill instead.
+@property (nonatomic, copy) void (^elevatedTerminate)(int processIdentifier);
+@property (nonatomic, readonly) int processIdentifier;
+
 - (void)cancel;
 
 @end

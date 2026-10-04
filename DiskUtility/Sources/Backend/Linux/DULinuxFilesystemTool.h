@@ -74,6 +74,11 @@ extern NSString * const kDUBackendDetailKey;
 // mkfs overwrites the primary signatures anyway).
 // YES when the mkfs tool for the identifier is installed on this host;
 // the format popups grey out the rest.
+// Installs (nil removes) the calling thread's cancellation probe; streamed
+// tools started from this thread are terminated when it turns YES.
++ (void)setCancelCheck:(BOOL (^)(void))check;
++ (BOOL)cancelRequested;
+
 + (BOOL)canFormatFilesystemType:(NSString *)fstype;
 
 // Unmounts every filesystem mounted from the device node itself or from one
