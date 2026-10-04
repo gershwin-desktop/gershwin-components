@@ -25,13 +25,19 @@ Applications folder and starts like any other application.
   and none is clearly the right one, the button reads Failed and the alert
   names the files rather than picking one at random. While the download runs
   the button shows its progress; afterwards it reads Open.
+- Some software is high risk by its category alone, so Get opens a panel
+  first when a word of one of those categories appears in an item's title,
+  description or other metadata. `RISKS.md` documents the categories, the
+  keywords and how to edit them. Cancel is the default button, so Return and
+  Escape both mean "do not download".
 - Downloaded lists what AppGarden downloaded. The detail page of a downloaded
   application has a Remove button that deletes the file after asking.
 - Applications the catalog only links to a web page for show Open Page.
 
 `INSTRUCTIONS.md` is the brief the application was built from, `FEED.md`
-documents the feed's shape and every irregularity the parser survives, and
-`DOWNLOADS.md` documents how a Get works out which file to fetch.
+documents the feed's shape and every irregularity the parser survives,
+`DOWNLOADS.md` documents how a Get works out which file to fetch, and
+`RISKS.md` documents the risk keywords a Get checks first.
 `Fixtures/feed-sample.json` holds 15 real entries covering all of them.
 `~/Library/Caches/io.github.gershwin-desktop.AppGarden/` for six hours, so a
 second launch shows the grid at once. When the catalog cannot be fetched, the
@@ -62,7 +68,7 @@ The application links the `PackageManager` framework, so the top-level
 
 Unit tests for the Foundation layer (parser, categories, licenses, search,
 download resolution, grid geometry, Discover order, feed loader, install
-registry, install task):
+registry, install task, risk keywords):
 
     gnustep-tests AppGarden/Tests/Unit
 
@@ -82,7 +88,8 @@ uitest slot after the application has been installed:
 ## Design record
 
 `INSTRUCTIONS.md` is the brief the application was built from, `FEED.md`
-documents the feed's shape and every irregularity the parser survives, and
+documents the feed's shape and every irregularity the parser survives,
 `DOWNLOADS.md` documents how a Get works out which release and which file to
-fetch. `Fixtures/feed-sample.json` holds 15 real entries covering all of
-them.
+fetch, and `RISKS.md` documents the risk categories and the keywords that
+raise the panel. `Fixtures/feed-sample.json` holds 15 real entries covering
+all of them, `Fixtures/feed-risk.json` three invented ones for the panel.

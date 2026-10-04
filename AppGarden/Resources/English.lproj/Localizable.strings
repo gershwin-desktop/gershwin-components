@@ -122,6 +122,15 @@
 /* Screenshot frame fallback when the picture does not arrive (AGScreenshotView). */
 "Screenshot unavailable" = "Screenshot unavailable";
 
+/* Risk warning (AGInstallButton), shown by Get when an item's metadata falls
+ * into a risk category. The first %@ is the item's name, the second the
+ * keywords that matched, which can come from the name, description,
+ * categories, authors or links. The risk sentences themselves live in
+ * Resources/RiskCategories.plist, which is data rather than interface. */
+"Get \"%@\" Anyway?" = "Get \"%@\" Anyway?";
+"Matched: %@" = "Matched: %@";
+"Get Anyway" = "Get Anyway";
+
 /* --------------------------------------------------------- Controllers */
 
 /* Top bar and banner (AGMainWindowController, AGStatusBannerController).

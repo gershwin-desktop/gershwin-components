@@ -1,0 +1,340 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    AppGarden's risk keyword database.
+
+    Every entry under Categories is one threat category. Its Keywords are
+    matched against the title, the description and the other metadata of a
+    catalog item (name, categories, repository, link URLs); a word matches
+    only as a whole word, so "ai" finds "AI workspace" and "Aarynwood" but
+    never "available". Every match makes the Get button show an alert that
+    carries ShortRisk, DetailedRisk and the keywords that fired.
+
+    The sentences are deliberately short and hedged. A keyword is a guess from
+    a word someone typed, not a finding, and the alert says so: the panel has
+    to leave the reader more able to judge the software than it found them.
+
+    Adding a category: give it an Identifier, a Title, both sentences and its
+    Keywords, then add a case to Tests/Unit/t_AGRiskAdviser.m. A category with
+    no keywords, or with an empty sentence, is dropped when the file is read
+    rather than shown as a blank warning.
+-->
+<plist version="1.0">
+<dict>
+	<key>Version</key>
+	<integer>1</integer>
+	<key>DisclaimerShort</key>
+	<string>AppGarden has not vetted anything here. You download at your own risk.</string>
+	<key>DisclaimerDetailed</key>
+	<string>The catalog is whatever publishers put in it. A warning only means a word in this description matched a category that is often misused, so it is a reason to look twice rather than a verdict on this program.</string>
+	<key>Categories</key>
+	<array>
+		<dict>
+			<key>Identifier</key>
+			<string>ai-agents</string>
+			<key>Title</key>
+			<string>AI, Agents and Language Models</string>
+			<key>ShortRisk</key>
+			<string>Might act on your computer, and on the internet, for you.</string>
+			<key>DetailedRisk</key>
+			<string>These tools read files, run commands and use your accounts, so a careless one can lose something or spend the AI credits you pay for.</string>
+			<key>Keywords</key>
+			<array>
+				<string>ai</string>
+				<string>agent</string>
+				<string>agents</string>
+				<string>agentic</string>
+				<string>llm</string>
+				<string>llms</string>
+				<string>gpt</string>
+				<string>chatgpt</string>
+				<string>openai</string>
+				<string>anthropic</string>
+				<string>claude</string>
+				<string>gemini</string>
+				<string>llama</string>
+				<string>mistral</string>
+				<string>copilot</string>
+				<string>chatbot</string>
+				<string>chat bot</string>
+				<string>autonomous</string>
+				<string>machine learning</string>
+				<string>neural network</string>
+				<string>mcp</string>
+				<string>model context protocol</string>
+				<string>ollama</string>
+				<string>langchain</string>
+				<string>inference</string>
+				<string>diffusion</string>
+				<string>huggingface</string>
+				<string>prompt engineering</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>wallets-crypto</string>
+			<key>Title</key>
+			<string>Wallets, Coins and Crypto</string>
+			<key>ShortRisk</key>
+			<string>A common place for scams.</string>
+			<key>DetailedRisk</key>
+			<string>A wallet can ask for your recovery phrase, or swap an address in your clipboard for one of its own. Money sent to the wrong address usually stays gone.</string>
+			<key>Keywords</key>
+			<array>
+				<string>wallet</string>
+				<string>wallets</string>
+				<string>crypto</string>
+				<string>cryptocurrency</string>
+				<string>bitcoin</string>
+				<string>ethereum</string>
+				<string>blockchain</string>
+				<string>nft</string>
+				<string>defi</string>
+				<string>web3</string>
+				<string>binance</string>
+				<string>metamask</string>
+				<string>coinbase</string>
+				<string>monero</string>
+				<string>seed phrase</string>
+				<string>recovery phrase</string>
+				<string>private key</string>
+				<string>airdrop</string>
+				<string>crypto exchange</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>remote-access</string>
+			<key>Title</key>
+			<string>Remote Access, Tunnels and Sharing</string>
+			<key>ShortRisk</key>
+			<string>Could give someone else a way in.</string>
+			<key>DetailedRisk</key>
+			<string>Remote control and file sharing open a path from the internet to this machine. Whoever holds the other end could read your screen and take files.</string>
+			<key>Keywords</key>
+			<array>
+				<string>remote access</string>
+				<string>remote control</string>
+				<string>remote desktop</string>
+				<string>rdp</string>
+				<string>vnc</string>
+				<string>teamviewer</string>
+				<string>anydesk</string>
+				<string>ssh server</string>
+				<string>telnet</string>
+				<string>tunnel</string>
+				<string>tunnelling</string>
+				<string>tunneling</string>
+				<string>ngrok</string>
+				<string>reverse proxy</string>
+				<string>port forwarding</string>
+				<string>trojan</string>
+				<string>rootkit</string>
+				<string>backdoor</string>
+				<string>screen sharing</string>
+				<string>remote administration</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>credential-access</string>
+			<key>Title</key>
+			<string>Passwords, Keys and Tokens</string>
+			<key>ShortRisk</key>
+			<string>Handles your passwords, keys or tokens.</string>
+			<key>DetailedRisk</key>
+			<string>A program like this can read every password and key on the machine at once. A copy of a well known password manager is a common way to take them.</string>
+			<key>Keywords</key>
+			<array>
+				<string>password manager</string>
+				<string>password store</string>
+				<string>password vault</string>
+				<string>password keeper</string>
+				<string>passwords</string>
+				<string>store passwords</string>
+				<string>manage passwords</string>
+				<string>credential</string>
+				<string>credentials</string>
+				<string>keychain</string>
+				<string>api key</string>
+				<string>api keys</string>
+				<string>two-factor</string>
+				<string>2fa</string>
+				<string>authenticator app</string>
+				<string>single sign-on</string>
+				<string>secret key</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>surveillance</string>
+			<key>Title</key>
+			<string>Screen, Camera and Microphone Recording</string>
+			<key>ShortRisk</key>
+			<string>Could record what happens on your screen.</string>
+			<key>DetailedRisk</key>
+			<string>Screen and camera tools keep a copy of what they see, which can include your passwords, your calls and other people's faces.</string>
+			<key>Keywords</key>
+			<array>
+				<string>spyware</string>
+				<string>keylogger</string>
+				<string>screen recorder</string>
+				<string>screen recording</string>
+				<string>screen capture</string>
+				<string>webcam</string>
+				<string>surveillance</string>
+				<string>employee monitoring</string>
+				<string>parental monitoring</string>
+				<string>capture your screen</string>
+				<string>spy on</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>scareware</string>
+			<key>Title</key>
+			<string>Security and Cleanup Tools</string>
+			<key>ShortRisk</key>
+			<string>Some of them sell you problems that are not there.</string>
+			<key>DetailedRisk</key>
+			<string>Cleaners and optimizers can report hundreds of made-up errors and charge to fix them. The repair itself may be the part that does harm.</string>
+			<key>Keywords</key>
+			<array>
+				<string>antivirus</string>
+				<string>anti-virus</string>
+				<string>antimalware</string>
+				<string>anti-malware</string>
+				<string>malware remover</string>
+				<string>virus scanner</string>
+				<string>registry cleaner</string>
+				<string>pc cleaner</string>
+				<string>junk cleaner</string>
+				<string>disk cleaner</string>
+				<string>system cleaner</string>
+				<string>system optimizer</string>
+				<string>system optimiser</string>
+				<string>pc optimizer</string>
+				<string>defragmenter</string>
+				<string>privacy cleaner</string>
+				<string>internet security</string>
+				<string>boot speed</string>
+				<string>malware protection</string>
+				<string>virus protection</string>
+				<string>clean your pc</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>unauthorized-modified</string>
+			<key>Title</key>
+			<string>Cracks, Activators and Repacks</string>
+			<key>ShortRisk</key>
+			<string>Cannot show you what was changed.</string>
+			<key>DetailedRisk</key>
+			<string>These are rebuilt binaries from an unknown builder, so more than the licence check may have been altered. They are also a common way unwanted software arrives.</string>
+			<key>Keywords</key>
+			<array>
+				<string>crack</string>
+				<string>cracks</string>
+				<string>cracked</string>
+				<string>keygen</string>
+				<string>keygens</string>
+				<string>activator</string>
+				<string>noreg</string>
+				<string>no-cd</string>
+				<string>nulled</string>
+				<string>warez</string>
+				<string>repack</string>
+				<string>repacked</string>
+				<string>pre-activated</string>
+				<string>serial key</string>
+				<string>license generator</string>
+				<string>licence generator</string>
+				<string>bypass the activation</string>
+				<string>without activation</string>
+				<string>full version unlocked</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>system-privileged</string>
+			<key>Title</key>
+			<string>Changes to the System</string>
+			<key>ShortRisk</key>
+			<string>Asks for rights that reach the whole system.</string>
+			<key>DetailedRisk</key>
+			<string>Root and kernel level access can turn a small mistake into an unusable machine, and can let a program start before anything else does.</string>
+			<key>Keywords</key>
+			<array>
+				<string>requires root</string>
+				<string>root access</string>
+				<string>root privileges</string>
+				<string>as root</string>
+				<string>administrator privileges</string>
+				<string>admin privileges</string>
+				<string>kernel module</string>
+				<string>system service</string>
+				<string>systemd service</string>
+				<string>bootloader</string>
+				<string>iptables</string>
+				<string>firewall rule</string>
+				<string>elevated privileges</string>
+				<string>runs as a service</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>bulk-mailing-scraping</string>
+			<key>Title</key>
+			<string>Bulk Messages, Bots and Scrapers</string>
+			<key>ShortRisk</key>
+			<string>Acts in your name, or collects other people's data.</string>
+			<key>DetailedRisk</key>
+			<string>Senders and bots use your machine and your address, so blocked servers and banned accounts land on you. Scrapers take data from others without asking them.</string>
+			<key>Keywords</key>
+			<array>
+				<string>scraper</string>
+				<string>scraping</string>
+				<string>bulk email</string>
+				<string>bulk mail</string>
+				<string>mass mailing</string>
+				<string>mass email</string>
+				<string>smtp server</string>
+				<string>email spam</string>
+				<string>instagram bot</string>
+				<string>auto clicker</string>
+				<string>message bomber</string>
+				<string>phone number generator</string>
+				<string>bulk messenger</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Identifier</key>
+			<string>vpn-proxy</string>
+			<key>Title</key>
+			<string>Proxies and VPNs</string>
+			<key>ShortRisk</key>
+			<string>Puts someone else in the middle of your traffic.</string>
+			<key>DetailedRisk</key>
+			<string>The operator could see every site you visit and change what comes back. A free one may also sell what it sees.</string>
+			<key>Keywords</key>
+			<array>
+				<string>vpn</string>
+				<string>vpns</string>
+				<string>http proxy</string>
+				<string>https proxy</string>
+				<string>socks proxy</string>
+				<string>socks5</string>
+				<string>socks4</string>
+				<string>proxy client</string>
+				<string>proxy manager</string>
+				<string>wireguard</string>
+				<string>openvpn</string>
+				<string>vless</string>
+				<string>onion service</string>
+				<string>tor browser</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

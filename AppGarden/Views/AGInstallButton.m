@@ -6,6 +6,9 @@
 #import "AGInstaller.h"
 #import "AGInstallTask.h"
 #import "AGDownloadResolver.h"
+#import "AGRiskAdviser.h"
+#import "AGRiskCategory.h"
+#import "AGRiskMatch.h"
 
 /*
  * The rendered state. It is kept in an ivar rather than derived in drawRect:
@@ -323,6 +326,11 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
   switch (_state)
     {
       case AGInstallButtonStateGet:
+        /* The one place a Get is started, from a card or from the detail
+         * page alike, so this is also the one place the risk alert has to
+         * stand in front of a download. */
+        if ([self askAboutRisksBeforeDownloading:app])
+          break;
         [_installer installApp:app];
         [self reloadState];
         break;
@@ -375,9 +383,80 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
   [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];
   if ([alert runModal] == NSAlertFirstButtonReturn)
     {
+      /* No second risk alert here: reaching this alert means a Get was
+       * already confirmed once, so asking again would only repeat itself. */
       [_installer installApp:_app];
       [self reloadState];
     }
+}
+
+/*
+ * Nothing in the catalog has been vetted, so a Get on an item whose metadata
+ * falls into a risk category asks first. Returns YES when a question was put
+ * to the user, in which case the download starts from the sheet's answer and
+ * not from the caller; NO for the many items no category claims.
+ */
+- (BOOL)askAboutRisksBeforeDownloading:(AGApp *)app
+{
+  AGRiskAdviser *adviser = [AGRiskAdviser sharedAdviser];
+  NSArray<AGRiskMatch *> *matches = [adviser matchesForApp:app];
+  if ([matches count] == 0)
+    return NO;
+
+  NSAlert *alert = [[NSAlert alloc] init];
+  [alert setMessageText:[NSString stringWithFormat:
+                            NSLocalizedString(@"Get \"%@\" Anyway?", @""),
+                            [app displayName]]];
+  [alert setInformativeText:[self riskWarningForMatches:matches adviser:adviser]];
+  /* Cancel is added first, which makes it the default button, so Return and
+   * Escape both mean "do not download". */
+  [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];
+  [alert addButtonWithTitle:NSLocalizedString(@"Get Anyway", @"")];
+
+  /* A sheet on this button's window, so the warning looks like every other
+   * alert on the desktop. The sheet does not block: its answer arrives in the
+   * completion handler, which is why the download is started from there and
+   * why this method cannot return the answer. */
+  AGInstaller *installer = _installer;
+  __weak AGInstallButton *weakSelf = self;
+  void (^answer)(NSModalResponse) = ^(NSModalResponse code)
+    {
+      if (code != NSAlertSecondButtonReturn)
+        return;
+      [installer installApp:app];
+      [weakSelf reloadState];
+    };
+
+  NSWindow *parent = [self window];
+  if (parent == nil)
+    answer([alert runModal]);
+  else
+    [alert beginSheetModalForWindow:parent completionHandler:answer];
+  return YES;
+}
+
+/*
+ * The alert's informative text: every matching category with its two
+ * sentences and the keywords that fired, then the catalog's own disclaimer.
+ * The keywords are there on purpose - a category is a guess from a word in a
+ * description, so the word is shown instead of only the verdict.
+ */
+- (NSString *)riskWarningForMatches:(NSArray<AGRiskMatch *> *)matches
+                           adviser:(AGRiskAdviser *)adviser
+{
+  NSMutableString *text = [NSMutableString string];
+  AGRiskMatch *match;
+  for (match in matches)
+    {
+      AGRiskCategory *category = [match category];
+      [text appendFormat:@"%@\n%@\n%@\n%@\n\n",
+        [category title], [category shortRisk], [category detailedRisk],
+        [NSString stringWithFormat:NSLocalizedString(@"Matched: %@", @""),
+          [[match keywords] componentsJoinedByString:@", "]]];
+    }
+  [text appendFormat:@"%@\n%@",
+    [adviser disclaimerShort], [adviser disclaimerDetailed]];
+  return text;
 }
 
 - (void)showMessage:(NSString *)message details:(NSString *)details

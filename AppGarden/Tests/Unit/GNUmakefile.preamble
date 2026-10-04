@@ -74,3 +74,15 @@ ADDITIONAL_INCLUDE_DIRS += -I/System/Library/Headers
 ADDITIONAL_OBJCFLAGS += -Wno-nullability-completeness
 
 t_AGInstallTask_OBJC_FILES += ../../Services/AGInstallTask.m
+
+# --- the risk keywords and their matching (appended; above stay untouched) ---
+
+../../Models/AGRiskCategory.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGRiskMatch.m_FILE_FLAGS += $(AG_ARCFLAGS)
+../../Models/AGRiskAdviser.m_FILE_FLAGS += $(AG_ARCFLAGS)
+
+# The adviser reads an item's categories and authors, so it needs the whole
+# feed model behind AGApp - and the parser, to read a catalog file the way the
+# app does.
+t_AGRiskAdviser_OBJC_FILES += ../../Models/AGRiskAdviser.m \
+  ../../Models/AGRiskCategory.m ../../Models/AGRiskMatch.m $(AG_FEED_SOURCES)

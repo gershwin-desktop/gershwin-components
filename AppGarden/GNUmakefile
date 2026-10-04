@@ -22,6 +22,9 @@ AppGarden_OBJC_FILES = \
   Models/AGDownloadResolver.m \
   Models/AGGridLayout.m \
   Models/AGDiscoverOrder.m \
+  Models/AGRiskCategory.m \
+  Models/AGRiskMatch.m \
+  Models/AGRiskAdviser.m \
   Services/AGFeedLoader.m \
   Services/AGImageCache.m \
   Services/AGInstaller.m \
@@ -47,6 +50,7 @@ AppGarden_OBJC_FILES = \
 AppGarden_RESOURCE_FILES = \
   AppGarden.png \
   AppGarden@2x.png \
+  RiskCategories.plist \
   Icons/ai.tiff Icons/astronomy.tiff Icons/audio.tiff \
   Icons/back.tiff \
   Icons/audiovideo.tiff Icons/chat.tiff Icons/database.tiff \
