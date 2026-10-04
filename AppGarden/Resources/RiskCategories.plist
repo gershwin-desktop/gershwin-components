@@ -8,13 +8,13 @@
     catalog item (name, categories, repository, link URLs); a word matches
     only as a whole word, so "ai" finds "AI workspace" and "Aarynwood" but
     never "available". Every match makes the Get button show an alert that
-    carries ShortRisk, DetailedRisk and the keywords that fired.
+    carries ShortRisk and DisclaimerShort.
 
     The sentences are deliberately short and hedged. A keyword is a guess from
     a word someone typed, not a finding, and the alert says so: the panel has
     to leave the reader more able to judge the software than it found them.
 
-    Adding a category: give it an Identifier, a Title, both sentences and its
+    Adding a category: give it an Identifier, a Title, its ShortRisk sentence and its
     Keywords, then add a case to Tests/Unit/t_AGRiskAdviser.m. A category with
     no keywords, or with an empty sentence, is dropped when the file is read
     rather than shown as a blank warning.
@@ -25,8 +25,6 @@
 	<integer>1</integer>
 	<key>DisclaimerShort</key>
 	<string>AppGarden has not checked this app.</string>
-	<key>DisclaimerDetailed</key>
-	<string>The catalog is whatever publishers put in it. A warning only means a word in this description matched a category that is often misused, so it is a reason to look twice rather than a verdict on this program.</string>
 	<key>Categories</key>
 	<array>
 		<dict>
@@ -36,8 +34,6 @@
 			<string>AI, Agents and Language Models</string>
 			<key>ShortRisk</key>
 			<string>Might act on your computer, and on the internet, for you.</string>
-			<key>DetailedRisk</key>
-			<string>These tools read files, run commands and use your accounts, so a careless one can lose something or spend the AI credits you pay for.</string>
 			<key>Keywords</key>
 			<array>
 				<string>ai</string>
@@ -77,8 +73,6 @@
 			<string>Wallets, Coins and Crypto</string>
 			<key>ShortRisk</key>
 			<string>A common place for scams.</string>
-			<key>DetailedRisk</key>
-			<string>A wallet can ask for your recovery phrase, or swap an address in your clipboard for one of its own. Money sent to the wrong address usually stays gone.</string>
 			<key>Keywords</key>
 			<array>
 				<string>wallet</string>
@@ -109,8 +103,6 @@
 			<string>Remote Access, Tunnels and Sharing</string>
 			<key>ShortRisk</key>
 			<string>Could give someone else a way in.</string>
-			<key>DetailedRisk</key>
-			<string>Remote control and file sharing open a path from the internet to this machine. Whoever holds the other end could read your screen and take files.</string>
 			<key>Keywords</key>
 			<array>
 				<string>remote access</string>
@@ -142,8 +134,6 @@
 			<string>Passwords, Keys and Tokens</string>
 			<key>ShortRisk</key>
 			<string>Handles your passwords, keys or tokens.</string>
-			<key>DetailedRisk</key>
-			<string>A program like this can read every password and key on the machine at once. A copy of a well known password manager is a common way to take them.</string>
 			<key>Keywords</key>
 			<array>
 				<string>password manager</string>
@@ -172,8 +162,6 @@
 			<string>Screen, Camera and Microphone Recording</string>
 			<key>ShortRisk</key>
 			<string>Could record what happens on your screen.</string>
-			<key>DetailedRisk</key>
-			<string>Screen and camera tools keep a copy of what they see, which can include your passwords, your calls and other people's faces.</string>
 			<key>Keywords</key>
 			<array>
 				<string>spyware</string>
@@ -196,8 +184,6 @@
 			<string>Security and Cleanup Tools</string>
 			<key>ShortRisk</key>
 			<string>Some of them sell you problems that are not there.</string>
-			<key>DetailedRisk</key>
-			<string>Cleaners and optimizers can report hundreds of made-up errors and charge to fix them. The repair itself may be the part that does harm.</string>
 			<key>Keywords</key>
 			<array>
 				<string>antivirus</string>
@@ -230,8 +216,6 @@
 			<string>Cracks, Activators and Repacks</string>
 			<key>ShortRisk</key>
 			<string>Cannot show you what was changed.</string>
-			<key>DetailedRisk</key>
-			<string>These are rebuilt binaries from an unknown builder, so more than the licence check may have been altered. They are also a common way unwanted software arrives.</string>
 			<key>Keywords</key>
 			<array>
 				<string>crack</string>
@@ -262,8 +246,6 @@
 			<string>Changes to the System</string>
 			<key>ShortRisk</key>
 			<string>Asks for rights that reach the whole system.</string>
-			<key>DetailedRisk</key>
-			<string>Root and kernel level access can turn a small mistake into an unusable machine, and can let a program start before anything else does.</string>
 			<key>Keywords</key>
 			<array>
 				<string>requires root</string>
@@ -289,8 +271,6 @@
 			<string>Bulk Messages, Bots and Scrapers</string>
 			<key>ShortRisk</key>
 			<string>Acts in your name, or collects other people's data.</string>
-			<key>DetailedRisk</key>
-			<string>Senders and bots use your machine and your address, so blocked servers and banned accounts land on you. Scrapers take data from others without asking them.</string>
 			<key>Keywords</key>
 			<array>
 				<string>scraper</string>
@@ -315,8 +295,6 @@
 			<string>Proxies and VPNs</string>
 			<key>ShortRisk</key>
 			<string>Puts someone else in the middle of your traffic.</string>
-			<key>DetailedRisk</key>
-			<string>The operator could see every site you visit and change what comes back. A free one may also sell what it sees.</string>
 			<key>Keywords</key>
 			<array>
 				<string>vpn</string>

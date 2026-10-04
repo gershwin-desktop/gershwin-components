@@ -61,13 +61,11 @@ static NSString *AGRiskStringValue(id value)
 {
   _categories = [NSArray array];
   _disclaimerShort = @"";
-  _disclaimerDetailed = @"";
   if (![propertyList isKindOfClass:[NSDictionary class]])
     return;
 
   NSDictionary *root = propertyList;
   _disclaimerShort = AGRiskStringValue([root objectForKey:@"DisclaimerShort"]);
-  _disclaimerDetailed = AGRiskStringValue([root objectForKey:@"DisclaimerDetailed"]);
 
   id entries = [root objectForKey:@"Categories"];
   if (![entries isKindOfClass:[NSArray class]])

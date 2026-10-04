@@ -36,7 +36,6 @@
 
 @property (nonatomic, copy, readonly) NSArray<AGRiskCategory *> *categories;
 @property (nonatomic, copy, readonly) NSString *disclaimerShort;
-@property (nonatomic, copy, readonly) NSString *disclaimerDetailed;
 
 /*
  * Every category whose keywords appear in the item, in the order the file

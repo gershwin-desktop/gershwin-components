@@ -145,8 +145,7 @@ static NSArray<NSString *> *AGRiskSearchForms(NSString *keyword)
   NSString *identifier = AGRiskStringValue([entry objectForKey:@"Identifier"]);
   NSString *title = AGRiskStringValue([entry objectForKey:@"Title"]);
   NSString *shortRisk = AGRiskStringValue([entry objectForKey:@"ShortRisk"]);
-  NSString *detailedRisk = AGRiskStringValue([entry objectForKey:@"DetailedRisk"]);
-  if (identifier == nil || title == nil || shortRisk == nil || detailedRisk == nil)
+  if (identifier == nil || title == nil || shortRisk == nil)
     return nil;
 
   /* A keyword that differs only in case or spacing is the same word twice,
@@ -178,7 +177,6 @@ static NSArray<NSString *> *AGRiskSearchForms(NSString *keyword)
   _identifier = identifier;
   _title = title;
   _shortRisk = shortRisk;
-  _detailedRisk = detailedRisk;
   _keywords = [keywords copy];
   _searchForms = [forms copy];
   return self;

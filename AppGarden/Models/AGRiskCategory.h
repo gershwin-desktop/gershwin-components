@@ -9,8 +9,7 @@
 /*
  * One threat category from Resources/RiskCategories.plist: the words in a
  * catalog item's metadata that mean "this can do damage", plus the sentence
- * shown when one of them fires (ShortRisk) and the sentence that explains it
- * (DetailedRisk).
+ * shown when one of them fires (ShortRisk).
  *
  * Foundation only, so the wording and the matching can be tested without a
  * display, like every other model here.
@@ -26,7 +25,6 @@
 @property (nonatomic, copy, readonly) NSString *identifier;   // "ai-agents"
 @property (nonatomic, copy, readonly) NSString *title;       // shown as the panel's headline
 @property (nonatomic, copy, readonly) NSString *shortRisk;   // one sentence
-@property (nonatomic, copy, readonly) NSString *detailedRisk; // the longer explanation
 @property (nonatomic, copy, readonly) NSArray<NSString *> *keywords; // as written, never empty
 
 /*

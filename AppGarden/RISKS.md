@@ -7,8 +7,8 @@ software sits in a category that is *known* to be abused, and why.
 
 That is what `Resources/RiskCategories.plist` is: a list of threat categories,
 the words that mean "this one", and the sentences the panel can show. When
-Get finds a word, the download waits and a panel names the category, its short
-and its detailed sentence, and the keywords that fired.
+Get finds a word, the download waits and a panel asks whether to continue,
+with one sentence per category and that the app has not been checked.
 
 ## What is searched
 
@@ -58,8 +58,8 @@ keyword list cannot contain a fragment - write "wallet" for wallets, not
 Against the live catalog (2569 items) these fire on about 14% of it, almost
 all of it AI clients and crypto wallets. The false positives that remain are
 games whose computer opponent is called "AI", and an item that merely lists
-"agent" in its repository name - which is why the panel shows the keywords:
-a guess from a word is something to read, not a verdict.
+"agent" in its repository name - so a warning is a guess from a
+word, something to read and not a verdict.
 
 ## Editing the file
 
@@ -67,9 +67,8 @@ a guess from a word is something to read, not a verdict.
 process. A category needs:
 
     Identifier      a key nothing else uses, e.g. "ai-agents"
-    Title           the panel's headline for it
+    Title           the category's name
     ShortRisk       one sentence: what this category can do
-    DetailedRisk    the longer explanation, with what to look at
     Keywords        the words, as they are written in a description
 
 An entry missing any of those is dropped when the file is read, so a

@@ -113,12 +113,7 @@ int main(void)
         PASS([[category identifier] length] > 0, "a category has an identifier");
         PASS([[category title] length] > 0, "a category has a title");
         PASS([[category shortRisk] length] > 0, "a category has a short sentence");
-        PASS([[category detailedRisk] length] > 0, "a category has a detailed sentence");
-        PASS([[category detailedRisk] length] > [[category shortRisk] length],
-             "the detailed sentence says more than the short one");
         PASS([[category shortRisk] hasSuffix:@"."], "the short sentence is a sentence");
-        PASS([[category detailedRisk] hasSuffix:@"."],
-             "the detailed sentence is a sentence");
         PASS([[category keywords] count] > 0, "a category has keywords");
         PASS(![identifiers containsObject:[category identifier]],
              "no two categories share an identifier");
@@ -137,17 +132,10 @@ int main(void)
       }
 
     PASS([[adviser disclaimerShort] length] > 0, "the short disclaimer is there");
-    PASS([[adviser disclaimerDetailed] length] > 0, "the detailed disclaimer is there");
     PASS([[[adviser disclaimerShort] lowercaseString] rangeOfString:@"not checked"].location
            != NSNotFound,
          "the disclaimer says the app has not been checked");
     PASS([[adviser disclaimerShort] length] < 50, "the short disclaimer stays one short line");
-    PASS([[[adviser disclaimerDetailed] lowercaseString] rangeOfString:@"description"].location
-           != NSNotFound,
-         "the detailed disclaimer says the warning came from the description");
-    PASS([[[adviser disclaimerDetailed] lowercaseString] rangeOfString:@"rather than"].location
-           != NSNotFound,
-         "the detailed disclaimer says the warning is not a verdict");
   }
 
   /* --- the two categories the catalog is full of --- */
@@ -241,13 +229,13 @@ int main(void)
     [entries addObject:[NSMutableDictionary dictionary]];   /* no keys at all */
     [entries addObject:@{ @"Identifier" : @"x", @"Title" : @"X", @"ShortRisk" : @"Short." }];
     [entries addObject:@{ @"Identifier" : @"y", @"Title" : @"Y",
-                          @"ShortRisk" : @"Short.", @"DetailedRisk" : @"Long." }];
+                          @"ShortRisk" : @"Short." }];
     [entries addObject:@"not a dictionary"];
     [entries addObject:@{ @"Identifier" : @"z", @"Title" : @"Z",
-                          @"ShortRisk" : @"Short.", @"DetailedRisk" : @"Long.",
+                          @"ShortRisk" : @"Short.",
                           @"Keywords" : @[ @"  ", @"" ] }];
     [entries addObject:@{ @"Identifier" : @"good", @"Title" : @"Good",
-                          @"ShortRisk" : @"Short.", @"DetailedRisk" : @"Long.",
+                          @"ShortRisk" : @"Short.",
                           @"Keywords" : @[ @"wallet", @"Wallet", @"AI" ] }];
     adviser = [AGRiskAdviser adviserWithPropertyList:@{ @"Categories" : entries }];
     PASS_EQUAL([[adviser categories] count], 1,
@@ -268,8 +256,7 @@ int main(void)
     NSDictionary *entry = @{ @"Identifier" : @"ai-agents",
                              @"Title" : @"AI",
                              @"ShortRisk" : @"Short.",
-                             @"DetailedRisk" : @"Long.",
-                             @"Keywords" : @[ @"ai", @"mcp", @"gpt" ] };
+                                                          @"Keywords" : @[ @"ai", @"mcp", @"gpt" ] };
     AGRiskCategory *category = [[AGRiskCategory alloc] initWithPropertyListEntry:entry];
     PASS(category != nil, "a complete entry is kept");
 
@@ -299,7 +286,7 @@ int main(void)
   {
     AGRiskCategory *category = [[AGRiskCategory alloc] initWithPropertyListEntry:
                                   @{ @"Identifier" : @"a", @"Title" : @"A",
-                                     @"ShortRisk" : @"S.", @"DetailedRisk" : @"D.",
+                                     @"ShortRisk" : @"S.",
                                      @"Keywords" : @[ @"x" ] }];
     AGRiskMatch *match = [[[AGRiskMatch alloc] initWithCategory:category
                                                         keywords:@[ @"x" ]] retain];
