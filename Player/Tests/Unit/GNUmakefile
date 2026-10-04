@@ -1,39 +1,33 @@
 #
-# Headless unit tests for Player's model and playback classes.
-# Build with "gmake", run each ./obj/t_* tool.
+# Headless ObjectTesting coverage for the pure-logic podcast pieces:
+# Podcast's property-list round trip and PodcastFeedParser's RSS parsing.
+# Episode playback and the UI itself are covered by the player*.uitest
+# scripts in Tests/, driven with the driveui skill - there is no window or
+# network here, just model/parser logic.
 #
+ifeq ($(GNUSTEP_MAKEFILES),)
+ GNUSTEP_MAKEFILES := $(shell gnustep-config --variable=GNUSTEP_MAKEFILES 2>/dev/null)
+endif
+ifeq ($(GNUSTEP_MAKEFILES),)
+ $(error You need to set GNUSTEP_MAKEFILES before compiling!)
+endif
+
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_PlayerPlaylist t_StreamPlayer t_PlayerSession t_PlayerSessionMedia t_PlayerMenu t_PlayerViews t_PlayerMediaInfo t_RadioManager t_MediaRemote
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+TEST_TOOL_NAME = t_Podcast t_PodcastFeedParser
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
-ADDITIONAL_INCLUDE_DIRS += -I../.. -I../../../MediaRemote
-ADDITIONAL_OBJCFLAGS += -Wno-deprecated
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated -Wall -Wextra -Werror
 
-t_PlayerPlaylist_OBJC_FILES = t_PlayerPlaylist.m
-t_PlayerSession_OBJC_FILES = t_PlayerSession.m ../../PlayerPlaylist.m \
-	../../PlayerAsync.m
-t_PlayerSessionMedia_OBJC_FILES = t_PlayerSessionMedia.m TestMedia.m \
-	../../PlayerSession.m ../../PlayerPlaylist.m ../../StreamPlayer.m \
-	../../PlayerAsync.m
-t_PlayerMenu_OBJC_FILES = t_PlayerMenu.m ../../PlayerMenu.m
-t_PlayerMenu_TOOL_LIBS += -lgnustep-gui
-t_PlayerViews_OBJC_FILES = t_PlayerViews.m ../../PlayerViews.m
-t_PlayerViews_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs x11)
-t_PlayerMediaInfo_OBJC_FILES = t_PlayerMediaInfo.m TestMedia.m ../../PlayerMediaInfo.m
-t_RadioManager_OBJC_FILES = t_RadioManager.m TestMedia.m ../../RadioManager.m \
-	../../RadioBrowser.m ../../RadioStation.m ../../PlayerAsync.m ../../StreamPlayer.m
-t_MediaRemote_OBJC_FILES = t_MediaRemote.m ../../../MediaRemote/GSMediaPlayer2.m
-t_RadioManager_TOOL_LIBS += -lgnustep-gui $(FFMPEG_LIBS)
-t_StreamPlayer_OBJC_FILES = t_StreamPlayer.m TestMedia.m ../../StreamPlayer.m
-
-# StreamPlayer decodes with FFmpeg and plays through libao
-FFMPEG_PKGS = libavformat libavcodec libavutil libswresample libswscale
-ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags $(FFMPEG_PKGS))
-FFMPEG_LIBS = $(shell pkg-config --libs $(FFMPEG_PKGS) ao)
-t_StreamPlayer_TOOL_LIBS += $(FFMPEG_LIBS)
-t_PlayerSessionMedia_TOOL_LIBS += $(FFMPEG_LIBS)
-t_PlayerMediaInfo_TOOL_LIBS += $(FFMPEG_LIBS)
+t_Podcast_OBJC_FILES = t_Podcast.m
+t_PodcastFeedParser_OBJC_FILES = t_PodcastFeedParser.m
+t_PodcastFeedParser_OBJC_FILES += ../../PlayerAsync.m
 
 -include GNUmakefile.preamble
 include $(GNUSTEP_MAKEFILES)/test-tool.make
+-include GNUmakefile.postamble
+
+after-clean::
+	rm -f core core.* *.core tests.log tests.sum oldtests.log oldtests.sum

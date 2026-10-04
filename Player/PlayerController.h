@@ -16,11 +16,16 @@
 #import "PlayerViews.h"
 #import "PlayerMediaRemote.h"
 
+#import "PodcastManager.h"
+
 @class RadioStation;
+@class Podcast;
+@class PodcastEpisode;
 
 typedef NS_ENUM(NSInteger, PlayerMode) {
     PlayerModeLocal,
-    PlayerModeRadio
+    PlayerModeRadio,
+    PlayerModePodcast
 };
 
 /**
@@ -30,13 +35,17 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
  */
 @interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource,
     ItemFlowViewDelegate, RadioManagerDelegate, YTDLPBackendDelegate,
-    PlayerSessionDelegate, PlayerContentViewController, PlayerMediaRemoteTarget>
+    PlayerSessionDelegate, PlayerContentViewController, PlayerMediaRemoteTarget,
+    PodcastManagerDelegate, NSTableViewDataSource, NSTableViewDelegate>
 {
     PlayerWindow *mainWindow;
     PlayerContentView *contentView;
 
     // Cover art carousel and video
     ItemFlowView *flowView;
+    // The toolbar-like gradient strip behind Radio/Podcast's search row,
+    // above the carousel; hidden in Local mode, which has no such row
+    PlayerBarView *topBarView;
     NSView *videoView;
     VideoRenderView *videoRenderView;
     NSProgressIndicator *progressIndicator;
@@ -87,6 +96,27 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     // quit) once the stations are there
     RadioStation *restoredRadioStation;
     BOOL resumeRadioPlayback;
+
+    // Podcasts: search/subscriptions carousel (shares flowView above) and,
+    // once a show is drilled into, an episode table in its place
+    NSSearchField *podcastSearchField;
+    NSButton *subscribeButton;
+    NSButton *backButton;
+    NSScrollView *episodeScrollView;
+    NSTableView *episodeTableView;
+    NSScrollView *showNotesScrollView;
+    NSTextView *showNotesTextView;
+    PlayerTimelineView *podcastTimelineView;
+    PodcastEpisode *currentPlayingEpisode;
+    // The show currentPlayingEpisode belongs to; kept apart from
+    // PodcastManager's currentShow because Back returns to the Shows
+    // screen (clearing currentShow) without stopping playback
+    Podcast *currentPlayingPodcast;
+    // Set once at launch from the defaults saved at the last quit; consumed
+    // (seeked to, then cleared) the first time any episode starts playing
+    NSString *pendingResumeEpisodeIdentifier;
+    NSTimeInterval pendingResumePosition;
+    BOOL pendingResumeShouldPlay;
 
     // Streaming sites
     YTDLPBackend *ytdlpBackend;
@@ -145,6 +175,38 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (void)radioSelectStationAtIndex:(NSUInteger)index;
 - (void)rebuildRadioStationMenu;
 - (BOOL)validateRadioMenuItem:(NSMenuItem *)item;
+@end
+
+/// Podcast search/subscribe/stream mode, in PlayerController+Podcast.m
+@interface PlayerController (Podcast)
+- (IBAction)toggleBrowsePodcasts:(id)sender;
+- (void)createPodcastViews;
+- (void)enterPodcastMode;
+/// Podcast mode as it was left: the last search and show, resuming the
+/// episode and position saved at quit when `resume` and it was playing.
+- (void)enterPodcastModeResuming:(BOOL)resume;
+- (void)exitPodcastMode;
+- (void)layoutPodcastMode;
+- (void)updatePodcastControls;
+- (void)podcastPlayPause;
+- (void)podcastStop;
+- (void)podcastNextEpisode;
+- (void)podcastPreviousEpisode;
+- (void)rebuildPodcastSubscriptionMenu;
+- (BOOL)validatePodcastMenuItem:(NSMenuItem *)item;
+/// Search results while the podcast search field has a query, else the
+/// subscriptions - whichever the Shows screen (the flowView) is showing.
+- (NSArray *)podcastShowsList;
+/// Browsing (arrow keys) rested on this show; drills into its episodes
+/// shortly, unless the selection moves on first.
+- (void)podcastBrowseToShowAtIndex:(NSUInteger)index;
+- (void)podcastDidStartPlayingEpisode;
+- (void)podcastDidStop;
+- (void)podcastDidFailWithError:(NSString *)errorMessage;
+- (void)updatePodcastPosition;
+/// Called from -applicationShouldTerminate: before playback stops, so
+/// the next launch can resume it.
+- (void)savePodcastPlaybackStateForQuit;
 @end
 
 #endif /* PlayerController_h */

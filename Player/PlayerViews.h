@@ -47,6 +47,46 @@
 /// the start and the end of a title stay readable.
 NSTextField *PlayerMakeLabel(NSFont *font);
 
+/// A toolbar-like strip: a subtle vertical gradient (lighter at the top, so
+/// it reads as a surface the window's frame continues into) with a hairline
+/// at one edge. Same treatment as FMRackNew's FMBarView, behind the search
+/// row above the carousel in Radio/Podcast mode.
+@interface PlayerBarView : NSView
+@property (nonatomic, assign) BOOL hairlineAtBottom;
+@end
+
+/// A seek bar: a track with a playhead at the current time and small tick
+/// marks for chapters. Click or drag anywhere to scrub; -action fires once
+/// the mouse goes up, the same "seek once, not while dragging" rule
+/// PlayerController's plain time slider uses.
+///
+/// Plain NSView, not NSControl: a bare NSControl subclass gets a plain
+/// NSCell by default, which does not support target/action and raises
+/// NSInternalInconsistencyException ("attempt to set a target in an
+/// NSCell") the moment -setTarget: is called - nothing else here uses a
+/// cell, so target/action/enabled are just ivars.
+@interface PlayerTimelineView : NSView
+{
+    NSTimeInterval _duration;
+    NSTimeInterval _currentTime;
+    NSArray *_chapterTimes;    // NSNumber seconds, ascending, parallel to _chapterTitles
+    NSArray *_chapterTitles;   // NSString, parallel to _chapterTimes
+    id _target;
+    SEL _action;
+    BOOL _enabled;
+}
+@property (nonatomic, assign) id target;
+@property (nonatomic, assign) SEL action;
+@property (nonatomic, assign, getter=isEnabled) BOOL enabled;
+@property (nonatomic, readonly) NSTimeInterval currentTime;
+- (void)setDuration:(NSTimeInterval)duration;
+- (void)setCurrentTime:(NSTimeInterval)seconds;
+/// Chapter tick marks; times (seconds) and titles (shown as a tooltip when
+/// hovering a mark) in the same order. Either nil, or both the same
+/// length; nil/empty draws no marks.
+- (void)setChapterTimes:(NSArray *)times titles:(NSArray *)titles;
+@end
+
 /// Asks the window manager to show the window full screen (above the menu
 /// bar and the Dock, without titlebar) or to bring it back; the window
 /// manager restores the previous frame itself.

@@ -310,18 +310,23 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 - (void)playURL:(NSString *)urlString
 {
+    [self playURL:urlString displayName:nil];
+}
+
+- (void)playURL:(NSString *)urlString displayName:(NSString *)displayName
+{
     if (!urlString || [urlString length] == 0) return;
 
     [self setAsidePlayer];
     _connecting = YES;
     _tuneAttempt++;
     [_currentStationName release];
-    _currentStationName = [[urlString lastPathComponent] copy];
+    _currentStationName = [(displayName ?: [urlString lastPathComponent]) copy];
     [_currentStreamURL release];
     _currentStreamURL = [urlString copy];
 
     if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:@"Connecting..."];
+        [_delegate radioManagerDidUpdateStatus:self status:[NSString stringWithFormat:@"Connecting to %@...", _currentStationName]];
     }
 
     [self openAndPlayURL:urlString];

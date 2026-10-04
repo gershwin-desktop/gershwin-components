@@ -101,6 +101,13 @@ static NSString *functionKey(unichar key)
     [item setTag:PlayerMenuStationListTag];
     [radio addItem:item];
 
+    NSMenu *podcasts = [self addSubmenu:@"Podcasts" to:mainMenu];
+    [self addItemTo:podcasts title:@"Browse Podcasts"
+             action:@selector(toggleBrowsePodcasts:) key:@"p" target:target];
+    item = (NSMenuItem *)[NSMenuItem separatorItem];
+    [item setTag:PlayerMenuSubscriptionListTag];
+    [podcasts addItem:item];
+
     return mainMenu;
 }
 

@@ -9,6 +9,7 @@
 #import "PlayerMenu.h"
 #import "AppearanceMetrics.h"
 #import "PlayerMediaInfo.h"
+#import "Podcast.h"
 
 NSString *const PlayerDefaultsVolume = @"PlayerVolume";
 NSString *const PlayerDefaultsMuted = @"PlayerMuted";
@@ -18,6 +19,11 @@ NSString *const PlayerDefaultsMode = @"PlayerMode";
 NSString *const PlayerDefaultsRadioSearch = @"PlayerRadioSearch";
 NSString *const PlayerDefaultsRadioStation = @"PlayerRadioStation";
 NSString *const PlayerDefaultsRadioPlaying = @"PlayerRadioPlaying";
+NSString *const PlayerDefaultsPodcastSearch = @"PlayerPodcastSearch";
+NSString *const PlayerDefaultsPodcastShow = @"PlayerPodcastShow";
+NSString *const PlayerDefaultsPodcastEpisode = @"PlayerPodcastEpisode";
+NSString *const PlayerDefaultsPodcastPosition = @"PlayerPodcastPosition";
+NSString *const PlayerDefaultsPodcastPlaying = @"PlayerPodcastPlaying";
 NSString *const PlayerDefaultsPlaylist = @"PlayerPlaylist";
 
 // Content size the window opens with
@@ -98,6 +104,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [pauseImage release];
     [pendingRadioStation release];
     [restoredRadioStation release];
+    [currentPlayingEpisode release];
+    [currentPlayingPodcast release];
+    [pendingResumeEpisodeIdentifier release];
     [ytdlpBackend setDelegate:nil];
     [ytdlpBackend release];
     [preferencesController release];
@@ -160,6 +169,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self playlistDidChange];
         if ([defaults integerForKey:PlayerDefaultsMode] == PlayerModeRadio) {
             [self enterRadioModeResuming:YES];
+        } else if ([defaults integerForKey:PlayerDefaultsMode] == PlayerModePodcast) {
+            [self enterPodcastModeResuming:YES];
         }
     }
     // Outlined before it shows, so it never appears as a rectangle first
@@ -192,6 +203,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     // Kept before the fade-out below stops the playback
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setObject:[session stateToRemember] forKey:PlayerDefaultsPlaylist];
+    if (playerMode == PlayerModePodcast && currentPlayingEpisode != nil) {
+        [self savePodcastPlaybackStateForQuit];
+    }
     [defaults synchronize];
 
     BOOL radioPlaying = [[RadioManager sharedManager] isPlaying];
@@ -280,6 +294,13 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [mainWindow setContentView:contentView];
     [mainWindow setInitialFirstResponder:contentView];
 
+    // Added before flowView and the search row's controls, so it draws
+    // behind both
+    topBarView = [[[PlayerBarView alloc] initWithFrame:NSZeroRect] autorelease];
+    [topBarView setHairlineAtBottom:YES];
+    [topBarView setHidden:YES];
+    [contentView addSubview:topBarView];
+
     flowView = [[[ItemFlowView alloc] initWithFrame:NSZeroRect] autorelease];
     [flowView setDataSource:self];
     [flowView setDelegate:self];
@@ -354,6 +375,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [contentView addSubview:muteCheckbox];
 
     [self createRadioViews];
+    [self createPodcastViews];
 
     // Restoring the frame resizes the window, which lays out all views, so
     // they must all exist by now
@@ -449,6 +471,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self layoutFullscreen];
     } else if (playerMode == PlayerModeRadio) {
         [self layoutRadioMode];
+    } else if (playerMode == PlayerModePodcast) {
+        [self layoutPodcastMode];
     } else {
         [self layoutLocalMode];
     }
@@ -516,6 +540,18 @@ static const NSTimeInterval kBrowseDelay = 0.5;
                                         kTimeLabelWidth, kTimeRowHeight)];
 }
 
+// Same row geometry as -layoutPositionRowFrom:to:y:, but for Podcast mode's
+// chapter-marked timeline in place of the plain slider.
+- (void)layoutTimelineRowFrom:(CGFloat)left to:(CGFloat)right y:(CGFloat)y
+{
+    [currentTimeLabel setFrame:NSMakeRect(left, y, kTimeLabelWidth, kTimeRowHeight)];
+    CGFloat timelineX = left + kTimeLabelWidth + METRICS_SPACE_8;
+    CGFloat timelineRight = right - kTimeLabelWidth - METRICS_SPACE_8;
+    [podcastTimelineView setFrame:NSMakeRect(timelineX, y, timelineRight - timelineX, kTimeRowHeight)];
+    [totalTimeLabel setFrame:NSMakeRect(timelineRight + METRICS_SPACE_8, y,
+                                        kTimeLabelWidth, kTimeRowHeight)];
+}
+
 // Laid out from the bottom up: bottom row, transport, position, track
 // info; the cover art takes whatever height is left at the top.
 - (void)layoutLocalMode
@@ -525,7 +561,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
-    [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:YES];
+    [self setViews:@[searchField, statusLabel, radioTextLabel, topBarView] hidden:YES];
     [flowView setUncoveredRects:nil];
     [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:NO];
@@ -588,7 +624,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     NSRect bounds = [contentView bounds];
     // Only the buttons: their bezels fill what the picture gives up for
     // them, while a text would stand on a black patch of window instead
-    [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:YES];
+    [self setViews:@[searchField, statusLabel, radioTextLabel, topBarView] hidden:YES];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self volumeViews] hidden:YES];
     [self setViews:[self positionViews] hidden:YES];
@@ -973,6 +1009,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 {
     if (playerMode == PlayerModeRadio) {
         [self radioPlayPause];
+    } else if (playerMode == PlayerModePodcast) {
+        [self podcastPlayPause];
     } else {
         [session togglePlayPause];
     }
@@ -982,6 +1020,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 {
     if (playerMode == PlayerModeRadio) {
         [self radioStop];
+    } else if (playerMode == PlayerModePodcast) {
+        [self podcastStop];
     } else {
         [session stop];
     }
@@ -991,6 +1031,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 {
     if (playerMode == PlayerModeRadio) {
         [self radioNextStation];
+    } else if (playerMode == PlayerModePodcast) {
+        [self podcastNextEpisode];
     } else {
         [session next];
     }
@@ -1000,6 +1042,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 {
     if (playerMode == PlayerModeRadio) {
         [self radioPreviousStation];
+    } else if (playerMode == PlayerModePodcast) {
+        [self podcastPreviousEpisode];
     } else {
         [session previous];
     }
@@ -1035,7 +1079,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (NSString *)mediaRemotePlaybackStatus
 {
-    if (playerMode == PlayerModeRadio) {
+    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
         RadioManager *radio = [RadioManager sharedManager];
         // Tuning in counts as playing: it is audible at once and a pause
         // has to silence it all the same
@@ -1056,10 +1100,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)mediaRemotePlay
 {
-    if (playerMode == PlayerModeRadio) {
+    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
         RadioManager *radio = [RadioManager sharedManager];
         if (![radio isPlaying] && ![self radioTuning]) {
-            [self radioPlayPause];
+            [self playPause:nil];
         }
         return;
     }
@@ -1070,9 +1114,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)mediaRemotePause
 {
-    if (playerMode == PlayerModeRadio) {
+    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
         // A live stream cannot pause: stop it, which is silent all the same
-        [self radioStop];
+        [self stop:nil];
         return;
     }
     if ([session state] == PlayerSessionPlaying) {
@@ -1082,8 +1126,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)mediaRemoteStop
 {
-    if (playerMode == PlayerModeRadio) {
-        [self radioStop];
+    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
+        [self stop:nil];
     } else {
         [session stop];
     }
@@ -1258,6 +1302,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)updatePosition
 {
+    if (playerMode == PlayerModePodcast) {
+        [self updatePodcastPosition];
+        return;
+    }
     NSTimeInterval duration = [session duration];
     NSTimeInterval position = [session currentTime];
     BOOL stopped = ([session state] == PlayerSessionStopped);
@@ -1274,6 +1322,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 {
     if (playerMode == PlayerModeRadio) {
         [self updateRadioControls];
+        return;
+    }
+    if (playerMode == PlayerModePodcast) {
+        [self updatePodcastControls];
         return;
     }
     BOOL playing = ([session state] == PlayerSessionPlaying);
@@ -1359,6 +1411,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         NSString *station = [[RadioManager sharedManager] currentStationName];
         [mainWindow setTitle:station ? [NSString stringWithFormat:@"Player - %@", station]
                                      : @"Player - Internet Radio"];
+    } else if (playerMode == PlayerModePodcast) {
+        NSString *title = [currentPlayingEpisode title];
+        [mainWindow setTitle:title ? [NSString stringWithFormat:@"Player - %@", title]
+                                   : @"Player - Podcasts"];
     } else if (item) {
         [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", [titleLabel stringValue]]];
     } else {
@@ -1479,6 +1535,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if (playerMode == PlayerModeRadio) {
         return [[[RadioManager sharedManager] stations] count];
     }
+    if (playerMode == PlayerModePodcast) {
+        return [[self podcastShowsList] count];
+    }
     return [[session playlist] count];
 }
 
@@ -1494,12 +1553,26 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [radio prefetchIconForStationAtIndex:index];
         return [radio imageForStation:[stations objectAtIndex:index]];
     }
+    if (playerMode == PlayerModePodcast) {
+        PodcastManager *podcasts = [PodcastManager sharedManager];
+        NSArray *shows = [self podcastShowsList];
+        if (index >= [shows count]) {
+            return nil;
+        }
+        Podcast *show = [shows objectAtIndex:index];
+        [podcasts prefetchArtworkForPodcast:show atIndex:index];
+        return [podcasts imageForPodcast:show];
+    }
     return [coverImages objectForKey:[[session playlist] itemAtIndex:index]];
 }
 
 - (void)itemFlowView:(ItemFlowView *)view didSelectItemAtIndex:(NSUInteger)index
 {
     if (suppressFlowSelection) {
+        return;
+    }
+    if (playerMode == PlayerModePodcast) {
+        [self podcastBrowseToShowAtIndex:index];
         return;
     }
     // Plays once browsing rests on a cover
@@ -1565,6 +1638,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if (action == @selector(toggleFullscreen:)) {
         [item setTitle:isFullscreen ? @"Exit Full Screen" : @"Enter Full Screen"];
         return YES;
+    }
+    if (action == @selector(toggleBrowsePodcasts:) || [[item representedObject] isKindOfClass:[Podcast class]]) {
+        return [self validatePodcastMenuItem:item];
     }
     return [self validateRadioMenuItem:item];
 }

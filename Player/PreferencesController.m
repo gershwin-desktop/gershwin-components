@@ -14,6 +14,7 @@
 NSString *const PrefKeyYTDLPFormat = @"YTDLPFormat";
 NSString *const PrefKeyYTDLPPath   = @"YTDLPPath";
 NSString *const PrefKeyFadeEnabled = @"PlayerFadeEnabled";
+NSString *const PrefKeyPodcastAutoPlayOldestUnplayed = @"PlayerPodcastAutoPlayOldestUnplayed";
 
 // Default values
 static NSString *const kDefaultFormat = @"best/best";
@@ -89,6 +90,11 @@ static FormatTag tagForFormatString(NSString *format)
     return p ? p : kDefaultPath;
 }
 
++ (BOOL)podcastAutoPlayOldestUnplayed
+{
+    return [[NSUserDefaults standardUserDefaults] boolForKey:PrefKeyPodcastAutoPlayOldestUnplayed];
+}
+
 // -----------------------------------------------------------------------
 // Lifecycle
 // -----------------------------------------------------------------------
@@ -106,6 +112,7 @@ static FormatTag tagForFormatString(NSString *format)
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [_panel release];
     [_fadeCheckbox release];
+    [_podcastAutoPlayPopUp release];
     [super dealloc];
 }
 
@@ -127,10 +134,10 @@ static FormatTag tagForFormatString(NSString *format)
     CGFloat panelW = 420.0;
     CGFloat popUpW = panelW - 2 * margin - labelW - METRICS_SPACE_8;
 
-    // Row heights: fade checkbox + gap + format popup + gap + path field + gap
-    // + check row + bottom margin
+    // Row heights: fade checkbox + gap + podcast auto-play popup + gap +
+    // format popup + gap + path field + gap + check row + bottom margin
     CGFloat checkboxH = 18.0;
-    CGFloat contentH = topMargin + checkboxH + gap + btnH + gap + inputH + gap + btnH
+    CGFloat contentH = topMargin + checkboxH + gap + btnH + gap + btnH + gap + inputH + gap + btnH
         + bottomMargin;
     NSRect panelRect = NSMakeRect(0, 0, panelW, contentH);
 
@@ -173,6 +180,32 @@ static FormatTag tagForFormatString(NSString *format)
     [_fadeCheckbox setTarget:self];
     [_fadeCheckbox setAction:@selector(_fadeChanged:)];
     [content addSubview:_fadeCheckbox];
+
+    y -= gap + btnH;
+
+    // ---- Podcasts: which episode to open ----
+    NSTextField *podcastLabel = [[[NSTextField alloc] initWithFrame:
+        NSMakeRect(margin, y, labelW, btnH)] autorelease];
+    [podcastLabel setStringValue:@"Podcasts:"];
+    [podcastLabel setBezeled:NO];
+    [podcastLabel setDrawsBackground:NO];
+    [podcastLabel setEditable:NO];
+    [podcastLabel setSelectable:NO];
+    [podcastLabel setAlignment:NSRightTextAlignment];
+    [podcastLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
+    [content addSubview:podcastLabel];
+
+    _podcastAutoPlayPopUp = [[NSPopUpButton alloc] initWithFrame:
+        NSMakeRect(margin + labelW + METRICS_SPACE_8, y, popUpW, btnH) pullsDown:NO];
+    [_podcastAutoPlayPopUp addItemWithTitle:@"Play newest episode"];
+    [[_podcastAutoPlayPopUp lastItem] setTag:0];
+    [_podcastAutoPlayPopUp addItemWithTitle:@"Play oldest unplayed episode"];
+    [[_podcastAutoPlayPopUp lastItem] setTag:1];
+    [_podcastAutoPlayPopUp selectItemWithTag:
+        [PreferencesController podcastAutoPlayOldestUnplayed] ? 1 : 0];
+    [_podcastAutoPlayPopUp setTarget:self];
+    [_podcastAutoPlayPopUp setAction:@selector(_podcastAutoPlayChanged:)];
+    [content addSubview:_podcastAutoPlayPopUp];
 
     y -= gap + btnH;
 
@@ -287,6 +320,14 @@ static FormatTag tagForFormatString(NSString *format)
 {
     [[NSUserDefaults standardUserDefaults] setBool:([_fadeCheckbox state] == NSOnState)
                                             forKey:PrefKeyFadeEnabled];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)_podcastAutoPlayChanged:(id)sender
+{
+    BOOL oldestUnplayed = [[_podcastAutoPlayPopUp selectedItem] tag] == 1;
+    [[NSUserDefaults standardUserDefaults] setBool:oldestUnplayed
+                                            forKey:PrefKeyPodcastAutoPlayOldestUnplayed];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 

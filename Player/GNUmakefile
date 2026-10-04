@@ -47,7 +47,13 @@ Player_HEADER_FILES = \
 	StreamPlayer.h \
 	RadioManager.h \
 	YTDLPBackend.h \
-	PreferencesController.h
+	PreferencesController.h \
+	Podcast.h \
+	PodcastEpisode.h \
+	PodcastChapter.h \
+	PodcastSearch.h \
+	PodcastFeedParser.h \
+	PodcastManager.h
 
 Player_OBJC_FILES = \
 	PlayerController.m \
@@ -65,7 +71,14 @@ Player_OBJC_FILES = \
 	StreamPlayer.m \
 	RadioManager.m \
 	YTDLPBackend.m \
-	PreferencesController.m
+	PreferencesController.m \
+	Podcast.m \
+	PodcastEpisode.m \
+	PodcastChapter.m \
+	PodcastSearch.m \
+	PodcastFeedParser.m \
+	PodcastManager.m \
+	PlayerController+Podcast.m
 
 Player_OBJC_FILES += Player_main.m
 
@@ -102,11 +115,5 @@ ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs x11)
 -include GNUmakefile.preamble
 
 include $(GNUSTEP_MAKEFILES)/application.make
-
-# Override desktop file creation — we don't need .desktop files for Gershwin.
-$(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop:
-	$(ECHO_NOTHING)echo "Desktop file generation disabled" > /dev/null$(END_ECHO)
-	$(ECHO_NOTHING)touch $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop; chmod a+x $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop$(END_ECHO)
-
 
 -include GNUmakefile.postamble

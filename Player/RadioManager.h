@@ -96,6 +96,10 @@
 /// Stream an arbitrary URL directly
 - (void)playURL:(NSString *)urlString;
 
+/// Stream an arbitrary URL directly, showing displayName instead of the
+/// URL in status text (e.g. a podcast episode's title).
+- (void)playURL:(NSString *)urlString displayName:(NSString *)displayName;
+
 /// Stop streaming; the sound fades out
 - (void)stop;
 /// A new player for each station; subclasses may configure it

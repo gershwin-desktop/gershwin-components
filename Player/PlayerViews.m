@@ -312,3 +312,226 @@ NSTextField *PlayerMakeLabel(NSFont *font)
     return label;
 }
 
+@implementation PlayerBarView
+
+@synthesize hairlineAtBottom = _hairlineAtBottom;
+
+- (BOOL)isOpaque
+{
+    return YES;
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSRect b = [self bounds];
+    NSGradient *g = [[[NSGradient alloc]
+        initWithStartingColor:[NSColor colorWithCalibratedWhite:0.82 alpha:1.0]
+                  endingColor:[NSColor colorWithCalibratedWhite:0.92 alpha:1.0]] autorelease];
+    [g drawInRect:b angle:90.0];
+
+    CGFloat y = _hairlineAtBottom ? NSMinY(b) + 0.5 : NSMaxY(b) - 0.5;
+    [[NSColor colorWithCalibratedWhite:0.62 alpha:1.0] setStroke];
+    NSBezierPath *line = [NSBezierPath bezierPath];
+    [line moveToPoint:NSMakePoint(NSMinX(b), y)];
+    [line lineToPoint:NSMakePoint(NSMaxX(b), y)];
+    [line setLineWidth:1.0];
+    [line stroke];
+}
+
+@end
+
+@implementation PlayerTimelineView
+
+@synthesize target = _target;
+@synthesize action = _action;
+@synthesize enabled = _enabled;
+
+- (BOOL)isFlipped
+{
+    return NO;
+}
+
+- (void)setDuration:(NSTimeInterval)duration
+{
+    NSTimeInterval newDuration = MAX(duration, 0);
+    // The position timer calls this ~4x/second; rebuilding the tooltip
+    // rects every tick (remove them all, re-add ~a dozen) never lets
+    // GNUstep's hover timer run long enough on a stable rect to show one -
+    // only do it when the duration actually changes (typically once, when
+    // it goes from unknown to known).
+    if (newDuration != _duration) {
+        _duration = newDuration;
+        [self rebuildChapterToolTips];
+    }
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setCurrentTime:(NSTimeInterval)seconds
+{
+    _currentTime = MAX(seconds, 0);
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setChapterTimes:(NSArray *)times titles:(NSArray *)titles
+{
+    if (_chapterTimes != times) {
+        [_chapterTimes release];
+        _chapterTimes = [times copy];
+    }
+    if (_chapterTitles != titles) {
+        [_chapterTitles release];
+        _chapterTitles = [titles copy];
+    }
+    [self rebuildChapterToolTips];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setFrame:(NSRect)frame
+{
+    [super setFrame:frame];
+    // Tooltip rects are positions along the track, which moves with it
+    [self rebuildChapterToolTips];
+}
+
+// One tooltip rect per chapter tick, spanning the view's full height so
+// hovering anywhere over the mark (not just its thin line) shows the title.
+- (void)rebuildChapterToolTips
+{
+    [self removeAllToolTips];
+    if (_duration <= 0 || [_chapterTimes count] == 0) {
+        return;
+    }
+    NSRect track = [self trackRect];
+    NSRect bounds = [self bounds];
+    for (NSUInteger i = 0; i < [_chapterTimes count]; i++) {
+        CGFloat x = [self xForTime:[[_chapterTimes objectAtIndex:i] doubleValue] inTrack:track];
+        NSRect hitRect = NSMakeRect(x - 4.0, NSMinY(bounds), 8.0, NSHeight(bounds));
+        [self addToolTipRect:hitRect owner:self userData:(void *)(uintptr_t)i];
+    }
+}
+
+- (NSString *)view:(NSView *)view stringForToolTip:(NSToolTipTag)tag
+              point:(NSPoint)point userData:(void *)data
+{
+    NSUInteger index = (NSUInteger)(uintptr_t)data;
+    if (index < [_chapterTitles count]) {
+        return [_chapterTitles objectAtIndex:index];
+    }
+    return nil;
+}
+
+- (void)dealloc
+{
+    [_chapterTimes release];
+    [_chapterTitles release];
+    [super dealloc];
+}
+
+// The track: a thin rounded bar, inset from the view's own edges so the
+// round playhead never clips.
+- (NSRect)trackRect
+{
+    NSRect b = [self bounds];
+    CGFloat trackHeight = 4.0;
+    CGFloat inset = 6.0;
+    return NSMakeRect(NSMinX(b) + inset, floor(NSMidY(b) - trackHeight / 2.0),
+                       NSWidth(b) - 2 * inset, trackHeight);
+}
+
+- (CGFloat)xForTime:(NSTimeInterval)seconds inTrack:(NSRect)track
+{
+    if (_duration <= 0) {
+        return NSMinX(track);
+    }
+    CGFloat fraction = MIN(MAX(seconds / _duration, 0.0), 1.0);
+    return NSMinX(track) + fraction * NSWidth(track);
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSRect track = [self trackRect];
+    BOOL enabled = [self isEnabled];
+
+    NSBezierPath *groove = [NSBezierPath bezierPathWithRoundedRect:track
+                                                             xRadius:NSHeight(track) / 2.0
+                                                             yRadius:NSHeight(track) / 2.0];
+    [[NSColor colorWithCalibratedWhite:(enabled ? 0.55 : 0.75) alpha:1.0] setFill];
+    [groove fill];
+
+    if (_duration > 0) {
+        CGFloat playedX = [self xForTime:_currentTime inTrack:track];
+        NSRect playedRect = NSMakeRect(NSMinX(track), NSMinY(track),
+                                        playedX - NSMinX(track), NSHeight(track));
+        NSBezierPath *played = [NSBezierPath bezierPathWithRoundedRect:playedRect
+                                                                 xRadius:NSHeight(track) / 2.0
+                                                                 yRadius:NSHeight(track) / 2.0];
+        [[NSColor selectedControlColor] setFill];
+        [played fill];
+    }
+
+    // Chapter ticks: small vertical marks crossing the track, each one
+    // taller than the track itself so they read against either fill color
+    for (NSNumber *chapterTime in _chapterTimes) {
+        CGFloat x = [self xForTime:[chapterTime doubleValue] inTrack:track];
+        NSRect tick = NSMakeRect(x - 0.5, NSMinY(track) - 3, 1.0, NSHeight(track) + 6);
+        [[NSColor colorWithCalibratedWhite:0.2 alpha:1.0] setFill];
+        NSRectFill(tick);
+    }
+
+    // Playhead
+    CGFloat headX = [self xForTime:_currentTime inTrack:track];
+    CGFloat headSize = 10.0;
+    NSRect head = NSMakeRect(headX - headSize / 2.0, NSMidY(track) - headSize / 2.0,
+                              headSize, headSize);
+    [[NSColor selectedControlColor] setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:head] fill];
+    [[NSColor colorWithCalibratedWhite:0.3 alpha:1.0] setStroke];
+    NSBezierPath *headStroke = [NSBezierPath bezierPathWithOvalInRect:head];
+    [headStroke setLineWidth:1.0];
+    [headStroke stroke];
+}
+
+// Scrubbing: the playhead follows the mouse at once for feedback; -action
+// fires only once, on mouse-up, the same "seek once, not per pixel of
+// drag" rule PlayerController's plain time slider uses (decoding restarts
+// at every seek).
+- (void)updateCurrentTimeFromEvent:(NSEvent *)event
+{
+    if (_duration <= 0) {
+        return;
+    }
+    NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSRect track = [self trackRect];
+    CGFloat fraction = (NSWidth(track) > 0)
+        ? (p.x - NSMinX(track)) / NSWidth(track) : 0.0;
+    fraction = MIN(MAX(fraction, 0.0), 1.0);
+    [self setCurrentTime:fraction * _duration];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    if (![self isEnabled]) {
+        return;
+    }
+    [self updateCurrentTimeFromEvent:event];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (![self isEnabled]) {
+        return;
+    }
+    [self updateCurrentTimeFromEvent:event];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    if (![self isEnabled]) {
+        return;
+    }
+    [self updateCurrentTimeFromEvent:event];
+    [NSApp sendAction:[self action] to:[self target] from:self];
+}
+
+@end
+

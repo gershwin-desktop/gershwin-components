@@ -11,6 +11,8 @@
 
 /// Tag of the separator after which the Radio menu lists the stations.
 enum { PlayerMenuStationListTag = 9999 };
+/// Tag of the separator after which the Podcasts menu lists subscriptions.
+enum { PlayerMenuSubscriptionListTag = 9998 };
 
 /**
  * Builds Player's main menu.  Player commands go to the given target;

@@ -52,6 +52,12 @@
     if (playerMode == PlayerModeRadio) {
         return;
     }
+    // Both modes play through the shared RadioManager; switching straight
+    // from one to the other has to stop the podcast first, or it would
+    // keep playing underneath the station carousel
+    if (playerMode == PlayerModePodcast) {
+        [self exitPodcastMode];
+    }
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [session stop];
     [self showCoverArt];
@@ -63,8 +69,10 @@
     [radio setVolume:[self volume]];
     [radio setMuted:[session muted]];
 
-    // Back where it was left: the same search, the same station
-    NSString *query = [defaults stringForKey:PlayerDefaultsRadioSearch] ?: @"";
+    // Back where it was left (the same search, the same station) only when
+    // resuming at launch; switching modes within a running session starts
+    // the search box clean, same as Podcasts
+    NSString *query = resume ? ([defaults stringForKey:PlayerDefaultsRadioSearch] ?: @"") : @"";
     [searchField setStringValue:query];
     [restoredRadioStation release];
     restoredRadioStation = [[RadioStation stationWithPropertyList:
@@ -75,7 +83,11 @@
     [self setRadioStatus:@"Loading stations..."];
     [radioTextLabel setStringValue:@""];
     [flowView reloadData];
-    if ([[radio stations] count] == 0) {
+    if (!resume) {
+        // Manual switch: the search box just went blank, so show local
+        // stations fresh rather than whatever an earlier search left loaded
+        [radio loadLocalStations];
+    } else if ([[radio stations] count] == 0) {
         if ([query length] > 0) {
             [radio searchStations:query];
         } else {
@@ -127,7 +139,7 @@
     [contentView setBlackBackground:NO];
     [self setViews:[self trackInfoViews] hidden:YES];
     [self setViews:[self positionViews] hidden:YES];
-    [self setViews:@[searchField, statusLabel, radioTextLabel] hidden:NO];
+    [self setViews:@[searchField, statusLabel, radioTextLabel, topBarView] hidden:NO];
     [self setViews:[self transportViews] hidden:NO];
     [self setViews:[self volumeViews] hidden:NO];
 
@@ -149,7 +161,10 @@
     CGFloat searchY = H - METRICS_CONTENT_TOP_MARGIN - METRICS_TEXT_INPUT_FIELD_HEIGHT;
     [searchField setFrame:NSMakeRect(left, searchY, right - left, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
 
-    [self setPictureFrame:NSMakeRect(0, y, W, searchY - METRICS_SPACE_12 - y)];
+    CGFloat topBarBottom = searchY - METRICS_SPACE_12;
+    [topBarView setFrame:NSMakeRect(0, topBarBottom, W, H - topBarBottom)];
+
+    [self setPictureFrame:NSMakeRect(0, y, W, topBarBottom - y)];
 }
 
 #pragma mark - Controls
@@ -431,6 +446,10 @@
 
 - (void)radioManagerDidStartPlaying:(RadioManager *)manager station:(RadioStation *)station
 {
+    if (playerMode == PlayerModePodcast) {
+        [self podcastDidStartPlayingEpisode];
+        return;
+    }
     if (station) {
         [[NSUserDefaults standardUserDefaults] setObject:[station propertyList]
                                                   forKey:PlayerDefaultsRadioStation];
@@ -452,6 +471,10 @@
 
 - (void)radioManagerDidStop:(RadioManager *)manager
 {
+    if (playerMode == PlayerModePodcast) {
+        [self podcastDidStop];
+        return;
+    }
     [radioTextLabel setStringValue:@""];
     NSString *name = [manager currentStationName];
     [self setRadioStatus:name ? [NSString stringWithFormat:@"%@ - Stopped", name]
@@ -461,6 +484,10 @@
 
 - (void)radioManager:(RadioManager *)manager didFailWithError:(NSString *)errorMessage
 {
+    if (playerMode == PlayerModePodcast) {
+        [self podcastDidFailWithError:errorMessage];
+        return;
+    }
     [self setRadioStatus:[NSString stringWithFormat:@"Cannot play: %@", errorMessage]];
     [self updateControls];
 }
