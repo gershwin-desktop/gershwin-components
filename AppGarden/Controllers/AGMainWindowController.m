@@ -21,10 +21,15 @@
 #import "AGDiscoverOrder.h"
 #import "AppearanceMetrics.h"
 
-static NSString *const kAGWindowFrameAutosaveName = @"AGMainWindow";
+/* Not the first name this was saved under: windows saved at the old, wider
+ * default would otherwise keep that width and the new default would never be
+ * seen. */
+static NSString *const kAGWindowFrameAutosaveName = @"AGMainWindowNarrow";
 static NSString *const kAGShowToolkitCategoriesKey = @"AGShowToolkitCategories";
 
-static const CGFloat kAGInitialWidth = 1040.0;
+/* Three columns of cards: 24 + 3 * 200 + 2 * 16 + 24 points beside the
+ * 200 point sidebar. */
+static const CGFloat kAGInitialWidth = 920.0;
 static const CGFloat kAGInitialHeight = 680.0;
 static const CGFloat kAGMinimumWidth = 760.0;
 static const CGFloat kAGMinimumHeight = 480.0;

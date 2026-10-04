@@ -916,7 +916,7 @@ the install button's progress state.
 
 ### Window
 
-- Title "AppGarden". Content size at first launch 1040 x 680, minimum
+- Title "AppGarden". Content size at first launch 920 x 680, minimum
   760 x 480. Frame autosave name `AGMainWindow`. Style: titled, closable,
   miniaturizable, resizable. Closing the window quits the app
   (`applicationShouldTerminateAfterLastWindowClosed:` returns YES); the app is
