@@ -119,6 +119,7 @@ static const float kIconSmall = 16.0;
     [window setTitle:@"Software Update"];
     [window center];
     [window setReleasedWhenClosed:NO];
+    [window setDelegate:self];
     _phases = [NSMutableArray array];
     [self buildContent];
   }
@@ -236,6 +237,15 @@ static const float kIconSmall = 16.0;
   [_boxFadeOverlay setHidden:YES];
   [_boxFadeOverlay setAutoresizingMask:NSViewMinYMargin];
   [content addSubview:_boxFadeOverlay];
+}
+
+// The window is only ever hidden by the app when the run ends; the close
+// button must not make a run that is still going invisible, or let the last
+// window closing quit the app under it.
+- (BOOL)windowShouldClose:(id)sender
+{
+  [[self delegate] progressWindowControllerDidAttemptClose:self];
+  return NO;
 }
 
 #pragma mark - Public API

@@ -9,7 +9,7 @@
 	<key>ApplicationName</key>
 	<string>Software Update</string>
 	<key>ApplicationDescription</key>
-	<string>Keeps a source-built Gershwin system in sync with the gershwin-desktop repositories</string>
+	<string>Updates Gershwin Desktop from source code repositories</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.gershwin-desktop.SoftwareUpdate</string>
 	<key>CFBundleExecutable</key>

@@ -18,6 +18,8 @@
 
 @protocol SWProgressWindowControllerDelegate <NSObject>
 - (void)progressWindowControllerDidClickStop:(SWProgressWindowController *)controller;
+// The user tried to close the window while the run is still going.
+- (void)progressWindowControllerDidAttemptClose:(SWProgressWindowController *)controller;
 @end
 
 @interface SWProgressWindowController : NSWindowController

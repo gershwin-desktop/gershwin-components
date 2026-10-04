@@ -39,6 +39,7 @@ static const double kCheckedProgressShare = 0.95;
     [window setTitle:@"Software Update"];
     [window center];
     [window setReleasedWhenClosed:NO];
+    [window setDelegate:self];
     [self buildContent];
   }
   return self;
@@ -126,6 +127,16 @@ static const double kCheckedProgressShare = 0.95;
   [_statusField setStringValue:[NSString stringWithFormat:
     @"Fetching %@ from origin (%lu of %lu)", name,
     (unsigned long)index, (unsigned long)total]];
+}
+
+// Closing the window while the check runs means stopping it: a check only
+// fetches, so there is nothing to protect.
+- (BOOL)windowShouldClose:(id)sender
+{
+  if ([_stopButton isEnabled]) {
+    [self stopClicked:nil];
+  }
+  return NO;
 }
 
 - (void)stopClicked:(id)sender

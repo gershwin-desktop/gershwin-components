@@ -127,6 +127,32 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   return YES;
 }
 
+// Quitting while the privileged run is going would leave a repository half
+// updated and the helper process running on its own, so Quit is refused until
+// the run has finished or been stopped (which also covers the time it takes
+// to wind a stopped run down). A check in progress has nothing to protect:
+// its fetches change no checkout.
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+  if (_updateTask != nil && [_updateTask isRunning]) {
+    [self explainThatUpdateIsRunning];
+    return NSTerminateCancel;
+  }
+  _stopRequested = YES;
+  return NSTerminateNow;
+}
+
+- (void)explainThatUpdateIsRunning
+{
+  NSAlert *alert = [[NSAlert alloc] init];
+  [alert setMessageText:_updateIsRebuild ? @"A rebuild is in progress." : @"An update is in progress."];
+  [alert setInformativeText:_updateWasStopped
+    ? @"It is being stopped and rolled back. Software Update can be closed once that is done."
+    : @"Quitting now could leave your system half updated. Click Stop to cancel it cleanly first."];
+  [alert addButtonWithTitle:@"OK"];
+  [alert runModal];
+}
+
 #pragma mark - Checking
 
 - (void)checkNow:(id)sender
@@ -562,7 +588,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     NSString *headline =
       [_updateCurrentPhase isEqualToString:@"developer"] ? @"Updating gershwin-developer…" :
       [_updateCurrentPhase isEqualToString:@"prereqs"] ? @"Installing prerequisites…" :
-      (_updateIsRebuild ? @"Rebuilding repositories…" : @"Updating repositories…");
+      (_updateIsRebuild ? @"Rebuilding repositories…" : @"Applying updates…");
     [_progressWindow beginPhaseWithIdentifier:_updateCurrentPhase headline:headline];
 
   } else if ([line hasPrefix:@"PREREQ_MISSING:"]) {
@@ -742,6 +768,11 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 }
 
 #pragma mark - SWProgressWindowControllerDelegate
+
+- (void)progressWindowControllerDidAttemptClose:(SWProgressWindowController *)controller
+{
+  [self explainThatUpdateIsRunning];
+}
 
 - (void)progressWindowControllerDidClickStop:(SWProgressWindowController *)controller
 {
