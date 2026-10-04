@@ -64,6 +64,15 @@ for q in 5 6; do
   fi
 done
 
+# a menu bar in a plain widget, not a QMainWindow
+for q in 5 6; do
+  if python3 -c "import PyQt$q.QtWidgets" 2>/dev/null; then
+    run qtplain$q qt-plain-app 0,0 $q
+    check qtplain$q $OUT/qt-plain-app.server "title = \"Plain Item\""
+    check qtplain$q $OUT/qt-plain-app.app "ACTIVATED Plain"
+  fi
+done
+
 # GTK 2 needs its headers for the test program only; the module never does.
 if pkg-config --exists gtk+-2.0; then
   cc -o "$OUT/gtk2-app" tests/gtk2-app.c $(pkg-config --cflags --libs gtk+-2.0) -Wno-deprecated-declarations

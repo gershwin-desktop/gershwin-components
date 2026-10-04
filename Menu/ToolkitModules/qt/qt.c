@@ -65,6 +65,9 @@ static int (*p_widgetIsVisibleTo)(const void *, const void *);
 static void (*p_arrayDeallocate)(void *data, long size, long align);
 static void (*p_listDispose)(void *data);
 static const char *(*p_qVersion)(void);
+static void (*p_findChildrenNamed)(const void *parent, const void *name, const void *meta, void *list, int options);
+static void (*p_findChildrenAny)(const void *parent, const void *meta, void *list, int options);
+static void *gQListNull; /* the empty QList<T> of Qt 5 points here */
 static void (*p_fromUtf8Qt5)(void *ret, const char *data, int size);
 static void (*p_fromUtf8Qt6)(void *ret, long size, const char *data);
 static const void *gWidgetMeta;
@@ -351,6 +354,40 @@ static int is_a(const void *object, const void *meta)
 
 static int gChecked;
 
+enum { FIND_CHILDREN_RECURSIVELY = 1 };
+
+/* A menu bar in any widget below a window, for windows that are not a QMainWindow.
+   The helper behind QObject::findChildren<T>() is exported, which spares the private
+   layout of QObject's children. */
+static const void *find_menu_bar_below(const void *window)
+{
+  unsigned char list[32] = { 0 };
+  const void *found = NULL;
+  void **bars;
+  int n = 0;
+  if (!p_findChildrenAny && !p_findChildrenNamed)
+    return NULL;
+  if (!gQt6)
+    *(void **)list = gQListNull;
+  if (p_findChildrenAny)
+    p_findChildrenAny(window, gMenuBarMeta, list, FIND_CHILDREN_RECURSIVELY);
+  else
+    {
+      /* a null QString matches every name */
+      unsigned char name[32] = { 0 };
+      if (!gQt6)
+        p_fromUtf8Qt5(name, NULL, 0);
+      p_findChildrenNamed(window, name, gMenuBarMeta, list, FIND_CHILDREN_RECURSIVELY);
+      qstring_free(name);
+    }
+  bars = qlist_take(list, &n);
+  for (int i = 0; i < n && found == NULL; i++)
+    if (p_widgetIsVisibleTo(bars[i], window))
+      found = bars[i];
+  free(bars);
+  return found;
+}
+
 static void enumerate_windows(void (*found)(void *, void *, unsigned long, void *), void *ctx)
 {
   unsigned char list[32] = { 0 };
@@ -376,11 +413,13 @@ static void enumerate_windows(void (*found)(void *, void *, unsigned long, void 
             }
         }
       TRACE("window %p visible %d main window %d\n", w, p_widgetIsVisibleTo(w, NULL), is_a(w, gMainWindowMeta));
-      if (!p_widgetIsVisibleTo(w, NULL) || !is_a(w, gMainWindowMeta))
+      if (!p_widgetIsVisibleTo(w, NULL))
         continue;
-      bar = p_menuWidget(w);
-      TRACE("menu widget %p\n", bar);
+      bar = is_a(w, gMainWindowMeta) ? p_menuWidget(w) : NULL;
       if (bar == NULL || !is_a(bar, gMenuBarMeta))
+        bar = find_menu_bar_below(w);
+      TRACE("menu widget %p\n", bar);
+      if (bar == NULL)
         continue;
       found((void *)bar, (void *)w, (unsigned long)p_widgetWinId(w), ctx);
     }
@@ -511,6 +550,12 @@ void gad_qt_start(void)
   if (!gQt6)
     QSYM(p_listDispose, "_ZN9QListData7disposeEPNS_4DataE");
   gWidgetMeta = sym("_ZN7QWidget16staticMetaObjectE");
+  /* optional: without them only the menu bar of a QMainWindow is found */
+  *(void **)&p_findChildrenAny = gQt6 ? sym("_Z23qt_qFindChildren_helperPK7QObjectRK11QMetaObjectP5QListIPvE6QFlagsIN2Qt15FindChildOptionEE") : NULL;
+  *(void **)&p_findChildrenNamed = sym("_Z23qt_qFindChildren_helperPK7QObjectRK7QStringRK11QMetaObjectP5QListIPvE6QFlagsIN2Qt15FindChildOptionEE");
+  gQListNull = gQt6 ? NULL : sym("_ZN9QListData11shared_nullE");
+  if (!gQt6 && gQListNull == NULL)
+    p_findChildrenNamed = NULL;
   *(void **)&p_fromUtf8Qt5 = gQt6 ? NULL : sym("_ZN7QString15fromUtf8_helperEPKci");
   *(void **)&p_fromUtf8Qt6 = gQt6 ? sym("_ZN7QString8fromUtf8E14QByteArrayView") : NULL;
   gMainWindowMeta = sym("_ZN11QMainWindow16staticMetaObjectE");
