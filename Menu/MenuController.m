@@ -771,8 +771,33 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     
     // Call directly instead of using dispatch_async - the main queue might not process async blocks reliably
     [self registerDBusServiceWhenReady];
+
+    // Deferred so the alert's modal loop does not hold up the rest of the launch
+    [self performSelector:@selector(warnAboutWrongMenuInterfaceStyle)
+               withObject:nil
+               afterDelay:0.0];
     
     MENU_PROFILE_END(applicationDidFinishLaunching);
+}
+
+/* The theme sets the Macintosh style; a user default naming another one
+   overrides it, and with the Windows95 style the search results menu is never
+   put on screen (NSMenu skips ordering front top-level menus).  Without a
+   visible warning that failure looks like a broken search. */
+- (void)warnAboutWrongMenuInterfaceStyle
+{
+    if (NSInterfaceStyleForKey(@"NSMenuInterfaceStyle", nil) == NSMacintoshInterfaceStyle) {
+        return;
+    }
+
+    NSString *value = [[NSUserDefaults standardUserDefaults] stringForKey:@"NSMenuInterfaceStyle"];
+    NSLog(@"MenuController: NSMenuInterfaceStyle is %@, expected NSMacintoshInterfaceStyle", value);
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:NSLocalizedString(@"Wrong menu interface style", @"Alert title for a wrong NSMenuInterfaceStyle")];
+    [alert setInformativeText:[NSString stringWithFormat:NSLocalizedString(@"The default NSMenuInterfaceStyle is set to %@, but menus need NSMacintoshInterfaceStyle. Menus, including the search results, may not appear. Remove the default with:\n\ndefaults delete NSGlobalDomain NSMenuInterfaceStyle\n\nand restart Menu.", @"Alert text for a wrong NSMenuInterfaceStyle"), value ? value : @"(set by the theme)"]];
+    [alert addButtonWithTitle:NSLocalizedString(@"OK", @"OK button")];
+    [alert setAlertStyle:NSWarningAlertStyle];
+    [alert runModal];
 }
 
 #if MENU_PROFILING
