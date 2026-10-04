@@ -9,7 +9,6 @@
 #import "AGRiskAdviser.h"
 #import "AGRiskCategory.h"
 #import "AGRiskMatch.h"
-#import "AGGitHubInfo.h"
 
 /*
  * The rendered state. It is kept in an ivar rather than derived in drawRect:
@@ -35,7 +34,6 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
   AGInstallButtonState _state;
   NSButton *_button;
   NSProgressIndicator *_progress;
-  BOOL _checking;   /* waiting for GitHub to say how old the publisher is */
 }
 
 #pragma mark - Setup
@@ -258,9 +256,8 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
       return;
     }
   [self updateAnimation];
-  [_button setTitle:_checking ? NSLocalizedString(@"Checking...", @"Looking up the publisher before a download")
-                              : [self titleForState:_state]];
-  [_button setEnabled:(_state != AGInstallButtonStateUnavailable && !_checking)];
+  [_button setTitle:[self titleForState:_state]];
+  [_button setEnabled:(_state != AGInstallButtonStateUnavailable)];
 }
 
 /* The indeterminate bar animates only while it can be seen, so a card
@@ -392,48 +389,17 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 
 /*
  * Nothing in the catalog has been vetted, so a Get first collects what is
- * worth a warning: the risk categories the item's metadata falls into and,
- * for a download from GitHub, a publisher account younger than a month or
- * one that cannot be looked up. With nothing to say the download starts at
- * once; otherwise a sheet asks, and the download starts from its answer.
+ * worth a warning: the risk categories the item's metadata falls into. With
+ * nothing to say the download starts at once; otherwise a sheet asks, and the
+ * download starts from its answer.
  */
 - (void)beginGet:(AGApp *)app
 {
   NSMutableArray<NSString *> *sentences = [NSMutableArray array];
-  AGRiskAdviser *adviser = [AGRiskAdviser sharedAdviser];
   AGRiskMatch *match;
-  for (match in [adviser matchesForApp:app])
+  for (match in [[AGRiskAdviser sharedAdviser] matchesForApp:app])
     [sentences addObject:[[match category] shortRisk]];
-
-  /* A release lookup and a direct link on github.com both fetch from the
-   * owner's repository, so both get the same check. */
-  NSString *owner = nil;
-  AGDownloadKind kind = [AGDownloadResolver kindForApp:app payload:NULL];
-  if (kind == AGDownloadKindGitHubLatestRelease || kind == AGDownloadKindDirectURL)
-    owner = [AGGitHubInfo ownerOfRepo:[AGGitHubInfo repositoryForApp:app]];
-
-  if (owner == nil)
-    {
-      [self finishGet:app warnings:sentences];
-      return;
-    }
-
-  _checking = YES;
-  [self updateControls];
-  __weak AGInstallButton *weakSelf = self;
-  [[_installer gitHubInfo] accountCreationDateForOwner:owner
-      completion:^(NSDate *date, NSError *error)
-        {
-          AGInstallButton *strongSelf = weakSelf;
-          if (strongSelf == nil)
-            return;
-          strongSelf->_checking = NO;
-          [strongSelf updateControls];
-          NSString *sentence = [AGGitHubInfo warningForAccountCreatedOn:date now:[NSDate date]];
-          if (sentence != nil)
-            [sentences addObject:sentence];
-          [strongSelf finishGet:app warnings:sentences];
-        }];
+  [self finishGet:app warnings:sentences];
 }
 
 - (void)finishGet:(AGApp *)app warnings:(NSArray<NSString *> *)sentences

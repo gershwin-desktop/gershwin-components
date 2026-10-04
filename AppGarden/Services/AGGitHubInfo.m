@@ -9,12 +9,10 @@
 #import "AGApp.h"
 
 NSString *const AGGitHubInfoErrorDomain = @"AGGitHubInfoErrorDomain";
-const NSInteger AGGitHubMinimumAccountAgeDays = 30;
 
 static const NSTimeInterval kAGStarsMaxAge = 6.0 * 3600.0;
 static NSString *const kAGCacheFileName = @"github.plist";
 static NSString *const kAGStarsKey = @"Stars";
-static NSString *const kAGAccountsKey = @"Accounts";
 
 typedef NS_ENUM(NSInteger, AGGitHubInfoErrorCode) {
   AGGitHubInfoErrorBadName = 1,
@@ -44,7 +42,6 @@ static BOOL AGIsGitHubName(NSString *name)
 {
   NSString *_cacheDirectory;
   NSString *_webBaseURL;
-  NSString *_apiBaseURL;
   NSOperationQueue *_queue;
   NSLock *_lock;
   NSMutableDictionary *_cache;
@@ -52,14 +49,12 @@ static BOOL AGIsGitHubName(NSString *name)
 
 - (instancetype)initWithCacheDirectory:(NSString *)directory
                             webBaseURL:(NSString *)webBaseURL
-                            apiBaseURL:(NSString *)apiBaseURL
 {
   self = [super init];
   if (self)
     {
       _cacheDirectory = [(directory != nil ? directory : AGDefaultCacheDirectory()) copy];
       _webBaseURL = [webBaseURL copy];
-      _apiBaseURL = [apiBaseURL copy];
       _queue = [[NSOperationQueue alloc] init];
       [_queue setMaxConcurrentOperationCount:2];
       _lock = [[NSLock alloc] init];
@@ -73,9 +68,6 @@ static BOOL AGIsGitHubName(NSString *name)
       [_cache setObject:[NSMutableDictionary dictionaryWithDictionary:
                             [stored objectForKey:kAGStarsKey]]
                  forKey:kAGStarsKey];
-      [_cache setObject:[NSMutableDictionary dictionaryWithDictionary:
-                            [stored objectForKey:kAGAccountsKey]]
-                 forKey:kAGAccountsKey];
     }
   return self;
 }
@@ -83,8 +75,7 @@ static BOOL AGIsGitHubName(NSString *name)
 - (instancetype)init
 {
   return [self initWithCacheDirectory:nil
-                           webBaseURL:@"https://github.com"
-                           apiBaseURL:@"https://api.github.com"];
+                           webBaseURL:@"https://github.com"];
 }
 
 #pragma mark - Pure parts
@@ -149,58 +140,6 @@ static BOOL AGIsGitHubName(NSString *name)
   if ([digits length] == 0)
     return nil;
   return [NSNumber numberWithLongLong:[digits longLongValue]];
-}
-
-+ (NSDate *)creationDateFromUserJSON:(NSData *)data error:(NSError **)error
-{
-  id root = ([data length] > 0)
-      ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]
-      : nil;
-  NSString *created = [root isKindOfClass:[NSDictionary class]]
-      ? [root objectForKey:@"created_at"] : nil;
-  NSDate *date = [created isKindOfClass:[NSString class]]
-      ? [[[NSISO8601DateFormatter alloc] init] dateFromString:created] : nil;
-  if (date != nil)
-    return date;
-
-  if (error != NULL)
-    {
-      NSString *message = [root isKindOfClass:[NSDictionary class]]
-          ? [root objectForKey:@"message"] : nil;
-      NSString *text;
-      if ([message rangeOfString:@"rate limit" options:NSCaseInsensitiveSearch].location
-          != NSNotFound)
-        text = NSLocalizedString(@"GitHub rate limit reached.", @"");
-      else if ([message length] > 0)
-        text = [NSString stringWithFormat:
-                    NSLocalizedString(@"GitHub answered: %@", @""), message];
-      else
-        text = NSLocalizedString(@"GitHub gave no answer about this account.", @"");
-      *error = AGGitHubError(AGGitHubInfoErrorUnexpectedAnswer, text);
-    }
-  return nil;
-}
-
-+ (NSInteger)daysFromDate:(NSDate *)date toDate:(NSDate *)now
-{
-  NSTimeInterval seconds = [now timeIntervalSinceDate:date];
-  return (seconds <= 0.0) ? 0 : (NSInteger)floor(seconds / 86400.0);
-}
-
-+ (NSString *)warningForAccountCreatedOn:(NSDate *)date now:(NSDate *)now
-{
-  if (date == nil)
-    return NSLocalizedString(@"AppGarden could not check how old the publisher's GitHub account is.", @"");
-  NSInteger days = [self daysFromDate:date toDate:now];
-  if (days >= AGGitHubMinimumAccountAgeDays)
-    return nil;
-  if (days < 1)
-    return NSLocalizedString(@"The publisher's GitHub account was created today.", @"");
-  if (days == 1)
-    return NSLocalizedString(@"The publisher's GitHub account is only 1 day old.", @"");
-  return [NSString stringWithFormat:
-              NSLocalizedString(@"The publisher's GitHub account is only %ld days old.", @""),
-              (long)days];
 }
 
 #pragma mark - Cache
@@ -273,62 +212,6 @@ static BOOL AGIsGitHubName(NSString *name)
       error = AGGitHubError(AGGitHubInfoErrorUnexpectedAnswer,
           NSLocalizedString(@"The repository page has no star count.", @""));
     [self deliver:^{ completion(stars, error); }];
-  }];
-}
-
-#pragma mark - Account age
-
-- (void)accountCreationDateForOwner:(NSString *)owner
-                         completion:(void (^)(NSDate *date, NSError *error))completion
-{
-  if (!AGIsGitHubName(owner))
-    {
-      NSError *error = AGGitHubError(AGGitHubInfoErrorBadName,
-          NSLocalizedString(@"This is not a GitHub account name.", @""));
-      [self deliver:^{ completion(nil, error); }];
-      return;
-    }
-
-  [_lock lock];
-  NSDate *known = [[_cache objectForKey:kAGAccountsKey] objectForKey:owner];
-  [_lock unlock];
-  if (known != nil)
-    {
-      [self deliver:^{ completion(known, nil); }];
-      return;
-    }
-
-  [_queue addOperationWithBlock:^{
-    NSString *tmp = [_cacheDirectory stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"account-%@.tmp", [[NSUUID UUID] UUIDString]]];
-    NSString *url = [NSString stringWithFormat:@"%@/users/%@", _apiBaseURL, owner];
-    NSString *reason = nil;
-    /* No -f: a refusal such as the rate limit comes with a JSON body that
-     * says so, and curl would otherwise throw it away. */
-    int status = AGRunCurl(@[ @"-sSL", @"--max-time", @"30",
-                              @"-H", @"Accept: application/vnd.github+json",
-                              @"-o", tmp, url ], &reason);
-    NSData *data = (status == 0) ? [NSData dataWithContentsOfFile:tmp] : nil;
-    [[NSFileManager defaultManager] removeItemAtPath:tmp error:NULL];
-
-    NSError *error = nil;
-    NSDate *date = nil;
-    if (status != 0)
-      error = AGGitHubError(AGGitHubInfoErrorDownload,
-          [NSString stringWithFormat:
-              NSLocalizedString(@"Could not reach GitHub: %@", @""),
-              reason != nil ? reason : @"curl"]);
-    else
-      date = [AGGitHubInfo creationDateFromUserJSON:data error:&error];
-
-    if (date != nil)
-      {
-        [_lock lock];
-        [[_cache objectForKey:kAGAccountsKey] setObject:date forKey:owner];
-        [self saveCache];
-        [_lock unlock];
-      }
-    [self deliver:^{ completion(date, error); }];
   }];
 }
 
