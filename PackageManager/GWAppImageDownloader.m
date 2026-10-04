@@ -455,8 +455,10 @@ typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
 
   NSFileManager *fm = [NSFileManager defaultManager];
 
-  // The AppImage is placed directly into ~/Applications as a flat,
-  // executable file - no .app wrapper, no launcher script.
+  // The AppImage is placed directly into ~/Applications as a flat file - no
+  // .app wrapper, no launcher script. It is left without the executable bit:
+  // Workspace asks the user whether to trust it when it is first opened, and
+  // sets the bit then.
   NSString *dest = [GWAppImageDownloader launcherPathForAppName:appName];
 
   // Remove any previous download of the same app.
@@ -477,9 +479,6 @@ typedef NS_ENUM(NSInteger, GWKDEDirectoryFault) {
   // Move the downloaded AppImage into place.
   if (![fm moveItemAtPath:src toPath:dest error:error])
     return NO;
-  [fm setAttributes:@{NSFilePosixPermissions:@0755}
-       ofItemAtPath:dest
-              error:nil];
 
   return YES;
 }

@@ -154,20 +154,19 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
        * that is where it is found, removed and revealed. */
       NSString *path = [GWAppImageDownloader existingLauncherPathForAppName:name];
       NSFileManager *fm = [NSFileManager defaultManager];
-      if ([fm isExecutableFileAtPath:path])
+      /* Present, not executable: a downloaded AppImage only gets the
+       * executable bit when the user trusts it in Workspace. */
+      if ([fm fileExistsAtPath:path])
         return AGInstallStateInstalled;
 
-      if (![fm fileExistsAtPath:path])
+      /* The file was deleted outside the app: the registry entry and a
+       * finished task that both promise it are stale, and keeping them
+       * would draw an Open button for a file that is not there. Dropping
+       * them on this query is state reconciliation, not an error path. */
+      [registry removeEntryForName:name];
+      @synchronized (self)
         {
-          /* The file was deleted outside the app: the registry entry and a
-           * finished task that both promise it are stale, and keeping them
-           * would draw an Open button for a file that is not there. Dropping
-           * them on this query is state reconciliation, not an error path. */
-          [registry removeEntryForName:name];
-          @synchronized (self)
-            {
-              [_tasks removeObjectForKey:name];
-            }
+          [_tasks removeObjectForKey:name];
         }
     }
 
@@ -472,24 +471,17 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   if ([[NSWorkspace sharedWorkspace] launchApplication:[app displayName]])
     return YES;
 
-  /* WHY the direct run exists: the workspace lookup answers out of the
-   * services cache, while a plain executable can always be started, so an
-   * AppImage the cache does not know about opens this way instead of being
-   * reported as unlaunchable. An error is reported only if this raises. */
-  NSTask *task = [[NSTask alloc] init];
-  [task setLaunchPath:[GWAppImageDownloader existingLauncherPathForAppName:name]];
-  [task setArguments:@[]];
-  [task setCurrentDirectoryPath:NSHomeDirectory()];
-  @try
-    {
-      [task launch];
-    }
-  @catch (NSException *exception)
+  /* WHY the file is opened: the workspace lookup answers out of the services
+   * cache, which does not know an AppImage that has not been trusted yet.
+   * The downloaded file is not executable, so it cannot be started directly;
+   * opening it hands it to Workspace, which asks the user to trust it, makes
+   * it executable and runs it. */
+  NSString *launcherPath = [GWAppImageDownloader existingLauncherPathForAppName:name];
+  if (![[NSWorkspace sharedWorkspace] openFile:launcherPath])
     {
       if (error != NULL)
         *error = AGInstallerError(AGInstallerErrorLaunch, [NSString stringWithFormat:
-            NSLocalizedString(@"Could not start %@: %@", @""),
-            [app displayName], [exception reason]]);
+            NSLocalizedString(@"Could not start %@", @""), [app displayName]]);
       return NO;
     }
   return YES;
