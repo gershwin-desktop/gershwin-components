@@ -359,9 +359,37 @@ static BOOL _confirmInstall(NSString *pkgName, NSString *filePath, NSString *fmt
   return result;
 }
 
+/* appwrap ships in /System/Library/Tools, not /Local; site-local overrides
+   may still place it under /Local, so try that first.  A hard-coded
+   /Local/Library/Tools/appwrap made NSTask raise "task has invalid launch
+   path" on the first package that ships a .desktop file, and because the
+   launch had no guard the exception killed OnDemand right after dpkg had
+   succeeded - a completed install looked like a failure. */
+static NSString *_appwrapPath(void)
+{
+  for (NSString *path in @[@"/Local/Library/Tools/appwrap",
+                            @"/System/Library/Tools/appwrap"])
+    {
+      if ([[NSFileManager defaultManager] isExecutableFileAtPath:path])
+        return path;
+    }
+  return nil;
+}
+
 /* Query the just-installed package's file list for .desktop entries and wrap them */
 static void _wrapPackageDesktopFiles(NSString *pkgName, NSString *fmt)
 {
+  NSString *appwrap = _appwrapPath();
+  if (!appwrap)
+    {
+      /* Wrapping only makes the entries easier to launch; the package is
+         installed either way, so a missing tool must not be read as a
+         failed install. Workspace still finds the entries in their
+         desktop directories. */
+      NSLog(@"OnDemand -> _wrapPackageDesktopFiles: appwrap not found, skipping");
+      return;
+    }
+
   NSString *listCmd = nil;
   if ([fmt isEqualToString:@"deb"])
     listCmd = [NSString stringWithFormat:@"dpkg -L %@ 2>/dev/null | grep '\\.desktop$'", pkgName];
@@ -393,10 +421,21 @@ static void _wrapPackageDesktopFiles(NSString *pkgName, NSString *fmt)
         {
           NSLog(@"OnDemand: wrapping %@", [df lastPathComponent]);
           NSTask *w = [[NSTask alloc] init];
-          [w setLaunchPath:@"/Local/Library/Tools/appwrap"];
+          [w setLaunchPath:appwrap];
           [w setArguments:@[@"-f", df]];
-          [w launch];
-          [w waitUntilExit];
+          @try
+            {
+              [w launch];
+              [w waitUntilExit];
+            }
+          @catch (NSException *exception)
+            {
+              /* One entry that cannot be wrapped must not take the
+                 installer down: the package is already installed at this
+                 point, and the unguarded launch used to raise
+                 "task has invalid launch path" out of main(). */
+              NSLog(@"OnDemand [FAIL] wrapping %@: %@", df, exception);
+            }
         }
     }
 }
