@@ -1273,6 +1273,24 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         }
     }
 
+    NSString *volumeName =
+        [DUParsing trimmedString:options[@"name"]] ?: @"";
+    // A filesystem straight on the raw disk is not a usable disk, so a
+    // whole-disk erase writes a table with one partition spanning the disk.
+    // Built before anything is touched so a too-small disk fails up front.
+    DUPartitionPlan *wholeDiskPlan = nil;
+    if (gate == nil && wholeDisk) {
+        NSError *planError = nil;
+        wholeDiskPlan =
+            [DUPartitionPlan planForWholeDiskErase:object
+                                        filesystem:formatIdentifier
+                                              name:volumeName
+                                             error:&planError];
+        if (wholeDiskPlan == nil) {
+            gate = planError;
+        }
+    }
+
     if (gate != nil) {
         if (completion != NULL) {
             completion(gate);
@@ -1281,8 +1299,6 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
     }
 
     NSString *node = object.backendPath;
-    NSString *volumeName =
-        [DUParsing trimmedString:options[@"name"]] ?: @"";
     NSString *label = [self sanitizedLabel:volumeName limit:labelLimit];
 
     NSArray<NSString *> *subtreeNodes = [self nodesOfSubtree:object];
@@ -1393,6 +1409,34 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
             fraction += 0.05;
         }
 
+        if (wholeDisk) {
+            // The shared partition code destroys any remaining table, writes
+            // the new one and formats each entry; its progress is folded into
+            // the last 20 percent of the erase bar.
+            NSError *partitionError = [self
+                writePartitionPlan:wholeDiskPlan
+                          toDevice:object
+                          progress:^(double partFraction, NSString *message) {
+                    if (progress != NULL) {
+                        progress(0.8 + partFraction * 0.2, message);
+                    }
+                }];
+            if (partitionError != nil) {
+                if (completion != NULL) {
+                    completion(partitionError);
+                }
+                return;
+            }
+            if (progress != NULL) {
+                progress(1.0,
+                         NSLocalizedString(@"Erase completed.", nil));
+            }
+            if (completion != NULL) {
+                completion(nil);
+            }
+            return;
+        }
+
         if (progress != NULL) {
             progress(fraction + 0.1,
                      NSLocalizedString(@"Creating filesystem...", nil));
@@ -1423,10 +1467,12 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
 
 #pragma mark - Partitioning
 
-- (void)partitionDevice:(DUStorageObject *)device
-                withPlan:(DUPartitionPlan *)plan
-               progress:(void (^)(double progress, NSString *message))progress
-             completion:(void (^)(NSError *error))completion
+// Synchronous so the whole-disk erase can run the same table write and
+// formatting as Partition without a second copy of it. Blocking: callers
+// run it on a worker.
+- (NSError *)writePartitionPlan:(DUPartitionPlan *)plan
+                       toDevice:(DUStorageObject *)device
+                       progress:(void (^)(double progress, NSString *message))progress
 {
     NSError *gate =
         [self gateForOperation:kDUOperationPartition onObject:device];
@@ -1498,10 +1544,7 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
     }
 
     if (gate != nil) {
-        if (completion != NULL) {
-            completion(gate);
-        }
-        return;
+        return gate;
     }
 
     /* Sector size comes from the DISK provider, not from the part class: a
@@ -1538,234 +1581,220 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         // Refuse rather than guess a sector size: the wrong one produces a
         // table whose partitions do not match what the user asked for, on a
         // disk whose old table has already been destroyed.
-        if (completion != NULL) {
-            completion(DUErrorMake(
+        return DUErrorMake(
                 DUErrorBackendUnavailable,
                 NSLocalizedString(@"The sector size of this disk could not be "
                                   @"read, so the partition sizes cannot be "
-                                  @"computed safely.", nil)));
-        }
-        return;
+                                  @"computed safely.", nil));
     }
 
     NSArray<NSString *> *subtreeNodes = [self nodesOfSubtree:device];
     unsigned long long diskBytes = [self sizeOfObject:device];
 
-    [self spawnWork:^{
-        // Rewriting the table under mounted filesystems would lose their
-        // contents and gpart refuses a busy provider, so detach them first.
-        NSError *unmountError = [self unmountMountsAmong:subtreeNodes];
-        if (unmountError != nil) {
-            if (completion != NULL) {
-                completion(unmountError);
-            }
-            return;
-        }
-        if (progress != NULL) {
-            progress(0.02,
-                     NSLocalizedString(@"Creating partition table...",
-                                       nil));
-        }
-        /* Applying a plan rewrites the whole table, so an existing one has to
-         * go first: gpart(8) leaves the entries of a table it recognises
-         * alone, which silently merges the old partitions into the new
-         * scheme and then makes every gpart add -i land on an occupied slot.
-         *
-         * Whether there IS a table is asked first rather than inferred from
-         * the destroy's exit code: gpart(8) reports an unlabelled disk
-         * differently across builds ("No such geom: da1" on some, "arg0
-         * 'da1': Invalid argument" on this one), and both are a normal
-         * "nothing to remove" rather than a failure. */
-        BOOL tableExists = [self partitionTableExistsOn:nodeName
-                                               gpartPath:gpartPath];
-        if (tableExists) {
-            DUProcessResult *destroyed =
-                [[DUAuthorizationManager sharedManager]
-                    runPrivileged:gpartPath
-                             args:@[ @"destroy", @"-F", nodeName ]
-                          timeout:300.0
-                            error:NULL];
-            if (![self runSucceeded:destroyed]) {
-                if (completion != NULL) {
-                    completion([self toolFailure:DUErrorPartitionError
-                                         message:NSLocalizedString(
-                                                      @"Removing the old "
-                                                      @"partition table "
-                                                      @"failed.", nil)
-                                          result:destroyed]);
-                }
-                return;
-            }
-        }
-
-        // gpart create rewrites the table; needs root.
-        DUProcessResult *created =
+    // Rewriting the table under mounted filesystems would lose their
+    // contents and gpart refuses a busy provider, so detach them first.
+    NSError *unmountError = [self unmountMountsAmong:subtreeNodes];
+    if (unmountError != nil) {
+        return unmountError;
+    }
+    if (progress != NULL) {
+        progress(0.02,
+                 NSLocalizedString(@"Creating partition table...",
+                                   nil));
+    }
+    /* Applying a plan rewrites the whole table, so an existing one has to
+     * go first: gpart(8) leaves the entries of a table it recognises
+     * alone, which silently merges the old partitions into the new
+     * scheme and then makes every gpart add -i land on an occupied slot.
+     *
+     * Whether there IS a table is asked first rather than inferred from
+     * the destroy's exit code: gpart(8) reports an unlabelled disk
+     * differently across builds ("No such geom: da1" on some, "arg0
+     * 'da1': Invalid argument" on this one), and both are a normal
+     * "nothing to remove" rather than a failure. */
+    BOOL tableExists = [self partitionTableExistsOn:nodeName
+                                           gpartPath:gpartPath];
+    if (tableExists) {
+        DUProcessResult *destroyed =
             [[DUAuthorizationManager sharedManager]
                 runPrivileged:gpartPath
-                         args:@[ @"create", @"-s", scheme, nodeName ]
+                         args:@[ @"destroy", @"-F", nodeName ]
                       timeout:300.0
                         error:NULL];
-        if (![self runSucceeded:created]) {
-            if (completion != NULL) {
-                completion([self toolFailure:DUErrorPartitionError
+        if (![self runSucceeded:destroyed]) {
+            return [self toolFailure:DUErrorPartitionError
                                      message:NSLocalizedString(
-                                                  @"Creating the partition "
-                                                  @"table failed.", nil)
-                                      result:created]);
-            }
-            return;
+                                                  @"Removing the old "
+                                                  @"partition table "
+                                                  @"failed.", nil)
+                                      result:destroyed];
         }
+    }
 
-        NSUInteger count = entries.count;
-        NSUInteger labelLimit = 0;
-        NSMutableArray<NSString *> *newNodes =
-            [NSMutableArray arrayWithCapacity:count];
-        for (NSUInteger i = 0; i < count; i++) {
-            DUPartition *entry = entries[i];
-            NSMutableArray<NSString *> *arguments =
-                [NSMutableArray arrayWithObject:@"add"];
-            [arguments addObjectsFromArray:@[ @"-t", types[i] ]];
+    // gpart create rewrites the table; needs root.
+    DUProcessResult *created =
+        [[DUAuthorizationManager sharedManager]
+            runPrivileged:gpartPath
+                     args:@[ @"create", @"-s", scheme, nodeName ]
+                  timeout:300.0
+                    error:NULL];
+    if (![self runSucceeded:created]) {
+        return [self toolFailure:DUErrorPartitionError
+                                 message:NSLocalizedString(
+                                              @"Creating the partition "
+                                              @"table failed.", nil)
+                                  result:created];
+    }
 
-            // 1 MiB alignment keeps partitions on flash erase blocks and
-            // 4Kn sector boundaries.
-            [arguments addObjectsFromArray:@[ @"-a", @"1m" ]];
+    NSUInteger count = entries.count;
+    NSUInteger labelLimit = 0;
+    NSMutableArray<NSString *> *newNodes =
+        [NSMutableArray arrayWithCapacity:count];
+    for (NSUInteger i = 0; i < count; i++) {
+        DUPartition *entry = entries[i];
+        NSMutableArray<NSString *> *arguments =
+            [NSMutableArray arrayWithObject:@"add"];
+        [arguments addObjectsFromArray:@[ @"-t", types[i] ]];
 
-            /* The last entry that reaches the end of the disk gets no -s:
-             * gpart then takes exactly what is left of the usable area, which
-             * excludes the backup table and the alignment slack. An explicit
-             * size computed from the plan runs past that and gpart rejects
-             * the add after the table was already rewritten. */
-            BOOL reachesDiskEnd = i + 1 == count && diskBytes > 0 &&
-                entry.offsetBytes + entry.sizeBytes + (1024ull * 1024ull) >
-                    diskBytes;
-            if (entry.sizeBytes > 0 && !reachesDiskEnd) {
-                // Round up so rounding can never swallow part of the last
-                // partition into unallocated space.
-                unsigned long long sectors =
-                    (entry.sizeBytes + sectorSize - 1) / sectorSize;
-                [arguments addObjectsFromArray:
-                                @[ @"-s",
-                                   [NSString stringWithFormat:@"%llu",
-                                                              sectors] ]];
-            }
-            /* No -i: gpart numbers the table from 1 and the layout numbers its
-             * entries from 0, so passing the layout index made every add after
-             * the first collide with a slot gpart had just used. Entries arrive
-             * in ascending offset order and gpart appends in call order, so
-             * letting gpart assign the index reproduces the layout exactly. */
-            if ([scheme isEqualToString:@"gpt"] &&
-                entry.name.length > 0) {
-                NSString *label =
-                    [self sanitizedLabel:entry.name limit:kMaxUFSLabelLength];
-                if (label.length > 0) {
-                    [arguments addObjectsFromArray:@[ @"-l", label ]];
-                }
-            }
-            [arguments addObject:nodeName];
+        // 1 MiB alignment keeps partitions on flash erase blocks and
+        // 4Kn sector boundaries.
+        [arguments addObjectsFromArray:@[ @"-a", @"1m" ]];
 
-            if (progress != NULL) {
-                progress(0.1 + 0.85 * (double)(i + 1) / (double)count,
-                         [NSString stringWithFormat:
-                              NSLocalizedString(@"Adding partition %lu of %lu...",
-                                                nil),
-                              (unsigned long)(i + 1), (unsigned long)count]);
-            }
-            // gpart add rewrites the table; needs root.
-            DUProcessResult *added =
-                [[DUAuthorizationManager sharedManager]
-                    runPrivileged:gpartPath
-                             args:arguments
-                          timeout:300.0
-                            error:NULL];
-            if (![self runSucceeded:added]) {
-                if (completion != NULL) {
-                    completion([self toolFailure:DUErrorPartitionError
-                                         message:NSLocalizedString(
-                                                      @"Adding a partition "
-                                                      @"failed.", nil)
-                                          result:added]);
-                }
-                return;
-            }
-            // gpart names the new provider itself ("da0p1 added"); asking it
-            // is the only way to know the node under every scheme.
-            NSString *addedLine =
-                [DUParsing trimmedString:added.standardOutput] ?: @"";
-            NSString *newName = [[addedLine
-                componentsSeparatedByCharactersInSet:
-                    [NSCharacterSet whitespaceAndNewlineCharacterSet]]
-                firstObject];
-            BOOL parsed = newName.length > 0 && [addedLine hasSuffix:@"added"];
-            [newNodes addObject:parsed
-                     ? [@"/dev" stringByAppendingPathComponent:newName]
-                     : @""];
+        /* The last entry that reaches the end of the disk gets no -s:
+         * gpart then takes exactly what is left of the usable area, which
+         * excludes the backup table and the alignment slack. An explicit
+         * size computed from the plan runs past that and gpart rejects
+         * the add after the table was already rewritten. */
+        BOOL reachesDiskEnd = i + 1 == count && diskBytes > 0 &&
+            entry.offsetBytes + entry.sizeBytes + (1024ull * 1024ull) >
+                diskBytes;
+        if (entry.sizeBytes > 0 && !reachesDiskEnd) {
+            // Round up so rounding can never swallow part of the last
+            // partition into unallocated space.
+            unsigned long long sectors =
+                (entry.sizeBytes + sectorSize - 1) / sectorSize;
+            [arguments addObjectsFromArray:
+                            @[ @"-s",
+                               [NSString stringWithFormat:@"%llu",
+                                                          sectors] ]];
         }
-
-        // gpart only records the type; without newfs every new partition
-        // stays blank although the user chose a format and a name for it.
-        for (NSUInteger i = 0; i < count; i++) {
-            DUPartition *entry = entries[i];
-            NSString *formatter = [self
-                formatterNameForFormatIdentifier:entry.filesystemType
-                                   labelCapacity:&labelLimit];
-            if (formatter == nil) {
-                continue;
-            }
-            if ([newNodes[i] length] == 0) {
-                if (completion != NULL) {
-                    completion(DUErrorMake(
-                        DUErrorPartitionError,
-                        NSLocalizedString(@"gpart did not report the name "
-                                          @"of a new partition, so it cannot "
-                                          @"be formatted.", nil)));
-                }
-                return;
-            }
-            NSString *formatterPath =
-                [DUFreeBSDToolCache pathForTool:formatter];
-            if (formatterPath == nil) {
-                if (completion != NULL) {
-                    completion(DUErrorMake(
-                        DUErrorUnsupportedOperation,
-                        [NSString stringWithFormat:
-                             NSLocalizedString(@"The %@ formatting tool is "
-                                               @"not installed.", nil),
-                             formatter]));
-                }
-                return;
-            }
-            if (progress != NULL) {
-                progress(0.95,
-                         [NSString stringWithFormat:
-                              NSLocalizedString(@"Formatting partition %lu "
-                                                @"of %lu...", nil),
-                              (unsigned long)(i + 1), (unsigned long)count]);
-            }
-            DUProcessResult *formatted = [self
-                runFormatter:formatterPath
-                        node:newNodes[i]
-                       label:[self sanitizedLabel:entry.name ?: @""
-                                            limit:labelLimit]];
-            if (![self runSucceeded:formatted]) {
-                if (completion != NULL) {
-                    completion([self toolFailure:DUErrorPartitionError
-                                         message:NSLocalizedString(
-                                                      @"Creating the "
-                                                      @"filesystem on a new "
-                                                      @"partition failed.",
-                                                      nil)
-                                          result:formatted]);
-                }
-                return;
+        /* No -i: gpart numbers the table from 1 and the layout numbers its
+         * entries from 0, so passing the layout index made every add after
+         * the first collide with a slot gpart had just used. Entries arrive
+         * in ascending offset order and gpart appends in call order, so
+         * letting gpart assign the index reproduces the layout exactly. */
+        if ([scheme isEqualToString:@"gpt"] &&
+            entry.name.length > 0) {
+            NSString *label =
+                [self sanitizedLabel:entry.name limit:kMaxUFSLabelLength];
+            if (label.length > 0) {
+                [arguments addObjectsFromArray:@[ @"-l", label ]];
             }
         }
+        [arguments addObject:nodeName];
 
         if (progress != NULL) {
-            progress(1.0,
-                     NSLocalizedString(@"Partitions created.", nil));
+            progress(0.1 + 0.85 * (double)(i + 1) / (double)count,
+                     [NSString stringWithFormat:
+                          NSLocalizedString(@"Adding partition %lu of %lu...",
+                                            nil),
+                          (unsigned long)(i + 1), (unsigned long)count]);
         }
+        // gpart add rewrites the table; needs root.
+        DUProcessResult *added =
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:gpartPath
+                         args:arguments
+                      timeout:300.0
+                        error:NULL];
+        if (![self runSucceeded:added]) {
+            return [self toolFailure:DUErrorPartitionError
+                                     message:NSLocalizedString(
+                                                  @"Adding a partition "
+                                                  @"failed.", nil)
+                                      result:added];
+        }
+        // gpart names the new provider itself ("da0p1 added"); asking it
+        // is the only way to know the node under every scheme.
+        NSString *addedLine =
+            [DUParsing trimmedString:added.standardOutput] ?: @"";
+        NSString *newName = [[addedLine
+            componentsSeparatedByCharactersInSet:
+                [NSCharacterSet whitespaceAndNewlineCharacterSet]]
+            firstObject];
+        BOOL parsed = newName.length > 0 && [addedLine hasSuffix:@"added"];
+        [newNodes addObject:parsed
+                 ? [@"/dev" stringByAppendingPathComponent:newName]
+                 : @""];
+    }
+
+    // gpart only records the type; without newfs every new partition
+    // stays blank although the user chose a format and a name for it.
+    for (NSUInteger i = 0; i < count; i++) {
+        DUPartition *entry = entries[i];
+        NSString *formatter = [self
+            formatterNameForFormatIdentifier:entry.filesystemType
+                               labelCapacity:&labelLimit];
+        if (formatter == nil) {
+            continue;
+        }
+        if ([newNodes[i] length] == 0) {
+            return DUErrorMake(
+                    DUErrorPartitionError,
+                    NSLocalizedString(@"gpart did not report the name "
+                                      @"of a new partition, so it cannot "
+                                      @"be formatted.", nil));
+        }
+        NSString *formatterPath =
+            [DUFreeBSDToolCache pathForTool:formatter];
+        if (formatterPath == nil) {
+            return DUErrorMake(
+                    DUErrorUnsupportedOperation,
+                    [NSString stringWithFormat:
+                         NSLocalizedString(@"The %@ formatting tool is "
+                                           @"not installed.", nil),
+                         formatter]);
+        }
+        if (progress != NULL) {
+            progress(0.95,
+                     [NSString stringWithFormat:
+                          NSLocalizedString(@"Formatting partition %lu "
+                                            @"of %lu...", nil),
+                          (unsigned long)(i + 1), (unsigned long)count]);
+        }
+        DUProcessResult *formatted = [self
+            runFormatter:formatterPath
+                    node:newNodes[i]
+                   label:[self sanitizedLabel:entry.name ?: @""
+                                        limit:labelLimit]];
+        if (![self runSucceeded:formatted]) {
+            return [self toolFailure:DUErrorPartitionError
+                                     message:NSLocalizedString(
+                                                  @"Creating the "
+                                                  @"filesystem on a new "
+                                                  @"partition failed.",
+                                                  nil)
+                                      result:formatted];
+        }
+    }
+
+    if (progress != NULL) {
+        progress(1.0,
+                 NSLocalizedString(@"Partitions created.", nil));
+    }
+    return nil;
+}
+
+- (void)partitionDevice:(DUStorageObject *)device
+                withPlan:(DUPartitionPlan *)plan
+               progress:(void (^)(double progress, NSString *message))progress
+             completion:(void (^)(NSError *error))completion
+{
+    [self spawnWork:^{
+        NSError *error =
+            [self writePartitionPlan:plan toDevice:device progress:progress];
         if (completion != NULL) {
-            completion(nil);
+            completion(error);
         }
     }];
 }

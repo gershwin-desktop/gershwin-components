@@ -922,6 +922,42 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
         }
     }
 
+    NSString *volumeName =
+        [DUParsing trimmedString:options[@"name"]] ?: @"";
+    // A filesystem straight on the raw disk is not a usable disk, so a
+    // whole-disk erase writes a label with one partition spanning the disk.
+    // The plan factory names gpt/mbr, but this backend can only write a BSD
+    // disklabel (scripted fdisk is not available), so only the plan's single
+    // entry is used and it is placed where a disklabel needs it: the factory
+    // leaves the first offset at 0, which would overlap the label sector, so
+    // it starts at 1 MiB, inside the margin the factory already reserves.
+    NSArray<DUPartition *> *wholeDiskEntries = nil;
+    BOOL wholeDisk = gate == nil &&
+        object.type == DUStorageObjectTypeDevice;
+    if (wholeDisk) {
+        NSError *planError = nil;
+        DUPartitionPlan *plan =
+            [DUPartitionPlan planForWholeDiskErase:object
+                                        filesystem:formatIdentifier
+                                              name:volumeName
+                                             error:&planError];
+        if (plan == nil || plan.entries.count != 1) {
+            gate = planError ?: DUErrorMake(
+                DUErrorInvalidArgument,
+                NSLocalizedString(@"The disk is too small to hold a "
+                                  @"partition table.", nil));
+        } else {
+            DUPartition *planned = plan.entries[0];
+            DUPartition *entry =
+                [[DUPartition alloc] initWithIdentifier:planned.identifier];
+            entry.offsetBytes = 1024ULL * 1024ULL;
+            entry.sizeBytes = planned.sizeBytes;
+            entry.filesystemType = planned.filesystemType;
+            entry.name = planned.name;
+            wholeDiskEntries = @[ entry ];
+        }
+    }
+
     if (gate != nil) {
         if (completion != NULL) {
             completion(gate);
@@ -930,8 +966,6 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
     }
 
     NSString *rawNode = [self rawNodeForPath:object.backendPath];
-    NSString *volumeName =
-        [DUParsing trimmedString:options[@"name"]] ?: @"";
     NSString *label = [self sanitizedLabel:volumeName limit:labelLimit];
     unsigned long long totalBytes = [self sizeOfObject:object];
 
@@ -995,6 +1029,34 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
                 return;
             }
             fraction = 0.75;
+        }
+
+        if (wholeDisk) {
+            // The shared partition code writes the label and formats the
+            // entry; its progress is folded into the last 20 percent of the
+            // erase bar.
+            NSError *partitionError = [self
+                writeDisklabelForEntries:wholeDiskEntries
+                                toDevice:object
+                                progress:^(double partFraction,
+                                           NSString *message) {
+                    if (progress != NULL) {
+                        progress(0.8 + partFraction * 0.2, message);
+                    }
+                }];
+            if (partitionError != nil) {
+                if (completion != NULL) {
+                    completion(partitionError);
+                }
+                return;
+            }
+            if (progress != NULL) {
+                progress(1.0, NSLocalizedString(@"Erase completed.", nil));
+            }
+            if (completion != NULL) {
+                completion(nil);
+            }
+            return;
         }
 
         // No signature-wipe pass: newfs rewrites the superblock area itself
@@ -1100,40 +1162,21 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
     return path;
 }
 
-- (void)partitionDevice:(DUStorageObject *)device
-                 withPlan:(DUPartitionPlan *)plan
-                progress:(void (^)(double progress, NSString *message))progress
-              completion:(void (^)(NSError *error))completion
+// Synchronous so the whole-disk erase can write the same label and format
+// the same partitions as Partition without a second copy of the code.
+// Blocking: callers run it on a worker. Only the entries matter here; the
+// scheme is always a BSD disklabel.
+- (NSError *)writeDisklabelForEntries:(NSArray<DUPartition *> *)entries
+                             toDevice:(DUStorageObject *)device
+                             progress:(void (^)(double progress, NSString *message))progress
 {
     NSError *gate = [self gateForOperation:kDUOperationPartition
                                  onObject:device];
-    if (gate == nil && plan == nil) {
-        gate = DUErrorMake(DUErrorInvalidArgument,
-                           NSLocalizedString(@"No partition plan was given.",
-                                             nil));
-    }
     if (gate == nil && device.backendPath.length == 0) {
         gate = DUErrorMake(DUErrorInvalidArgument,
                            NSLocalizedString(@"The device has no device "
                                              @"node.",
                                              nil));
-    }
-
-    NSString *scheme = gate == nil
-        ? [DUPartitionTableParser normalizeSchemeToken:plan.scheme]
-        : nil;
-    if (gate == nil && ![scheme isEqualToString:@"bsd"]) {
-        // Scripted MBR editing would need stdin control of `fdisk -e`,
-        // which the process runner deliberately does not provide. Refusing
-        // beats half-writing an MBR and dropping planned partitions.
-        gate = DUErrorMake(
-            DUErrorUnsupportedOperation,
-            [NSString stringWithFormat:
-                 NSLocalizedString(@"Partition scheme %@ is not supported "
-                                   @"here; only BSD disklabel layouts can "
-                                   @"be applied.",
-                                   nil),
-             plan.scheme ?: @""]);
     }
 
     NSString *disklabelPath = nil;
@@ -1180,7 +1223,6 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
     // Resolve every entry up front so a bad plan fails synchronously
     // instead of after the label was already rewritten. The template
     // grammar demands explicit sizes and offsets in sectors.
-    NSArray<DUPartition *> *entries = gate == nil ? plan.entries : nil;
     NSMutableArray<NSString *> *letters =
         [NSMutableArray arrayWithCapacity:entries.count];
     NSMutableArray<NSString *> *sizes =
@@ -1291,10 +1333,7 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
     }
 
     if (gate != nil) {
-        if (completion != NULL) {
-            completion(gate);
-        }
-        return;
+        return gate;
     }
 
     NSMutableString *template = [NSMutableString string];
@@ -1312,113 +1351,138 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
     NSString *templatePath =
         [self secureTemporaryFileWithContents:template error:&templateError];
     if (templatePath == nil) {
-        if (completion != NULL) {
-            completion(templateError);
-        }
-        return;
+        return templateError;
     }
 
     NSArray<NSString *> *subtreeNodes = [self nodesOfSubtree:device];
     NSString *diskName = device.backendPath.lastPathComponent;
 
-    [self spawnWork:^{
-        // Rewriting the label under mounted filesystems would lose their
-        // contents, so detach them first.
-        NSError *unmountError = [self unmountMountsAmong:subtreeNodes];
-        if (unmountError != nil) {
-            unlink(templatePath.fileSystemRepresentation);
-            if (completion != NULL) {
-                completion(unmountError);
-            }
-            return;
+    // Rewriting the label under mounted filesystems would lose their
+    // contents, so detach them first.
+    NSError *unmountError = [self unmountMountsAmong:subtreeNodes];
+    if (unmountError != nil) {
+        unlink(templatePath.fileSystemRepresentation);
+        return unmountError;
+    }
+    if (progress != NULL) {
+        progress(0.2,
+                 NSLocalizedString(@"Writing the disklabel...", nil));
+    }
+    DUProcessResult *result =
+        [DUAuthorizationManager.sharedManager
+            runPrivileged:disklabelPath
+                     args:@[ @"-R", rawDiskNode, templatePath ]
+                  timeout:kToolTimeoutSeconds
+                    error:NULL];
+    // The template must vanish regardless of how the tool run ends; it
+    // describes the layout and outliving the operation serves nobody.
+    unlink(templatePath.fileSystemRepresentation);
+
+    if (![self runSucceeded:result]) {
+        return [self
+                toolFailure:DUErrorPartitionError
+                    message:NSLocalizedString(
+                                @"Writing the disklabel failed.", nil)
+                     result:result];
+    }
+
+    // disklabel only records the type; without newfs every new partition
+    // stays blank although the user chose a format and a name for it.
+    for (NSUInteger i = 0; i < letters.count; i++) {
+        NSUInteger labelLimit = 0;
+        BOOL takesLabel = NO;
+        NSString *formatter = [self
+            formatterNameForFormatIdentifier:entries[i].filesystemType
+                               labelCapacity:&labelLimit
+                                ufsTakesLabel:&takesLabel];
+        if (formatter == nil) {
+            continue;
+        }
+        NSString *formatterPath =
+            [DUNetBSDToolCache pathForTool:formatter];
+        if (formatterPath == nil) {
+            return DUErrorMake(
+                    DUErrorUnsupportedOperation,
+                    [NSString stringWithFormat:
+                         NSLocalizedString(@"The %@ formatting tool is "
+                                           @"not installed.", nil),
+                         formatter]);
         }
         if (progress != NULL) {
-            progress(0.2,
-                     NSLocalizedString(@"Writing the disklabel...", nil));
+            progress(0.4 + 0.55 * (double)i / (double)letters.count,
+                     [NSString stringWithFormat:
+                          NSLocalizedString(@"Formatting partition %lu "
+                                            @"of %lu...", nil),
+                          (unsigned long)(i + 1),
+                          (unsigned long)letters.count]);
         }
-        DUProcessResult *result =
-            [DUAuthorizationManager.sharedManager
-                runPrivileged:disklabelPath
-                         args:@[ @"-R", rawDiskNode, templatePath ]
-                      timeout:kToolTimeoutSeconds
-                        error:NULL];
-        // The template must vanish regardless of how the tool run ends; it
-        // describes the layout and outliving the operation serves nobody.
-        unlink(templatePath.fileSystemRepresentation);
-
-        if (![self runSucceeded:result]) {
-            if (completion != NULL) {
-                completion([self
+        NSString *partitionNode = [self
+            rawNodeForPath:[@"/dev/" stringByAppendingFormat:@"%@%@",
+                                                             diskName,
+                                                             letters[i]]];
+        DUProcessResult *formatted = [self
+            runFormatter:formatterPath
+                    node:partitionNode
+                   label:[self sanitizedLabel:entries[i].name ?: @""
+                                        limit:labelLimit]
+              takesLabel:takesLabel];
+        if (![self runSucceeded:formatted]) {
+            return [self
                     toolFailure:DUErrorPartitionError
                         message:NSLocalizedString(
-                                    @"Writing the disklabel failed.", nil)
-                         result:result]);
-            }
-            return;
+                                    @"Creating the filesystem on a new "
+                                    @"partition failed.", nil)
+                         result:formatted];
         }
+    }
 
-        // disklabel only records the type; without newfs every new partition
-        // stays blank although the user chose a format and a name for it.
-        for (NSUInteger i = 0; i < letters.count; i++) {
-            NSUInteger labelLimit = 0;
-            BOOL takesLabel = NO;
-            NSString *formatter = [self
-                formatterNameForFormatIdentifier:entries[i].filesystemType
-                                   labelCapacity:&labelLimit
-                                    ufsTakesLabel:&takesLabel];
-            if (formatter == nil) {
-                continue;
-            }
-            NSString *formatterPath =
-                [DUNetBSDToolCache pathForTool:formatter];
-            if (formatterPath == nil) {
-                if (completion != NULL) {
-                    completion(DUErrorMake(
-                        DUErrorUnsupportedOperation,
-                        [NSString stringWithFormat:
-                             NSLocalizedString(@"The %@ formatting tool is "
-                                               @"not installed.", nil),
-                             formatter]));
-                }
-                return;
-            }
-            if (progress != NULL) {
-                progress(0.4 + 0.55 * (double)i / (double)letters.count,
-                         [NSString stringWithFormat:
-                              NSLocalizedString(@"Formatting partition %lu "
-                                                @"of %lu...", nil),
-                              (unsigned long)(i + 1),
-                              (unsigned long)letters.count]);
-            }
-            NSString *partitionNode = [self
-                rawNodeForPath:[@"/dev/" stringByAppendingFormat:@"%@%@",
-                                                                 diskName,
-                                                                 letters[i]]];
-            DUProcessResult *formatted = [self
-                runFormatter:formatterPath
-                        node:partitionNode
-                       label:[self sanitizedLabel:entries[i].name ?: @""
-                                            limit:labelLimit]
-                  takesLabel:takesLabel];
-            if (![self runSucceeded:formatted]) {
-                if (completion != NULL) {
-                    completion([self
-                        toolFailure:DUErrorPartitionError
-                            message:NSLocalizedString(
-                                        @"Creating the filesystem on a new "
-                                        @"partition failed.", nil)
-                             result:formatted]);
-                }
-                return;
-            }
-        }
+    if (progress != NULL) {
+        progress(1.0,
+                 NSLocalizedString(@"Partitions created.", nil));
+    }
+    return nil;
+}
 
-        if (progress != NULL) {
-            progress(1.0,
-                     NSLocalizedString(@"Partitions created.", nil));
-        }
+- (void)partitionDevice:(DUStorageObject *)device
+                 withPlan:(DUPartitionPlan *)plan
+                progress:(void (^)(double progress, NSString *message))progress
+              completion:(void (^)(NSError *error))completion
+{
+    NSError *gate = nil;
+    if (plan == nil) {
+        gate = DUErrorMake(DUErrorInvalidArgument,
+                           NSLocalizedString(@"No partition plan was given.",
+                                             nil));
+    }
+    NSString *scheme = gate == nil
+        ? [DUPartitionTableParser normalizeSchemeToken:plan.scheme]
+        : nil;
+    if (gate == nil && ![scheme isEqualToString:@"bsd"]) {
+        // Scripted MBR editing would need stdin control of `fdisk -e`,
+        // which the process runner deliberately does not provide. Refusing
+        // beats half-writing an MBR and dropping planned partitions.
+        gate = DUErrorMake(
+            DUErrorUnsupportedOperation,
+            [NSString stringWithFormat:
+                 NSLocalizedString(@"Partition scheme %@ is not supported "
+                                   @"here; only BSD disklabel layouts can "
+                                   @"be applied.",
+                                   nil),
+             plan.scheme ?: @""]);
+    }
+    if (gate != nil) {
         if (completion != NULL) {
-            completion(nil);
+            completion(gate);
+        }
+        return;
+    }
+    NSArray<DUPartition *> *entries = plan.entries;
+    [self spawnWork:^{
+        NSError *error = [self writeDisklabelForEntries:entries
+                                               toDevice:device
+                                               progress:progress];
+        if (completion != NULL) {
+            completion(error);
         }
     }];
 }

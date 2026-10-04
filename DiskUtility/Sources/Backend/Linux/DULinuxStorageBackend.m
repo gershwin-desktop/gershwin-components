@@ -493,15 +493,45 @@
             return;
         }
 
-        progress(0.85, NSLocalizedString(@"Creating filesystem...", nil));
-        result = [DULinuxFilesystemTool formatVolumeAtDevicePath:devicePath
-                                                  filesystemType:fstype
-                                                           label:name
-                                                        progress:^(double fraction, NSString *line) {
-            // mkfs stage fractions (0.1..0.92) fold into the erase bar's
-            // final 15% after wipefs.
-            progress(0.85 + fraction * 0.14, line);
-        }];
+        if ([object isKindOfClass:[DUStorageDevice class]]) {
+            // A whole-disk erase leaves a usable disk: fresh table, one
+            // partition spanning it, formatted as chosen.
+            NSError *planError = nil;
+            DUPartitionPlan *plan =
+                [DUPartitionPlan planForWholeDiskErase:object
+                                            filesystem:fstype
+                                                  name:name
+                                                 error:&planError];
+            if (plan == nil) {
+                completion(planError);
+                return;
+            }
+            progress(0.8, NSLocalizedString(@"Writing the partition table...", nil));
+            result = [[DULinuxPartitionTool new]
+                applyPlan:plan
+             toDevicePath:devicePath
+                 progress:^(double fraction, NSString *message) {
+                progress(0.8 + fraction * 0.1, message);
+            }];
+            if (result == nil) {
+                progress(0.9, NSLocalizedString(@"Creating filesystem...", nil));
+                result = [self formatPartitionsOfPlan:plan
+                                       diskDevicePath:devicePath
+                                             progress:^(double fraction, NSString *line) {
+                    progress(0.9 + fraction * 0.09, line);
+                }];
+            }
+        } else {
+            progress(0.85, NSLocalizedString(@"Creating filesystem...", nil));
+            result = [DULinuxFilesystemTool formatVolumeAtDevicePath:devicePath
+                                                      filesystemType:fstype
+                                                               label:name
+                                                            progress:^(double fraction, NSString *line) {
+                // mkfs stage fractions (0.1..0.92) fold into the erase bar's
+                // final 15% after wipefs.
+                progress(0.85 + fraction * 0.14, line);
+            }];
+        }
         progress(1.0,
                  result == nil
                      ? NSLocalizedString(@"Erase completed successfully.", nil)

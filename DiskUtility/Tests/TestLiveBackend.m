@@ -242,34 +242,6 @@ static id<DUStorageBackend> Backend(void)
     return backend;
 }
 
-static DUStorageObject *FindNode(DUStorageObject *object, NSString *node)
-{
-    if ([object.backendPath isEqualToString:node]) {
-        return object;
-    }
-    for (DUStorageObject *child in object.children) {
-        DUStorageObject *found = FindNode(child, node);
-        if (found != nil) {
-            return found;
-        }
-    }
-    return nil;
-}
-
-static DUStorageObject *ObjectAtNode(id<DUStorageBackend> backend,
-                                     NSString *node)
-{
-    NSError *error = nil;
-    NSArray *objects = [backend discoverStorageObjects:&error];
-    for (DUStorageObject *root in objects) {
-        DUStorageObject *found = FindNode(root, node);
-        if (found != nil) {
-            return found;
-        }
-    }
-    return nil;
-}
-
 static DUStorageObject *DiskOf(id<DUStorageBackend> backend, NSString *node)
 {
     NSError *error = nil;
@@ -1510,7 +1482,7 @@ static void PhaseSecureErase(id<DUStorageBackend> backend)
 
 static void PhaseWholeDiskErase(id<DUStorageBackend> backend)
 {
-    printf("\n== whole-disk erase (destroys the table) ==\n");
+    printf("\n== whole-disk erase (new table, one partition) ==\n");
     fflush(stdout);
     DUStorageObject *disk = DiskOf(backend, gDevice);
     if (disk == nil) {
@@ -1526,27 +1498,42 @@ static void PhaseWholeDiskErase(id<DUStorageBackend> backend)
                   completion:done];
     });
     Check(error == nil, @"erase the whole disk", ErrorText(error));
-    Check(HasUFSTag(@"WHOLEDISK", gDevice),
-          @"whole disk carries the new filesystem", gDevice);
 
-    error = RunAsync(backend, @"verify-whole", ^(void (^done)(NSError *)) {
-        [backend verifyObject:ObjectAtNode(backend, gDevice)
-                    progress:^(double f, NSString *m) { DumpProgress(f, m); }
-                  completion:done];
-    });
-    Check(error == nil, @"verify the freshly erased disk", ErrorText(error));
-
+    // A whole-disk erase must leave a usable disk: a fresh table with one
+    // partition spanning it, not a filesystem on the raw device.
     DUStorageObject *after = DiskOf(backend, gDevice);
+    NSUInteger partitionCount = 0;
     if (after != nil) {
         DUStorageDevice *device = (DUStorageDevice *)after;
         printf("       scheme after whole-disk erase: %s\n",
                S(device.partitionScheme ?: @"(none)"));
         fflush(stdout);
-        Check(device.children.count == 0,
-              @"the old partition table is gone",
-              [NSString stringWithFormat:@"%lu children",
-                                         (unsigned long)device.children.count]);
+        for (DUStorageObject *child in device.children) {
+            if ([child isKindOfClass:[DUPartition class]]) {
+                partitionCount++;
+            }
+        }
     }
+    Check(partitionCount == 1,
+          @"the erased disk carries a table with exactly one partition",
+          [NSString stringWithFormat:@"%lu partitions",
+                                     (unsigned long)partitionCount]);
+
+    DUStorageObject *whole = PartitionVolumeOf(backend, 0);
+    Check(whole != nil && HasUFSTag(@"WHOLEDISK", whole.backendPath),
+          @"the single partition carries the new filesystem and label",
+          whole.backendPath ?: @"(no partition)");
+
+    if (whole == nil) {
+        return;
+    }
+    error = RunAsync(backend, @"verify-whole", ^(void (^done)(NSError *)) {
+        [backend verifyObject:PartitionVolumeOf(backend, 0)
+                    progress:^(double f, NSString *m) { DumpProgress(f, m); }
+                  completion:done];
+    });
+    Check(error == nil, @"verify the freshly erased partition",
+          ErrorText(error));
 }
 
 int main(int argc, const char *argv[])
