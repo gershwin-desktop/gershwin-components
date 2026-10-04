@@ -549,17 +549,32 @@ static void PhaseGuards(id<DUStorageBackend> backend)
                    [NSCharacterSet whitespaceAndNewlineCharacterSet]]
                .UTF8String);
 
-    // Now the guards must fire.
+    // Erase unmounts what is mounted from the target first, like the
+    // platform's own disk utility; it must neither refuse nor leave the old
+    // mount behind.
     error = RunAsync(backend, @"erase-while-mounted", ^(void (^done)(NSError *)) {
         [backend eraseObject:guard
-                     options:@{ kDUFormatIdentifierKey : @"ufs" }
+                     options:@{ kDUFormatIdentifierKey : @"ufs",
+                                @"name" : @"GUARD" }
                     progress:^(double f, NSString *m) { DumpProgress(f, m); }
                   completion:done];
     });
-    Check(error != nil && error.code == 3 /* DUErrorDeviceBusy */,
-          @"erase refused while mounted",
-          error == nil ? @"it ran anyway" : ErrorText(error));
+    Check(error == nil, @"erase of a mounted volume succeeds",
+          ErrorText(error));
+    Check(!ShellOK(@"mount | grep -q %@", mountPoint),
+          @"erase unmounted the volume first", mountPoint);
 
+    // Repair still has to refuse a mounted filesystem: fsck on a live
+    // mount corrupts it.
+    guard = PartitionVolumeOf(backend, 0);
+    error = RunAsync(backend, @"remount-guard", ^(void (^done)(NSError *)) {
+        [backend mountObject:guard
+                  completion:^(NSError *mountError, NSString *point) {
+                      (void)point;
+                      done(mountError);
+                  }];
+    });
+    Check(error == nil, @"remount the guard volume", ErrorText(error));
     error = RunAsync(backend, @"repair-while-mounted", ^(void (^done)(NSError *)) {
         [backend repairObject:guard
                     progress:^(double f, NSString *m) { DumpProgress(f, m); }
@@ -576,6 +591,7 @@ static void PhaseGuards(id<DUStorageBackend> backend)
         [layout addPartitionWithSize:32ULL * 1024 * 1024
                                name:@"X"
                               error:NULL];
+        [layout setFormat:@"ufs" forPartition:layout.partitions[0]];
         DUPartitionPlan *plan = [DUPartitionPlan planFromLayout:layout
                                                       forDevice:disk
                                                      destructive:YES];
@@ -584,25 +600,17 @@ static void PhaseGuards(id<DUStorageBackend> backend)
                          progress:^(double f, NSString *m) { DumpProgress(f, m); }
                        completion:done];
     });
-    Check(error != nil && error.code == 3,
-          @"partition refused while a child is mounted",
-          error == nil ? @"it ran anyway" : ErrorText(error));
-
-    // Unmount, then everything must be allowed again.
-    guard = PartitionVolumeOf(backend, 0);
-    error = RunAsync(backend, @"unmount-guard", ^(void (^done)(NSError *)) {
-        [backend unmountObject:guard completion:done];
-    });
-    Check(error == nil, @"unmount volume", ErrorText(error));
+    Check(error == nil, @"partitioning a disk with a mounted child succeeds",
+          ErrorText(error));
+    Check(!ShellOK(@"mount | grep -q %@", mountPoint),
+          @"partitioning unmounted the child first", mountPoint);
     {
-        // Report the line, not just a verdict: the check can only be argued
-        // with if the reader can see what the mount table actually said.
-        NSString *listing =
-            DUParsingLikeTrim(Shell(@"mount | grep %@", mountPoint));
-        Check(listing.length == 0, @"mount table no longer lists it",
-              listing.length == 0
-                  ? mountPoint
-                  : [NSString stringWithFormat:@"still: %@", listing]);
+        // The plan carried a format and a name, so the new partition must
+        // come out formatted and labelled, not blank.
+        DUStorageObject *fresh = PartitionVolumeOf(backend, 0);
+        Check(fresh != nil && HasUFSTag(@"X", fresh.backendPath),
+              @"partitioning formatted the new partition with its label",
+              fresh.backendPath);
     }
 
     // Unmounting something that is not mounted must fail honestly.
