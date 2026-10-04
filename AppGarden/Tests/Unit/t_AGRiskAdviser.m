@@ -138,12 +138,10 @@ int main(void)
 
     PASS([[adviser disclaimerShort] length] > 0, "the short disclaimer is there");
     PASS([[adviser disclaimerDetailed] length] > 0, "the detailed disclaimer is there");
-    PASS([[[adviser disclaimerShort] lowercaseString] rangeOfString:@"vetted"].location
+    PASS([[[adviser disclaimerShort] lowercaseString] rangeOfString:@"not checked"].location
            != NSNotFound,
-         "the disclaimer says the catalog has not been vetted");
-    PASS([[[adviser disclaimerShort] lowercaseString] rangeOfString:@"risk"].location
-           != NSNotFound,
-         "the disclaimer says the user proceeds at their own risk");
+         "the disclaimer says the app has not been checked");
+    PASS([[adviser disclaimerShort] length] < 50, "the short disclaimer stays one short line");
     PASS([[[adviser disclaimerDetailed] lowercaseString] rangeOfString:@"description"].location
            != NSNotFound,
          "the detailed disclaimer says the warning came from the description");

@@ -127,9 +127,8 @@
  * keywords that matched, which can come from the name, description,
  * categories, authors or links. The risk sentences themselves live in
  * Resources/RiskCategories.plist, which is data rather than interface. */
-"Get \"%@\" Anyway?" = "Get \"%@\" Anyway?";
-"Matched: %@" = "Matched: %@";
-"Get Anyway" = "Get Anyway";
+"Do you want to download \"%@\"?" = "Do you want to download \"%@\"?";
+"Download" = "Download";
 
 /* --------------------------------------------------------- Controllers */
 

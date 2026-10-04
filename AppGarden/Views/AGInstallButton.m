@@ -405,13 +405,13 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 
   NSAlert *alert = [[NSAlert alloc] init];
   [alert setMessageText:[NSString stringWithFormat:
-                            NSLocalizedString(@"Get \"%@\" Anyway?", @""),
+                            NSLocalizedString(@"Do you want to download \"%@\"?", @""),
                             [app displayName]]];
   [alert setInformativeText:[self riskWarningForMatches:matches adviser:adviser]];
   /* Cancel is added first, which makes it the default button, so Return and
    * Escape both mean "do not download". */
   [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];
-  [alert addButtonWithTitle:NSLocalizedString(@"Get Anyway", @"")];
+  [alert addButtonWithTitle:NSLocalizedString(@"Download", @"")];
 
   /* A sheet on this button's window, so the warning looks like every other
    * alert on the desktop. The sheet does not block: its answer arrives in the
@@ -436,27 +436,22 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 }
 
 /*
- * The alert's informative text: every matching category with its two
- * sentences and the keywords that fired, then the catalog's own disclaimer.
- * The keywords are there on purpose - a category is a guess from a word in a
- * description, so the word is shown instead of only the verdict.
+ * The alert's informative text, kept to what fits a glance: one sentence per
+ * matching category, then that the app has not been checked. The longer
+ * explanation and the keywords that fired stay in the data and in RISKS.md;
+ * a person deciding whether to download needs the verdict, not the evidence.
  */
 - (NSString *)riskWarningForMatches:(NSArray<AGRiskMatch *> *)matches
                            adviser:(AGRiskAdviser *)adviser
 {
-  NSMutableString *text = [NSMutableString string];
+  NSMutableArray<NSString *> *sentences = [NSMutableArray array];
   AGRiskMatch *match;
   for (match in matches)
-    {
-      AGRiskCategory *category = [match category];
-      [text appendFormat:@"%@\n%@\n%@\n%@\n\n",
-        [category title], [category shortRisk], [category detailedRisk],
-        [NSString stringWithFormat:NSLocalizedString(@"Matched: %@", @""),
-          [[match keywords] componentsJoinedByString:@", "]]];
-    }
-  [text appendFormat:@"%@\n%@",
-    [adviser disclaimerShort], [adviser disclaimerDetailed]];
-  return text;
+    [sentences addObject:[[match category] shortRisk]];
+  /* One paragraph: the theme gives the informative text a box a few lines
+   * high and scrolls anything longer, and a blank line costs one of them. */
+  [sentences addObject:[adviser disclaimerShort]];
+  return [sentences componentsJoinedByString:@" "];
 }
 
 - (void)showMessage:(NSString *)message details:(NSString *)details

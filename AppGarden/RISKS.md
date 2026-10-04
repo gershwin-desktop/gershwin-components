@@ -6,7 +6,7 @@ application is safe - it can only tell you, before you download one, that the
 software sits in a category that is *known* to be abused, and why.
 
 That is what `Resources/RiskCategories.plist` is: a list of threat categories,
-the words that mean "this one", and the two sentences the panel shows. When
+the words that mean "this one", and the sentences the panel can show. When
 Get finds a word, the download waits and a panel names the category, its short
 and its detailed sentence, and the keywords that fired.
 

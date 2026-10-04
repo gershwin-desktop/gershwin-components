@@ -29,7 +29,8 @@ Applications folder and starts like any other application.
   first when a word of one of those categories appears in an item's title,
   description or other metadata. `RISKS.md` documents the categories, the
   keywords and how to edit them. Cancel is the default button, so Return and
-  Escape both mean "do not download".
+  Escape both mean "do not download". The panel is two lines: one sentence
+  per category and that the app has not been checked.
 - Downloaded lists what AppGarden downloaded. The detail page of a downloaded
   application has a Remove button that deletes the file after asking.
 - Applications the catalog only links to a web page for show Open Page.

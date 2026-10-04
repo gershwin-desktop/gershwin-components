@@ -24,7 +24,7 @@
 	<key>Version</key>
 	<integer>1</integer>
 	<key>DisclaimerShort</key>
-	<string>AppGarden has not vetted anything here. You download at your own risk.</string>
+	<string>AppGarden has not checked this app.</string>
 	<key>DisclaimerDetailed</key>
 	<string>The catalog is whatever publishers put in it. A warning only means a word in this description matched a category that is often misused, so it is a reason to look twice rather than a verdict on this program.</string>
 	<key>Categories</key>
