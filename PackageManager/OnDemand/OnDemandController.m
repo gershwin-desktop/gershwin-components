@@ -42,6 +42,7 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
 @implementation OnDemandController
 {
   BOOL _isTerminating;
+  BOOL _directInstallRunning;
   double _totalDownloadBytes;
   double _downloadedBytes;
   CGFloat _lastFetchPct;
@@ -288,10 +289,13 @@ static BOOL _confirmInstall(NSString *pkgName, NSString *filePath, NSString *fmt
 
   if ([fmt isEqualToString:@"deb"])
     {
-      /* Debian/Ubuntu: apt-get --simulate install ./<file> shows the local
-         package plus any dependencies that would be downloaded */
+      /* Debian/Ubuntu: apt-get --simulate install <file> shows the local
+         package plus any dependencies that would be downloaded.  filePath
+         is absolute; a "./"-prefix would turn it into ".//Local/..." which
+         is neither a package name nor a file apt can read, and the detail
+         lines silently never appeared. */
       NSString *out = _runCmd(@"/usr/bin/apt-get",
-        @[@"--simulate", @"install", [@"./" stringByAppendingPathComponent:filePath]]);
+        @[@"--simulate", @"install", filePath]);
       if (out)
         {
           NSString *summary = @"";
@@ -475,6 +479,12 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 - (void)performDirectInstall
 {
   if (!_directFilePath || !_directFormat) return;
+  if (_directInstallRunning)
+    {
+      NSLog(@"OnDemand: install already running - ignoring repeat direct install");
+      return;
+    }
+  _directInstallRunning = YES;
 
   /* Ask for confirmation first. Only show the progress window after the
      user confirms. Runs on a background thread; _confirmInstall shows the
@@ -548,6 +558,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_finishWithCancel
 {
+  _directInstallRunning = NO;
   [NSApp terminate:nil];
 }
 
@@ -562,16 +573,27 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
       NSString *candidate = [parts count] > 0 ? parts[0] : binName;
       _launchPath = [self _which:candidate];
       if (!_launchPath)
-        _launchPath = [self _which:[candidate stringByAppendingString:@"-stable"]];
+        _launchPath = [self _which:[candidate lowercaseString]];
+      if (!_launchPath)
+        _launchPath = [self _which:
+          [candidate stringByAppendingString:@"-stable"]];
       if (_launchPath)
         {
+          /* The direct-install branch hid this button (with its Return key
+             equivalent); reveal it as the default Launch button. */
+          [_installButton setHidden:NO];
           [_installButton setTitle:@"Launch"];
+          [_installButton setKeyEquivalent:@"\r"];
           [_installButton setAction:@selector(launchFoundApp)];
           [_installButton setTarget:self];
         }
       else
         {
+          /* Keep it hidden; the cancel button is already "Close" and a
+             second, hidden Close button would only be another key-
+             equivalent trap. Drop the stale "\r". */
           [_installButton setTitle:@"Close"];
+          [_installButton setKeyEquivalent:@""];
           [_installButton setAction:@selector(closeWindow:)];
           [_installButton setTarget:self];
         }
@@ -585,6 +607,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
   [_cancelButton setTitle:@"Close"];
   [_cancelButton setAction:@selector(closeWindow:)];
   [_cancelButton setTarget:self];
+  _directInstallRunning = NO;
 }
 
 - (IBAction)launchFoundApp
@@ -632,10 +655,14 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_finishWithError:(NSString *)errorDetail
 {
+  /* The Install button is hidden in direct-install mode; do not reveal a
+     second Close button and drop its key equivalent. */
+  [_installButton setKeyEquivalent:@""];
   [_installButton setTitle:@"Close"];
   [_installButton setAction:@selector(closeWindow:)];
   [_installButton setTarget:self];
   [_cancelButton setEnabled:NO];
+  _directInstallRunning = NO;
   [self showError:errorDetail];
 }
 
@@ -757,6 +784,12 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
       // Direct install: auto-start, hide confirmation UI, show progress
       [_descriptionField setHidden:YES];
       [_installButton setHidden:YES];
+      /* A hidden but enabled button keeps its "\r" key equivalent, and
+         NSWindow's key-equivalent traversal (unlike macOS) reaches hidden
+         buttons - pressing Return in this window fired installClicked again
+         on top of a running install.  Also drop the equivalent here; it is
+         restored when the button is revealed as Launch below. */
+      [_installButton setKeyEquivalent:@""];
       [self _showProgressBar];
     }
   else
@@ -815,6 +848,11 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_showProgressBar
 {
+  /* showWindow runs the direct-install branch again after the confirmation,
+     and a second installClicked re-enters it - recreate the bar once. */
+  if (_progressBar)
+    return;
+
   CGFloat cx = kSideMargin;
   CGFloat contentW = kWinWidth - 2 * kSideMargin;
   CGFloat progY  = kBottomMargin + kBtnHeight + kSpace16;
@@ -842,9 +880,18 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 {
   if (_isDirectInstall)
     {
+      /* One install at a time. This action fires from the hidden Install
+         button's "\r" key equivalent whenever the window is key, even while
+         an install is already running. */
+      if (_directInstallRunning)
+        {
+          NSLog(@"OnDemand: install already running - ignoring repeat install click");
+          return;
+        }
       NSLog(@"OnDemand -> installClicked: direct install");
       [_descriptionField setHidden:YES];
       [_installButton setHidden:YES];
+      [_installButton setKeyEquivalent:@""];
       [self _showProgressBar];
       [self performDirectInstall];
       return;
