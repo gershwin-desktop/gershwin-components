@@ -72,7 +72,8 @@ if which Menu >/dev/null 2>&1; then
   export GTK_PATH=/System/Library/Libraries/appmenu-do${GTK_PATH:+:$GTK_PATH}
   export GTK_MODULES=gtk-appmenu-do
   export QT_PLUGIN_PATH=/System/Library/Libraries/appmenu-do${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
-  export QT_QPA_PLATFORMTHEME=gad
+  # gad first: it only starts the menu module and leaves the theme to the next name
+  case ":$QT_QPA_PLATFORMTHEME:" in *:gad:*) ;; *) export QT_QPA_PLATFORMTHEME=gad${QT_QPA_PLATFORMTHEME:+:$QT_QPA_PLATFORMTHEME} ;; esac
   export GIO_EXTRA_MODULES=/System/Library/Libraries/appmenu-do/gio/modules${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}
 fi
 ```

@@ -65,6 +65,9 @@ static int (*p_widgetIsVisibleTo)(const void *, const void *);
 static void (*p_arrayDeallocate)(void *data, long size, long align);
 static void (*p_listDispose)(void *data);
 static const char *(*p_qVersion)(void);
+static void (*p_fromUtf8Qt5)(void *ret, const char *data, int size);
+static void (*p_fromUtf8Qt6)(void *ret, long size, const char *data);
+static const void *gWidgetMeta;
 static const void *gMainWindowMeta;
 static const void *gMenuBarMeta;
 
@@ -201,6 +204,33 @@ static void **qlist_take(void *qlist, int *count)
   return items;
 }
 
+/* ---- layout checks ----
+ * Everything above and below relies on the memory layout of QString, QList and the
+ * virtual table of QObject in the Qt that runs.  Those are the same inside Qt 5 and inside
+ * Qt 6 as far as it has been looked at (5.15, 6.8, 6.11); a version where they differ
+ * must not be read blindly, so both are tried on things whose value is known, and the
+ * module switches itself off if they do not come out. */
+
+static int gDisabled;
+
+/* A QString made here from known text has to read back the same. */
+static int qstring_layout_ok(void)
+{
+  static const char text[] = "g\xc3\xa4" "d \xf0\x9f\x98\x80";
+  unsigned char str[32] = { 0 };
+  char *back;
+  int ok;
+  if (gQt6)
+    p_fromUtf8Qt6(str, (long)strlen(text), text);
+  else
+    p_fromUtf8Qt5(str, text, (int)strlen(text));
+  back = qstring_to_utf8(str, 0);
+  qstring_free(str);
+  ok = back != NULL && strcmp(back, text) == 0;
+  free(back);
+  return ok;
+}
+
 /* ---- tree ---- */
 
 static int in_set(void **set, int n, void *p)
@@ -319,17 +349,32 @@ static int is_a(const void *object, const void *meta)
   return p_metaInherits(metaObject(object), meta);
 }
 
+static int gChecked;
+
 static void enumerate_windows(void (*found)(void *, void *, unsigned long, void *), void *ctx)
 {
   unsigned char list[32] = { 0 };
   int n = 0;
   void **windows;
+  if (gDisabled)
+    return;
   p_topLevelWidgets(list);
   windows = qlist_take(list, &n);
   for (int i = 0; i < n; i++)
     {
       const void *w = windows[i];
       const void *bar;
+      /* The first window we see proves the list layout and the virtual table. */
+      if (!gChecked)
+        {
+          gChecked = 1;
+          if (!is_a(w, gWidgetMeta))
+            {
+              fprintf(stderr, "qt-appmenu-do: this Qt does not have the memory layout the module reads, switched off\n");
+              gDisabled = 1;
+              break;
+            }
+        }
       TRACE("window %p visible %d main window %d\n", w, p_widgetIsVisibleTo(w, NULL), is_a(w, gMainWindowMeta));
       if (!p_widgetIsVisibleTo(w, NULL) || !is_a(w, gMainWindowMeta))
         continue;
@@ -465,16 +510,26 @@ void gad_qt_start(void)
   QSYM(p_arrayDeallocate, gQt6 ? "_ZN10QArrayData10deallocateEPS_xx" : "_ZN10QArrayData10deallocateEPS_mm");
   if (!gQt6)
     QSYM(p_listDispose, "_ZN9QListData7disposeEPNS_4DataE");
+  gWidgetMeta = sym("_ZN7QWidget16staticMetaObjectE");
+  *(void **)&p_fromUtf8Qt5 = gQt6 ? NULL : sym("_ZN7QString15fromUtf8_helperEPKci");
+  *(void **)&p_fromUtf8Qt6 = gQt6 ? sym("_ZN7QString8fromUtf8E14QByteArrayView") : NULL;
   gMainWindowMeta = sym("_ZN11QMainWindow16staticMetaObjectE");
   gMenuBarMeta = sym("_ZN8QMenuBar16staticMetaObjectE");
-  if (gMainWindowMeta == NULL || gMenuBarMeta == NULL)
-    missing = "QMainWindow/QMenuBar::staticMetaObject";
+  if (gMainWindowMeta == NULL || gMenuBarMeta == NULL || gWidgetMeta == NULL)
+    missing = "QWidget/QMainWindow/QMenuBar::staticMetaObject";
+  if (gQt6 ? p_fromUtf8Qt6 == NULL : p_fromUtf8Qt5 == NULL)
+    missing = "QString::fromUtf8";
   if (missing)
     {
       fprintf(stderr, "qt-appmenu-do: Qt %s lacks %s\n", version, missing);
       return;
     }
 
+  if (!qstring_layout_ok())
+    {
+      fprintf(stderr, "qt-appmenu-do: Qt %s does not have the QString layout the module reads, switched off\n", version);
+      return;
+    }
   gad_poller_start(&gQtToolkit, p_g_idle_add, p_g_timeout_add, TICK_MS);
   TRACE("running\n");
 }

@@ -16,8 +16,8 @@ GTK4_CORE := $(OBJDIR)/lib/libgad-gtk4-core.so
 GTK4_STUB := $(OBJDIR)/gio/libgad-gio.so
 QT_CORE := $(OBJDIR)/lib/libgad-qt-core.so
 # Qt 6 loads a platform plugin only for the exact minor version it runs, so one
-# small file per minor version (6.2 up to 6.16) points at the single QT_CORE.
-QT6_MINORS := 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+# small file per minor version (6.2 up to 6.40) points at the single QT_CORE.
+QT6_MINORS := $(shell i=2; while [ $$i -le 40 ]; do echo $$i; i=$$((i+1)); done)
 QT_STUBS := $(OBJDIR)/platformthemes/libgad-qt5.so \
 	$(foreach m,$(QT6_MINORS),$(OBJDIR)/platformthemes/libgad-qt6-$(m).so)
 CORE_OBJS := $(OBJDIR)/core/node.o $(OBJDIR)/core/mainsync.o $(OBJDIR)/core/bridge.o
