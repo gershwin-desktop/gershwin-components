@@ -16,7 +16,7 @@
 
 void g_io_module_load(void *module)
 {
-  unsigned (*major)(void);
+  unsigned (*gtkMajorVersion)(void);
   Dl_info where;
   char path[1024];
   char *slash;
@@ -24,8 +24,8 @@ void g_io_module_load(void *module)
   void (*start)(void);
   (void)module;
 
-  *(void **)&major = dlsym(RTLD_DEFAULT, "gtk_get_major_version");
-  if (major == NULL || major() != 4)
+  *(void **)&gtkMajorVersion = dlsym(RTLD_DEFAULT, "gtk_get_major_version");
+  if (gtkMajorVersion == NULL || gtkMajorVersion() != 4)
     return;
   if (!dladdr((void *)g_io_module_load, &where) || strlen(where.dli_fname) >= sizeof path - 40)
     return;
