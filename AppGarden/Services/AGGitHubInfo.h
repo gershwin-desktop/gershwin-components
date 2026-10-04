@@ -26,6 +26,8 @@ extern const NSInteger AGGitHubMinimumAccountAgeDays;
  * Foundation only. The fetch goes through curl on an NSOperationQueue, like
  * the catalog and the images, and every completion arrives on the main queue.
  */
+@class AGApp;
+
 @interface AGGitHubInfo : NSObject
 
 - (instancetype)initWithCacheDirectory:(NSString *)directory
@@ -41,6 +43,12 @@ extern const NSInteger AGGitHubMinimumAccountAgeDays;
 /* When the user or organization was created, from the disk when known. */
 - (void)accountCreationDateForOwner:(NSString *)owner
                          completion:(void (^)(NSDate *date, NSError *error))completion;
+
+/* The repository an app's AppImage comes from: its GitHub repository when the
+ * feed names one, else the repository a direct link on github.com points into
+ * (https://github.com/owner/repo/releases/download/...). Nil for an app that
+ * is not hosted on GitHub. */
++ (NSString *)repositoryForApp:(AGApp *)app;
 
 /* "owner" of "owner/repo", nil for anything else. */
 + (NSString *)ownerOfRepo:(NSString *)repo;

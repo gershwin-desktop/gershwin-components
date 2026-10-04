@@ -31,7 +31,8 @@ Applications folder and starts like any other application.
   keywords and how to edit them. Cancel is the default button, so Return and
   Escape both mean "do not download". The panel is two lines: one sentence
   per category and that the app has not been checked.
-- The detail page of an app that comes from GitHub shows the star count of its
+- The detail page of an app that comes from GitHub, by its feed entry or by a
+  direct link on github.com, shows the star count of its
   repository, read from the repository's web page (the API allows only 60
   anonymous requests an hour). Before a download from GitHub, Get checks how
   old the publisher's account is, with one API request per publisher whose

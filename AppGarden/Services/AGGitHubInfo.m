@@ -6,6 +6,7 @@
 
 #import "AGGitHubInfo.h"
 #import "AGFetch.h"
+#import "AGApp.h"
 
 NSString *const AGGitHubInfoErrorDomain = @"AGGitHubInfoErrorDomain";
 const NSInteger AGGitHubMinimumAccountAgeDays = 30;
@@ -95,6 +96,24 @@ static BOOL AGIsGitHubName(NSString *name)
       || !AGIsGitHubName([parts objectAtIndex:1]))
     return nil;
   return [parts objectAtIndex:0];
+}
+
++ (NSString *)repositoryForApp:(AGApp *)app
+{
+  if ([app githubRepo] != nil)
+    return [app githubRepo];
+  NSURL *url = [app downloadPageURL];
+  NSString *host = [[url host] lowercaseString];
+  if (![host isEqualToString:@"github.com"] && ![host isEqualToString:@"www.github.com"])
+    return nil;
+  NSMutableArray<NSString *> *parts = [NSMutableArray array];
+  for (NSString *part in [[url path] componentsSeparatedByString:@"/"])
+    if ([part length] > 0)
+      [parts addObject:part];
+  if ([parts count] < 2)
+    return nil;
+  NSString *repo = [NSString stringWithFormat:@"%@/%@", [parts objectAtIndex:0], [parts objectAtIndex:1]];
+  return ([self ownerOfRepo:repo] != nil) ? repo : nil;
 }
 
 + (NSNumber *)starCountFromRepositoryHTML:(NSString *)html

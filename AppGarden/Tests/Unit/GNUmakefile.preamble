@@ -91,4 +91,4 @@ t_AGRiskAdviser_OBJC_FILES += ../../Models/AGRiskAdviser.m \
 
 ../../Services/AGGitHubInfo.m_FILE_FLAGS += $(AG_ARCFLAGS)
 
-t_AGGitHubInfo_OBJC_FILES += ../../Services/AGGitHubInfo.m
+t_AGGitHubInfo_OBJC_FILES += ../../Services/AGGitHubInfo.m $(AG_APP_SOURCES)

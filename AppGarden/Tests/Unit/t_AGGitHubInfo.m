@@ -12,6 +12,7 @@
 #import <Foundation/Foundation.h>
 #import "Testing.h"
 #import "AGGitHubInfo.h"
+#import "AGApp.h"
 
 static NSNumber *sStars = nil;
 static NSDate *sDate = nil;
@@ -127,6 +128,32 @@ int main(void)
              @"The publisher's GitHub account was created today.", "under a day is today");
   PASS([[AGGitHubInfo warningForAccountCreatedOn: nil now: now] rangeOfString: @"could not check"].location != NSNotFound,
        "an unknown date is a warning that says so");
+
+  /* --- the repository an app comes from --- */
+  {
+    NSDictionary *named = @{ @"name": @"A", @"links": @[
+        @{ @"type": @"GitHub", @"url": @"own/named" },
+        @{ @"type": @"Download", @"url": @"https://github.com/other/place/releases/download/v1/A.AppImage" } ] };
+    NSDictionary *direct = @{ @"name": @"B", @"links": @[
+        @{ @"type": @"Download", @"url": @"https://github.com/own/direct/releases/download/v1/B-x86_64.AppImage" } ] };
+    NSDictionary *www = @{ @"name": @"C", @"links": @[
+        @{ @"type": @"Download", @"url": @"https://WWW.GitHub.com/own/www/releases/download/v1/C.AppImage" } ] };
+    NSDictionary *elsewhere = @{ @"name": @"D", @"links": @[
+        @{ @"type": @"Download", @"url": @"https://example.org/own/direct/D.AppImage" } ] };
+    NSDictionary *shortPath = @{ @"name": @"E", @"links": @[
+        @{ @"type": @"Download", @"url": @"https://github.com/own" } ] };
+    PASS_EQUAL([AGGitHubInfo repositoryForApp: [[AGApp alloc] initWithFeedItem: named]], @"own/named",
+               "the feed's repository wins");
+    PASS_EQUAL([AGGitHubInfo repositoryForApp: [[AGApp alloc] initWithFeedItem: direct]], @"own/direct",
+               "a direct link on github.com names its repository");
+    PASS_EQUAL([AGGitHubInfo repositoryForApp: [[AGApp alloc] initWithFeedItem: www]], @"own/www",
+               "www.github.com and capital letters in the host are the same host");
+    PASS([AGGitHubInfo repositoryForApp: [[AGApp alloc] initWithFeedItem: elsewhere]] == nil,
+         "a link on another host is not GitHub");
+    PASS([AGGitHubInfo repositoryForApp: [[AGApp alloc] initWithFeedItem: shortPath]] == nil,
+         "a link without a repository is not a repository");
+    PASS([AGGitHubInfo repositoryForApp: nil] == nil, "no app is no repository");
+  }
 
   /* --- fetching and caching --- */
   NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:

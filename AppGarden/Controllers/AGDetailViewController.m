@@ -451,7 +451,7 @@ static const CGFloat kAGDetailTightGap = 4.0;
  * way, and a failure says so instead of leaving the line looking complete. */
 - (void)requestStars
 {
-  NSString *repo = [_app githubRepo];
+  NSString *repo = [AGGitHubInfo repositoryForApp:_app];
   if (repo == nil)
     return;
   __weak AGDetailViewController *weakSelf = self;

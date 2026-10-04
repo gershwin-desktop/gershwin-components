@@ -405,10 +405,12 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
   for (match in [adviser matchesForApp:app])
     [sentences addObject:[[match category] shortRisk]];
 
-  id payload = nil;
+  /* A release lookup and a direct link on github.com both fetch from the
+   * owner's repository, so both get the same check. */
   NSString *owner = nil;
-  if ([AGDownloadResolver kindForApp:app payload:&payload] == AGDownloadKindGitHubLatestRelease)
-    owner = [AGGitHubInfo ownerOfRepo:[app githubRepo]];
+  AGDownloadKind kind = [AGDownloadResolver kindForApp:app payload:NULL];
+  if (kind == AGDownloadKindGitHubLatestRelease || kind == AGDownloadKindDirectURL)
+    owner = [AGGitHubInfo ownerOfRepo:[AGGitHubInfo repositoryForApp:app]];
 
   if (owner == nil)
     {
