@@ -131,11 +131,6 @@ int main(void)
           }
       }
 
-    PASS([[adviser disclaimerShort] length] > 0, "the short disclaimer is there");
-    PASS([[[adviser disclaimerShort] lowercaseString] rangeOfString:@"not checked"].location
-           != NSNotFound,
-         "the disclaimer says the app has not been checked");
-    PASS([[adviser disclaimerShort] length] < 50, "the short disclaimer stays one short line");
   }
 
   /* --- the two categories the catalog is full of --- */

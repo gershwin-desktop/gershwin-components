@@ -128,7 +128,7 @@
  * categories, authors or links. The risk sentences themselves live in
  * Resources/RiskCategories.plist, which is data rather than interface. */
 "Do you want to download \"%@\"?" = "Do you want to download \"%@\"?";
-"Download" = "Download";
+"Download at Your Own Risk" = "Download at Your Own Risk";
 
 /* GitHub stars (AGGitHubInfo, AGDetailViewController). */
 "%@ stars on GitHub" = "%@ stars on GitHub";

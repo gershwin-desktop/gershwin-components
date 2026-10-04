@@ -29,8 +29,8 @@ Applications folder and starts like any other application.
   first when a word of one of those categories appears in an item's title,
   description or other metadata. `RISKS.md` documents the categories, the
   keywords and how to edit them. Cancel is the default button, so Return and
-  Escape both mean "do not download". The panel is two lines: one sentence
-  per category and that the app has not been checked.
+  Escape both mean "do not download". The panel gives one sentence per
+  category, and the button reads Download at Your Own Risk.
 - The detail page of an app that comes from GitHub, by its feed entry or by a
   direct link on github.com, shows the star count of its
   repository, read from the repository's web page (the API allows only 60

@@ -8,7 +8,7 @@ software sits in a category that is *known* to be abused, and why.
 That is what `Resources/RiskCategories.plist` is: a list of threat categories,
 the words that mean "this one", and the sentences the panel can show. When
 Get finds a word, the download waits and a panel asks whether to continue,
-with one sentence per category and that the app has not been checked.
+with one sentence per category; the button reads Download at Your Own Risk.
 
 ## What is searched
 

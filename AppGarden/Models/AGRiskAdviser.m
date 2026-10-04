@@ -14,14 +14,6 @@
 
 static NSString *const AGRiskCategoriesResource = @"RiskCategories";
 
-static NSString *AGRiskStringValue(id value)
-{
-  if (![value isKindOfClass:[NSString class]])
-    return @"";
-  return [value stringByTrimmingCharactersInSet:
-            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-}
-
 @implementation AGRiskAdviser
 
 + (instancetype)sharedAdviser
@@ -60,12 +52,10 @@ static NSString *AGRiskStringValue(id value)
 - (void)readPropertyList:(id)propertyList
 {
   _categories = [NSArray array];
-  _disclaimerShort = @"";
   if (![propertyList isKindOfClass:[NSDictionary class]])
     return;
 
   NSDictionary *root = propertyList;
-  _disclaimerShort = AGRiskStringValue([root objectForKey:@"DisclaimerShort"]);
 
   id entries = [root objectForKey:@"Categories"];
   if (![entries isKindOfClass:[NSArray class]])

@@ -416,14 +416,13 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
                             NSLocalizedString(@"Do you want to download \"%@\"?", @""),
                             [app displayName]]];
   /* One paragraph: the theme gives the informative text a box a few lines
-   * high and scrolls anything longer, and a blank line costs one of them. */
-  NSMutableArray<NSString *> *lines = [sentences mutableCopy];
-  [lines addObject:[[AGRiskAdviser sharedAdviser] disclaimerShort]];
-  [alert setInformativeText:[lines componentsJoinedByString:@" "]];
+   * high and scrolls anything longer, and a blank line costs one of them. The
+   * button's own wording, at your own risk, is the disclaimer. */
+  [alert setInformativeText:[sentences componentsJoinedByString:@" "]];
   /* Cancel is added first, which makes it the default button, so Return and
    * Escape both mean "do not download". */
   [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];
-  [alert addButtonWithTitle:NSLocalizedString(@"Download", @"")];
+  [alert addButtonWithTitle:NSLocalizedString(@"Download at Your Own Risk", @"")];
 
   /* A sheet on this button's window, so the warning looks like every other
    * alert on the desktop. The sheet does not block: its answer arrives in the

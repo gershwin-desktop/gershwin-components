@@ -16,9 +16,7 @@
  *
  * Nothing in the catalog is vetted, so this is a warning, never a block: it
  * looks for the words of a threat category in what the publisher wrote and
- * hands the Get button something to say about it. The disclaimer the panel
- * shows is part of this file because it is the same statement about the whole
- * catalog, not about one category.
+ * hands the Get button something to say about it.
  *
  * Foundation only, so it can be tested headless.
  */
@@ -35,7 +33,6 @@
 + (instancetype)adviserWithPropertyList:(id)propertyList;
 
 @property (nonatomic, copy, readonly) NSArray<AGRiskCategory *> *categories;
-@property (nonatomic, copy, readonly) NSString *disclaimerShort;
 
 /*
  * Every category whose keywords appear in the item, in the order the file

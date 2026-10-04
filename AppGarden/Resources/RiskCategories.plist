@@ -8,7 +8,7 @@
     catalog item (name, categories, repository, link URLs); a word matches
     only as a whole word, so "ai" finds "AI workspace" and "Aarynwood" but
     never "available". Every match makes the Get button show an alert that
-    carries ShortRisk and DisclaimerShort.
+    carries its ShortRisk sentence.
 
     The sentences are deliberately short and hedged. A keyword is a guess from
     a word someone typed, not a finding, and the alert says so: the panel has
@@ -23,8 +23,6 @@
 <dict>
 	<key>Version</key>
 	<integer>1</integer>
-	<key>DisclaimerShort</key>
-	<string>AppGarden has not checked this app.</string>
 	<key>Categories</key>
 	<array>
 		<dict>
@@ -33,7 +31,7 @@
 			<key>Title</key>
 			<string>AI, Agents and Language Models</string>
 			<key>ShortRisk</key>
-			<string>Might act on your computer, and on the internet, for you.</string>
+			<string>AI agents can read your files, run commands and use your accounts on your behalf, and a careless one can cause real damage.</string>
 			<key>Keywords</key>
 			<array>
 				<string>ai</string>
@@ -72,7 +70,7 @@
 			<key>Title</key>
 			<string>Wallets, Coins and Crypto</string>
 			<key>ShortRisk</key>
-			<string>A common place for scams.</string>
+			<string>Crypto wallets are a common target for fraud. A fake one can empty your account, and transfers can't be undone.</string>
 			<key>Keywords</key>
 			<array>
 				<string>wallet</string>
@@ -102,7 +100,7 @@
 			<key>Title</key>
 			<string>Remote Access, Tunnels and Sharing</string>
 			<key>ShortRisk</key>
-			<string>Could give someone else a way in.</string>
+			<string>Remote access software can let someone else see and control this computer, so a fake one gives a stranger a way in.</string>
 			<key>Keywords</key>
 			<array>
 				<string>remote access</string>
@@ -133,7 +131,7 @@
 			<key>Title</key>
 			<string>Passwords, Keys and Tokens</string>
 			<key>ShortRisk</key>
-			<string>Handles your passwords, keys or tokens.</string>
+			<string>Apps that handle passwords, keys or tokens can pass them on. A fake one can take over your accounts.</string>
 			<key>Keywords</key>
 			<array>
 				<string>password manager</string>
@@ -161,7 +159,7 @@
 			<key>Title</key>
 			<string>Screen, Camera and Microphone Recording</string>
 			<key>ShortRisk</key>
-			<string>Could record what happens on your screen.</string>
+			<string>Recording apps can capture your screen, camera or microphone, and a fake one can do it without you noticing.</string>
 			<key>Keywords</key>
 			<array>
 				<string>spyware</string>
@@ -183,7 +181,7 @@
 			<key>Title</key>
 			<string>Security and Cleanup Tools</string>
 			<key>ShortRisk</key>
-			<string>Some of them sell you problems that are not there.</string>
+			<string>Some cleaning and security tools invent problems to sell you a fix, or leave something harmful behind.</string>
 			<key>Keywords</key>
 			<array>
 				<string>antivirus</string>
@@ -215,7 +213,7 @@
 			<key>Title</key>
 			<string>Cracks, Activators and Repacks</string>
 			<key>ShortRisk</key>
-			<string>Cannot show you what was changed.</string>
+			<string>Cracked or repacked software can contain hidden changes, and there is no way to see what was altered.</string>
 			<key>Keywords</key>
 			<array>
 				<string>crack</string>
@@ -245,7 +243,7 @@
 			<key>Title</key>
 			<string>Changes to the System</string>
 			<key>ShortRisk</key>
-			<string>Asks for rights that reach the whole system.</string>
+			<string>Apps that change the system need rights that reach the whole computer, so a malicious one can do serious harm.</string>
 			<key>Keywords</key>
 			<array>
 				<string>requires root</string>
@@ -270,7 +268,7 @@
 			<key>Title</key>
 			<string>Bulk Messages, Bots and Scrapers</string>
 			<key>ShortRisk</key>
-			<string>Acts in your name, or collects other people's data.</string>
+			<string>Bots and scrapers can send messages or collect other people's data in your name, which can get you banned or worse.</string>
 			<key>Keywords</key>
 			<array>
 				<string>scraper</string>
@@ -294,7 +292,7 @@
 			<key>Title</key>
 			<string>Proxies and VPNs</string>
 			<key>ShortRisk</key>
-			<string>Puts someone else in the middle of your traffic.</string>
+			<string>A VPN or proxy sends your internet traffic through someone else's server, which might be able to read it.</string>
 			<key>Keywords</key>
 			<array>
 				<string>vpn</string>
