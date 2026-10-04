@@ -460,7 +460,7 @@ Rules, in order:
     - (CGFloat)heightForCount:(NSUInteger)n width:(CGFloat)width;
     - (NSInteger)indexAtPoint:(NSPoint)p width:(CGFloat)width count:(NSUInteger)n; // -1 if in a gap
 
-Cards are 200 x 232 points, minimum gap 20, side inset 24 (that is
+Cards are 160 x 176 points, minimum gap 20, side inset 24 (that is
 `METRICS_CONTENT_SIDE_MARGIN`). The extra horizontal space is distributed
 into the gaps, not added as a right margin, so the grid is centered.
 
@@ -916,7 +916,7 @@ the install button's progress state.
 
 ### Window
 
-- Title "AppGarden". Content size at first launch 920 x 680, minimum
+- Title "AppGarden". Content size at first launch 780 x 680, minimum
   760 x 480. Frame autosave name `AGMainWindow`. Style: titled, closable,
   miniaturizable, resizable. Closing the window quits the app
   (`applicationShouldTerminateAfterLastWindowClosed:` returns YES); the app is
@@ -1008,10 +1008,10 @@ user sees the scope of the search.
   layout pass compute the visible index range, bind the pooled views to those
   indices. With 1551 items and recycling, memory stays small and the initial
   layout is instant. Non-visible cards do not exist.
-- Card (200 x 232): white rounded rectangle (radius 10) with a 1-point
+- Card (160 x 176): white rounded rectangle (radius 10) with a 1-point
   border `[NSColor colorWithCalibratedWhite:0.0 alpha:0.08]`, no shadow
   (shadows cost redraw time in this stack and look heavy). Inside, top to
-  bottom, centered horizontally: 16 points padding, icon 96 x 96 (the
+  bottom, centered horizontally: 16 points padding, icon 48 x 48 (the
   `NSImage` drawn with `NSCompositeSourceOver`, `respectFlipped` YES,
   interpolation high; the placeholder when nil), 12 points, name 13 pt bold
   centered, single line, truncating tail, 4 points, summary 11 pt gray

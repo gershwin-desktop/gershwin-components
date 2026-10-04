@@ -7,10 +7,10 @@
 #import "AGInstallButton.h"
 #import "AGPlaceholderIcon.h"
 
-static const CGFloat kAGCardWidth = 200.0;
-static const CGFloat kAGCardHeight = 232.0;
+static const CGFloat kAGCardWidth = 160.0;
+static const CGFloat kAGCardHeight = 176.0;
 static const CGFloat kAGCardCornerRadius = 10.0;
-static const CGFloat kAGIconSide = 96.0;
+static const CGFloat kAGIconSide = 48.0;
 /* Card title to summary; AppearanceMetrics has no 4-point step and the
  * design calls for exactly this, so the number lives here once. */
 static const CGFloat kAGNameSummaryGap = 4.0;
