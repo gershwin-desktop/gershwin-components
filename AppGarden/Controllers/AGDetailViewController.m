@@ -283,9 +283,16 @@ static const CGFloat kAGDetailTightGap = 4.0;
   [_removeButton setAction:@selector(removeClicked:)];
   [_contentView addSubview:_removeButton];
 
-  _catalogPageButton = [self linkWithTitle:NSLocalizedString(@"View on appimage.github.io", @"")
-                                       url:[app catalogPageURL]
-                                      font:METRICS_FONT_SYSTEM_REGULAR_13];
+  /* An app on GitHub links to its own repository, which is where its source,
+   * releases and issues are; only the others fall back to the catalog page. */
+  NSString *repo = [AGGitHubInfo repositoryForApp:app];
+  _catalogPageButton = (repo != nil)
+      ? [self linkWithTitle:NSLocalizedString(@"View on GitHub", @"")
+                        url:[NSURL URLWithString:[@"https://github.com/" stringByAppendingString:repo]]
+                       font:METRICS_FONT_SYSTEM_REGULAR_13]
+      : [self linkWithTitle:NSLocalizedString(@"View on appimage.github.io", @"")
+                        url:[app catalogPageURL]
+                       font:METRICS_FONT_SYSTEM_REGULAR_13];
 
   if ([app screenshotURL] != nil)
     {

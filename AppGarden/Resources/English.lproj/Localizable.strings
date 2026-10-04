@@ -158,6 +158,7 @@
 
 /* Detail page (AGDetailViewController). %@ is the application's name. */
 "View on appimage.github.io" = "View on appimage.github.io";
+"View on GitHub" = "View on GitHub";
 "Description" = "Description";
 "The publisher did not provide a description." = "The publisher did not provide a description.";
 "Information" = "Information";
