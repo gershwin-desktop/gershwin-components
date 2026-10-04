@@ -312,6 +312,8 @@ static NSString * const kDefaultsConfirmDestructive =
              radios.count == 0)) {
             radio.state = NSOnState;
         }
+        [radio setTarget:self];
+        [radio setAction:@selector(securityRadioChosen:)];
         [content addSubview:radio];
         [radios addObject:radio];
         y -= METRICS_RADIO_BUTTON_LINE_SPACING;
@@ -343,6 +345,16 @@ static NSString * const kDefaultsConfirmDestructive =
     }
     [panel orderOut:nil];
     _pendingSecurityRadios = nil;
+}
+
+// Radio buttons only exclude each other inside one NSMatrix; these sit
+// loose in a view, so without this both stayed on and the first one always
+// won, which made the zero overwrite impossible to choose.
+- (void)securityRadioChosen:(id)sender
+{
+    for (NSButton *radio in _pendingSecurityRadios) {
+        radio.state = radio == sender ? NSOnState : NSOffState;
+    }
 }
 
 - (void)securityDialogDone:(id)sender
