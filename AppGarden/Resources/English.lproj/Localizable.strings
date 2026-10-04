@@ -134,6 +134,8 @@
 "%@ stars on GitHub" = "%@ stars on GitHub";
 "1 star on GitHub" = "1 star on GitHub";
 "GitHub stars unavailable" = "GitHub stars unavailable";
+"Checking..." = "Checking...";
+"The repository page has no description." = "The repository page has no description.";
 "Could not read the repository page: %@" = "Could not read the repository page: %@";
 "The repository page has no star count." = "The repository page has no star count.";
 "This is not a GitHub repository name." = "This is not a GitHub repository name.";

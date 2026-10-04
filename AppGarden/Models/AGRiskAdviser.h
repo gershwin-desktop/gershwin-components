@@ -42,6 +42,13 @@
 - (NSArray<AGRiskMatch *> *)matchesForApp:(AGApp *)app;
 
 /*
+ * The same, also reading additionalTexts: text from somewhere other than the
+ * catalog entry, such as the README of the repository the app is hosted in.
+ */
+- (NSArray<AGRiskMatch *> *)matchesForApp:(AGApp *)app
+                          additionalTexts:(NSArray<NSString *> *)additionalTexts;
+
+/*
  * The metadata searched, in the order it is searched: the item's name and
  * display name, its summary and full description, its categories (both
  * spellings), its authors, its repository and the URLs it links to. Exposed

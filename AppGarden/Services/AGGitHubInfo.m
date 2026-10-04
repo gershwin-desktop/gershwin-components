@@ -10,9 +10,11 @@
 
 NSString *const AGGitHubInfoErrorDomain = @"AGGitHubInfoErrorDomain";
 
-static const NSTimeInterval kAGStarsMaxAge = 6.0 * 3600.0;
+const NSUInteger AGGitHubPageTextLimit = 12000;
+
+static const NSTimeInterval kAGPageMaxAge = 6.0 * 3600.0;
 static NSString *const kAGCacheFileName = @"github.plist";
-static NSString *const kAGStarsKey = @"Stars";
+static NSString *const kAGPagesKey = @"Pages";
 
 typedef NS_ENUM(NSInteger, AGGitHubInfoErrorCode) {
   AGGitHubInfoErrorBadName = 1,
@@ -45,6 +47,7 @@ static BOOL AGIsGitHubName(NSString *name)
   NSOperationQueue *_queue;
   NSLock *_lock;
   NSMutableDictionary *_cache;
+  NSMutableDictionary<NSString *, NSMutableArray *> *_pending; /* repo -> completions */
 }
 
 - (instancetype)initWithCacheDirectory:(NSString *)directory
@@ -58,6 +61,7 @@ static BOOL AGIsGitHubName(NSString *name)
       _queue = [[NSOperationQueue alloc] init];
       [_queue setMaxConcurrentOperationCount:2];
       _lock = [[NSLock alloc] init];
+      _pending = [NSMutableDictionary dictionary];
       [[NSFileManager defaultManager] createDirectoryAtPath:_cacheDirectory
                                 withIntermediateDirectories:YES
                                                  attributes:nil
@@ -66,8 +70,8 @@ static BOOL AGIsGitHubName(NSString *name)
           [_cacheDirectory stringByAppendingPathComponent:kAGCacheFileName]];
       _cache = [NSMutableDictionary dictionary];
       [_cache setObject:[NSMutableDictionary dictionaryWithDictionary:
-                            [stored objectForKey:kAGStarsKey]]
-                 forKey:kAGStarsKey];
+                            [stored objectForKey:kAGPagesKey]]
+                 forKey:kAGPagesKey];
     }
   return self;
 }
@@ -105,6 +109,79 @@ static BOOL AGIsGitHubName(NSString *name)
     return nil;
   NSString *repo = [NSString stringWithFormat:@"%@/%@", [parts objectAtIndex:0], [parts objectAtIndex:1]];
   return ([self ownerOfRepo:repo] != nil) ? repo : nil;
+}
+
++ (NSString *)pageTextFromRepositoryHTML:(NSString *)html
+{
+  if ([html length] == 0)
+    return nil;
+  NSMutableArray<NSString *> *parts = [NSMutableArray array];
+
+  NSRange meta = [html rangeOfString:@"<meta name=\"description\" content=\""];
+  if (meta.location != NSNotFound)
+    {
+      NSString *rest = [html substringFromIndex:NSMaxRange(meta)];
+      NSRange quote = [rest rangeOfString:@"\""];
+      if (quote.location != NSNotFound)
+        [parts addObject:[rest substringToIndex:quote.location]];
+    }
+
+  /* The README is the <article> whose own tag says markdown-body: the words
+   * markdown-body also appear in the page's scripts and styles, so the first
+   * mention is not necessarily the article. */
+  NSUInteger from = 0;
+  while (from < [html length])
+    {
+      NSRange open = [html rangeOfString:@"<article" options:0
+                                   range:NSMakeRange(from, [html length] - from)];
+      if (open.location == NSNotFound)
+        break;
+      NSRange tagEnd = [html rangeOfString:@">" options:0
+                                     range:NSMakeRange(open.location, [html length] - open.location)];
+      if (tagEnd.location == NSNotFound)
+        break;
+      NSString *tag = [html substringWithRange:
+          NSMakeRange(open.location, tagEnd.location - open.location)];
+      from = NSMaxRange(tagEnd);
+      if ([tag rangeOfString:@"markdown-body"].location == NSNotFound)
+        continue;
+      NSRange close = [html rangeOfString:@"</article>" options:0
+                                    range:NSMakeRange(from, [html length] - from)];
+      if (close.location != NSNotFound)
+        [parts addObject:[html substringWithRange:
+            NSMakeRange(from, close.location - from)]];
+      break;
+    }
+
+  NSString *joined = [parts componentsJoinedByString:@" "];
+  static NSRegularExpression *blocks = nil, *tags = nil, *spaces = nil;
+  if (blocks == nil)
+    {
+      blocks = [NSRegularExpression regularExpressionWithPattern:
+          @"<(script|style)[^>]*>.*?</\\1>" options:NSRegularExpressionDotMatchesLineSeparators
+                                                  error:NULL];
+      tags = [NSRegularExpression regularExpressionWithPattern:@"<[^>]*>" options:0 error:NULL];
+      spaces = [NSRegularExpression regularExpressionWithPattern:@"\\s+" options:0 error:NULL];
+    }
+  NSString *text = [blocks stringByReplacingMatchesInString:joined options:0
+                                                      range:NSMakeRange(0, [joined length])
+                                               withTemplate:@" "];
+  text = [tags stringByReplacingMatchesInString:text options:0
+                                          range:NSMakeRange(0, [text length])
+                                   withTemplate:@" "];
+  NSDictionary *entities = @{ @"&amp;" : @"&", @"&lt;" : @"<", @"&gt;" : @">",
+                              @"&quot;" : @"\"", @"&#39;" : @"'", @"&nbsp;" : @" " };
+  for (NSString *entity in entities)
+    text = [text stringByReplacingOccurrencesOfString:entity
+                                           withString:[entities objectForKey:entity]];
+  text = [spaces stringByReplacingMatchesInString:text options:0
+                                            range:NSMakeRange(0, [text length])
+                                     withTemplate:@" "];
+  text = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if ([text length] == 0)
+    return nil;
+  return ([text length] > AGGitHubPageTextLimit)
+      ? [text substringToIndex:AGGitHubPageTextLimit] : text;
 }
 
 + (NSNumber *)starCountFromRepositoryHTML:(NSString *)html
@@ -156,13 +233,39 @@ static BOOL AGIsGitHubName(NSString *name)
   [[NSOperationQueue mainQueue] addOperationWithBlock:block];
 }
 
-#pragma mark - Stars
+#pragma mark - The repository page
 
 - (void)starsForRepo:(NSString *)repo
           completion:(void (^)(NSNumber *stars, NSError *error))completion
 {
-  NSString *owner = [AGGitHubInfo ownerOfRepo:repo];
-  if (owner == nil)
+  [self pageForRepo:repo completion:^(NSDictionary *page, NSError *error) {
+    NSNumber *stars = [page objectForKey:@"Count"];
+    if (stars == nil && error == nil)
+      error = AGGitHubError(AGGitHubInfoErrorUnexpectedAnswer,
+          NSLocalizedString(@"The repository page has no star count.", @""));
+    completion(stars, stars != nil ? nil : error);
+  }];
+}
+
+- (void)pageTextForRepo:(NSString *)repo
+             completion:(void (^)(NSString *text, NSError *error))completion
+{
+  [self pageForRepo:repo completion:^(NSDictionary *page, NSError *error) {
+    NSString *text = [page objectForKey:@"Text"];
+    if (text == nil && error == nil)
+      error = AGGitHubError(AGGitHubInfoErrorUnexpectedAnswer,
+          NSLocalizedString(@"The repository page has no description.", @""));
+    completion(text, text != nil ? nil : error);
+  }];
+}
+
+/* One fetch serves the stars and the text, from the cache while it is under
+ * six hours old; two askers for the same page at once share the request. The
+ * completion arrives on the main queue. */
+- (void)pageForRepo:(NSString *)repo
+         completion:(void (^)(NSDictionary *page, NSError *error))completion
+{
+  if ([AGGitHubInfo ownerOfRepo:repo] == nil)
     {
       NSError *error = AGGitHubError(AGGitHubInfoErrorBadName,
           NSLocalizedString(@"This is not a GitHub repository name.", @""));
@@ -171,19 +274,27 @@ static BOOL AGIsGitHubName(NSString *name)
     }
 
   [_lock lock];
-  NSDictionary *entry = [[_cache objectForKey:kAGStarsKey] objectForKey:repo];
-  [_lock unlock];
+  NSDictionary *entry = [[_cache objectForKey:kAGPagesKey] objectForKey:repo];
   NSDate *when = [entry objectForKey:@"Date"];
-  NSNumber *known = [entry objectForKey:@"Count"];
-  if (known != nil && when != nil && -[when timeIntervalSinceNow] < kAGStarsMaxAge)
+  if (entry != nil && when != nil && -[when timeIntervalSinceNow] < kAGPageMaxAge)
     {
-      [self deliver:^{ completion(known, nil); }];
+      [_lock unlock];
+      [self deliver:^{ completion(entry, nil); }];
       return;
     }
+  NSMutableArray *waiting = [_pending objectForKey:repo];
+  if (waiting != nil)
+    {
+      [waiting addObject:[completion copy]];
+      [_lock unlock];
+      return;
+    }
+  [_pending setObject:[NSMutableArray arrayWithObject:[completion copy]] forKey:repo];
+  [_lock unlock];
 
   [_queue addOperationWithBlock:^{
     NSString *tmp = [_cacheDirectory stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"stars-%@.tmp", [[NSUUID UUID] UUIDString]]];
+        [NSString stringWithFormat:@"page-%@.tmp", [[NSUUID UUID] UUIDString]]];
     NSString *url = [NSString stringWithFormat:@"%@/%@", _webBaseURL, repo];
     NSString *reason = nil;
     int status = AGRunCurl(@[ @"-fsSL", @"--max-time", @"30", @"-o", tmp, url ], &reason);
@@ -193,15 +304,16 @@ static BOOL AGIsGitHubName(NSString *name)
     [[NSFileManager defaultManager] removeItemAtPath:tmp error:NULL];
 
     NSNumber *stars = [AGGitHubInfo starCountFromRepositoryHTML:html];
+    NSString *text = [AGGitHubInfo pageTextFromRepositoryHTML:html];
+    NSMutableDictionary *page = nil;
     NSError *error = nil;
-    if (stars != nil)
+    if (stars != nil || text != nil)
       {
-        [_lock lock];
-        [[_cache objectForKey:kAGStarsKey] setObject:@{ @"Count" : stars,
-                                                        @"Date" : [NSDate date] }
-                                              forKey:repo];
-        [self saveCache];
-        [_lock unlock];
+        page = [NSMutableDictionary dictionaryWithObject:[NSDate date] forKey:@"Date"];
+        if (stars != nil)
+          [page setObject:stars forKey:@"Count"];
+        if (text != nil)
+          [page setObject:text forKey:@"Text"];
       }
     else if (status != 0)
       error = AGGitHubError(AGGitHubInfoErrorDownload,
@@ -211,7 +323,20 @@ static BOOL AGIsGitHubName(NSString *name)
     else
       error = AGGitHubError(AGGitHubInfoErrorUnexpectedAnswer,
           NSLocalizedString(@"The repository page has no star count.", @""));
-    [self deliver:^{ completion(stars, error); }];
+
+    [_lock lock];
+    NSArray *completions = [_pending objectForKey:repo];
+    [_pending removeObjectForKey:repo];
+    if (page != nil)
+      {
+        [[_cache objectForKey:kAGPagesKey] setObject:page forKey:repo];
+        [self saveCache];
+      }
+    [_lock unlock];
+    [self deliver:^{
+      for (void (^done)(NSDictionary *, NSError *) in completions)
+        done(page, error);
+    }];
   }];
 }
 

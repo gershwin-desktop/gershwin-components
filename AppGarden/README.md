@@ -34,7 +34,11 @@ Applications folder and starts like any other application.
 - The detail page of an app that comes from GitHub, by its feed entry or by a
   direct link on github.com, shows the star count of its
   repository, read from the repository's web page (the API allows only 60
-  anonymous requests an hour).
+  anonymous requests an hour). The same page also feeds the risk check: for an
+  app hosted on GitHub, Get reads the repository's description and README as
+  well as the catalog entry, so software that calls itself an AI workspace is
+  flagged even when its catalog line says nothing. The page is cached for six
+  hours, so Get is instant once the detail page has been open.
 - Downloaded lists what AppGarden downloaded. The detail page of a downloaded
   application has a Remove button that deletes the file after asking.
 - Applications the catalog only links to a web page for show Open Page.

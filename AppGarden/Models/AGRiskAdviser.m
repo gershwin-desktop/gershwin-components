@@ -112,10 +112,19 @@ static NSString *const AGRiskCategoriesResource = @"RiskCategories";
 
 - (NSArray<AGRiskMatch *> *)matchesForApp:(AGApp *)app
 {
+  return [self matchesForApp:app additionalTexts:nil];
+}
+
+- (NSArray<AGRiskMatch *> *)matchesForApp:(AGApp *)app
+                          additionalTexts:(NSArray<NSString *> *)additionalTexts
+{
   if ([_categories count] == 0)
     return [NSArray array];
 
-  NSArray<NSString *> *texts = [self searchTextsForApp:app];
+  NSMutableArray<NSString *> *texts =
+      [[self searchTextsForApp:app] mutableCopy];
+  if (additionalTexts != nil)
+    [texts addObjectsFromArray:additionalTexts];
   if ([texts count] == 0)
     return [NSArray array];
 

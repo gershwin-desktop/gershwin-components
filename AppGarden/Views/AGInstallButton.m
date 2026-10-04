@@ -9,6 +9,7 @@
 #import "AGRiskAdviser.h"
 #import "AGRiskCategory.h"
 #import "AGRiskMatch.h"
+#import "AGGitHubInfo.h"
 
 /*
  * The rendered state. It is kept in an ivar rather than derived in drawRect:
@@ -34,6 +35,7 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
   AGInstallButtonState _state;
   NSButton *_button;
   NSProgressIndicator *_progress;
+  BOOL _checking;   /* reading the repository page before the risk check */
 }
 
 #pragma mark - Setup
@@ -256,8 +258,9 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
       return;
     }
   [self updateAnimation];
-  [_button setTitle:[self titleForState:_state]];
-  [_button setEnabled:(_state != AGInstallButtonStateUnavailable)];
+  [_button setTitle:_checking ? NSLocalizedString(@"Checking...", @"Reading the repository before a download")
+                              : [self titleForState:_state]];
+  [_button setEnabled:(_state != AGInstallButtonStateUnavailable && !_checking)];
 }
 
 /* The indeterminate bar animates only while it can be seen, so a card
@@ -389,17 +392,53 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 
 /*
  * Nothing in the catalog has been vetted, so a Get first collects what is
- * worth a warning: the risk categories the item's metadata falls into. With
- * nothing to say the download starts at once; otherwise a sheet asks, and the
- * download starts from its answer.
+ * worth a warning: the risk categories the item falls into. A catalog entry is
+ * often one line, so for an app hosted on GitHub the repository's own front
+ * page, its description and README, is read as well; it comes from the web
+ * page, not the API, and from the cache when the detail page has already
+ * fetched it. With nothing to say the download starts at once; otherwise a
+ * sheet asks, and the download starts from its answer.
  */
 - (void)beginGet:(AGApp *)app
 {
+  AGRiskAdviser *adviser = [AGRiskAdviser sharedAdviser];
+  AGDownloadKind kind = [AGDownloadResolver kindForApp:app payload:NULL];
+  NSString *repo = (kind == AGDownloadKindGitHubLatestRelease || kind == AGDownloadKindDirectURL)
+      ? [AGGitHubInfo repositoryForApp:app] : nil;
+  if (repo == nil)
+    {
+      [self finishGet:app warnings:[self sentencesForMatches:[adviser matchesForApp:app]]];
+      return;
+    }
+
+  _checking = YES;
+  [self updateControls];
+  __weak AGInstallButton *weakSelf = self;
+  [[_installer gitHubInfo] pageTextForRepo:repo
+      completion:^(NSString *text, NSError *error)
+        {
+          AGInstallButton *strongSelf = weakSelf;
+          if (strongSelf == nil)
+            return;
+          strongSelf->_checking = NO;
+          [strongSelf updateControls];
+          /* A page that cannot be read leaves the catalog entry as the only
+           * evidence: the warning is advice, and a download from a host that
+           * cannot be reached fails by itself. */
+          NSArray<NSString *> *extra = (text != nil) ? @[ text ] : nil;
+          [strongSelf finishGet:app
+                       warnings:[strongSelf sentencesForMatches:
+                                    [adviser matchesForApp:app additionalTexts:extra]]];
+        }];
+}
+
+- (NSArray<NSString *> *)sentencesForMatches:(NSArray<AGRiskMatch *> *)matches
+{
   NSMutableArray<NSString *> *sentences = [NSMutableArray array];
   AGRiskMatch *match;
-  for (match in [[AGRiskAdviser sharedAdviser] matchesForApp:app])
+  for (match in matches)
     [sentences addObject:[[match category] shortRisk]];
-  [self finishGet:app warnings:sentences];
+  return sentences;
 }
 
 - (void)finishGet:(AGApp *)app warnings:(NSArray<NSString *> *)sentences

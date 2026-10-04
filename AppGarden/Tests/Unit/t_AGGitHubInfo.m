@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-/* t_AGGitHubInfo.m - the star count and its cache. The fetches run against
+/* t_AGGitHubInfo.m - the star count, the page text and their cache. The fetches run against
  * file:// URLs: a directory tree stands in for github.com, so the tool proves
  * the behavior without the network. */
 
@@ -14,12 +14,14 @@
 #import "AGApp.h"
 
 static NSNumber *sStars = nil;
+static NSString *sText = nil;
 static NSError *sError = nil;
 static BOOL sDone = NO;
 
 static void resetResult(void)
 {
   [sStars release]; sStars = nil;
+  [sText release]; sText = nil;
   [sError release]; sError = nil;
   sDone = NO;
 }
@@ -42,6 +44,15 @@ static void fetchStars(AGGitHubInfo *info, NSString *repo)
   waitDone();
 }
 
+static void fetchText(AGGitHubInfo *info, NSString *repo)
+{
+  resetResult();
+  [info pageTextForRepo: repo completion: ^(NSString *text, NSError *error) {
+    sText = [text retain]; sError = [error retain]; sDone = YES;
+  }];
+  waitDone();
+}
+
 static void writeFile(NSString *path, NSString *text)
 {
   [[NSFileManager defaultManager] createDirectoryAtPath: [path stringByDeletingLastPathComponent]
@@ -52,7 +63,8 @@ static void writeFile(NSString *path, NSString *text)
 static NSString *counterPage(NSString *title)
 {
   return [NSString stringWithFormat:
-      @"<a><span id=\"repo-stars-counter-star\" aria-label=\"x\" title=\"%@\" class=\"Counter\">1.2k</span></a>",
+      @"<a><span id=\"repo-stars-counter-star\" aria-label=\"x\" title=\"%@\" class=\"Counter\">1.2k</span></a>"
+      "<article class=\"markdown-body\"><p>An AI coding workspace.</p></article>",
       title];
 }
 
@@ -75,6 +87,50 @@ int main(void)
        "a title that is not a number is no count");
   PASS([AGGitHubInfo starCountFromRepositoryHTML: @"<html>nothing</html>"] == nil,
        "a page without the counter has no count");
+
+  /* --- the text of a repository page --- */
+  {
+    NSString *page = @"<html><head><meta name=\"description\" content=\"A tool &amp; more - own/repo\">"
+                     "<script>var ai = 'agent'; var c = 'markdown-body';</script></head><body>"
+                     "<article class=\"other\">Unrelated article words</article>"
+                     "<nav>GitHub Copilot AI code creation Sign in</nav>"
+                     "<div class=\"about\">About</div>"
+                     "<article class=\"markdown-body entry-content\" itemprop=\"text\">"
+                     "<h1>Title</h1><p>An <b>AI</b> coding workspace.</p>"
+                     "<style>.x { color: red }</style><p>Second&nbsp;line &lt;ok&gt;</p></article>"
+                     "<footer>Terms Privacy</footer></body></html>";
+    NSString *text = [AGGitHubInfo pageTextFromRepositoryHTML: page];
+    PASS(text != nil, "a page with a README has text");
+    PASS([text rangeOfString: @"An AI coding workspace."].location != NSNotFound,
+         "the README text is read with its tags dropped");
+    PASS([text rangeOfString: @"A tool & more"].location != NSNotFound,
+         "the description is read and its entities are decoded");
+    PASS([text rangeOfString: @"Second line <ok>"].location != NSNotFound,
+         "entities in the README are decoded");
+    PASS([text rangeOfString: @"Unrelated"].location == NSNotFound,
+         "an article that is not the README is not read");
+    PASS([text rangeOfString: @"Copilot"].location == NSNotFound,
+         "the menu around the README is not read");
+    PASS([text rangeOfString: @"Sign in"].location == NSNotFound, "the page's chrome is not read");
+    PASS([text rangeOfString: @"color"].location == NSNotFound, "style blocks are dropped");
+    PASS([text rangeOfString: @"agent"].location == NSNotFound, "script blocks are dropped");
+    PASS([text rangeOfString: @"  "].location == NSNotFound, "white space is collapsed");
+
+    PASS([[AGGitHubInfo pageTextFromRepositoryHTML:
+              @"<meta name=\"description\" content=\"Only a description\">"] isEqual: @"Only a description"],
+         "a page with only a description has that text");
+    PASS([AGGitHubInfo pageTextFromRepositoryHTML: @"<html><body>nothing</body></html>"] == nil,
+         "a page with neither has no text");
+    PASS([AGGitHubInfo pageTextFromRepositoryHTML: nil] == nil, "no page has no text");
+
+    NSMutableString *big = [NSMutableString stringWithString:
+        @"<article class=\"markdown-body\"><p>"];
+    for (int i = 0; i < 5000; i++)
+      [big appendString: @"word "];
+    [big appendString: @"</p></article>"];
+    PASS([[AGGitHubInfo pageTextFromRepositoryHTML: big] length] == AGGitHubPageTextLimit,
+         "a long README is cut at the limit");
+  }
 
   /* --- the repository an app comes from --- */
   {
@@ -122,6 +178,10 @@ int main(void)
   fetchStars(info, @"owner/repo");
   PASS_EQUAL(sStars, [NSNumber numberWithInt: 4321],
              "a second ask within six hours is answered from the cache");
+
+  fetchText(info, @"owner/repo");
+  PASS(sText != nil && sError == nil, "the page text comes from the same page");
+  PASS([sText rangeOfString: @"AI"].location != NSNotFound, "the page text has the README");
 
   fetchStars(info, @"owner/gone");
   PASS(sStars == nil && sError != nil, "an unreachable page is an error");

@@ -174,6 +174,24 @@ int main(void)
                @"wallets-crypto", "wallet is found where it is a word of its own");
   }
 
+  /* --- text from outside the catalog entry, such as a repository README --- */
+  {
+    AGApp *plain = App(@"ZCodium", @"An independent audit fork.");
+    AGRiskAdviser *adviser = LoadedAdviser();
+    PASS_EQUAL([[adviser matchesForApp:plain] count], 0,
+               "the catalog entry alone says nothing risky");
+    NSArray<AGRiskMatch *> *matches = [adviser matchesForApp:plain
+        additionalTexts:[NSArray arrayWithObject:
+            @"ZCodium keeps the product itself, an AI coding workspace for the desktop."]];
+    PASS_EQUAL([matches count], 1, "a README that says AI is flagged");
+    PASS_EQUAL([[[[matches objectAtIndex:0] category] identifier] description], @"ai-agents",
+               "it is the AI category that fires");
+    PASS_EQUAL([[adviser matchesForApp:plain additionalTexts:[NSArray arrayWithObject:@"A plain editor."]] count], 0,
+               "a README that says nothing risky adds nothing");
+    PASS_EQUAL([[adviser matchesForApp:plain additionalTexts:nil] count], 0,
+               "no additional text is the same as the entry alone");
+  }
+
   /* --- the metadata that is searched --- */
   {
     NSMutableDictionary *item = [NSMutableDictionary dictionary];
