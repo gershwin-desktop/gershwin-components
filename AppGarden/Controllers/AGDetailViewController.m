@@ -11,6 +11,7 @@
 #import "AGLicenseFormatter.h"
 #import "AGImageCache.h"
 #import "AGInstaller.h"
+#import "AGGitHubInfo.h"
 #import "AGInstallButton.h"
 #import "AGScreenshotView.h"
 #import "AGPlaceholderIcon.h"
@@ -134,7 +135,7 @@ static const CGFloat kAGDetailTightGap = 4.0;
   NSImageView *_iconView;
   NSTextField *_nameLabel;
   NSArray<NSView *> *_authorViews;      /* AGLinkButton or NSTextField, comma labels between */
-  NSArray<NSView *> *_metaViews;        /* category label, separator, license label or link */
+  NSMutableArray<NSView *> *_metaViews; /* category label, separator, license label or link, stars */
   AGInstallButton *_installButton;
   NSButton *_removeButton;
   AGLinkButton *_catalogPageButton;
@@ -215,6 +216,7 @@ static const CGFloat kAGDetailTightGap = 4.0;
 
   [self layoutDetailContentView:_contentView];
   [self requestImages];
+  [self requestStars];
 }
 
 - (void)buildContent
@@ -440,6 +442,48 @@ static const CGFloat kAGDetailTightGap = 4.0;
           [strongSelf->_screenshotView setState:AGScreenshotStateFailed];
       }];
     }
+}
+
+#pragma mark - GitHub stars
+
+/* The star count of the repository the AppImage comes from, appended to the
+ * line under the name when it arrives; nothing is shown while it is on its
+ * way, and a failure says so instead of leaving the line looking complete. */
+- (void)requestStars
+{
+  NSString *repo = [_app githubRepo];
+  if (repo == nil)
+    return;
+  __weak AGDetailViewController *weakSelf = self;
+  [[_installer gitHubInfo] starsForRepo:repo
+      completion:^(NSNumber *stars, NSError *error)
+        {
+          [weakSelf showStars:stars error:error];
+        }];
+}
+
+- (void)showStars:(NSNumber *)stars error:(NSError *)error
+{
+  NSColor *gray = [NSColor disabledControlTextColor];
+  NSString *text;
+  if (stars != nil)
+    {
+      NSNumberFormatter *formatter = [[NSNumberFormatter alloc] init];
+      [formatter setNumberStyle:NSNumberFormatterDecimalStyle];
+      NSString *count = [formatter stringFromNumber:stars];
+      text = ([stars integerValue] == 1)
+          ? NSLocalizedString(@"1 star on GitHub", @"")
+          : [NSString stringWithFormat:NSLocalizedString(@"%@ stars on GitHub", @""), count];
+    }
+  else
+    text = NSLocalizedString(@"GitHub stars unavailable", @"");
+
+  [_metaViews addObject:[self labelWithString:@"  \u00b7  " font:METRICS_FONT_SYSTEM_REGULAR_11 color:gray]];
+  NSTextField *label = [self labelWithString:text font:METRICS_FONT_SYSTEM_REGULAR_11 color:gray];
+  if (stars == nil)
+    [label setToolTip:[error localizedDescription]];
+  [_metaViews addObject:label];
+  [self layoutDetailContentView:_contentView];
 }
 
 #pragma mark - Removing

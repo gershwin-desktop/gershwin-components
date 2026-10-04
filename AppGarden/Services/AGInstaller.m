@@ -7,6 +7,7 @@
 #import "AGInstaller.h"
 #import "AGInstallRegistry.h"
 #import "AGInstallTask.h"
+#import "AGGitHubInfo.h"
 #import "AGDownloadResolver.h"
 #import "AGApp.h"
 #import "AGCatalog.h"
@@ -112,6 +113,7 @@ static void AGPostInstalledSetChange(AGInstaller *installer)
   if (self)
     {
       _registry = registry;
+      _gitHubInfo = [[AGGitHubInfo alloc] init];
       _queue = [[NSOperationQueue alloc] init];
       /* One download at a time keeps bandwidth predictable and progress
        * readable; a second Get click on another app queues behind the first

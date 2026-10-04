@@ -9,6 +9,7 @@
 #import "AGRiskAdviser.h"
 #import "AGRiskCategory.h"
 #import "AGRiskMatch.h"
+#import "AGGitHubInfo.h"
 
 /*
  * The rendered state. It is kept in an ivar rather than derived in drawRect:
@@ -34,6 +35,7 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
   AGInstallButtonState _state;
   NSButton *_button;
   NSProgressIndicator *_progress;
+  BOOL _checking;   /* waiting for GitHub to say how old the publisher is */
 }
 
 #pragma mark - Setup
@@ -256,8 +258,9 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
       return;
     }
   [self updateAnimation];
-  [_button setTitle:[self titleForState:_state]];
-  [_button setEnabled:(_state != AGInstallButtonStateUnavailable)];
+  [_button setTitle:_checking ? NSLocalizedString(@"Checking...", @"Looking up the publisher before a download")
+                              : [self titleForState:_state]];
+  [_button setEnabled:(_state != AGInstallButtonStateUnavailable && !_checking)];
 }
 
 /* The indeterminate bar animates only while it can be seen, so a card
@@ -329,10 +332,7 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
         /* The one place a Get is started, from a card or from the detail
          * page alike, so this is also the one place the risk alert has to
          * stand in front of a download. */
-        if ([self askAboutRisksBeforeDownloading:app])
-          break;
-        [_installer installApp:app];
-        [self reloadState];
+        [self beginGet:app];
         break;
 
       case AGInstallButtonStateWaiting:
@@ -391,23 +391,67 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 }
 
 /*
- * Nothing in the catalog has been vetted, so a Get on an item whose metadata
- * falls into a risk category asks first. Returns YES when a question was put
- * to the user, in which case the download starts from the sheet's answer and
- * not from the caller; NO for the many items no category claims.
+ * Nothing in the catalog has been vetted, so a Get first collects what is
+ * worth a warning: the risk categories the item's metadata falls into and,
+ * for a download from GitHub, a publisher account younger than a month or
+ * one that cannot be looked up. With nothing to say the download starts at
+ * once; otherwise a sheet asks, and the download starts from its answer.
  */
-- (BOOL)askAboutRisksBeforeDownloading:(AGApp *)app
+- (void)beginGet:(AGApp *)app
 {
+  NSMutableArray<NSString *> *sentences = [NSMutableArray array];
   AGRiskAdviser *adviser = [AGRiskAdviser sharedAdviser];
-  NSArray<AGRiskMatch *> *matches = [adviser matchesForApp:app];
-  if ([matches count] == 0)
-    return NO;
+  AGRiskMatch *match;
+  for (match in [adviser matchesForApp:app])
+    [sentences addObject:[[match category] shortRisk]];
+
+  id payload = nil;
+  NSString *owner = nil;
+  if ([AGDownloadResolver kindForApp:app payload:&payload] == AGDownloadKindGitHubLatestRelease)
+    owner = [AGGitHubInfo ownerOfRepo:[app githubRepo]];
+
+  if (owner == nil)
+    {
+      [self finishGet:app warnings:sentences];
+      return;
+    }
+
+  _checking = YES;
+  [self updateControls];
+  __weak AGInstallButton *weakSelf = self;
+  [[_installer gitHubInfo] accountCreationDateForOwner:owner
+      completion:^(NSDate *date, NSError *error)
+        {
+          AGInstallButton *strongSelf = weakSelf;
+          if (strongSelf == nil)
+            return;
+          strongSelf->_checking = NO;
+          [strongSelf updateControls];
+          NSString *sentence = [AGGitHubInfo warningForAccountCreatedOn:date now:[NSDate date]];
+          if (sentence != nil)
+            [sentences addObject:sentence];
+          [strongSelf finishGet:app warnings:sentences];
+        }];
+}
+
+- (void)finishGet:(AGApp *)app warnings:(NSArray<NSString *> *)sentences
+{
+  if ([sentences count] == 0)
+    {
+      [_installer installApp:app];
+      [self reloadState];
+      return;
+    }
 
   NSAlert *alert = [[NSAlert alloc] init];
   [alert setMessageText:[NSString stringWithFormat:
                             NSLocalizedString(@"Do you want to download \"%@\"?", @""),
                             [app displayName]]];
-  [alert setInformativeText:[self riskWarningForMatches:matches adviser:adviser]];
+  /* One paragraph: the theme gives the informative text a box a few lines
+   * high and scrolls anything longer, and a blank line costs one of them. */
+  NSMutableArray<NSString *> *lines = [sentences mutableCopy];
+  [lines addObject:[[AGRiskAdviser sharedAdviser] disclaimerShort]];
+  [alert setInformativeText:[lines componentsJoinedByString:@" "]];
   /* Cancel is added first, which makes it the default button, so Return and
    * Escape both mean "do not download". */
   [alert addButtonWithTitle:NSLocalizedString(@"Cancel", @"")];
@@ -415,8 +459,7 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
 
   /* A sheet on this button's window, so the warning looks like every other
    * alert on the desktop. The sheet does not block: its answer arrives in the
-   * completion handler, which is why the download is started from there and
-   * why this method cannot return the answer. */
+   * completion handler, which is why the download is started from there. */
   AGInstaller *installer = _installer;
   __weak AGInstallButton *weakSelf = self;
   void (^answer)(NSModalResponse) = ^(NSModalResponse code)
@@ -432,26 +475,6 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
     answer([alert runModal]);
   else
     [alert beginSheetModalForWindow:parent completionHandler:answer];
-  return YES;
-}
-
-/*
- * The alert's informative text, kept to what fits a glance: one sentence per
- * matching category, then that the app has not been checked. The longer
- * explanation and the keywords that fired stay in the data and in RISKS.md;
- * a person deciding whether to download needs the verdict, not the evidence.
- */
-- (NSString *)riskWarningForMatches:(NSArray<AGRiskMatch *> *)matches
-                           adviser:(AGRiskAdviser *)adviser
-{
-  NSMutableArray<NSString *> *sentences = [NSMutableArray array];
-  AGRiskMatch *match;
-  for (match in matches)
-    [sentences addObject:[[match category] shortRisk]];
-  /* One paragraph: the theme gives the informative text a box a few lines
-   * high and scrolls anything longer, and a blank line costs one of them. */
-  [sentences addObject:[adviser disclaimerShort]];
-  return [sentences componentsJoinedByString:@" "];
 }
 
 - (void)showMessage:(NSString *)message details:(NSString *)details

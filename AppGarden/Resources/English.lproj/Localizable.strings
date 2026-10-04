@@ -130,6 +130,25 @@
 "Do you want to download \"%@\"?" = "Do you want to download \"%@\"?";
 "Download" = "Download";
 
+/* GitHub checks (AGGitHubInfo, AGInstallButton, AGDetailViewController).
+ * The sentences join the risk alert before a download; %ld is whole days. */
+"Checking..." = "Checking...";
+"The publisher's GitHub account is only %ld days old." = "The publisher's GitHub account is only %ld days old.";
+"The publisher's GitHub account is only 1 day old." = "The publisher's GitHub account is only 1 day old.";
+"The publisher's GitHub account was created today." = "The publisher's GitHub account was created today.";
+"AppGarden could not check how old the publisher's GitHub account is." = "AppGarden could not check how old the publisher's GitHub account is.";
+"%@ stars on GitHub" = "%@ stars on GitHub";
+"1 star on GitHub" = "1 star on GitHub";
+"GitHub stars unavailable" = "GitHub stars unavailable";
+"GitHub rate limit reached." = "GitHub rate limit reached.";
+"GitHub answered: %@" = "GitHub answered: %@";
+"GitHub gave no answer about this account." = "GitHub gave no answer about this account.";
+"Could not read the repository page: %@" = "Could not read the repository page: %@";
+"Could not reach GitHub: %@" = "Could not reach GitHub: %@";
+"The repository page has no star count." = "The repository page has no star count.";
+"This is not a GitHub repository name." = "This is not a GitHub repository name.";
+"This is not a GitHub account name." = "This is not a GitHub account name.";
+
 /* --------------------------------------------------------- Controllers */
 
 /* Top bar and banner (AGMainWindowController, AGStatusBannerController).

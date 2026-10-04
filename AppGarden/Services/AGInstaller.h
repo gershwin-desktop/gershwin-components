@@ -7,7 +7,7 @@
 #import <Foundation/Foundation.h>
 #import "AGInstallTask.h"
 
-@class AGApp, AGCatalog, AGInstallRegistry;
+@class AGApp, AGCatalog, AGInstallRegistry, AGGitHubInfo;
 
 /*
  * Posted on the main thread whenever a task's progress or state changes.
@@ -36,6 +36,9 @@ typedef NS_ENUM(NSInteger, AGInstallState) {
 - (instancetype)init NS_UNAVAILABLE;
 
 @property (nonatomic, readonly, strong) AGInstallRegistry *registry;
+/* Star counts and account ages from GitHub, shared by the detail page and
+   the download check so a repeated question is answered from one cache. */
+@property (nonatomic, readonly, strong) AGGitHubInfo *gitHubInfo;
 
 - (AGInstallState)stateForApp:(AGApp *)app;
 

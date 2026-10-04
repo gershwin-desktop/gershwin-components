@@ -31,6 +31,12 @@ Applications folder and starts like any other application.
   keywords and how to edit them. Cancel is the default button, so Return and
   Escape both mean "do not download". The panel is two lines: one sentence
   per category and that the app has not been checked.
+- The detail page of an app that comes from GitHub shows the star count of its
+  repository, read from the repository's web page (the API allows only 60
+  anonymous requests an hour). Before a download from GitHub, Get checks how
+  old the publisher's account is, with one API request per publisher whose
+  answer is kept for good; an account younger than 30 days, or one that could
+  not be looked up, is named in the same alert as the risk categories.
 - Downloaded lists what AppGarden downloaded. The detail page of a downloaded
   application has a Remove button that deletes the file after asking.
 - Applications the catalog only links to a web page for show Open Page.

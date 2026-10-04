@@ -28,6 +28,7 @@ AppGarden_OBJC_FILES = \
   Services/AGFeedLoader.m \
   Services/AGImageCache.m \
   Services/AGInstaller.m \
+  Services/AGGitHubInfo.m \
   Services/AGInstallTask.m \
   Services/AGInstallRegistry.m \
   Controllers/AGAppDelegate.m \

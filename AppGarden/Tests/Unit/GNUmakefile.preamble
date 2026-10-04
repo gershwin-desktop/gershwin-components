@@ -86,3 +86,9 @@ t_AGInstallTask_OBJC_FILES += ../../Services/AGInstallTask.m
 # app does.
 t_AGRiskAdviser_OBJC_FILES += ../../Models/AGRiskAdviser.m \
   ../../Models/AGRiskCategory.m ../../Models/AGRiskMatch.m $(AG_FEED_SOURCES)
+
+# --- GitHub star count and account age (appended; above stays untouched) ---
+
+../../Services/AGGitHubInfo.m_FILE_FLAGS += $(AG_ARCFLAGS)
+
+t_AGGitHubInfo_OBJC_FILES += ../../Services/AGGitHubInfo.m
