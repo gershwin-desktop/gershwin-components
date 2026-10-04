@@ -763,18 +763,38 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
 
     NSString *lowercaseSearch = [searchString lowercaseString];
 
+    /* Rank before truncating: a title that starts with the query must beat one
+       that merely contains it ("Player" before "MPlayer" for "play"), and
+       the menu order only breaks ties. */
+    NSMutableArray *ranked = [NSMutableArray array];
+    NSMutableArray *ranks = [NSMutableArray array];
     for (ActionSearchResult *result in self.allMenuItems) {
         NSString *lowercaseTitle = [[result title] lowercaseString];
         NSString *lowercasePath = [[result path] lowercaseString];
+        NSUInteger rank;
 
-        if ([lowercaseTitle rangeOfString:lowercaseSearch].location != NSNotFound ||
-            [lowercasePath rangeOfString:lowercaseSearch].location != NSNotFound) {
-            [self.filteredResults addObject:result];
+        if ([lowercaseTitle hasPrefix:lowercaseSearch]) {
+            rank = 0;
+        } else if ([lowercaseTitle rangeOfString:[@" " stringByAppendingString:lowercaseSearch]].location != NSNotFound) {
+            rank = 1;
+        } else if ([lowercaseTitle rangeOfString:lowercaseSearch].location != NSNotFound) {
+            rank = 2;
+        } else if ([lowercasePath rangeOfString:lowercaseSearch].location != NSNotFound) {
+            rank = 3;
+        } else {
+            continue;
         }
+        [ranked addObject:result];
+        [ranks addObject:[NSNumber numberWithUnsignedInteger:rank]];
+    }
 
-        if ([self.filteredResults count] >= kMaxResultsShown) {
-            break;
+    for (NSUInteger rank = 0; rank <= 3; rank++) {
+        for (NSUInteger i = 0; i < [ranked count]; i++) {
+            if ([[ranks objectAtIndex:i] unsignedIntegerValue] != rank) continue;
+            [self.filteredResults addObject:[ranked objectAtIndex:i]];
+            if ([self.filteredResults count] >= kMaxResultsShown) break;
         }
+        if ([self.filteredResults count] >= kMaxResultsShown) break;
     }
 
     /* When the query matches no (or very few) menu items, fall back to Run /
