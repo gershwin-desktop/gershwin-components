@@ -6,18 +6,25 @@
 
 #import "DUDeviceMonitor.h"
 
+#import "DUDeviceEventSource.h"
 #import "DUErrors.h"
 #import "DUStorageManager.h"
 
 // Defaults key overriding the poll interval in seconds.
 static NSString *const DURefreshIntervalDefaultsKey = @"DURefreshInterval";
-static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
+// With kernel events the poll is only a safety net for lost events; without
+// them it is the only way to notice a plugged disk, so it runs often.
+static const NSTimeInterval DUEventBackedRefreshInterval = 30.0;
+static const NSTimeInterval DUPollOnlyRefreshInterval = 3.0;
 
 @implementation DUDeviceMonitor {
     DUStorageManager *_storageManager;
     NSTimer *_timer;
     NSLock *_lock;
     BOOL _refreshInFlight; // Skips ticks when the previous one still runs.
+    BOOL _refreshRequestedWhileBusy; // An event arrived mid-refresh.
+    DUDeviceEventSource *_eventSource;
+    BOOL _eventsActive;
 }
 
 - (instancetype)initWithStorageManager:(DUStorageManager *)storageManager
@@ -28,6 +35,7 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
     }
     _storageManager = storageManager;
     _lock = [[NSLock alloc] init];
+    _eventSource = [DUDeviceEventSource sourceForPlatform];
     _interval = [self configuredInterval];
 
     // The interval was read once at init and the timer armed from it, so
@@ -49,7 +57,8 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
     if (configured != nil && configured.doubleValue >= 1.0) {
         return configured.doubleValue;
     }
-    return DUDefaultRefreshInterval;
+    return _eventsActive ? DUEventBackedRefreshInterval
+                         : DUPollOnlyRefreshInterval;
 }
 
 - (void)defaultsChanged:(NSNotification *)notification
@@ -73,7 +82,20 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
                                     repeats:YES];
     NSTimer *armed = _timer;
     [_lock unlock];
-    [[NSRunLoop currentRunLoop] addTimer:armed forMode:NSRunLoopCommonModes];
+    [self schedule:armed];
+}
+
+// The common-modes pseudo mode never fired the timer on this run loop, so
+// plugging or unplugging a disk went unnoticed; the concrete modes do. The
+// tracking and modal modes keep the list live during menus and sheets.
+- (void)schedule:(NSTimer *)timer
+{
+    NSRunLoop *loop = [NSRunLoop currentRunLoop];
+    [loop addTimer:timer forMode:NSDefaultRunLoopMode];
+    // Literal mode names: this file stays Foundation-only (the manager tests
+    // link it without AppKit).
+    [loop addTimer:timer forMode:@"NSEventTrackingRunLoopMode"];
+    [loop addTimer:timer forMode:@"NSModalPanelRunLoopMode"];
 }
 
 - (void)start
@@ -83,14 +105,21 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
         [_lock unlock];
         return;
     }
+    // Events first: whether they are available decides the poll interval.
+    __weak DUDeviceMonitor *weakSelf = self;
+    _eventsActive = [_eventSource startWithHandler:^{
+        [weakSelf refreshOnce];
+    }];
+    _interval = [self configuredInterval];
     // Retained cycle is deliberate and broken in -stop/dealloc.
     _timer = [NSTimer timerWithTimeInterval:_interval
                                      target:self
                                    selector:@selector(timerFired:)
                                    userInfo:nil
                                     repeats:YES];
-    [[NSRunLoop currentRunLoop] addTimer:_timer forMode:NSRunLoopCommonModes];
+    NSTimer *armed = _timer;
     [_lock unlock];
+    [self schedule:armed];
 
     // First snapshot right away so the UI does not start empty.
     [self refreshOnce];
@@ -98,6 +127,7 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
 
 - (void)stop
 {
+    [_eventSource stop];
     [_lock lock];
     if (_timer != nil) {
         [_timer invalidate];
@@ -124,6 +154,8 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
 {
     [_lock lock];
     if (_refreshInFlight) {
+        // The running pass may have read the disks before this change.
+        _refreshRequestedWhileBusy = YES;
         [_lock unlock];
         return;
     }
@@ -151,7 +183,12 @@ static const NSTimeInterval DUDefaultRefreshInterval = 10.0;
             } @finally {
                 [self->_lock lock];
                 self->_refreshInFlight = NO;
+                BOOL again = self->_refreshRequestedWhileBusy;
+                self->_refreshRequestedWhileBusy = NO;
                 [self->_lock unlock];
+                if (again) {
+                    [self refreshOnce];
+                }
             }
         }
     }];

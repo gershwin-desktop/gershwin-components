@@ -63,6 +63,7 @@ t_LiveBackend_OBJC_FILES = \
     $(SOURCES)/Services/DUImageService.m \
     $(SOURCES)/Services/DUNotifications.m \
     $(SOURCES)/Services/DUOperationManager.m \
+    $(SOURCES)/Services/DUDeviceEventSource.m \
     $(SOURCES)/Services/DUDeviceMonitor.m \
     $(SOURCES)/Services/DUStorageManager.m \
     $(SOURCES)/Utilities/DUErrors.m \

@@ -51,6 +51,7 @@ t_StorageManager_OBJC_FILES = \
     $(SOURCES)/Operations/DUVerifyDiscOperation.m \
     $(SOURCES)/Operations/DUVerifyOperation.m \
     $(SOURCES)/Services/DUAuthorizationManager.m \
+    $(SOURCES)/Services/DUDeviceEventSource.m \
     $(SOURCES)/Services/DUDeviceMonitor.m \
     $(SOURCES)/Services/DUImageService.m \
     $(SOURCES)/Services/DUNotifications.m \
