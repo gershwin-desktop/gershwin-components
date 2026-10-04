@@ -12,22 +12,22 @@ static const float kWinWidth = METRICS_WIN_MIN_WIDTH;
 // details disclosure row, then (when expanded) the phases box, then the
 // footer button row - so kCollapsedHeight/kExpandedHeight always match what
 // -buildContent actually lays out instead of being independent guesses.
-static const float kHeaderHeight = METRICS_CONTENT_TOP_MARGIN + 20.0 + METRICS_SPACE_16
+static const float kHeaderHeight = METRICS_CONTENT_TOP_MARGIN + 20.0 + METRICS_SPACE_8
                                   + 20.0 + METRICS_SPACE_8 + 16.0;
-static const float kDetailsRowHeight = METRICS_BUTTON_HEIGHT;
+static const float kDetailsRowHeight = 20.0;
 static const float kFooterHeight = METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT;
-static const float kPhasesBoxHeight = 200.0;
-static const float kCollapsedHeight = kHeaderHeight + METRICS_SPACE_16 + kDetailsRowHeight
+static const float kPhasesBoxHeight = 160.0;
+static const float kCollapsedHeight = kHeaderHeight + METRICS_SPACE_8 + kDetailsRowHeight
                                      + METRICS_SPACE_16 + kFooterHeight;
-static const float kExpandedHeight = kHeaderHeight + METRICS_SPACE_16 + kDetailsRowHeight
-                                    + METRICS_SPACE_16 + kPhasesBoxHeight
+static const float kExpandedHeight = kHeaderHeight + METRICS_SPACE_8 + kDetailsRowHeight
+                                    + METRICS_SPACE_8 + kPhasesBoxHeight
                                     + METRICS_SPACE_16 + kFooterHeight;
 // The Eau theme's disclosure triangle is drawn at 40% of its button's frame
 // (Eau+Button.m), so the stock 13x13 GNUstep disclosure button renders a
 // ~5pt glyph - much smaller and fainter than the handoff mockup's bold,
 // nearly edge-to-edge triangle. Sizing the button up is the only lever this
 // theme call exposes for that.
-static const float kDisclosureSide = 24.0;
+static const float kDisclosureSide = 20.0;
 static const float kPhaseRowHeight = 22.0;
 static const float kItemRowHeight = 20.0;
 static const float kIconSmall = 16.0;
@@ -67,6 +67,26 @@ static const float kIconSmall = 16.0;
 }
 @end
 
+// Clicking the "Details" label must do exactly what clicking the triangle does,
+// so the label hands its click to the disclosure button instead of swallowing it.
+@interface SWDisclosureLabel : NSTextField
+{
+  NSButton *_disclosureButton;
+}
+- (void)setDisclosureButton:(NSButton *)button;
+@end
+
+@implementation SWDisclosureLabel
+- (void)setDisclosureButton:(NSButton *)button
+{
+  _disclosureButton = button;
+}
+- (void)mouseDown:(NSEvent *)event
+{
+  [_disclosureButton performClick:self];
+}
+@end
+
 @interface SWProgressWindowController ()
 {
   NSTextField *_headlineField;
@@ -91,7 +111,7 @@ static const float kIconSmall = 16.0;
 {
   NSRect frame = NSMakeRect(0, 0, kWinWidth, kCollapsedHeight);
   NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
-                                                  styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
+                                                  styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
   self = [super initWithWindow:window];
@@ -126,7 +146,7 @@ static const float kIconSmall = 16.0;
   [content addSubview:_headlineField];
 
   _progressBar = [[NSProgressIndicator alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, NSMinY([_headlineField frame]) - METRICS_SPACE_16 - 20.0,
+    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, NSMinY([_headlineField frame]) - METRICS_SPACE_8 - 20.0,
                contentRight - METRICS_CONTENT_SIDE_MARGIN, 20.0)];
   [_progressBar setStyle:NSProgressIndicatorStyleBar];
   [_progressBar setIndeterminate:NO];
@@ -157,7 +177,7 @@ static const float kIconSmall = 16.0;
   // status line and above the (revealed/hidden) box, matching the mockup -
   // not down at the bottom sharing a row with Stop, which is where the box
   // ended up appearing BELOW this row instead of above it.
-  float detailsRowY = NSMinY([_statusField frame]) - METRICS_SPACE_16 - kDetailsRowHeight;
+  float detailsRowY = NSMinY([_statusField frame]) - METRICS_SPACE_8 - kDetailsRowHeight;
   _detailsButton = [[NSButton alloc] initWithFrame:
     NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
                detailsRowY + (kDetailsRowHeight - kDisclosureSide) / 2.0,
@@ -170,9 +190,12 @@ static const float kIconSmall = 16.0;
   [_detailsButton setAutoresizingMask:NSViewMinYMargin];
   [content addSubview:_detailsButton];
 
-  NSTextField *detailsLabel = [[NSTextField alloc] initWithFrame:
+  // Same row, same height and same vertical centre as the triangle, so the
+  // label text sits on the triangle's centre line.
+  SWDisclosureLabel *detailsLabel = [[SWDisclosureLabel alloc] initWithFrame:
     NSMakeRect(NSMaxX([_detailsButton frame]) + METRICS_SPACE_8, detailsRowY,
                100.0, kDetailsRowHeight)];
+  [detailsLabel setDisclosureButton:_detailsButton];
   [detailsLabel setStringValue:@"Details"];
   [detailsLabel setFont:METRICS_FONT_SYSTEM_REGULAR_13];
   [detailsLabel setBezeled:NO];
@@ -195,7 +218,7 @@ static const float kIconSmall = 16.0;
   // distance below the details row stays constant at any window height,
   // including while the disclosure animation is mid-flight.
   NSRect boxFrame = NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
-                                detailsRowY - METRICS_SPACE_16 - kPhasesBoxHeight,
+                                detailsRowY - METRICS_SPACE_8 - kPhasesBoxHeight,
                                 contentRight - METRICS_CONTENT_SIDE_MARGIN, kPhasesBoxHeight);
   _phasesScroll = [[NSScrollView alloc] initWithFrame:boxFrame];
   [_phasesScroll setHasVerticalScroller:YES];

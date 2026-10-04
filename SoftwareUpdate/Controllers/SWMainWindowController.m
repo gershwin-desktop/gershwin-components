@@ -9,14 +9,18 @@
 #import "SWGitTool.h"
 #import "AppearanceMetrics.h"
 
-static const float kWinWidth = 680.0;
-static const float kWinHeight = 520.0;
+static const float kWinWidth = 490.0;
+static const float kWinHeight = 560.0;
+static const float kNameColumnMinWidth = 150.0;
 static const float kHeaderHeight = 96.0;
 // Must clear the dev-branch checkbox row's own top edge (bottom margin +
 // button height + one group gap + the checkbox's own line height), or the
 // split view above it draws over the checkbox - see -buildBottomBarIn:.
+static const float kSummaryHeight = 16.0;
+static const float kWarningHeight = 16.0;
 static const float kBottomBarHeight =
-  METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_16 + METRICS_RADIO_BUTTON_LINE_SPACING;
+  METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_12 + METRICS_RADIO_BUTTON_LINE_SPACING
+  + METRICS_SPACE_8 + kSummaryHeight + METRICS_SPACE_12;
 
 @interface SWMainWindowController ()
 {
@@ -27,9 +31,8 @@ static const float kBottomBarHeight =
   NSSplitView *_splitView;
   NSTableView *_tableView;
   NSTextView *_detailsCommitsView;
-  NSTextField *_detailsNameField;
-  NSTextField *_detailsSummaryField;
   NSTextField *_detailsWarningField;
+  NSScrollView *_commitsScroll;
 
   NSButton *_devBranchCheckbox;
   NSTextField *_summaryField;
@@ -47,10 +50,94 @@ static const float kBottomBarHeight =
 // reaches NSTableView's own -mouseDown:, cell tracking and row selection
 // included; the controller re-selects the row itself when it toggles.
 @interface SWForceToggleTableView : NSTableView
+{
+  BOOL _fillingNameColumn;
+}
 @property (nonatomic, weak) SWMainWindowController *toggleController;
 @end
 
 @implementation SWForceToggleTableView
+
+// GNUstep leaves -setColumnAutoresizingStyle: unimplemented, so a window
+// widened after the columns were sized would leave blank space right of the
+// last column. The repository name gets that space.
+- (void)fillNameColumnToWidth
+{
+  NSTableColumn *name = [self tableColumnWithIdentifier:@"name"];
+  NSView *clip = [self superview];
+  if (_fillingNameColumn || clip == nil || name == nil) {
+    return;
+  }
+  // The name column takes whatever the others leave, so the result does not
+  // depend on how wide it was before (adding the gap to the current width
+  // piled up whenever the table re-tiled itself in between).
+  CGFloat others = 0.0;
+  for (NSTableColumn *column in [self tableColumns]) {
+    if (column != name) {
+      others += [column width];
+    }
+  }
+  CGFloat wanted = NSWidth([clip bounds]) - others;
+  // Never narrower than it was laid out for, and below a point the
+  // difference is rounding, which would make the table and the scroll view
+  // chase each other.
+  wanted = MAX(wanted, kNameColumnMinWidth);
+  if (fabs(wanted - [name width]) < 1.0) {
+    return;
+  }
+  _fillingNameColumn = YES;
+  [name setWidth:wanted];
+  _fillingNameColumn = NO;
+}
+
+- (void)tile
+{
+  [super tile];
+  [self fillNameColumnToWidth];
+}
+
+// The clip view stretches its document view when the window is resized; the
+// columns follow from here.
+- (void)resizeWithOldSuperviewSize:(NSSize)oldSize
+{
+  [super resizeWithOldSuperviewSize:oldSize];
+  [self fillNameColumnToWidth];
+}
+
+- (void)viewDidMoveToSuperview
+{
+  [super viewDidMoveToSuperview];
+  [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                  name:NSViewFrameDidChangeNotification
+                                                object:nil];
+  if ([self superview] != nil) {
+    [[self superview] setPostsFrameChangedNotifications:YES];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(clipViewFrameChanged:)
+                                                 name:NSViewFrameDidChangeNotification
+                                               object:[self superview]];
+  }
+  [self fillNameColumnToWidth];
+}
+
+- (void)clipViewFrameChanged:(NSNotification *)notification
+{
+  [self fillNameColumnToWidth];
+}
+
+// Full-row stripes without the per-cell gaps the stock alternating colors leave.
+- (void)drawRow:(NSInteger)row clipRect:(NSRect)clipRect
+{
+  if ([self isRowSelected:row]) {
+    [[NSColor selectedControlColor] setFill];
+  } else if (row % 2 == 0) {
+    [[NSColor controlBackgroundColor] setFill];
+  } else {
+    [[NSColor colorWithCalibratedWhite:0.93 alpha:1.0] setFill];
+  }
+  NSRectFill([self rectOfRow:row]);
+  [super drawRow:row clipRect:clipRect];
+}
 
 - (void)mouseDown:(NSEvent *)event
 {
@@ -115,26 +202,26 @@ static const float kBottomBarHeight =
   NSTextField *headline = [[NSTextField alloc] initWithFrame:
     NSMakeRect(METRICS_TEXT_LEFT, top - METRICS_CONTENT_TOP_MARGIN - 20.0,
                contentRight - METRICS_TEXT_LEFT, 20.0)];
-  [headline setStringValue:@"Updates are available for your Gershwin system"];
+  [headline setStringValue:@"Updates are available"];
   [headline setFont:METRICS_FONT_SYSTEM_BOLD_13];
   [headline setBezeled:NO];
   [headline setDrawsBackground:NO];
   [headline setEditable:NO];
   [headline setSelectable:NO];
-  [headline setAutoresizingMask:NSViewMinYMargin];
+  [headline setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
   [content addSubview:headline];
 
   NSTextField *subtitle = [[NSTextField alloc] initWithFrame:
     NSMakeRect(METRICS_TEXT_LEFT, NSMinY([headline frame]) - METRICS_TITLE_MESSAGE_GAP - 16.0,
                contentRight - METRICS_TEXT_LEFT, 16.0)];
-  [subtitle setStringValue:@"Review the repositories below, then update the ones you want."];
+  [subtitle setStringValue:@"Select the repositories to update."];
   [subtitle setFont:METRICS_FONT_SYSTEM_REGULAR_11];
   [subtitle setTextColor:[NSColor disabledControlTextColor]];
   [subtitle setBezeled:NO];
   [subtitle setDrawsBackground:NO];
   [subtitle setEditable:NO];
   [subtitle setSelectable:NO];
-  [subtitle setAutoresizingMask:NSViewMinYMargin];
+  [subtitle setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
   [content addSubview:subtitle];
 
   // Centered against the headline+subtitle block's actual vertical span,
@@ -158,7 +245,7 @@ static const float kBottomBarHeight =
   // Checkbox row sits above the button row (button height, then a standard
   // group gap) rather than an arbitrary +24 - the old value left only 4px
   // between the two rows, not one of the standard spacing values.
-  float checkboxY = METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_16;
+  float checkboxY = METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_12;
   _devBranchCheckbox = [[NSButton alloc] initWithFrame:
     NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, checkboxY, 260.0, METRICS_RADIO_BUTTON_LINE_SPACING)];
   [_devBranchCheckbox setButtonType:NSSwitchButton];
@@ -169,8 +256,9 @@ static const float kBottomBarHeight =
   [content addSubview:_devBranchCheckbox];
 
   _summaryField = [[NSTextField alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, METRICS_CONTENT_BOTTOM_MARGIN + 2.0,
-               contentRight - METRICS_CONTENT_SIDE_MARGIN, 16.0)];
+    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN,
+               checkboxY + METRICS_RADIO_BUTTON_LINE_SPACING + METRICS_SPACE_8,
+               contentRight - METRICS_CONTENT_SIDE_MARGIN, kSummaryHeight)];
   [_summaryField setFont:METRICS_FONT_SYSTEM_REGULAR_11];
   [_summaryField setTextColor:[NSColor disabledControlTextColor]];
   [_summaryField setBezeled:NO];
@@ -245,7 +333,7 @@ static const float kBottomBarHeight =
   [_splitView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
 
   NSScrollView *tableScroll = [[NSScrollView alloc] initWithFrame:
-    NSMakeRect(0, 0, NSWidth(splitFrame), NSHeight(splitFrame) * 0.55)];
+    NSMakeRect(0, 0, NSWidth(splitFrame), NSHeight(splitFrame) * 0.34)];
   [tableScroll setHasVerticalScroller:YES];
   [tableScroll setBorderType:NSBezelBorder];
   [tableScroll setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
@@ -254,12 +342,11 @@ static const float kBottomBarHeight =
   [(SWForceToggleTableView *)_tableView setToggleController:self];
   [_tableView setDataSource:self];
   [_tableView setDelegate:self];
-  [_tableView setUsesAlternatingRowBackgroundColors:YES];
   [_tableView setAllowsMultipleSelection:NO];
 
   NSTableColumn *installColumn = [[NSTableColumn alloc] initWithIdentifier:@"install"];
   [[installColumn headerCell] setStringValue:@"Install"];
-  [installColumn setWidth:50.0];
+  [installColumn setWidth:44.0];
   NSButtonCell *checkboxCell = [[NSButtonCell alloc] init];
   [checkboxCell setButtonType:NSSwitchButton];
   [checkboxCell setTitle:@""];
@@ -270,32 +357,27 @@ static const float kBottomBarHeight =
 
   NSTableColumn *nameColumn = [[NSTableColumn alloc] initWithIdentifier:@"name"];
   [[nameColumn headerCell] setStringValue:@"Repository"];
-  [nameColumn setWidth:280.0];
+  [nameColumn setWidth:150.0];
   [_tableView addTableColumn:nameColumn];
 
   NSTableColumn *branchColumn = [[NSTableColumn alloc] initWithIdentifier:@"branch"];
   [[branchColumn headerCell] setStringValue:@"Branch"];
-  [branchColumn setWidth:140.0];
+  [branchColumn setWidth:76.0];
   [_tableView addTableColumn:branchColumn];
 
   NSTableColumn *commitsColumn = [[NSTableColumn alloc] initWithIdentifier:@"commits"];
   [[commitsColumn headerCell] setStringValue:@"Commits"];
-  [commitsColumn setWidth:90.0];
+  [commitsColumn setWidth:60.0];
   [_tableView addTableColumn:commitsColumn];
 
   [tableScroll setDocumentView:_tableView];
   [_splitView addSubview:tableScroll];
 
-  NSScrollView *detailsScroll = [[NSScrollView alloc] initWithFrame:
-    NSMakeRect(0, 0, NSWidth(splitFrame), NSHeight(splitFrame) * 0.45)];
-  [detailsScroll setHasVerticalScroller:YES];
-  [detailsScroll setBorderType:NSBezelBorder];
-  [detailsScroll setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-
-  NSView *detailsContainer = [[NSView alloc] initWithFrame:[[detailsScroll contentView] bounds]];
+  NSView *detailsContainer = [[NSView alloc] initWithFrame:
+    NSMakeRect(0, 0, NSWidth(splitFrame), NSHeight(splitFrame) * 0.66)];
+  [detailsContainer setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
   [self buildDetailsPaneIn:detailsContainer];
-  [detailsScroll setDocumentView:detailsContainer];
-  [_splitView addSubview:detailsScroll];
+  [_splitView addSubview:detailsContainer];
 
   [content addSubview:_splitView];
 }
@@ -303,31 +385,12 @@ static const float kBottomBarHeight =
 - (void)buildDetailsPaneIn:(NSView *)container
 {
   NSRect bounds = [container bounds];
-  float width = NSWidth(bounds) - 2 * METRICS_CONTENT_SIDE_MARGIN;
 
-  _detailsNameField = [[NSTextField alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, NSHeight(bounds) - METRICS_CONTENT_TOP_MARGIN - 18.0, width, 18.0)];
-  [_detailsNameField setFont:METRICS_FONT_SYSTEM_BOLD_13];
-  [_detailsNameField setBezeled:NO];
-  [_detailsNameField setDrawsBackground:NO];
-  [_detailsNameField setEditable:NO];
-  [_detailsNameField setSelectable:NO];
-  [_detailsNameField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
-  [container addSubview:_detailsNameField];
-
-  _detailsSummaryField = [[NSTextField alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, NSMinY([_detailsNameField frame]) - METRICS_SPACE_8 - 16.0, width, 16.0)];
-  [_detailsSummaryField setFont:METRICS_FONT_SYSTEM_REGULAR_11];
-  [_detailsSummaryField setTextColor:[NSColor disabledControlTextColor]];
-  [_detailsSummaryField setBezeled:NO];
-  [_detailsSummaryField setDrawsBackground:NO];
-  [_detailsSummaryField setEditable:NO];
-  [_detailsSummaryField setSelectable:NO];
-  [_detailsSummaryField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
-  [container addSubview:_detailsSummaryField];
-
+  // The repository name, branch and commit count are already columns of the
+  // list above, so this pane holds only what the list cannot show: a warning
+  // for the selected repository and its changelog.
   _detailsWarningField = [[NSTextField alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, NSMinY([_detailsSummaryField frame]) - METRICS_SPACE_8 - 16.0, width, 16.0)];
+    NSMakeRect(0, NSHeight(bounds) - kWarningHeight, NSWidth(bounds), kWarningHeight)];
   [_detailsWarningField setFont:METRICS_FONT_SYSTEM_REGULAR_11];
   [_detailsWarningField setBezeled:NO];
   [_detailsWarningField setDrawsBackground:NO];
@@ -337,27 +400,41 @@ static const float kBottomBarHeight =
   [_detailsWarningField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
   [container addSubview:_detailsWarningField];
 
-  // The whole details pane already scrolls as one unit (detailsScroll, in
-  // -buildSplitViewIn:), matching the handoff mockup's single plain text box
-  // with one scrollbar - nesting a second NSScrollView just for this text
-  // view gave the pane two scrollbars fighting each other. NSTextView
-  // defaults to vertically resizable with no max height, though, so left
-  // alone it grows to fit however many commits are listed and overlaps the
-  // name/summary fields above it instead of clipping - confirmed live with
-  // 8 commits, which grew the view from its allotted ~74pt up to 125pt.
-  // Turning that off keeps it confined to the space computed below; a repo
-  // with more commits than fit is something the user sees by dragging the
-  // split view's own divider, not a second, nested scrollbar.
-  float commitsTop = NSMinY([_detailsWarningField frame]) - METRICS_SPACE_8;
+  // Only the commit list scrolls. A text view sitting directly in a
+  // fixed-size container never scrolled: nothing clipped it, so a long
+  // changelog just ran off the pane.
+  _commitsScroll = [[NSScrollView alloc] initWithFrame:bounds];
+  [_commitsScroll setHasVerticalScroller:YES];
+  [_commitsScroll setBorderType:NSBezelBorder];
+  [_commitsScroll setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+  NSSize contentSize = [_commitsScroll contentSize];
   _detailsCommitsView = [[NSTextView alloc] initWithFrame:
-    NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, 0, width, commitsTop)];
-  [_detailsCommitsView setVerticallyResizable:NO];
+    NSMakeRect(0, 0, contentSize.width, contentSize.height)];
+  [_detailsCommitsView setMinSize:NSMakeSize(0, contentSize.height)];
+  [_detailsCommitsView setMaxSize:NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX)];
+  [_detailsCommitsView setVerticallyResizable:YES];
+  [_detailsCommitsView setHorizontallyResizable:NO];
+  [[_detailsCommitsView textContainer] setWidthTracksTextView:YES];
   [_detailsCommitsView setEditable:NO];
   [_detailsCommitsView setSelectable:YES];
   [_detailsCommitsView setDrawsBackground:NO];
   [_detailsCommitsView setFont:METRICS_FONT_SYSTEM_REGULAR_11];
-  [_detailsCommitsView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-  [container addSubview:_detailsCommitsView];
+  [_detailsCommitsView setAutoresizingMask:NSViewWidthSizable];
+  [_commitsScroll setDocumentView:_detailsCommitsView];
+  [container addSubview:_commitsScroll];
+}
+
+// The warning line takes its slot from the top of the changelog only while
+// it has something to say.
+- (void)setDetailsWarningVisible:(BOOL)visible
+{
+  [_detailsWarningField setHidden:!visible];
+  NSRect bounds = [[_commitsScroll superview] bounds];
+  NSRect frame = bounds;
+  if (visible) {
+    frame.size.height -= kWarningHeight + METRICS_SPACE_8;
+  }
+  [_commitsScroll setFrame:frame];
 }
 
 #pragma mark - Public API
@@ -575,37 +652,24 @@ static const float kBottomBarHeight =
 - (void)showDetailsForRepository:(SWRepository *)repo
 {
   if (!repo) {
-    [_detailsNameField setStringValue:@""];
-    [_detailsSummaryField setStringValue:@""];
-    [_detailsWarningField setHidden:YES];
+    [self setDetailsWarningVisible:NO];
     [[_detailsCommitsView textStorage] setAttributedString:[[NSAttributedString alloc] initWithString:@""]];
     return;
-  }
-
-  [_detailsNameField setStringValue:[repo name]];
-
-  if ([repo isPinned]) {
-    [_detailsSummaryField setStringValue:[NSString stringWithFormat:
-      @"Pinned by gershwin-developer to %@", [self branchDisplayStringForRepository:repo]]];
-  } else {
-    [_detailsSummaryField setStringValue:[NSString stringWithFormat:
-      @"origin/%@ · %lu new commit%@", [repo targetBranch] ?: @"",
-      (unsigned long)[repo commitCount], [repo commitCount] == 1 ? @"" : @"s"]];
   }
 
   NSString *reason = [SWSelectionRules blockedReasonForRepository:repo];
   if (reason) {
     [_detailsWarningField setStringValue:[NSString stringWithFormat:@"%@: %@", [repo name], reason]];
     [_detailsWarningField setTextColor:[NSColor redColor]];
-    [_detailsWarningField setHidden:NO];
+    [self setDetailsWarningVisible:YES];
   } else if ([repo dirty]) {
     [_detailsWarningField setStringValue:[NSString stringWithFormat:
       @"%lu modified file%@ will be set aside and restored after updating.",
       (unsigned long)[repo modifiedFileCount], [repo modifiedFileCount] == 1 ? @"" : @"s"]];
     [_detailsWarningField setTextColor:[NSColor colorWithCalibratedRed:0.6 green:0.4 blue:0.0 alpha:1.0]];
-    [_detailsWarningField setHidden:NO];
+    [self setDetailsWarningVisible:YES];
   } else {
-    [_detailsWarningField setHidden:YES];
+    [self setDetailsWarningVisible:NO];
   }
 
   NSMutableAttributedString *commitsText = [[NSMutableAttributedString alloc] init];

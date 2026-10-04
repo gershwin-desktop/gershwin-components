@@ -11,6 +11,7 @@ static const float kWinWidth = METRICS_WIN_MIN_WIDTH;
 static const float kWinHeight = 155.0;
 static const float kBarHeight = 20.0;
 static const float kLineHeight = 20.0;
+static const double kCheckedProgressShare = 0.95;
 
 @interface SWCheckingWindowController ()
 {
@@ -67,10 +68,12 @@ static const float kLineHeight = 20.0;
     NSMakeRect(METRICS_TEXT_LEFT, progressY,
                contentRight - METRICS_TEXT_LEFT, kBarHeight)];
   [_progressBar setStyle:NSProgressIndicatorStyleBar];
-  [_progressBar setIndeterminate:YES];
+  [_progressBar setIndeterminate:NO];
+  [_progressBar setMinValue:0.0];
+  [_progressBar setMaxValue:1.0];
+  [_progressBar setDoubleValue:0.0];
   [_progressBar setControlSize:NSControlSizeRegular];
   [content addSubview:_progressBar];
-  [_progressBar startAnimation:nil];
 
   float statusY = progressY - METRICS_SPACE_8 - kLineHeight;
   _statusField = [[NSTextField alloc] initWithFrame:
@@ -113,6 +116,13 @@ static const float kLineHeight = 20.0;
   // guard, one of those callbacks overwrites "Stopping..." with a fresh
   // "Fetching ..." line, and the button looks like it did nothing.
   if (_stopping) return;
+  // The checker reports each repository as it finishes, so index of total is
+  // the share done. The bar stops short of full because the work after the
+  // last fetch (picking the default selection, building the list) is still
+  // to come.
+  if (total > 0) {
+    [_progressBar setDoubleValue:kCheckedProgressShare * (double)index / (double)total];
+  }
   [_statusField setStringValue:[NSString stringWithFormat:
     @"Fetching %@ from origin (%lu of %lu)", name,
     (unsigned long)index, (unsigned long)total]];
