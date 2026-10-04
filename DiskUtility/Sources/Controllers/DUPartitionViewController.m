@@ -747,6 +747,35 @@ static NSString *const kDefaultsConfirmDestructive =
         unsigned long long gapBytes = [self largestFreeGapBytes];
         unsigned long long wanted = MAX(gapBytes / 2,
                                         kMinimumNewPartitionBytes);
+        // The 1 MiB left over after an existing table's last partition is
+        // alignment slack, not space worth a partition of its own.
+        if (gapBytes < 16ull * 1024ull * 1024ull) {
+            // A disk filled by its partitions has no gap to split, which
+            // left the count popup unable to add anything; halve the
+            // largest partition and give the freed half to the new one.
+            DUPartition *largest = nil;
+            for (DUPartition *candidate in _layout.partitions) {
+                if (largest == nil ||
+                        candidate.sizeBytes > largest.sizeBytes) {
+                    largest = candidate;
+                }
+            }
+            unsigned long long half = largest.sizeBytes / 2;
+            half -= half % (1024ull * 1024ull);
+            NSError *resizeError = nil;
+            if (largest == nil || half < kMinimumNewPartitionBytes ||
+                ![_layout resizePartition:largest
+                              toSizeBytes:half
+                                    error:&resizeError]) {
+                [self showError:NSLocalizedString(
+                                    @"Not enough free space for another "
+                                    @"partition.", nil)
+                        detail:resizeError.localizedDescription];
+                break;
+            }
+            gapBytes = [self largestFreeGapBytes];
+            wanted = gapBytes;
+        }
         if (wanted > gapBytes) {
             [self showError:NSLocalizedString(
                                 @"Not enough free space for another "
