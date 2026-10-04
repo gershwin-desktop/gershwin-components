@@ -108,11 +108,6 @@ ADDITIONAL_GUI_LIBS += $(WHISPER_CURL_LIBS)
 
 include $(GNUSTEP_MAKEFILES)/application.make
 
-# Override desktop file creation
-$(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop:
-	$(ECHO_NOTHING)echo "Desktop file generation disabled" > /dev/null$(END_ECHO)
-	$(ECHO_NOTHING)touch $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop; chmod a+x $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop$(END_ECHO)
-
 -include GNUmakefile.postamble
 
 endif
