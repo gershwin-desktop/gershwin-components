@@ -180,7 +180,8 @@
             kDUFormatIdentifierKey : type,
             kDUFormatDisplayNameKey :
                 [DUPartitionTableParser filesystemDisplayName:type],
-            kDUFormatCanFormatKey : @YES,
+            kDUFormatCanFormatKey :
+                @([DULinuxFilesystemTool canFormatFilesystemType:type]),
         }];
     }
     return formats;
@@ -529,12 +530,62 @@
                                                    NSString *message) {
             progress(0.1 + fraction * 0.85, message);
         }];
+        if (result == nil) {
+            result = [self formatPartitionsOfPlan:plan
+                                     diskDevicePath:device.backendPath
+                                           progress:progress];
+        }
         progress(1.0,
                  result == nil
                      ? NSLocalizedString(@"Partitioning completed.", nil)
                      : NSLocalizedString(@"Partitioning failed.", nil));
         completion(result);
     });
+}
+
+// parted only records a filesystem hint; without mkfs the chosen formats
+// never exist and every partition comes out blank.
+- (NSError *)formatPartitionsOfPlan:(DUPartitionPlan *)plan
+                      diskDevicePath:(NSString *)diskPath
+                            progress:(void (^)(double, NSString *))progress
+{
+    NSArray<DUPartition *> *entries = plan.entries;
+    NSString *disk = [diskPath stringByResolvingSymlinksInPath];
+    // Names like nvme0n1 and mmcblk0 take a "p" before the number.
+    BOOL separator = [[disk substringFromIndex:disk.length - 1]
+        rangeOfCharacterFromSet:[NSCharacterSet decimalDigitCharacterSet]]
+            .location != NSNotFound;
+    for (NSUInteger i = 0; i < entries.count; i++) {
+        DUPartition *entry = entries[i];
+        if (entry.filesystemType.length == 0) {
+            continue;
+        }
+        NSString *node = [NSString stringWithFormat:@"%@%@%lu", disk,
+                          separator ? @"p" : @"", (unsigned long)(i + 1)];
+        // The kernel creates the node asynchronously after the table write.
+        for (int wait = 0; wait < 100 &&
+             ![[NSFileManager defaultManager] fileExistsAtPath:node]; wait++) {
+            [NSThread sleepForTimeInterval:0.1];
+        }
+        NSError *error =
+            [DULinuxFilesystemTool unmountAllMountsOfDevicePath:node];
+        if (error != nil) {
+            return error;
+        }
+        double base = 0.1 + 0.85 * ((double)i / (double)entries.count);
+        double span = 0.85 / (double)entries.count;
+        error = [DULinuxFilesystemTool
+            formatVolumeAtDevicePath:node
+                      filesystemType:entry.filesystemType
+                               label:entry.name
+                            progress:^(double fraction, NSString *line) {
+            progress(base + fraction * span, line);
+        }];
+        if (error != nil) {
+            return error;
+        }
+    }
+    return nil;
 }
 
 #pragma mark - Mount management

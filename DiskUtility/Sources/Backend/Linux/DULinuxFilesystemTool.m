@@ -132,19 +132,16 @@ static double StageFractionForLine(NSString *line, double current)
         BOOL digits = isdigit(before) && isdigit(after);
         if (digits && [lower containsString:@"inode tables"]) {
             // "Writing inode tables: 34/1280" -> fraction within the phase.
-            NSScanner *scanner = [NSScanner scannerWithString:lower];
-            [scanner setScanLocation:0];
             double written = -1.0;
-            while (!scanner.isAtEnd) {
-                NSString *word = nil;
-                [scanner scanUpToCharactersFromSet:
-                             [[NSCharacterSet whitespaceCharacterSet]
-                                 invertedSet]
-                                      intoString:&word];
-                NSScanner *wordScanner = [NSScanner scannerWithString:word ?: @""];
+            // The old scanner loop never advanced past a line's first word
+            // and spun forever, growing memory until the app was killed.
+            for (NSString *word in [lower componentsSeparatedByCharactersInSet:
+                                        [NSCharacterSet whitespaceCharacterSet]]) {
+                NSScanner *wordScanner = [NSScanner scannerWithString:word];
                 double n = 0;
                 double m = 0;
-                if ([wordScanner scanDouble:&n] && [wordScanner scanString:@"/" intoString:NULL] &&
+                if ([wordScanner scanDouble:&n] &&
+                    [wordScanner scanString:@"/" intoString:NULL] &&
                     [wordScanner scanDouble:&m] && m > 0) {
                     written = n / m;
                     break;
@@ -294,9 +291,31 @@ static NSError *RunStreamedTool(NSString *toolName,
            @"xfs" : @"-L",
            @"f2fs" : @"-l",
            @"swap" : @"-L" };
+    // mkfs.vfat and friends refuse an over-long label outright instead of
+    // truncating, so the default volume name of a stick would fail the erase.
+    NSDictionary<NSString *, NSNumber *> *limitTable =
+        @{ @"ext2" : @16, @"ext3" : @16, @"ext4" : @16, @"vfat" : @11,
+           @"exfat" : @11, @"ntfs" : @128, @"xfs" : @12, @"f2fs" : @512,
+           @"swap" : @15 };
+    NSString *fitted = label;
+    NSUInteger limit = limitTable[fstype].unsignedIntegerValue;
+    if ([fstype isEqualToString:@"vfat"]) {
+        fitted = [fitted uppercaseString];
+    }
+    if (limit > 0 && fitted.length > limit) {
+        fitted = [fitted substringToIndex:limit];
+    }
     NSMutableArray<NSString *> *arguments = [base mutableCopy];
-    [arguments addObjectsFromArray:@[ flagTable[fstype], label ]];
+    [arguments addObjectsFromArray:@[ flagTable[fstype], fitted ]];
     return arguments;
+}
+
++ (BOOL)canFormatFilesystemType:(NSString *)fstype
+{
+    NSArray<NSString *> *prefix =
+        [self formatArgumentsForFilesystemType:fstype label:nil];
+    return prefix != nil &&
+        [DUProcessRunner executablePathForName:prefix.firstObject] != nil;
 }
 
 + (NSString *)checkToolNameForFilesystemType:(NSString *)fstype

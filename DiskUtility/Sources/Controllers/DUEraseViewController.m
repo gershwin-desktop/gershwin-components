@@ -222,19 +222,25 @@ static NSString * const kDefaultsConfirmDestructive =
     if (object != nil) {
         NSArray<NSDictionary *> *formats =
             [self.storageManager supportedFormatsForObject:object];
+        // Unavailable filesystems stay visible but greyed out so the user
+        // sees what this machine lacks the tools for; the menu must not
+        // auto-enable them.
+        _formatPopup.menu.autoenablesItems = NO;
+        NSInteger firstEnabled = -1;
         for (NSDictionary *format in formats) {
-            if (![format[kDUFormatCanFormatKey] boolValue]) {
-                continue;
-            }
             NSMenuItem *item = [[NSMenuItem alloc]
                 initWithTitle:format[kDUFormatDisplayNameKey]
                        action:nil
                 keyEquivalent:@""];
             item.representedObject = format[kDUFormatIdentifierKey];
+            item.enabled = [format[kDUFormatCanFormatKey] boolValue];
             [_formatPopup.menu addItem:item];
+            if ([item isEnabled] && firstEnabled < 0) {
+                firstEnabled = (NSInteger)_formatPopup.itemArray.count - 1;
+            }
         }
-        if (_formatPopup.itemArray.count > 0) {
-            [_formatPopup selectItemAtIndex:0];
+        if (firstEnabled >= 0) {
+            [_formatPopup selectItemAtIndex:firstEnabled];
         }
 
         // Prefill with the current display name; users usually keep it.

@@ -72,6 +72,10 @@ extern NSString * const kDUBackendDetailKey;
 // format cannot inherit leftovers. Fails hard when wipefs exists but fails;
 // returns nil immediately when wipefs is not installed (the subsequent
 // mkfs overwrites the primary signatures anyway).
+// YES when the mkfs tool for the identifier is installed on this host;
+// the format popups grey out the rest.
++ (BOOL)canFormatFilesystemType:(NSString *)fstype;
+
 // Unmounts every filesystem mounted from the device node itself or from one
 // of its partitions (e.g. /dev/sda and /dev/sda1, /dev/nvme0n1p2). Returns
 // nil when nothing remains mounted, otherwise a DUErrorDeviceBusy error.

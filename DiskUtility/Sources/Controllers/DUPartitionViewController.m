@@ -555,29 +555,32 @@ static NSString *const kDefaultsConfirmDestructive =
     }
     NSArray<NSDictionary *> *formats =
         [self.storageManager supportedFormatsForObject:_device];
+    // Unavailable filesystems stay visible but greyed out; the menu must
+    // not auto-enable them.
+    _formatPopup.menu.autoenablesItems = NO;
     NSInteger matchIndex = -1;
-    NSUInteger index = 0;
+    NSInteger firstEnabled = -1;
     for (NSDictionary *format in formats) {
-        if (![format[kDUFormatCanFormatKey] boolValue]) {
-            continue;
-        }
         NSMenuItem *item = [[NSMenuItem alloc]
             initWithTitle:format[kDUFormatDisplayNameKey] ?: @""
                    action:nil
             keyEquivalent:@""];
         item.representedObject = format[kDUFormatIdentifierKey];
+        item.enabled = [format[kDUFormatCanFormatKey] boolValue];
         [_formatPopup.menu addItem:item];
-        if (filesystemType.length > 0 &&
+        NSInteger position = (NSInteger)_formatPopup.itemArray.count - 1;
+        if ([item isEnabled] && firstEnabled < 0) {
+            firstEnabled = position;
+        }
+        if ([item isEnabled] && filesystemType.length > 0 &&
             [format[kDUFormatIdentifierKey]
                 isEqualToString:filesystemType]) {
-            matchIndex = (NSInteger)_formatPopup.itemArray.count - 1;
+            matchIndex = position;
         }
-        index++;
     }
-    (void)index;
-    if (_formatPopup.itemArray.count > 0) {
+    if (firstEnabled >= 0) {
         [_formatPopup selectItemAtIndex:
-            matchIndex >= 0 ? matchIndex : 0];
+            matchIndex >= 0 ? matchIndex : firstEnabled];
     }
 }
 
@@ -1134,6 +1137,22 @@ static NSString *const kDefaultsConfirmDestructive =
             summary);
         if (choice != NSAlertAlternateReturn) {
             return;
+        }
+    }
+
+    // Partitions read from the old table carry no filesystem type, yet the
+    // Format popup shows its first entry for them; without this they were
+    // created blank while the user saw a format selected.
+    NSString *blankFormat = nil;
+    for (NSMenuItem *item in _formatPopup.itemArray) {
+        if ([item isEnabled]) {
+            blankFormat = item.representedObject;
+            break;
+        }
+    }
+    for (DUPartition *partition in _layout.partitions) {
+        if (partition.filesystemType.length == 0 && blankFormat.length > 0) {
+            [_layout setFormat:blankFormat forPartition:partition];
         }
     }
 
