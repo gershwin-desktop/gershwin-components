@@ -33,6 +33,8 @@ void gad_node_free(GadNode *node)
   for (int i = 0; i < node->nchildren; i++)
     gad_node_free(node->children[i]);
   free(node->children);
+  if (node->widget_free)
+    node->widget_free(node->widget);
   free(node->title);
   free(node);
 }

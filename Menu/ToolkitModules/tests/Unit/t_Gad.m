@@ -13,6 +13,7 @@
 void gad_module_activate(unsigned long xid, const int *path, int len) {}
 void gad_module_request(unsigned long xid) {}
 GadNode *gad_module_snapshot(unsigned long xid) { return NULL; }
+void gad_module_connected(void) {}
 int gad_module_has_dynamic_menus(void) { return 0; }
 GadNode *gad_module_refresh(unsigned long xid, int *changed) { *changed = 0; return NULL; }
 

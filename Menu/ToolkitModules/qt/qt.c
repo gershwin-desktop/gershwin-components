@@ -23,7 +23,6 @@
 #include "gad.h"
 
 #define TICK_MS 500
-#define SNAPSHOT_TIMEOUT_MS 250
 #define MAX_DEPTH 16
 #define MAX_DYNAMIC 256
 
@@ -34,6 +33,8 @@ enum { ATTRIBUTE_DONT_USE_NATIVE_MENU_BAR = 6 };
 enum { ACTION_TRIGGER = 0 };
 
 static int gQt6;
+static int gDebug;
+#define TRACE(...) do { if (gDebug) fprintf(stderr, "qt-appmenu-do: " __VA_ARGS__); } while (0)
 
 /* GLib, found in the process */
 static unsigned (*p_g_idle_add)(int (*)(void *), void *);
@@ -66,23 +67,6 @@ static void (*p_listDispose)(void *data);
 static const char *(*p_qVersion)(void);
 static const void *gMainWindowMeta;
 static const void *gMenuBarMeta;
-
-typedef struct
-{
-  void *menubar;
-  void *window;
-  unsigned long xid;
-  int seen;
-  int hidden;
-  int last_connected;
-  int dynamic;
-  unsigned long long sig;   /* structure, key equivalents and state last sent */
-  unsigned long long ssig;  /* structure and key equivalents only */
-} Entry;
-
-static Entry **gEntries;
-static int gEntryCount;
-static int gDynamicTotal;
 
 /* Menus found empty and filled by aboutToShow, which need it again on use. */
 static void *gProbed[MAX_DYNAMIC];
@@ -315,67 +299,18 @@ static void fill_actions(GadNode *parent, const void *widget, int depth)
   free(actions);
 }
 
-enum { BUILD_PLAIN, BUILD_PROBE, BUILD_REFRESH };
-
-static GadNode *build_tree(Entry *e, int mode)
+static GadNode *build_menu_bar(void *bar, void *window, int mode, int *dynamic)
 {
+  (void)window;
   GadNode *root = gad_node_new();
-  gProbe = (mode != BUILD_PLAIN);
-  gRefresh = (mode == BUILD_REFRESH);
+  gProbe = (mode != GAD_BUILD_PLAIN);
+  gRefresh = (mode == GAD_BUILD_REFRESH);
   gDynamic = 0;
   if (root)
-    fill_actions(root, e->menubar, 0);
+    fill_actions(root, bar, 0);
   gProbe = gRefresh = 0;
-  if (mode != BUILD_PLAIN)
-    {
-      __atomic_fetch_add(&gDynamicTotal, gDynamic - e->dynamic, __ATOMIC_RELAXED);
-      e->dynamic = gDynamic;
-    }
+  *dynamic = gDynamic;
   return root;
-}
-
-/* ---- entries ---- */
-
-static void apply_visibility(Entry *e)
-{
-  int connected = gad_bridge_connected();
-  /* Only take the in-window menu bar away while Menu.app really shows it. */
-  if (connected && (!e->hidden || p_widgetIsVisibleTo(e->menubar, e->window)))
-    {
-      p_widgetHide(e->menubar);
-      e->hidden = 1;
-    }
-  else if (!connected && e->hidden)
-    {
-      p_widgetShow(e->menubar);
-      e->hidden = 0;
-    }
-}
-
-static void push_entry(Entry *e)
-{
-  GadNode *root = build_tree(e, BUILD_PROBE);
-  if (root == NULL)
-    return;
-  gad_bridge_push(e->xid, root);
-  e->sig = gad_node_signature(root, 1, GAD_SIGNATURE_SEED);
-  e->ssig = gad_node_signature(root, 0, GAD_SIGNATURE_SEED);
-  gad_node_free(root);
-  e->last_connected = gad_bridge_connected();
-  apply_visibility(e);
-}
-
-static Entry *entry_for_xid(unsigned long xid)
-{
-  Entry *only = NULL;
-  for (int i = 0; i < gEntryCount; i++)
-    {
-      if (gEntries[i]->xid == xid)
-        return gEntries[i];
-      only = gEntries[i];
-    }
-  /* Menu.app may name the application's window rather than ours. */
-  return gEntryCount == 1 ? only : NULL;
 }
 
 static int is_a(const void *object, const void *meta)
@@ -384,210 +319,51 @@ static int is_a(const void *object, const void *meta)
   return p_metaInherits(metaObject(object), meta);
 }
 
-static void drop_entry(int index)
-{
-  Entry *e = gEntries[index];
-  gad_bridge_unregister(e->xid);
-  __atomic_fetch_sub(&gDynamicTotal, e->dynamic, __ATOMIC_RELAXED);
-  free(e);
-  gEntries[index] = gEntries[--gEntryCount];
-}
-
-static int tick_cb(void *data)
+static void enumerate_windows(void (*found)(void *, void *, unsigned long, void *), void *ctx)
 {
   unsigned char list[32] = { 0 };
   int n = 0;
   void **windows;
-  (void)data;
-  for (int i = 0; i < gEntryCount; i++)
-    gEntries[i]->seen = 0;
-
   p_topLevelWidgets(list);
   windows = qlist_take(list, &n);
   for (int i = 0; i < n; i++)
     {
       const void *w = windows[i];
       const void *bar;
-      Entry *e = NULL;
+      TRACE("window %p visible %d main window %d\n", w, p_widgetIsVisibleTo(w, NULL), is_a(w, gMainWindowMeta));
       if (!p_widgetIsVisibleTo(w, NULL) || !is_a(w, gMainWindowMeta))
         continue;
       bar = p_menuWidget(w);
+      TRACE("menu widget %p\n", bar);
       if (bar == NULL || !is_a(bar, gMenuBarMeta))
         continue;
-      for (int j = 0; j < gEntryCount; j++)
-        if (gEntries[j]->menubar == bar)
-          e = gEntries[j];
-      if (e == NULL)
-        {
-          Entry **grown = realloc(gEntries, sizeof(Entry *) * (size_t)(gEntryCount + 1));
-          if (grown == NULL)
-            continue;
-          gEntries = grown;
-          e = calloc(1, sizeof *e);
-          if (e == NULL)
-            continue;
-          e->menubar = (void *)bar;
-          e->window = (void *)w;
-          e->xid = (unsigned long)p_widgetWinId(w);
-          gEntries[gEntryCount++] = e;
-          e->seen = 1;
-          push_entry(e);
-          continue;
-        }
-      e->seen = 1;
-      /* The program changes its menus without a signal we could listen to,
-         so look again; only a change is sent. */
-      {
-        GadNode *root = build_tree(e, BUILD_PROBE);
-        if (root)
-          {
-            unsigned long long sig = gad_node_signature(root, 1, GAD_SIGNATURE_SEED);
-            gad_node_free(root);
-            if (sig != e->sig || gad_bridge_connected() != e->last_connected)
-              push_entry(e);
-            else
-              apply_visibility(e);
-          }
-      }
+      found((void *)bar, (void *)w, (unsigned long)p_widgetWinId(w), ctx);
     }
   free(windows);
-  for (int i = gEntryCount - 1; i >= 0; i--)
-    if (!gEntries[i]->seen)
-      drop_entry(i);
-  return 1;
 }
 
-/* ---- calls from the Distributed Objects thread ---- */
-
-typedef struct
+static int bar_is_shown(void *bar, void *window)
 {
-  unsigned long xid;
-  int *path;
-  int len;
-} Activation;
-
-static int activate_idle(void *data)
-{
-  Activation *a = data;
-  Entry *e = entry_for_xid(a->xid);
-  GadNode *tree = e ? build_tree(e, BUILD_PLAIN) : NULL;
-  GadNode *cur = tree ? gad_node_at_path(tree, a->path, a->len) : NULL;
-  if (cur == NULL || cur == tree)
-    fprintf(stderr, "qt-appmenu-do: no menu item at the requested path for window 0x%lx\n", a->xid);
-  else if (!cur->has_submenu && !cur->separator && cur->enabled)
-    p_actionActivate(cur->widget, ACTION_TRIGGER);
-  gad_node_free(tree);
-  free(a->path);
-  free(a);
-  return 0;
+  return p_widgetIsVisibleTo(bar, window);
 }
 
-void gad_module_activate(unsigned long xid, const int *path, int len)
+static void set_bar_shown(void *bar, void *window, int shown)
 {
-  Activation *a = calloc(1, sizeof *a);
-  if (a == NULL)
-    return;
-  a->xid = xid;
-  a->len = len;
-  a->path = malloc(sizeof(int) * (size_t)(len ? len : 1));
-  if (a->path == NULL)
-    {
-      free(a);
-      return;
-    }
-  memcpy(a->path, path, sizeof(int) * (size_t)len);
-  p_g_idle_add(activate_idle, a);
+  (void)window;
+  if (shown)
+    p_widgetShow(bar);
+  else
+    p_widgetHide(bar);
 }
 
-static int request_idle(void *data)
+static void activate_action(void *action)
 {
-  unsigned long xid = (unsigned long)data;
-  for (int i = 0; i < gEntryCount; i++)
-    if (xid == 0 || gEntries[i]->xid == xid)
-      push_entry(gEntries[i]);
-  return 0;
+  p_actionActivate(action, ACTION_TRIGGER);
 }
 
-void gad_module_request(unsigned long xid)
-{
-  p_g_idle_add(request_idle, (void *)xid);
-}
-
-typedef struct
-{
-  unsigned long xid;
-  int refresh;
-} SnapshotRequest;
-
-typedef struct
-{
-  GadNode *tree;
-  int changed;
-} SnapshotResult;
-
-static void *snapshot_call(void *arg)
-{
-  SnapshotRequest *s = arg;
-  SnapshotResult *r = calloc(1, sizeof *r);
-  Entry *e = entry_for_xid(s->xid);
-  if (r == NULL)
-    return NULL;
-  r->tree = e ? build_tree(e, s->refresh ? BUILD_REFRESH : BUILD_PLAIN) : NULL;
-  if (r->tree && s->refresh)
-    {
-      unsigned long long sig = gad_node_signature(r->tree, 0, GAD_SIGNATURE_SEED);
-      r->changed = (sig != e->ssig);
-      e->ssig = sig;
-      e->sig = gad_node_signature(r->tree, 1, GAD_SIGNATURE_SEED);
-    }
-  return r;
-}
-
-static void snapshot_destroy(void *result)
-{
-  SnapshotResult *r = result;
-  if (r)
-    gad_node_free(r->tree);
-  free(r);
-}
-
-static GadNode *run_on_main(unsigned long xid, int refresh, int *changed)
-{
-  SnapshotRequest s = { xid, refresh };
-  SnapshotResult *r = gad_main_call(snapshot_call, &s, snapshot_destroy, SNAPSHOT_TIMEOUT_MS);
-  GadNode *tree = NULL;
-  if (r)
-    {
-      tree = r->tree;
-      if (changed)
-        *changed = r->changed;
-      free(r);
-    }
-  return tree;
-}
-
-GadNode *gad_module_snapshot(unsigned long xid)
-{
-  return run_on_main(xid, 0, NULL);
-}
-
-int gad_module_has_dynamic_menus(void)
-{
-  return __atomic_load_n(&gDynamicTotal, __ATOMIC_RELAXED) != 0;
-}
-
-GadNode *gad_module_refresh(unsigned long xid, int *changed)
-{
-  GadNode *tree;
-  *changed = 0;
-  tree = run_on_main(xid, 1, changed);
-  if (tree && !*changed)
-    {
-      gad_node_free(tree);
-      tree = NULL;
-    }
-  return tree;
-}
+static const GadToolkit gQtToolkit = {
+  enumerate_windows, build_menu_bar, bar_is_shown, set_bar_shown, activate_action
+};
 
 /* ---- start ---- */
 
@@ -624,11 +400,14 @@ void gad_qt_start(void)
   if (started)
     return;
   started = 1;
+  gDebug = getenv("GAD_DEBUG") != NULL;
+  TRACE("started\n");
 
   *(void **)&p_qVersion = sym("qVersion");
   if (p_qVersion == NULL)
     return;
   version = p_qVersion();
+  TRACE("Qt %s\n", version);
   gQt6 = (version[0] == '6');
   if (version[0] != '5' && version[0] != '6')
     {
@@ -650,7 +429,10 @@ void gad_qt_start(void)
   /* A program without QtWidgets has no QMenuBar to hand over, and says nothing */
   *(void **)&p_topLevelWidgets = sym("_ZN12QApplication15topLevelWidgetsEv");
   if (p_topLevelWidgets == NULL)
-    return;
+    {
+      TRACE("no QApplication::topLevelWidgets: no QtWidgets in this program\n");
+      return;
+    }
 
   *(void **)&p_g_idle_add = sym("g_idle_add");
   *(void **)&p_g_timeout_add = sym("g_timeout_add");
@@ -693,7 +475,6 @@ void gad_qt_start(void)
       return;
     }
 
-  gad_main_call_init(p_g_idle_add);
-  gad_bridge_start();
-  p_g_timeout_add(TICK_MS, tick_cb, NULL);
+  gad_poller_start(&gQtToolkit, p_g_idle_add, p_g_timeout_add, TICK_MS);
+  TRACE("running\n");
 }

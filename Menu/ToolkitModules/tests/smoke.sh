@@ -5,9 +5,10 @@ set -u
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/gad-smoke.XXXXXX")
-mkdir -p "$OUT/modules" "$OUT/platformthemes"
+mkdir -p "$OUT/modules" "$OUT/platformthemes" "$OUT/lib"
 cp obj/modules/libgtk-appmenu-do.so "$OUT/modules/"
-cp obj/platformthemes/libgad.so "$OUT/platformthemes/"
+cp obj/platformthemes/*.so "$OUT/platformthemes/"
+cp obj/lib/libgad-qt-core.so "$OUT/lib/"
 export GTK_PATH=$OUT GTK_MODULES=gtk-appmenu-do
 export QT_PLUGIN_PATH=$OUT QT_QPA_PLATFORMTHEME=gad
 export GNUSTEP_USER_ROOT=$OUT/gs

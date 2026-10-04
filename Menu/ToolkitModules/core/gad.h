@@ -18,7 +18,8 @@ typedef struct GadNode {
   int has_submenu;
   char key[8];        /* UTF-8, empty when there is no key equivalent */
   unsigned long mods; /* NSEvent modifier mask */
-  void *widget;       /* GtkMenuItem; valid on the GTK main thread only */
+  void *widget;       /* what activates the item; valid on the toolkit's main thread only */
+  void (*widget_free)(void *widget); /* releases widget when the node is freed, or NULL */
   struct GadNode **children;
   int nchildren;
 } GadNode;
@@ -60,13 +61,41 @@ void gad_main_call_init(unsigned (*idle_add)(int (*)(void *), void *));
 void *gad_main_call(void *(*fn)(void *), void *arg, void (*destroy)(void *result),
                     int timeout_ms);
 
+/* A toolkit module that finds menu bars by looking at the program on a timer
+   (core/poller.c) describes the toolkit with this.  All of it runs on the main
+   thread of the program. */
+enum { GAD_BUILD_PLAIN, GAD_BUILD_PROBE, GAD_BUILD_REFRESH };
+
+typedef struct GadToolkit
+{
+  /* Calls found(bar, window, xid, ctx) for every window that has a menu bar. */
+  void (*enumerate)(void (*found)(void *bar, void *window, unsigned long xid, void *ctx),
+                    void *ctx);
+  /* PROBE fills menus that are empty, REFRESH asks the ones that were filled
+     on use again.  *dynamic is the number of menus that need REFRESH. */
+  GadNode *(*build)(void *bar, void *window, int mode, int *dynamic);
+  int (*is_shown)(void *bar, void *window);
+  void (*set_shown)(void *bar, void *window, int shown);
+  /* Triggers the item that a node's widget pointer stands for. */
+  void (*activate)(void *target);
+} GadToolkit;
+
+/* Starts the bridge and looks at the program every interval_ms. idle_add and
+   timeout_add are g_idle_add and g_timeout_add of the toolkit's GLib. */
+void gad_poller_start(const GadToolkit *toolkit,
+                      unsigned (*idle_add)(int (*)(void *), void *),
+                      unsigned (*timeout_add)(unsigned, int (*)(void *), void *),
+                      unsigned interval_ms);
+
 /* bridge.m - callable from the GTK main thread */
 void gad_bridge_start(void);
 int gad_bridge_connected(void);
 void gad_bridge_push(unsigned long xid, const GadNode *root);
 void gad_bridge_unregister(unsigned long xid);
 
-/* module.c - called from the Distributed Objects thread */
+/* the toolkit module - called from the Distributed Objects thread */
+/* Menu.app became reachable: send every menu and take the in-window ones away. */
+void gad_module_connected(void);
 void gad_module_activate(unsigned long xid, const int *path, int len);
 void gad_module_request(unsigned long xid);
 /* Blocks the caller until the GTK main loop built a fresh tree; NULL on timeout. */

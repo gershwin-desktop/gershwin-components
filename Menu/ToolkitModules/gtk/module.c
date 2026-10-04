@@ -601,6 +601,18 @@ static gboolean request_idle(void *data)
   return 0;
 }
 
+static gboolean connected_idle(void *data)
+{
+  (void)data;
+  request_idle(NULL);
+  return 0;
+}
+
+void gad_module_connected(void)
+{
+  p_g_idle_add(connected_idle, NULL);
+}
+
 void gad_module_request(unsigned long xid)
 {
   p_g_idle_add(request_idle, (void *)xid);

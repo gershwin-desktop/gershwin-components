@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include "gad.h"
 
 #import "../../GNUStepMenuIPC.h"
@@ -105,7 +106,10 @@ static void CollectStates(const GadNode *node, NSMutableArray *out)
 
 - (void)setConnected:(BOOL)connected
 {
+  BOOL was = atomic_load(&gConnected) != 0;
   atomic_store(&gConnected, connected ? 1 : 0);
+  if (connected && !was)
+    gad_module_connected();
 }
 
 - (void)connectionDied:(NSNotification *)note
@@ -298,8 +302,19 @@ static void CollectStates(const GadNode *node, NSMutableArray *out)
 
 #pragma mark C interface
 
+extern char **environ;
+
 void gad_bridge_start(void)
 {
+#if !defined(__linux__)
+  /* Foundation learns the arguments and the environment of a program from the
+     C runtime on Linux only.  Everywhere else the program that loads this code
+     does not know Foundation, so it is told here; the arguments themselves are
+     of no use to the bridge. */
+  static char *argv[2];
+  argv[0] = (char *)getprogname();
+  GSInitializeProcess(1, argv, environ);
+#endif
   GADBridge *bridge = [GADBridge shared];
   gThread = [[NSThread alloc] initWithTarget:bridge selector:@selector(run) object:nil];
   [gThread setName:@"gtk-appmenu-do"];
