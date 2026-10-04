@@ -15,6 +15,7 @@
 
 static NSNumber *sStars = nil;
 static NSString *sText = nil;
+static NSString *sLicense = nil;
 static NSError *sError = nil;
 static BOOL sDone = NO;
 
@@ -22,6 +23,7 @@ static void resetResult(void)
 {
   [sStars release]; sStars = nil;
   [sText release]; sText = nil;
+  [sLicense release]; sLicense = nil;
   [sError release]; sError = nil;
   sDone = NO;
 }
@@ -49,6 +51,15 @@ static void fetchText(AGGitHubInfo *info, NSString *repo)
   resetResult();
   [info pageTextForRepo: repo completion: ^(NSString *text, NSError *error) {
     sText = [text retain]; sError = [error retain]; sDone = YES;
+  }];
+  waitDone();
+}
+
+static void fetchLicense(AGGitHubInfo *info, NSString *repo)
+{
+  resetResult();
+  [info licenseForRepo: repo completion: ^(NSString *license, NSError *error) {
+    sLicense = [license retain]; sError = [error retain]; sDone = YES;
   }];
   waitDone();
 }
@@ -132,6 +143,29 @@ int main(void)
          "a long README is cut at the limit");
   }
 
+  /* --- the license in an API answer --- */
+  {
+    NSError *error = nil;
+    NSDictionary *mit = [AGGitHubInfo licenseFromRepositoryJSON:
+        [@"{\"id\":1,\"license\":{\"spdx_id\":\"MIT\",\"name\":\"MIT License\"}}" dataUsingEncoding: NSUTF8StringEncoding]
+                                                          error: &error];
+    PASS_EQUAL([AGGitHubInfo licenseStringFromDictionary: mit], @"MIT", "the SPDX identifier is preferred");
+    NSDictionary *named = [AGGitHubInfo licenseFromRepositoryJSON:
+        [@"{\"id\":1,\"license\":{\"name\":\"Some License\"}}" dataUsingEncoding: NSUTF8StringEncoding]
+                                                            error: &error];
+    PASS_EQUAL([AGGitHubInfo licenseStringFromDictionary: named], @"Some License", "the name is the fallback");
+    NSDictionary *none = [AGGitHubInfo licenseFromRepositoryJSON:
+        [@"{\"id\":1,\"license\":null}" dataUsingEncoding: NSUTF8StringEncoding] error: &error];
+    PASS(none != nil && [AGGitHubInfo licenseStringFromDictionary: none] == nil,
+         "a null license is a repository without one");
+    PASS([AGGitHubInfo licenseFromRepositoryJSON: [@"{\"message\":\"Not Found\"}" dataUsingEncoding: NSUTF8StringEncoding]
+                                           error: &error] == nil && error != nil,
+         "an answer that is not a repository is an error");
+    PASS([[error localizedDescription] rangeOfString: @"Not Found"].location != NSNotFound,
+         "GitHub's own message is in the error");
+    PASS([AGGitHubInfo licenseFromRepositoryJSON: nil error: &error] == nil, "no answer is an error");
+  }
+
   /* --- the repository an app comes from --- */
   {
     NSDictionary *named = @{ @"name": @"A", @"links": @[
@@ -164,12 +198,23 @@ int main(void)
   [[NSFileManager defaultManager] removeItemAtPath: root error: NULL];
   NSString *web = [root stringByAppendingPathComponent: @"web"];
   NSString *cache = [root stringByAppendingPathComponent: @"cache"];
+  NSString *api = [root stringByAppendingPathComponent: @"api"];
   NSString *webURL = [[NSURL fileURLWithPath: web] absoluteString];
+  NSString *apiURL = [[NSURL fileURLWithPath: api] absoluteString];
   writeFile([web stringByAppendingPathComponent: @"owner/repo"], counterPage(@"4,321"));
   writeFile([web stringByAppendingPathComponent: @"owner/bare"], @"<html></html>");
+  writeFile([api stringByAppendingPathComponent: @"repos/owner/repo"],
+            @"{\"id\":1,\"full_name\":\"owner/repo\",\"license\":{\"key\":\"mit\",\"name\":\"MIT License\",\"spdx_id\":\"MIT\"}}");
+  writeFile([api stringByAppendingPathComponent: @"repos/owner/none"],
+            @"{\"id\":2,\"full_name\":\"owner/none\",\"license\":null}");
+  writeFile([api stringByAppendingPathComponent: @"repos/owner/other"],
+            @"{\"id\":3,\"full_name\":\"owner/other\",\"license\":{\"key\":\"other\",\"name\":\"Other\",\"spdx_id\":\"NOASSERTION\"}}");
+  writeFile([api stringByAppendingPathComponent: @"repos/owner/limited"],
+            @"{\"message\":\"API rate limit exceeded for 1.2.3.4.\"}");
 
   AGGitHubInfo *info = [[AGGitHubInfo alloc] initWithCacheDirectory: cache
-                                                         webBaseURL: webURL];
+                                                         webBaseURL: webURL
+                                                         apiBaseURL: apiURL];
   fetchStars(info, @"owner/repo");
   PASS_EQUAL(sStars, [NSNumber numberWithInt: 4321], "the stars are fetched");
   PASS(sError == nil, "fetching the stars is not an error");
@@ -192,9 +237,35 @@ int main(void)
 
   /* A new object reads the file the first one wrote. */
   [info release];
-  info = [[AGGitHubInfo alloc] initWithCacheDirectory: cache webBaseURL: webURL];
+  info = [[AGGitHubInfo alloc] initWithCacheDirectory: cache webBaseURL: webURL apiBaseURL: apiURL];
   fetchStars(info, @"owner/repo");
   PASS_EQUAL(sStars, [NSNumber numberWithInt: 4321], "the star count survives a restart");
+
+  fetchLicense(info, @"owner/repo");
+  PASS_EQUAL(sLicense, @"MIT", "the license is the SPDX identifier GitHub reports");
+  PASS(sError == nil, "fetching the license is not an error");
+  [[NSFileManager defaultManager] removeItemAtPath: [api stringByAppendingPathComponent: @"repos/owner/repo"] error: NULL];
+  fetchLicense(info, @"owner/repo");
+  PASS_EQUAL(sLicense, @"MIT", "a second ask within a week is answered from the cache");
+  [info release];
+  info = [[AGGitHubInfo alloc] initWithCacheDirectory: cache webBaseURL: webURL apiBaseURL: apiURL];
+  fetchLicense(info, @"owner/repo");
+  PASS_EQUAL(sLicense, @"MIT", "the license survives a restart");
+  fetchLicense(info, @"owner/none");
+  PASS(sLicense == nil && sError == nil, "a repository without a license is no license and no error");
+  fetchLicense(info, @"owner/other");
+  PASS(sLicense == nil && sError == nil, "a license GitHub does not recognize says nothing");
+  fetchLicense(info, @"owner/limited");
+  PASS(sLicense == nil && sError != nil, "a refusal is an error");
+  PASS([[sError localizedDescription] rangeOfString: @"rate limit"].location != NSNotFound,
+       "the refusal names the rate limit");
+  writeFile([api stringByAppendingPathComponent: @"repos/owner/limited"],
+            @"{\"id\":4,\"full_name\":\"owner/limited\",\"license\":{\"spdx_id\":\"GPL-3.0\",\"name\":\"GPL\"}}");
+  fetchLicense(info, @"owner/limited");
+  PASS(sLicense == nil && sError != nil,
+       "after a refusal the same question is not asked again for a while");
+  fetchLicense(info, @"nobody/here");
+  PASS(sLicense == nil && sError != nil, "an unknown repository is an error");
 
   [info release];
   [[NSFileManager defaultManager] removeItemAtPath: root error: NULL];

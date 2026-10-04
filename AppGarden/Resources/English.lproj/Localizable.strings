@@ -104,7 +104,7 @@
 /* Download button titles, one per state (AGInstallButton). */
 "Get" = "Get";
 "Waiting..." = "Waiting...";
-"Open" = "Open";
+"Show" = "Show";
 "Failed" = "Failed";
 "Open Page" = "Open Page";
 "Unavailable" = "Unavailable";
@@ -135,6 +135,11 @@
 "1 star on GitHub" = "1 star on GitHub";
 "GitHub stars unavailable" = "GitHub stars unavailable";
 "Checking..." = "Checking...";
+"License as reported by GitHub" = "License as reported by GitHub";
+"GitHub rate limit reached." = "GitHub rate limit reached.";
+"GitHub answered: %@" = "GitHub answered: %@";
+"GitHub gave no answer about this repository." = "GitHub gave no answer about this repository.";
+"Could not reach GitHub: %@" = "Could not reach GitHub: %@";
 "The repository page has no description." = "The repository page has no description.";
 "Could not read the repository page: %@" = "Could not read the repository page: %@";
 "The repository page has no star count." = "The repository page has no star count.";

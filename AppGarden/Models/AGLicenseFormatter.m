@@ -30,6 +30,13 @@ static NSString *AGLicenseBaseString(NSString *raw)
   return raw;
 }
 
++ (BOOL)isUnknownLicense:(NSString *)raw
+{
+  NSString *trimmed = [raw stringByTrimmingCharactersInSet:
+      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  return ([trimmed length] == 0 || [trimmed caseInsensitiveCompare:@"NOASSERTION"] == NSOrderedSame);
+}
+
 + (NSURL *)licenseURLForLicense:(NSString *)raw
 {
   if (raw == nil || ![raw hasPrefix:@"LicenseRef-"])

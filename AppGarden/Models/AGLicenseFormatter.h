@@ -19,4 +19,8 @@
 // links the license only when there is somewhere to go.
 + (NSURL *)licenseURLForLicense:(NSString *)raw;
 
+// YES when the feed said nothing useful: no license, an empty one, or
+// NOASSERTION. Those are the items worth asking GitHub about.
++ (BOOL)isUnknownLicense:(NSString *)raw;
+
 @end

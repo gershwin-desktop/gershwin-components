@@ -15,6 +15,9 @@ const NSUInteger AGGitHubPageTextLimit = 12000;
 static const NSTimeInterval kAGPageMaxAge = 6.0 * 3600.0;
 static NSString *const kAGCacheFileName = @"github.plist";
 static NSString *const kAGPagesKey = @"Pages";
+static NSString *const kAGLicensesKey = @"Licenses";
+static const NSTimeInterval kAGLicenseMaxAge = 7.0 * 86400.0;
+static const NSTimeInterval kAGLicenseRetryAfterFailure = 3600.0;
 
 typedef NS_ENUM(NSInteger, AGGitHubInfoErrorCode) {
   AGGitHubInfoErrorBadName = 1,
@@ -44,6 +47,8 @@ static BOOL AGIsGitHubName(NSString *name)
 {
   NSString *_cacheDirectory;
   NSString *_webBaseURL;
+  NSString *_apiBaseURL;
+  NSMutableDictionary<NSString *, NSDate *> *_licenseFailures; /* repo -> when, this session */
   NSOperationQueue *_queue;
   NSLock *_lock;
   NSMutableDictionary *_cache;
@@ -52,12 +57,15 @@ static BOOL AGIsGitHubName(NSString *name)
 
 - (instancetype)initWithCacheDirectory:(NSString *)directory
                             webBaseURL:(NSString *)webBaseURL
+                            apiBaseURL:(NSString *)apiBaseURL
 {
   self = [super init];
   if (self)
     {
       _cacheDirectory = [(directory != nil ? directory : AGDefaultCacheDirectory()) copy];
       _webBaseURL = [webBaseURL copy];
+      _apiBaseURL = [apiBaseURL copy];
+      _licenseFailures = [NSMutableDictionary dictionary];
       _queue = [[NSOperationQueue alloc] init];
       [_queue setMaxConcurrentOperationCount:2];
       _lock = [[NSLock alloc] init];
@@ -72,6 +80,9 @@ static BOOL AGIsGitHubName(NSString *name)
       [_cache setObject:[NSMutableDictionary dictionaryWithDictionary:
                             [stored objectForKey:kAGPagesKey]]
                  forKey:kAGPagesKey];
+      [_cache setObject:[NSMutableDictionary dictionaryWithDictionary:
+                            [stored objectForKey:kAGLicensesKey]]
+                 forKey:kAGLicensesKey];
     }
   return self;
 }
@@ -79,7 +90,8 @@ static BOOL AGIsGitHubName(NSString *name)
 - (instancetype)init
 {
   return [self initWithCacheDirectory:nil
-                           webBaseURL:@"https://github.com"];
+                           webBaseURL:@"https://github.com"
+                           apiBaseURL:@"https://api.github.com"];
 }
 
 #pragma mark - Pure parts
@@ -184,6 +196,59 @@ static BOOL AGIsGitHubName(NSString *name)
       ? [text substringToIndex:AGGitHubPageTextLimit] : text;
 }
 
++ (NSDictionary *)licenseFromRepositoryJSON:(NSData *)data error:(NSError **)error
+{
+  id root = ([data length] > 0)
+      ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]
+      : nil;
+  if ([root isKindOfClass:[NSDictionary class]]
+      && ([root objectForKey:@"full_name"] != nil || [root objectForKey:@"id"] != nil))
+    {
+      id license = [root objectForKey:@"license"];
+      NSMutableDictionary *result = [NSMutableDictionary dictionary];
+      if ([license isKindOfClass:[NSDictionary class]])
+        {
+          NSString *spdx = [license objectForKey:@"spdx_id"];
+          NSString *name = [license objectForKey:@"name"];
+          if ([spdx isKindOfClass:[NSString class]])
+            [result setObject:spdx forKey:@"SPDX"];
+          if ([name isKindOfClass:[NSString class]])
+            [result setObject:name forKey:@"Name"];
+        }
+      return result;
+    }
+
+  if (error != NULL)
+    {
+      NSString *message = [root isKindOfClass:[NSDictionary class]]
+          ? [root objectForKey:@"message"] : nil;
+      NSString *text;
+      if ([message rangeOfString:@"rate limit" options:NSCaseInsensitiveSearch].location
+          != NSNotFound)
+        text = NSLocalizedString(@"GitHub rate limit reached.", @"");
+      else if ([message length] > 0)
+        text = [NSString stringWithFormat:
+                    NSLocalizedString(@"GitHub answered: %@", @""), message];
+      else
+        text = NSLocalizedString(@"GitHub gave no answer about this repository.", @"");
+      *error = AGGitHubError(AGGitHubInfoErrorUnexpectedAnswer, text);
+    }
+  return nil;
+}
+
++ (NSString *)licenseStringFromDictionary:(NSDictionary *)license
+{
+  NSString *spdx = [license objectForKey:@"SPDX"];
+  if ([spdx length] > 0 && [spdx caseInsensitiveCompare:@"NOASSERTION"] != NSOrderedSame)
+    return spdx;
+  /* "Other" is GitHub's name for a license it did not recognize, which says
+   * nothing about the license itself. */
+  NSString *name = [license objectForKey:@"Name"];
+  if ([spdx length] == 0 && [name length] > 0 && [name caseInsensitiveCompare:@"Other"] != NSOrderedSame)
+    return name;
+  return nil;
+}
+
 + (NSNumber *)starCountFromRepositoryHTML:(NSString *)html
 {
   NSRange marker = [html rangeOfString:@"id=\"repo-stars-counter-star\""];
@@ -231,6 +296,124 @@ static BOOL AGIsGitHubName(NSString *name)
 - (void)deliver:(void (^)(void))block
 {
   [[NSOperationQueue mainQueue] addOperationWithBlock:block];
+}
+
+#pragma mark - The license
+
+- (void)licenseForRepo:(NSString *)repo
+            completion:(void (^)(NSString *license, NSError *error))completion
+{
+  if ([AGGitHubInfo ownerOfRepo:repo] == nil)
+    {
+      NSError *error = AGGitHubError(AGGitHubInfoErrorBadName,
+          NSLocalizedString(@"This is not a GitHub repository name.", @""));
+      [self deliver:^{ completion(nil, error); }];
+      return;
+    }
+
+  [_lock lock];
+  NSDictionary *entry = [[_cache objectForKey:kAGLicensesKey] objectForKey:repo];
+  NSDate *failed = [_licenseFailures objectForKey:repo];
+  [_lock unlock];
+
+  NSDate *when = [entry objectForKey:@"Date"];
+  if (entry != nil && when != nil && -[when timeIntervalSinceNow] < kAGLicenseMaxAge)
+    {
+      NSString *known = [AGGitHubInfo licenseStringFromDictionary:entry];
+      [self deliver:^{ completion(known, nil); }];
+      return;
+    }
+  /* After a refusal, such as the rate limit, the same question is not asked
+   * again for an hour: every detail page view would otherwise spend a request
+   * that is certain to be refused. */
+  if (failed != nil && -[failed timeIntervalSinceNow] < kAGLicenseRetryAfterFailure)
+    {
+      NSError *error = AGGitHubError(AGGitHubInfoErrorDownload,
+          NSLocalizedString(@"GitHub rate limit reached.", @""));
+      [self deliver:^{ completion(nil, error); }];
+      return;
+    }
+
+  [_queue addOperationWithBlock:^{
+    NSString *body = [_cacheDirectory stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"license-%@.tmp", [[NSUUID UUID] UUIDString]]];
+    NSString *headers = [body stringByAppendingString:@".headers"];
+    NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
+        @"-sSL", @"--max-time", @"30",
+        @"-H", @"Accept: application/vnd.github+json", nil];
+    NSString *etag = [entry objectForKey:@"ETag"];
+    if ([etag length] > 0)
+      {
+        /* Revalidating costs nothing against the limit when the answer is
+         * "not modified". */
+        [arguments addObject:@"-H"];
+        [arguments addObject:[@"If-None-Match: " stringByAppendingString:etag]];
+      }
+    [arguments addObjectsFromArray:@[ @"-D", headers, @"-o", body,
+        [NSString stringWithFormat:@"%@/repos/%@", _apiBaseURL, repo] ]];
+    NSString *reason = nil;
+    int status = AGRunCurl(arguments, &reason);
+    NSData *data = [NSData dataWithContentsOfFile:body];
+    NSString *headerText = [NSString stringWithContentsOfFile:headers
+                                                     encoding:NSUTF8StringEncoding error:NULL];
+    [[NSFileManager defaultManager] removeItemAtPath:body error:NULL];
+    [[NSFileManager defaultManager] removeItemAtPath:headers error:NULL];
+
+    /* Only the last header block counts: curl lists every redirect hop. */
+    NSString *lastBlock = [[headerText componentsSeparatedByString:@"\r\n\r\n"]
+        objectAtIndex:MAX(0, (NSInteger)[[headerText componentsSeparatedByString:@"\r\n\r\n"] count] - 2)];
+    NSInteger httpStatus = 0;
+    NSString *newETag = nil;
+    for (NSString *line in [lastBlock componentsSeparatedByCharactersInSet:
+                               [NSCharacterSet newlineCharacterSet]])
+      {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([trimmed hasPrefix:@"HTTP/"])
+          {
+            NSArray *parts = [trimmed componentsSeparatedByString:@" "];
+            if ([parts count] > 1)
+              httpStatus = [[parts objectAtIndex:1] integerValue];
+          }
+        else if ([[trimmed lowercaseString] hasPrefix:@"etag:"])
+          newETag = [[trimmed substringFromIndex:5]
+              stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+      }
+
+    NSDictionary *license = nil;
+    NSError *error = nil;
+    if (status != 0)
+      error = AGGitHubError(AGGitHubInfoErrorDownload,
+          [NSString stringWithFormat:
+              NSLocalizedString(@"Could not reach GitHub: %@", @""),
+              reason != nil ? reason : @"curl"]);
+    else if (httpStatus == 304 && entry != nil)
+      license = entry;
+    else
+      license = [AGGitHubInfo licenseFromRepositoryJSON:data error:&error];
+
+    [_lock lock];
+    if (license != nil)
+      {
+        NSMutableDictionary *stored = [NSMutableDictionary dictionaryWithObject:[NSDate date]
+                                                                         forKey:@"Date"];
+        for (NSString *key in @[ @"SPDX", @"Name" ])
+          if ([license objectForKey:key] != nil)
+            [stored setObject:[license objectForKey:key] forKey:key];
+        NSString *keep = (newETag != nil) ? newETag : [entry objectForKey:@"ETag"];
+        if (keep != nil)
+          [stored setObject:keep forKey:@"ETag"];
+        [[_cache objectForKey:kAGLicensesKey] setObject:stored forKey:repo];
+        [_licenseFailures removeObjectForKey:repo];
+        [self saveCache];
+      }
+    else
+      [_licenseFailures setObject:[NSDate date] forKey:repo];
+    [_lock unlock];
+
+    NSString *result = (license != nil) ? [AGGitHubInfo licenseStringFromDictionary:license] : nil;
+    [self deliver:^{ completion(result, error); }];
+  }];
 }
 
 #pragma mark - The repository page

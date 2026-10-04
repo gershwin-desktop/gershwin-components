@@ -292,7 +292,7 @@ typedef NS_ENUM(NSInteger, AGInstallButtonState) {
       case AGInstallButtonStateDownloading:
         return @"";   /* the progress bar stands in for the button */
       case AGInstallButtonStateOpen:
-        return NSLocalizedString(@"Open", @"Show the installed file in the file manager");
+        return NSLocalizedString(@"Show", @"Show the downloaded file in the file manager");
       case AGInstallButtonStateFailed:
         return NSLocalizedString(@"Failed", @"The install did not finish");
       case AGInstallButtonStateOpenPage:

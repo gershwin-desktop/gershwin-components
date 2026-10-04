@@ -135,6 +135,8 @@ static const CGFloat kAGDetailTightGap = 4.0;
   NSImageView *_iconView;
   NSTextField *_nameLabel;
   NSArray<NSView *> *_authorViews;      /* AGLinkButton or NSTextField, comma labels between */
+  NSTextField *_licenseMetaLabel;       /* the license in the header line, when it is plain text */
+  NSTextField *_licenseInfoLabel;       /* the same in the information table */
   NSMutableArray<NSView *> *_metaViews; /* category label, separator, license label or link, stars */
   AGInstallButton *_installButton;
   NSButton *_removeButton;
@@ -217,6 +219,7 @@ static const CGFloat kAGDetailTightGap = 4.0;
   [self layoutDetailContentView:_contentView];
   [self requestImages];
   [self requestStars];
+  [self requestLicense];
 }
 
 - (void)buildContent
@@ -265,7 +268,10 @@ static const CGFloat kAGDetailTightGap = 4.0;
   if (licenseURL != nil)
     [metaViews addObject:[self linkWithTitle:license url:licenseURL font:METRICS_FONT_SYSTEM_REGULAR_11]];
   else
-    [metaViews addObject:[self labelWithString:license font:METRICS_FONT_SYSTEM_REGULAR_11 color:gray]];
+    {
+      _licenseMetaLabel = [self labelWithString:license font:METRICS_FONT_SYSTEM_REGULAR_11 color:gray];
+      [metaViews addObject:_licenseMetaLabel];
+    }
   _metaViews = metaViews;
 
   NSSize buttonSize = [AGInstallButton sizeForStyle:AGInstallButtonStyleDetail];
@@ -401,8 +407,9 @@ static const CGFloat kAGDetailTightGap = 4.0;
   addRow(NSLocalizedString(@"Developer", @""),
          text(([authorNames count] > 0) ? [authorNames componentsJoinedByString:@", "] : nil));
   addRow(NSLocalizedString(@"Category", @""), text([self visibleCategoryDisplayNames]));
-  addRow(NSLocalizedString(@"License", @""),
-         text([AGLicenseFormatter displayStringForLicense:[app license]]));
+  NSView *licenseValue = text([AGLicenseFormatter displayStringForLicense:[app license]]);
+  _licenseInfoLabel = (NSTextField *)licenseValue;
+  addRow(NSLocalizedString(@"License", @""), licenseValue);
   if ([app githubURL] != nil)
     addRow(NSLocalizedString(@"Source", @""),
            [self linkWithTitle:[app githubRepo] url:[app githubURL] font:font]);
@@ -467,6 +474,41 @@ static const CGFloat kAGDetailTightGap = 4.0;
         {
           [weakSelf showStars:stars error:error];
         }];
+}
+
+/* The license the catalog entry lacks, from GitHub. Asked only when the entry
+ * has none: the request is one of the 60 anonymous ones an hour, so it is not
+ * spent on an answer the page already has. The answer is kept for a week and
+ * then revalidated for free, so a repository costs a request once. */
+- (void)requestLicense
+{
+  NSString *repo = [AGGitHubInfo repositoryForApp:_app];
+  if (repo == nil || ![AGLicenseFormatter isUnknownLicense:[_app license]])
+    return;
+  __weak AGDetailViewController *weakSelf = self;
+  [[_installer gitHubInfo] licenseForRepo:repo
+      completion:^(NSString *license, NSError *error)
+        {
+          (void)error;
+          [weakSelf showLicense:license];
+        }];
+}
+
+- (void)showLicense:(NSString *)license
+{
+  if ([license length] == 0)
+    return;
+  NSString *shown = [AGLicenseFormatter displayStringForLicense:license];
+  NSString *tip = NSLocalizedString(@"License as reported by GitHub", @"");
+  for (NSTextField *label in @[ _licenseMetaLabel, _licenseInfoLabel ])
+    {
+      if (label == nil)
+        continue;
+      [label setStringValue:shown];
+      [label setToolTip:tip];
+      [label sizeToFit];
+    }
+  [self layoutDetailContentView:_contentView];
 }
 
 - (void)showStars:(NSNumber *)stars error:(NSError *)error

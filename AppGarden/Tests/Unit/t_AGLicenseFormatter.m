@@ -15,6 +15,12 @@ int main(void)
   /* --- the mappings from the brief --- */
   PASS_EQUAL([AGLicenseFormatter displayStringForLicense: nil], @"Unknown license",
              "a missing license shows Unknown license");
+  PASS([AGLicenseFormatter isUnknownLicense: nil], "no license is unknown");
+  PASS([AGLicenseFormatter isUnknownLicense: @""], "an empty license is unknown");
+  PASS([AGLicenseFormatter isUnknownLicense: @"  "], "a blank license is unknown");
+  PASS([AGLicenseFormatter isUnknownLicense: @"noassertion"], "NOASSERTION in any case is unknown");
+  PASS(![AGLicenseFormatter isUnknownLicense: @"MIT"], "MIT is known");
+  PASS(![AGLicenseFormatter isUnknownLicense: @"LicenseRef-proprietary"], "proprietary is known");
   PASS_EQUAL([AGLicenseFormatter displayStringForLicense: @"NOASSERTION"], @"Unknown license",
              "NOASSERTION shows Unknown license");
   PASS_EQUAL([AGLicenseFormatter displayStringForLicense: @"LicenseRef-proprietary"],

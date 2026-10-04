@@ -24,7 +24,7 @@ Applications folder and starts like any other application.
   .AppImage links download as they are. If a release holds several AppImages
   and none is clearly the right one, the button reads Failed and the alert
   names the files rather than picking one at random. While the download runs
-  the button shows its progress; afterwards it reads Open.
+  the button shows its progress; afterwards it reads Show, which shows the file in the file manager.
 - Some software is high risk by its category alone, so Get opens a panel
   first when a word of one of those categories appears in an item's title,
   description or other metadata. `RISKS.md` documents the categories, the
@@ -39,6 +39,12 @@ Applications folder and starts like any other application.
   well as the catalog entry, so software that calls itself an AI workspace is
   flagged even when its catalog line says nothing. The page is cached for six
   hours, so Get is instant once the detail page has been open.
+- When the catalog entry has no license, the detail page asks GitHub for the
+  repository's license, the one thing read from the API. A repository costs
+  one of the 60 anonymous requests an hour once: the answer is kept for a
+  week and then revalidated with its ETag, which GitHub does not count when
+  nothing changed. After a refusal the question is not asked again for an
+  hour.
 - Downloaded lists what AppGarden downloaded. The detail page of a downloaded
   application has a Remove button that deletes the file after asking.
 - Applications the catalog only links to a web page for show Open Page.
