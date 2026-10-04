@@ -61,6 +61,16 @@ static inline NSColor *AGPlaceholderLetterColor(void)
 }
 
 /* The single accent, borrowed from the theme's selection color. */
+static inline NSColor *AGTopBarGradientBottomColor(void)
+{
+  return [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];
+}
+
+static inline NSColor *AGTopBarGradientTopColor(void)
+{
+  return [NSColor colorWithCalibratedWhite:0.92 alpha:1.0];
+}
+
 static inline NSColor *AGAccentColor(void)
 {
   return [NSColor selectedControlColor];

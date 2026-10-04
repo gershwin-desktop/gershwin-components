@@ -19,6 +19,7 @@
 #import "AGSearchIndex.h"
 #import "AGCategoryNames.h"
 #import "AGDiscoverOrder.h"
+#import "AGColors.h"
 #import "AppearanceMetrics.h"
 
 /* Not the first name this was saved under: windows saved at the old, wider
@@ -104,18 +105,31 @@ static NSImage *AGBackArrowImage(void)
 
 #pragma mark - Top bar and page container
 
-/* Draws the one-point separator under the top bar; the controls sit on the
-   window background like everywhere else. */
+/* A subtle vertical gradient (lighter at the top, so it reads as a surface
+   the window's frame continues into rather than a stripe painted on the
+   content), with a one-point separator at the bottom edge. Same treatment
+   as FMRackNew's FMBarView and Player's PlayerBarView. */
 @interface AGTopBarView : NSView
 @end
 
 @implementation AGTopBarView
 
+- (BOOL)isOpaque
+{
+  return YES;
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
   (void)dirtyRect;
+  NSRect b = [self bounds];
+  NSGradient *g = [[NSGradient alloc]
+      initWithStartingColor:AGTopBarGradientBottomColor()
+                endingColor:AGTopBarGradientTopColor()];
+  [g drawInRect:b angle:90.0];
+
   [[NSColor gridColor] set];
-  NSRectFill(NSMakeRect(0.0, 0.0, NSWidth([self bounds]), 1.0));
+  NSRectFill(NSMakeRect(0.0, 0.0, NSWidth(b), 1.0));
 }
 
 @end
