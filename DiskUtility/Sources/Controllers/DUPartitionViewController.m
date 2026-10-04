@@ -368,6 +368,11 @@ static NSString *const kDefaultsConfirmDestructive =
         _committedScheme =
             [DUPartitionTableParser normalizeSchemeToken:
                  _device.partitionScheme];
+        if (_committedScheme.length == 0) {
+            // A blank or filesystem-on-whole-disk device has no table to
+            // keep; without a scheme the plan was rejected as unsupported.
+            _committedScheme = @"gpt";
+        }
 
         NSError *error = nil;
         DUPartitionLayout *built =
@@ -434,6 +439,13 @@ static NSString *const kDefaultsConfirmDestructive =
                 return NSOrderedSame;
             }];
     for (DUPartition *source_partition in ordered) {
+        // BIOS boot and ESP slivers below the layout minimum exist on many
+        // real disks; refusing the whole table because of one of them made
+        // the tab unusable. Applying rewrites the table from the layout
+        // anyway, so such slivers are not shown.
+        if (source_partition.sizeBytes < 1024ull * 1024ull) {
+            continue;
+        }
         NSSet<NSString *> *knownIdentifiers = [NSSet setWithArray:
             [fresh.partitions valueForKey:@"identifier"]];
         if (![fresh addPartitionWithSize:source_partition.sizeBytes
@@ -1179,6 +1191,12 @@ static NSString *const kDefaultsConfirmDestructive =
         [self.logView appendLine:NSLocalizedString(
             @"Partitioning failed.", nil)];
         [self.logView appendLine:error.localizedDescription ?: @""];
+        NSString *detail = DUErrorBackendDetail(error);
+        if (detail.length > 0) {
+            [self.logView appendLine:detail];
+        }
+        NSLog(@"Partitioning failed: %@ - %@", error.localizedDescription,
+              detail);
     }
     [self updateEnabledStates];
 

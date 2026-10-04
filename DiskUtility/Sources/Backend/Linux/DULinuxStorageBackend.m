@@ -465,7 +465,12 @@
             sizeBytes = ((DUStorageVolume *)object).capacityBytes;
         }
 
-        NSError *result = nil;
+        NSError *result =
+            [DULinuxFilesystemTool unmountAllMountsOfDevicePath:devicePath];
+        if (result != nil) {
+            completion(result);
+            return;
+        }
         if ([method isEqualToString:kDUEraseMethodZerosKey] && sizeBytes > 0) {
             // Zero overwrite is the slow phase; it owns most of the bar.
             result = [DULinuxFilesystemTool zeroFillDevicePath:devicePath
@@ -511,9 +516,14 @@
              completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
+        NSError *result = [DULinuxFilesystemTool
+            unmountAllMountsOfDevicePath:device.backendPath];
+        if (result != nil) {
+            completion(result);
+            return;
+        }
         progress(0.1, NSLocalizedString(@"Applying partition layout...", nil));
-        NSError *result =
-            [[DULinuxPartitionTool new] applyPlan:plan
+        result = [[DULinuxPartitionTool new] applyPlan:plan
                                     toDevicePath:device.backendPath
                                         progress:^(double fraction,
                                                    NSString *message) {

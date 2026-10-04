@@ -423,6 +423,12 @@ static NSString * const kDefaultsConfirmDestructive =
     } else {
         [strongSelf.logView appendLine:NSLocalizedString(
                                             @"Erase failed.", nil)];
+        [strongSelf.logView appendLine:error.localizedDescription ?: @""];
+        NSString *detail = DUErrorBackendDetail(error);
+        if (detail.length > 0) {
+            [strongSelf.logView appendLine:detail];
+            NSLog(@"Erase failed: %@ - %@", error.localizedDescription, detail);
+        }
     }
 }
 

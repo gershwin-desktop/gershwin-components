@@ -225,9 +225,13 @@ static NSError *RunStreamedTool(NSString *toolName,
                     (okExitMask & (1u << status)) == 0) {
                     // Output is merged into standardOutput by the streaming
                     // runner; keep the tail as backend detail either way.
-                    NSString *detail = processResult.standardError.length > 0
-                        ? processResult.standardError
-                        : processResult.standardOutput;
+                    // The streams are merged, so the transcript has the
+                    // whole story; standardError alone is often just a
+                    // warning printed before the real failure.
+                    NSString *detail = [NSString stringWithFormat:
+                        @"%@\n(%@ status %d)", transcript,
+                        processResult.exitedNormally ? @"exit" : @"signal",
+                        status];
                     result = [NSError
                         errorWithDomain:DUStorageErrorDomain
                                    code:failCode
@@ -381,6 +385,82 @@ static NSError *RunStreamedTool(NSString *toolName,
                                              nil));
 }
 
+// Mount sources that belong to a disk: the node itself, or the node plus a
+// partition number, with a "p" separator when the disk name ends in a digit.
+static BOOL SourceBelongsToDisk(NSString *source, NSString *disk)
+{
+    if ([source isEqualToString:disk]) {
+        return YES;
+    }
+    if (![source hasPrefix:disk]) {
+        return NO;
+    }
+    NSString *rest = [source substringFromIndex:disk.length];
+    if ([rest hasPrefix:@"p"]) {
+        rest = [rest substringFromIndex:1];
+    }
+    if (rest.length == 0) {
+        return NO;
+    }
+    NSCharacterSet *nonDigits =
+        [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    return [rest rangeOfCharacterFromSet:nonDigits].location == NSNotFound;
+}
+
+// /proc/self/mounts escapes space, tab, newline and backslash as octal.
+static NSString *UnescapeMountField(NSString *field)
+{
+    NSMutableString *out = [NSMutableString stringWithCapacity:field.length];
+    for (NSUInteger i = 0; i < field.length; i++) {
+        unichar c = [field characterAtIndex:i];
+        if (c == '\\' && i + 3 < field.length) {
+            NSString *octal = [field substringWithRange:NSMakeRange(i + 1, 3)];
+            [out appendFormat:@"%c", (char)strtol(octal.UTF8String, NULL, 8)];
+            i += 3;
+        } else {
+            [out appendFormat:@"%C", c];
+        }
+    }
+    return out;
+}
+
++ (NSError *)unmountAllMountsOfDevicePath:(NSString *)devicePath
+{
+    // mkfs, wipefs and parted refuse or corrupt a disk with live mounts, and
+    // desktop automounters mount removable media as soon as it appears.
+    NSString *umount = [DUProcessRunner executablePathForName:@"umount"];
+    NSString *table = [NSString stringWithContentsOfFile:@"/proc/self/mounts"
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:NULL];
+    NSString *disk = [devicePath stringByResolvingSymlinksInPath];
+    for (NSString *line in [table componentsSeparatedByString:@"\n"]) {
+        NSArray<NSString *> *fields =
+            [line componentsSeparatedByString:@" "];
+        if (fields.count < 2 || !SourceBelongsToDisk(fields[0], disk)) {
+            continue;
+        }
+        NSString *mountPoint = UnescapeMountField(fields[1]);
+        NSError *runError = nil;
+        DUProcessResult *result = umount == nil ? nil
+            : [[DUAuthorizationManager sharedManager]
+                  runPrivileged:umount
+                           args:@[ mountPoint ]
+                        timeout:300.0
+                          error:&runError];
+        if (result == nil || ![result exitedWithStatus:0]) {
+            return [NSError errorWithDomain:DUStorageErrorDomain
+                                       code:DUErrorDeviceBusy
+                                   userInfo:@{
+                NSLocalizedDescriptionKey : [NSString stringWithFormat:
+                    NSLocalizedString(@"%@ could not be unmounted.", nil),
+                    mountPoint],
+                kDUBackendDetailKey : StderrTail(result.standardError),
+            }];
+        }
+    }
+    return nil;
+}
+
 + (NSError *)wipeSignaturesAtDevicePath:(NSString *)devicePath
 {
     NSString *wipefs = [DUProcessRunner executablePathForName:@"wipefs"];
@@ -507,7 +587,10 @@ static NSError *RunStreamedTool(NSString *toolName,
                                 fstype]);
     }
 
+    // prefix leads with the executable name, which is resolved to a path
+    // separately; passing it on as well made mkfs read it as the device.
     NSMutableArray<NSString *> *arguments = [prefix mutableCopy];
+    [arguments removeObjectAtIndex:0];
     [arguments addObject:devicePath];
 
     return RunStreamedTool(prefix.firstObject,

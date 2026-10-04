@@ -32,6 +32,19 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
         [DUProcessRunner executablePathForName:@"sfdisk"] != nil;
 }
 
+// Whole-device size from sysfs (512-byte sectors); 0 when unknown.
++ (unsigned long long)sizeOfDevicePath:(NSString *)devicePath
+{
+    NSString *name =
+        [[devicePath stringByResolvingSymlinksInPath] lastPathComponent];
+    NSString *path =
+        [NSString stringWithFormat:@"/sys/class/block/%@/size", name];
+    NSString *text = [NSString stringWithContentsOfFile:path
+                                               encoding:NSUTF8StringEncoding
+                                                  error:NULL];
+    return (unsigned long long)text.longLongValue * 512ull;
+}
+
 + (NSString *)tableLabelForScheme:(NSString *)scheme
 {
     NSString *normalized = [[DUParsing trimmedString:scheme] lowercaseString];
@@ -226,6 +239,7 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
 
     NSArray<DUPartition *> *entries = plan.entries;
     unsigned long long cursor = kFirstUsableByte;
+    unsigned long long deviceBytes = [[self class] sizeOfDevicePath:devicePath];
     BOOL isMsdos = [tableLabel isEqualToString:@"msdos"];
 
     for (NSUInteger i = 0; i < entries.count; i++) {
@@ -236,6 +250,13 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
         // partition at the same address. Explicit offsets are honored as-is.
         unsigned long long start = cursor;
         unsigned long long end = start + entry.sizeBytes;
+        // The first MiB is skipped for alignment, so a layout that spans the
+        // whole disk would end past the device (and into the backup GPT);
+        // the 1 MiB tail keeps room for it.
+        if (deviceBytes > kFirstUsableByte &&
+            end > deviceBytes - kFirstUsableByte) {
+            end = deviceBytes - kFirstUsableByte;
+        }
         cursor = end;
 
         NSMutableArray<NSString *> *arguments =
@@ -246,7 +267,16 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
         if (isMsdos) {
             [arguments addObject:@"primary"];
         } else if (entry.name.length > 0) {
-            [arguments addObject:entry.name];
+            // parted splits script arguments on whitespace again, so a name
+            // like "Partition 1" swallowed the start operand and produced a
+            // 48 KB partition; its own quote syntax keeps it in one piece.
+            NSString *safeName = [[entry.name
+                componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet characterSetWithCharactersInString:
+                                        @"'\"\\"]]
+                componentsJoinedByString:@""];
+            [arguments addObject:
+                [NSString stringWithFormat:@"'%@'", safeName]];
         } else {
             [arguments addObject:
                  [NSString stringWithFormat:@"partition%lu",
@@ -258,8 +288,8 @@ static const unsigned long long kFirstUsableByte = 1024ull * 1024;
             [arguments addObject:fsToken];
         }
         [arguments addObjectsFromArray:@[
-            [NSString stringWithFormat:@"%llub", start],
-            [NSString stringWithFormat:@"%llub", end],
+            [NSString stringWithFormat:@"%lluB", start],
+            [NSString stringWithFormat:@"%lluB", end - 1],
         ]];
 
         double fraction =
