@@ -408,6 +408,31 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     _appMenuWidget = widget;
 }
 
+- (void)scaleFactorDidChange
+{
+    if ([self.searchPanel isVisible]) [self hideSearchPopup];
+
+    /* The box is one menu item high.  The window keeps the device size it was
+       given at the old scale, and a frame equal to the current one is not set
+       again, so the size is moved off and back to make the backend measure it
+       anew. */
+    CGFloat itemHeight = [[GSTheme theme] menuItemHeight];
+    NSSize content = [[self.searchPanel contentView] frame].size;
+    [self.searchPanel setContentSize:NSMakeSize(content.width, itemHeight + 1.0)];
+    [self.searchPanel setContentSize:NSMakeSize(content.width, itemHeight)];
+    NSRect field = [self.searchField frame];
+    field.origin.y = 0;
+    field.size.height = itemHeight;
+    [self.searchField setFrame:field];
+
+    /* The results menu keeps the row height and the window of the scale it was
+       first shown at; a new one is measured at the scale there is now. */
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:nil object:self.resultsMenu];
+    [self.resultsMenu setDelegate:nil];
+    self.resultsMenu = nil;
+    [self createResultsMenu];
+}
+
 - (void)showSearchPopupAtPoint:(NSPoint)point
 {
     [[X11ShortcutManager sharedManager] suspendKeyGrabs];

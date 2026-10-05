@@ -677,6 +677,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     [self refreshSizesOfMenu:widget.cachedSystemMenu visited:visited];
     [self refreshSizesOfMenu:widget.cachedAppsSubmenu visited:visited];
     [self refreshSizesOfMenu:widget.systemPrefsSubmenu visited:visited];
+    [[ActionSearchController sharedController] scaleFactorDidChange];
 }
 
 - (void)checkScaleFactor:(NSTimer *)timer
