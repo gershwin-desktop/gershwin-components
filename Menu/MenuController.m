@@ -637,6 +637,48 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     [self.menuBarView setNeedsDisplay:YES];
 }
 
+/* A dropdown menu keeps its window between uses, with the device size it had
+ * when it was last laid out (user size * GSScaleFactor then).  After a scale
+ * factor change the cells are drawn at the new scale but the window is still
+ * the old size, so the Applications and System Preferences menus came up cut
+ * off or with empty space. */
+- (void)refreshSizesOfMenu:(NSMenu *)menu visited:(NSMutableSet *)visited
+{
+    if (menu == nil) return;
+    NSValue *key = [NSValue valueWithNonretainedObject:menu];
+    if ([visited containsObject:key]) return;
+    [visited addObject:key];
+
+    NSMenuView *representation = [menu menuRepresentation];
+    if (representation && ![representation isHorizontal]) {
+        [representation sizeToFit];
+        NSWindow *window = [menu window];
+        if (window && ![window isVisible]) {
+            [window setContentSize:[representation frame].size];
+            /* The backend turns the frame into device pixels when it is set;
+             * an equal frame is not set again, so the window would stay at
+             * the size of the old scale. */
+            [window setFrame:[window frame] display:NO];
+        }
+    }
+
+    for (NSMenuItem *item in [menu itemArray]) {
+        [self refreshSizesOfMenu:[item submenu] visited:visited];
+    }
+}
+
+- (void)refreshDropdownSizes
+{
+    NSMutableSet *visited = [NSMutableSet set];
+    AppMenuWidget *widget = self.appMenuWidget;
+
+    [self refreshSizesOfMenu:widget.currentMenu visited:visited];
+    [self refreshSizesOfMenu:widget.systemMenu visited:visited];
+    [self refreshSizesOfMenu:widget.cachedSystemMenu visited:visited];
+    [self refreshSizesOfMenu:widget.cachedAppsSubmenu visited:visited];
+    [self refreshSizesOfMenu:widget.systemPrefsSubmenu visited:visited];
+}
+
 - (void)checkScaleFactor:(NSTimer *)timer
 {
     // GNUstep caches defaults per-process; synchronize re-reads the store so
@@ -714,6 +756,10 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
 
     // Update the MenuExtraManager's cached screen width
     [self.menuExtraManager setScreenWidth:self.screenSize.width];
+
+    // The dropdowns that were opened before keep the window size of the old
+    // scale factor; they are measured again.
+    [self refreshDropdownSizes];
 
     // Keep EWMH dock/strut properties synchronized with current geometry.
     [self applyMenuBarDockAndStrutProperties];
