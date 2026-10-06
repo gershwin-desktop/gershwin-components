@@ -73,6 +73,8 @@
 - (void)keyboardLayoutChanged:(id)sender;
 - (void)resetLoginWindow;
 - (void)monitorSession;
+- (void)releaseLoginDaemons;
+- (void)reapStrayChildren;
 - (void)renderDesktopBackground;
 - (BOOL)trySystemAction:(NSString *)actionType;
 - (void)killAllSessionProcesses:(uid_t)uid;

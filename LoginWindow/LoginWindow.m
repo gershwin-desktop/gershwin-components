@@ -15,6 +15,7 @@
 #import <sys/user.h>
 #if defined(__OpenBSD__)
 #import <util.h>
+#import <sys/proc.h>
 // OpenBSD's struct kinfo_proc uses p_* field names (and p__pgid, since
 // <sys/proc.h> hijacks p_pgid); FreeBSD uses ki_*.
 #define GW_KP_PID   p_pid
@@ -22,6 +23,7 @@
 #define GW_KP_SID   p_sid
 #define GW_KP_PGID  p__pgid
 #define GW_KP_COMM  p_comm
+#define GW_KP_ZOMBIE(p) ((p)->p_stat == SZOMB)
 // OpenBSD has no login_getpwclass(); look the class up by name from pw_class.
 #define GW_LOGIN_GETPWCLASS(p) login_getclass((p)->pw_class)
 #else
@@ -31,6 +33,7 @@
 #define GW_KP_SID   ki_sid
 #define GW_KP_PGID  ki_pgid
 #define GW_KP_COMM  ki_comm
+#define GW_KP_ZOMBIE(p) ((p)->ki_stat == SZOMB)
 #define GW_LOGIN_GETPWCLASS(p) login_getpwclass(p)
 #endif
 #endif
@@ -1838,6 +1841,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         // Hide the login window and release UI to free memory
         [self releaseLoginUI];
         
+        [self releaseLoginDaemons];
         NSDebugLLog(@"gwcomp", @"[DEBUG] LoginWindow hidden, monitoring session PID %d", pid);
         
         // Start monitoring the session in the background
@@ -2296,6 +2300,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         
         // Hide the login window (it's already visible from startup)
         [loginWindow orderOut:nil];
+        [self releaseLoginDaemons];
         
         NSDebugLLog(@"gwcomp", @"[DEBUG] LoginWindow hidden, monitoring auto-login session PID %d", pid);
         
@@ -2409,6 +2414,117 @@ static NSDictionary *parseStringsFile(NSString *path)
     }
 }
 
+// Calls visit() for every process owned by uid. name is the bare command name.
+static void scanProcessesOfUID(uid_t uid,
+    void (^visit)(pid_t pid, pid_t ppid, pid_t pgid, pid_t sid, const char *name, bool zombie))
+{
+#if defined(__linux__)
+    DIR *proc_dir = opendir("/proc");
+    if (!proc_dir) {
+        NSDebugLog(@"Failed to open /proc directory: %s", strerror(errno));
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(proc_dir)) != NULL) {
+        if (!isdigit(entry->d_name[0]))
+            continue;
+
+        pid_t pid = atoi(entry->d_name);
+        if (pid <= 1 || pid == getpid())
+            continue;
+
+        // Read process UID from /proc/PID/status
+        char status_path[256];
+        snprintf(status_path, sizeof(status_path), "/proc/%d/status", pid);
+        FILE *status_file = fopen(status_path, "r");
+        if (!status_file)
+            continue;
+
+        uid_t proc_uid = (uid_t)-1;
+        char line[256];
+        while (fgets(line, sizeof(line), status_file)) {
+            if (strncmp(line, "Uid:", 4) == 0) {
+                // Format: Uid: <real> <effective> <saved> <fs>
+                sscanf(line + 4, " %u", &proc_uid);
+                break;
+            }
+        }
+        fclose(status_file);
+
+        if (proc_uid != uid)
+            continue;
+
+        char stat_path[256];
+        snprintf(stat_path, sizeof(stat_path), "/proc/%d/stat", pid);
+        FILE *stat_file = fopen(stat_path, "r");
+        if (!stat_file)
+            continue;
+
+        pid_t parsed_pid, ppid, pgrp, session;
+        char comm[256];
+        char state;
+
+        if (fscanf(stat_file, "%d %s %c %d %d %d",
+                   &parsed_pid, comm, &state, &ppid, &pgrp, &session) == 6) {
+            // comm is in format "(name)", so strip the parens.
+            char *name = comm;
+            if (name[0] == '(') name++;
+            char *paren = strchr(name, ')');
+            if (paren) *paren = '\0';
+            visit(pid, ppid, pgrp, session, name, state == 'Z');
+        }
+        fclose(stat_file);
+    }
+
+    closedir(proc_dir);
+
+#else
+    // BSD implementation using sysctl. OpenBSD's KERN_PROC needs a 6-element
+    // mib carrying the struct size and element count; FreeBSD uses 4.
+#if defined(__OpenBSD__)
+    int mib[6] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)uid,
+                  sizeof(struct kinfo_proc), 0};
+    int miblen = 6;
+#else
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, uid};
+    int miblen = 4;
+#endif
+    size_t size = 0;
+
+    if (sysctl(mib, miblen, NULL, &size, NULL, 0) != 0) {
+        NSDebugLog(@"Failed to get process list size: %s", strerror(errno));
+        return;
+    }
+
+    struct kinfo_proc *procs = malloc(size);
+    if (!procs) {
+        NSDebugLog(@"Failed to allocate memory for process list");
+        return;
+    }
+
+#if defined(__OpenBSD__)
+    mib[5] = (int)(size / sizeof(struct kinfo_proc));
+#endif
+    if (sysctl(mib, miblen, procs, &size, NULL, 0) != 0) {
+        NSDebugLog(@"Failed to get process list: %s", strerror(errno));
+        free(procs);
+        return;
+    }
+
+    int numProcs = size / sizeof(struct kinfo_proc);
+    for (int i = 0; i < numProcs; i++) {
+        pid_t pid = procs[i].GW_KP_PID;
+        if (pid <= 1 || pid == getpid())
+            continue;
+        visit(pid, procs[i].GW_KP_PPID, procs[i].GW_KP_PGID, procs[i].GW_KP_SID,
+              procs[i].GW_KP_COMM, GW_KP_ZOMBIE(&procs[i]));
+    }
+
+    free(procs);
+#endif
+}
+
 // Names of daemons that detach from the session (fork + new SID).
 // These escape process-group and session-based cleanup, so we match
 // them explicitly by UID + command name.
@@ -2466,144 +2582,21 @@ static bool isDetachedDaemon(const char *comm)
     // daemons owned by this user (gpbs, gdnc, dbus-daemon).
     NSDebugLog(@"Scanning for remaining session processes and detached daemons");
 
-    int sessionRelatedKilled = 0;
+    __block int sessionRelatedKilled = 0;
+    pid_t sessionLeader = sessionPid;
 
-#if defined(__linux__)
-    DIR *proc_dir = opendir("/proc");
-    if (!proc_dir) {
-        NSDebugLog(@"Failed to open /proc directory: %s", strerror(errno));
-        return;
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(proc_dir)) != NULL) {
-        if (!isdigit(entry->d_name[0]))
-            continue;
-
-        pid_t pid = atoi(entry->d_name);
-        if (pid <= 1 || pid == getpid())
-            continue;
-
-        // Read process UID from /proc/PID/status
-        char status_path[256];
-        snprintf(status_path, sizeof(status_path), "/proc/%d/status", pid);
-        FILE *status_file = fopen(status_path, "r");
-        if (!status_file)
-            continue;
-
-        uid_t proc_uid = (uid_t)-1;
-        char line[256];
-        while (fgets(line, sizeof(line), status_file)) {
-            if (strncmp(line, "Uid:", 4) == 0) {
-                // Format: Uid: <real> <effective> <saved> <fs>
-                sscanf(line + 4, " %u", &proc_uid);
-                break;
-            }
-        }
-        fclose(status_file);
-
-        if (proc_uid != uid)
-            continue;
-
-        // Read /proc/PID/stat for process info
-        char stat_path[256];
-        snprintf(stat_path, sizeof(stat_path), "/proc/%d/stat", pid);
-        FILE *stat_file = fopen(stat_path, "r");
-        if (!stat_file)
-            continue;
-
-        pid_t parsed_pid, ppid, pgrp, session;
-        char comm[256];
-        char state;
-
-        if (fscanf(stat_file, "%d %s %c %d %d %d",
-                   &parsed_pid, comm, &state, &ppid, &pgrp, &session) == 6) {
-
-            bool shouldKill = false;
-
-            // Session-related checks (same as before)
-            if (ppid == sessionPid || session == sessionPid || pgrp == sessionPid) {
-                NSDebugLog(@"Found session-related process: PID=%d, Command=%s", pid, comm);
-                shouldKill = true;
-            }
-
-            // Detached daemon check - match by command name.
-            // comm is in format "(name)", so strip the parens.
-            char *name = comm;
-            if (name[0] == '(') name++;
-            char *paren = strchr(name, ')');
-            if (paren) *paren = '\0';
-
-            if (!shouldKill && isDetachedDaemon(name)) {
-                NSDebugLog(@"Found detached daemon: PID=%d, Command=%s", pid, name);
-                shouldKill = true;
-            }
-
-            if (shouldKill) {
-                if (kill(pid, SIGKILL) == 0) {
-                    sessionRelatedKilled++;
-                } else if (errno != ESRCH) {
-                    NSDebugLog(@"Failed to kill process %d: %s", pid, strerror(errno));
-                }
-            }
-        }
-
-        fclose(stat_file);
-    }
-
-    closedir(proc_dir);
-
-#else
-    // BSD implementation using sysctl. OpenBSD's KERN_PROC needs a 6-element
-    // mib carrying the struct size and element count; FreeBSD uses 4.
-#if defined(__OpenBSD__)
-    int mib[6] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)uid,
-                  sizeof(struct kinfo_proc), 0};
-    int miblen = 6;
-#else
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, uid};
-    int miblen = 4;
-#endif
-    size_t size = 0;
-
-    if (sysctl(mib, miblen, NULL, &size, NULL, 0) != 0) {
-        NSDebugLog(@"Failed to get process list size: %s", strerror(errno));
-        return;
-    }
-
-    struct kinfo_proc *procs = malloc(size);
-    if (!procs) {
-        NSDebugLog(@"Failed to allocate memory for process list");
-        return;
-    }
-
-#if defined(__OpenBSD__)
-    mib[5] = (int)(size / sizeof(struct kinfo_proc));
-#endif
-    if (sysctl(mib, miblen, procs, &size, NULL, 0) != 0) {
-        NSDebugLog(@"Failed to get process list: %s", strerror(errno));
-        free(procs);
-        return;
-    }
-
-    int numProcs = size / sizeof(struct kinfo_proc);
-    for (int i = 0; i < numProcs; i++) {
-        pid_t pid = procs[i].GW_KP_PID;
-        if (pid <= 1 || pid == getpid())
-            continue;
-
+    scanProcessesOfUID(uid, ^(pid_t pid, pid_t ppid, pid_t pgid, pid_t sid, const char *name, bool zombie) {
         bool shouldKill = false;
 
         // Session-related checks
-        if (procs[i].GW_KP_PPID == sessionPid || procs[i].GW_KP_SID == sessionPid ||
-            procs[i].GW_KP_PGID == sessionPid) {
-            NSDebugLog(@"Found session-related process: PID=%d, Command=%s", pid, procs[i].GW_KP_COMM);
+        if (ppid == sessionLeader || sid == sessionLeader || pgid == sessionLeader) {
+            NSDebugLog(@"Found session-related process: PID=%d, Command=%s", pid, name);
             shouldKill = true;
         }
 
         // Detached daemon check
-        if (!shouldKill && isDetachedDaemon(procs[i].GW_KP_COMM)) {
-            NSDebugLog(@"Found detached daemon: PID=%d, Command=%s", pid, procs[i].GW_KP_COMM);
+        if (!shouldKill && isDetachedDaemon(name)) {
+            NSDebugLog(@"Found detached daemon: PID=%d, Command=%s", pid, name);
             shouldKill = true;
         }
 
@@ -2614,10 +2607,7 @@ static bool isDetachedDaemon(const char *comm)
                 NSDebugLog(@"Failed to kill process %d: %s", pid, strerror(errno));
             }
         }
-    }
-
-    free(procs);
-#endif
+    });
 
     NSDebugLog(@"Session cleanup complete: killed %d processes", sessionRelatedKilled);
 
@@ -2630,6 +2620,41 @@ static bool isDetachedDaemon(const char *comm)
     if (reaped > 0) {
         NSDebugLog(@"Reaped %d zombie processes", reaped);
     }
+}
+
+/* Children started behind our back, such as the pasteboard server's launcher
+   that libs-gui starts through NSTask, are never reaped: the SIGCHLD handler
+   is a no-op on purpose, because NSTask's own reaper waits for any child and
+   would take the session's exit status away from monitorSession. So they are
+   reaped here by pid, leaving out the session and the X server. */
+- (void)reapStrayChildren
+{
+    pid_t myPid = getpid();
+    pid_t session = sessionPid;
+    pid_t xserver = xServerPid;
+
+    scanProcessesOfUID(getuid(), ^(pid_t pid, pid_t ppid, pid_t pgid, pid_t sid, const char *name, bool zombie) {
+        if (zombie && ppid == myPid && pid != session && pid != xserver) {
+            NSDebugLog(@"Reaping stray child %s (PID %d)", name, pid);
+            waitpid(pid, NULL, WNOHANG);
+        }
+    });
+}
+
+/* The login screen needed its own notification and pasteboard servers. They are
+   started on demand and stay behind owned by root, next to the user's own
+   pair, for the whole session. They are started again when the login screen
+   comes back after the logout. */
+- (void)releaseLoginDaemons
+{
+    [self reapStrayChildren];
+
+    scanProcessesOfUID(0, ^(pid_t pid, pid_t ppid, pid_t pgid, pid_t sid, const char *name, bool zombie) {
+        if (isDetachedDaemon(name) && strcmp(name, "dbus-daemon") != 0) {
+            NSDebugLog(@"Releasing login daemon %s (PID %d)", name, pid);
+            kill(pid, SIGTERM);
+        }
+    });
 }
 
 - (void)showStatus:(NSString *)message
