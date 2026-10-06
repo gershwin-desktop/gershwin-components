@@ -619,7 +619,28 @@ static NSDictionary *parseStringsFile(NSString *path)
     if (val && _logWindow) [_logWindow setTitle:val];
 }
 
+/* Decoding and scaling the picture takes tens of megabytes of heap that the
+   allocator keeps resident, and this process lives as long as the session. A
+   short-lived copy of ourselves does the work, so the memory dies with it. */
 - (void)loadDesktopBackground
+{
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:[[NSBundle mainBundle] executablePath]];
+    [task setArguments:@[@"--set-background"]];
+    @try {
+        [task launch];
+        [task waitUntilExit];
+        if ([task terminationStatus] != 0) {
+            NSLog(@"[LoginWindow] Desktop background: helper failed with status %d",
+                  [task terminationStatus]);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[LoginWindow] Desktop background: could not start helper: %@", e);
+    }
+    [task release];
+}
+
+- (void)renderDesktopBackground
 {
     //Read desktop background preferences from global defaults
     NSString *prefsPath = @"/System/Library/Preferences/GlobalDefaults/org.gnustep.Workspace.plist";

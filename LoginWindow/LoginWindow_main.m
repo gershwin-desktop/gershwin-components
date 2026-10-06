@@ -620,7 +620,19 @@ void stopXorgLikeShellScript(void)
 int main(int argc, const char *argv[])
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    
+
+    // Helper mode, started by -loadDesktopBackground: paint the root window and
+    // exit, so the image decoding never grows the long-lived login process.
+    if (argc > 1 && strcmp(argv[1], "--set-background") == 0) {
+        setenv("DISPLAY", ":0", 1);
+        [NSApplication sharedApplication];
+        LoginWindow *painter = [[LoginWindow alloc] init];
+        [painter renderDesktopBackground];
+        [painter release];
+        [pool drain];
+        return 0;
+    }
+
     // Install X11 error handlers FIRST before any X operations
     XSetIOErrorHandler(mainXIOErrorHandler);
     XSetErrorHandler(mainXErrorHandler);
