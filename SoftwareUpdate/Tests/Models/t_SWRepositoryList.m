@@ -15,9 +15,42 @@ static NSString *const kFixtureCSV =
   @"libobjc2,https://example.invalid/libobjc2.git,abc1234,\n"
   @"gershwin-windowmanager,https://example.invalid/gershwin-windowmanager.git,,YES\n";
 
+/* The optional fifth column, Platforms, limits a repository to Windows builds
+ * ("windows"), to everything else ("unix") or lists both. */
+static NSString *const kPlatformCSV =
+  @"Name,URL,Pin,RestartRequired,Platforms\n"
+  @"libs-gui,https://example.invalid/libs-gui.git,abc1234,YES\n"
+  @"plugins-themes-WinUXTheme,https://example.invalid/winux.git,92ab1fb,,windows\n"
+  @"only-unix,https://example.invalid/u.git,,,unix\n"
+  @"both,https://example.invalid/b.git,,,windows unix\n"
+  @"gershwin-workspace,https://example.invalid/ws.git,,\n";
+
 int main(void)
 {
   NSAutoreleasePool *arp = [NSAutoreleasePool new];
+
+  /* --- a repository for Windows builds only is not Software Update's
+   *     business anywhere else: it is never checked out there, so it could
+   *     only be reported as a repository that could not be checked --- */
+  {
+    NSData *data = [kPlatformCSV dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *repos = [SWRepositoryList repositoriesFromCSVData:data error:NULL];
+    NSMutableArray *names = [NSMutableArray array];
+    for (SWRepository *r in repos) [names addObject:[r name]];
+
+#ifdef _WIN32
+    BOOL windows = YES;
+#else
+    BOOL windows = NO;
+#endif
+    PASS([names containsObject:@"plugins-themes-WinUXTheme"] == windows,
+         "a Windows-only repository is listed in Windows builds and nowhere else");
+    PASS([names containsObject:@"only-unix"] == !windows,
+         "a repository for everything but Windows is not listed in Windows builds");
+    PASS([names containsObject:@"both"], "a repository for both is listed everywhere");
+    PASS([names containsObject:@"libs-gui"], "a row without a Platforms column is listed everywhere");
+    PASS([names containsObject:@"gershwin-workspace"], "a row with an empty Platforms column is listed everywhere");
+  }
 
   /* --- parsing a fixture CSV from data --- */
   {

@@ -8,6 +8,30 @@
 
 NSString *const SWRepositoryListErrorDomain = @"SWRepositoryListErrorDomain";
 
+/* The platform this Software Update was built for, in the words of the
+ * Platforms column of Repositories.csv. */
+static NSString *SWCurrentPlatform(void)
+{
+#ifdef _WIN32
+  return @"windows";
+#else
+  return @"unix";
+#endif
+}
+
+/* Whether a repository is for this platform: the Platforms column is empty
+ * (everywhere) or lists it.  A repository for another platform is not checked
+ * out here - the Windows theme is a Windows-only repository - so listing it
+ * would only report it as one that could not be checked. */
+static BOOL SWPlatformsIncludeCurrent(NSString *platforms)
+{
+  NSString *list = [platforms stringByTrimmingCharactersInSet:
+    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if ([list length] == 0) return YES;
+  return [[list componentsSeparatedByCharactersInSet:
+    [NSCharacterSet whitespaceCharacterSet]] containsObject:SWCurrentPlatform()];
+}
+
 @implementation SWRepositoryList
 
 + (NSArray<SWRepository *> *)repositoriesFromCSVAtPath:(NSString *)path
@@ -44,6 +68,9 @@ NSString *const SWRepositoryListErrorDomain = @"SWRepositoryListErrorDomain";
 
     NSString *name = fields[0];
     if ([name isEqualToString:@"Name"]) continue; // header row
+
+    // An optional fifth column limits the repository to some platforms.
+    if ([fields count] > 4 && !SWPlatformsIncludeCurrent(fields[4])) continue;
 
     NSMutableDictionary *entry = [NSMutableDictionary dictionary];
     [entry setObject:name forKey:@"Name"];
