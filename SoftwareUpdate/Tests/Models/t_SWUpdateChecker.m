@@ -115,8 +115,8 @@ int main(void)
   {
     BOOL byBranch = NO;
     for (NSString *u in statusURLs)
-      if ([u hasSuffix:@"/gershwin-workspace/commits/main/check-runs"]) byBranch = YES;
-    PASS(byBranch, "the build status of a branch is asked for by the branch name, before the fetch");
+      if ([u containsString:@"/gershwin-workspace/actions?query=branch%3Amain"]) byBranch = YES;
+    PASS(byBranch, "the Actions page of the branch is asked about its tip before the fetch");
   }
   PASS(progressCalls == 3, "progress is reported once per repository");
   PASS(reachableResult, "at least one repository was reachable");

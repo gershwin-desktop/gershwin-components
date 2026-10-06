@@ -25,6 +25,18 @@ typedef NSData * (^SWHTTPFetcher)(NSURL *url);
 // same sha never repeats the network request.
 - (SWBuildStatus)statusForRepositoryNamed:(NSString *)repoName sha:(NSString *)sha;
 
+// The build status of the tip of a branch, read from the Actions page of the
+// repository on github.com (the runs of pushes to that branch) and not from
+// the API, which allows 60 requests an hour per address without a token.  The
+// page lists a run with the commit it ran for and whether it is running,
+// failed or passed, so a build that is still going is seen too, which the
+// badge cannot show.  When the page gives no answer for this commit (not
+// reachable, markup not understood, no run for it yet) the API is asked, by
+// the commit.  tipSha is the full sha the branch is at.
+- (SWBuildStatus)statusForRepositoryNamed:(NSString *)repoName
+                                    branch:(NSString *)branch
+                                    tipSha:(NSString *)tipSha;
+
 - (void)clearCache;
 
 @end

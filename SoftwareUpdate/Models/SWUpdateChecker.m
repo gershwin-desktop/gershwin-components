@@ -263,7 +263,10 @@
         SWGitTool *git = [self gitToolForRepository:repo];
         NSString *tip = branch ? [git remoteTipOfBranch:branch] : nil;
         if (branch && !(tip && [tip isEqualToString:[git fullShaForRef:@"HEAD"]])) {
-          SWBuildStatus status = [self->_buildStatusClient statusForRepositoryNamed:[repo name] sha:branch];
+          // The Actions page first, the API when the page says nothing.
+          SWBuildStatus status = tip
+            ? [self->_buildStatusClient statusForRepositoryNamed:[repo name] branch:branch tipSha:tip]
+            : [self->_buildStatusClient statusForRepositoryNamed:[repo name] sha:branch];
           @synchronized (self) { [self->_serverStatus setObject:@(status) forKey:[repo name]]; }
         }
       }

@@ -31,7 +31,10 @@
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     // GitHub's API rejects requests with no User-Agent.
     [request setValue:@"gershwin-desktop-software-update" forHTTPHeaderField:@"User-Agent"];
-    [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    // The API is asked for JSON, the Actions page for HTML.
+    [request setValue:([[url host] isEqualToString:@"github.com"] ? @"text/html"
+                                                                   : @"application/vnd.github+json")
+        forHTTPHeaderField:@"Accept"];
     // Without a token GitHub allows 60 requests an hour per address, which a
     // few checks use up; with one, the limit is far higher.
     NSDictionary *env = [[NSProcessInfo processInfo] environment];
@@ -84,6 +87,97 @@
     }
   }
   return status;
+}
+
+- (SWBuildStatus)statusForRepositoryNamed:(NSString *)repoName
+                                    branch:(NSString *)branch
+                                    tipSha:(NSString *)tipSha
+{
+  if ([tipSha length] == 0 || [branch length] == 0) {
+    return [self statusForRepositoryNamed:repoName sha:tipSha];
+  }
+
+  NSNumber *cached;
+  @synchronized (self) {
+    cached = [_cache objectForKey:tipSha];
+  }
+  if (cached) return (SWBuildStatus)[cached integerValue];
+
+  NSString *urlString = [NSString stringWithFormat:
+    @"https://github.com/gershwin-desktop/%@/actions?query=branch%%3A%@+event%%3Apush",
+    repoName, [branch stringByAddingPercentEncodingWithAllowedCharacters:
+      [NSCharacterSet alphanumericCharacterSet]]];
+  NSData *page = _fetcher([NSURL URLWithString:urlString]);
+  NSNumber *scraped = [self statusFromActionsPageData:page forSha:tipSha];
+  if (scraped) {
+    @synchronized (self) {
+      [_cache setObject:scraped forKey:tipSha];
+    }
+    return (SWBuildStatus)[scraped integerValue];
+  }
+
+  // The page said nothing about this commit: ask the API.
+  return [self statusForRepositoryNamed:repoName sha:tipSha];
+}
+
+// Reads the run rows of an Actions page.  A row holds the commit its run is
+// for (a link to /commit/<sha>) and the state of the run in the label of its
+// icon: "currently running", "queued", "failed", "cancelled", "completed
+// successfully" and the like.  Of the rows for this commit: any failed run
+// makes it failed, else any run still going makes it running, else a passed
+// run makes it passed.  nil when no row is for this commit or the page is not
+// understood, so that the caller asks the API instead.
+- (NSNumber *)statusFromActionsPageData:(NSData *)data forSha:(NSString *)sha
+{
+  if (!data || [sha length] < 7) return nil;
+  NSString *html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+  if ([html length] == 0) return nil;
+
+  NSError *error = nil;
+  NSRegularExpression *rowStart = [NSRegularExpression regularExpressionWithPattern:@"class=\"[^\"]*Box-row"
+                                                                              options:0
+                                                                                error:&error];
+  NSRegularExpression *label = [NSRegularExpression regularExpressionWithPattern:@"aria-label=\"([A-Za-z ]+): "
+                                                                         options:0
+                                                                           error:&error];
+  NSRegularExpression *commit = [NSRegularExpression regularExpressionWithPattern:@"/commit/([0-9a-f]{40})"
+                                                                          options:0
+                                                                            error:&error];
+  if (error) return nil;
+
+  NSArray<NSTextCheckingResult *> *starts = [rowStart matchesInString:html options:0 range:NSMakeRange(0, [html length])];
+  BOOL failed = NO, running = NO, passed = NO, seen = NO;
+  NSString *lowerSha = [sha lowercaseString];
+
+  for (NSUInteger i = 0; i < [starts count]; i++) {
+    NSUInteger from = [starts[i] range].location;
+    NSUInteger to = (i + 1 < [starts count]) ? [starts[i + 1] range].location : [html length];
+    NSRange rowRange = NSMakeRange(from, to - from);
+
+    NSTextCheckingResult *c = [commit firstMatchInString:html options:0 range:rowRange];
+    if (!c) continue;
+    NSString *rowSha = [html substringWithRange:[c rangeAtIndex:1]];
+    if (![rowSha hasPrefix:lowerSha] && ![lowerSha hasPrefix:rowSha]) continue;
+
+    NSTextCheckingResult *l = [label firstMatchInString:html options:0 range:rowRange];
+    if (!l) continue;
+    NSString *state = [[html substringWithRange:[l rangeAtIndex:1]] lowercaseString];
+
+    if ([state hasPrefix:@"failed"] || [state hasPrefix:@"cancel"] || [state hasPrefix:@"timed"]
+        || [state hasPrefix:@"stopped"]) {
+      failed = YES; seen = YES;
+    } else if ([state hasPrefix:@"currently"] || [state hasPrefix:@"queued"] || [state hasPrefix:@"waiting"]
+               || [state hasPrefix:@"pending"] || [state hasPrefix:@"in progress"]) {
+      running = YES; seen = YES;
+    } else if ([state hasPrefix:@"completed"] || [state hasPrefix:@"success"]) {
+      passed = YES; seen = YES;
+    }                                        // skipped and the like count for nothing
+  }
+
+  if (!seen) return nil;
+  if (failed) return @(SWBuildStatusFailed);
+  if (running) return @(SWBuildStatusRunning);
+  return passed ? @(SWBuildStatusPassed) : nil;
 }
 
 // Parses a check-runs response: no runs -> unknown; any check that has not

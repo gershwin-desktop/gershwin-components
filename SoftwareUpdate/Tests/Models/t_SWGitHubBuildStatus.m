@@ -89,6 +89,58 @@ int main(void)
          "no check runs at all reports unknown");
   }
 
+  /* --- the Actions page: rows of the runs of pushes, read for one commit --- */
+  {
+    NSString *tip = @"350f7ad7f66ec18a182d69cbda569c000529cc96";
+    NSString *(^row)(NSString *, NSString *) = ^NSString *(NSString *state, NSString *sha) {
+      return [NSString stringWithFormat:
+        @"<div class=\"Box-row js-socket-channel\"><svg aria-label=\"%@: \"></svg>"
+        @"<a href=\"/gershwin-desktop/r/actions/runs/1\">run</a>"
+        @"<a href=\"/gershwin-desktop/r/commit/%@\">x</a></div>", state, sha];
+    };
+    NSString *other = @"1562a98f7ad7f66ec18a182d69cbda569c000529";
+    __block int apiCalls = 0, pageCalls = 0;
+    __block NSString *page = nil;
+    SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      if ([[url host] isEqualToString:@"github.com"]) {
+        pageCalls++;
+        PASS([[url absoluteString] containsString:@"branch%3Adev"], "the page is asked for the branch");
+        return page ? [page dataUsingEncoding:NSUTF8StringEncoding] : nil;
+      }
+      apiCalls++;
+      return jsonData(@"{\"total_count\":1,\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\"}]}");
+    }];
+
+    page = [@[ row(@"currently running", other), row(@"completed successfully", tip), row(@"failed", @"e16d1f6aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") ]
+             componentsJoinedByString:@""];
+    PASS([status statusForRepositoryNamed:@"r" branch:@"dev" tipSha:tip] == SWBuildStatusPassed && apiCalls == 0 && pageCalls == 1,
+         "the page's row for the tip says passed: no API request, and other commits' rows do not count");
+
+    SWGitHubBuildStatus *s2 = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      return [[@[ row(@"currently running", tip), row(@"completed successfully", tip) ] componentsJoinedByString:@""]
+               dataUsingEncoding:NSUTF8StringEncoding];
+    }];
+    PASS([s2 statusForRepositoryNamed:@"r" branch:@"dev" tipSha:tip] == SWBuildStatusRunning,
+         "a run still going on the tip is seen, which the badge cannot show");
+
+    SWGitHubBuildStatus *s3 = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      return [[@[ row(@"completed successfully", tip), row(@"failed", tip) ] componentsJoinedByString:@""]
+               dataUsingEncoding:NSUTF8StringEncoding];
+    }];
+    PASS([s3 statusForRepositoryNamed:@"r" branch:@"dev" tipSha:tip] == SWBuildStatusFailed,
+         "a failed run on the tip makes it failed even when another run passed");
+
+    /* no row for this commit, or no page at all: the API is asked */
+    apiCalls = 0;
+    page = row(@"completed successfully", other);
+    PASS([status statusForRepositoryNamed:@"r" branch:@"dev" tipSha:@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] == SWBuildStatusPassed && apiCalls == 1,
+         "a page with no row for the commit falls back to the API");
+    page = nil;
+    apiCalls = 0;
+    PASS([status statusForRepositoryNamed:@"r" branch:@"dev" tipSha:@"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"] == SWBuildStatusPassed && apiCalls == 1,
+         "no page at all falls back to the API");
+  }
+
   /* --- the rate limit message is an answer that is no answer, and is asked again --- */
   {
     __block int asked = 0;
