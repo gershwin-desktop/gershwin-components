@@ -903,6 +903,9 @@ static NSDictionary *parseStringsFile(NSString *path)
 {
     NSDebugLLog(@"gwcomp", @"[DEBUG] Releasing login UI to free memory");
 
+    // The theme pulses the default button from a timer that keeps pointing at
+    // it; without this the timer fires on the freed button after the login.
+    [loginWindow setDefaultButtonCell:nil];
     [loginWindow orderOut:nil];
     [loginWindow release];
     loginWindow = nil;
@@ -3508,7 +3511,16 @@ static bool isDetachedDaemon(const char *comm)
     // Allow login without password if username is present.
     BOOL shouldEnable = hasUsername;
     
-    [loginButton setEnabled:shouldEnable];
+    if (shouldEnable != [loginButton isEnabled]) {
+        [loginButton setEnabled:shouldEnable];
+        // The theme pulses the window's default button, but it starts the
+        // pulse timer only for an enabled button and learns about later
+        // enabling only if the cell already had a control view when it was
+        // installed. Ours starts disabled and is not drawn yet at creation,
+        // so install it as default once it can be used; otherwise the pulse
+        // advances only when the text cursor blink redraws the button (2 Hz).
+        [loginWindow setDefaultButtonCell:shouldEnable ? [loginButton cell] : nil];
+    }
     
     NSDebugLLog(@"gwcomp", @"[DEBUG] Login button state updated - username: %s, password: %s, enabled: %s",
           hasUsername ? "yes" : "no",
