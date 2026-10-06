@@ -89,12 +89,25 @@ int main(void)
          "no check runs at all reports unknown");
   }
 
-  /* --- unreachable / unparsable response reports unknown, never a guess --- */
+  /* --- the rate limit message is an answer that is no answer, and is asked again --- */
+  {
+    __block int asked = 0;
+    SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+      asked++;
+      return jsonData(@"{\"message\":\"API rate limit exceeded\"}");
+    }];
+    PASS([status statusForRepositoryNamed:@"gershwin-developer" sha:@"dev"] == SWBuildStatusUnavailable,
+         "a rate limit response is unavailable, not a pass");
+    [status statusForRepositoryNamed:@"gershwin-developer" sha:@"dev"];
+    PASS(asked == 2, "an answer that is no answer is not kept: the next ask asks again");
+  }
+
+  /* --- unreachable / unparsable response is unavailable: never a guess, and never a pass --- */
   {
     SWGitHubBuildStatus *status = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
       return nil; // simulates a network failure or rate limit
     }];
-    PASS([status statusForRepositoryNamed:@"gershwin-eau-theme" sha:@"333333"] == SWBuildStatusUnknown,
+    PASS([status statusForRepositoryNamed:@"gershwin-eau-theme" sha:@"333333"] == SWBuildStatusUnavailable,
          "a failed fetch reports unknown rather than a false pass or fail");
   }
 

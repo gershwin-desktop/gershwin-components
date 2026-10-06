@@ -80,7 +80,10 @@ int main(void)
     [[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-workspace", @"URL": @"u"}],
   ];
 
+  // Every URL the build status client is asked for, in order.
+  NSMutableArray *statusURLs = [NSMutableArray array];
   SWGitHubBuildStatus *buildStatus = [[SWGitHubBuildStatus alloc] initWithFetcher:^NSData *(NSURL *url) {
+    @synchronized (statusURLs) { [statusURLs addObject:[url absoluteString]]; }
     return [@"{\"total_count\":1,\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\"}]}"
              dataUsingEncoding:NSUTF8StringEncoding];
   }];
@@ -106,6 +109,15 @@ int main(void)
     reachableResult = anyReachable;
   }];
 
+  /* Fail fast: what the server says about the build of a branch is asked
+   * before anything is fetched, by the name of the branch, which needs no
+   * fetch to know; only after that does the check look for changes. */
+  {
+    BOOL byBranch = NO;
+    for (NSString *u in statusURLs)
+      if ([u hasSuffix:@"/gershwin-workspace/commits/main/check-runs"]) byBranch = YES;
+    PASS(byBranch, "the build status of a branch is asked for by the branch name, before the fetch");
+  }
   PASS(progressCalls == 3, "progress is reported once per repository");
   PASS(reachableResult, "at least one repository was reachable");
   PASS([checker localFailureReason] == nil,

@@ -17,6 +17,7 @@ typedef NS_ENUM(NSInteger, SWBuildStatus) {
   SWBuildStatusPassed,
   SWBuildStatusFailed,
   SWBuildStatusRunning,
+  SWBuildStatusUnavailable,   // the server could not be asked (rate limit, no network): not a pass
 };
 
 @interface SWRepository : NSObject

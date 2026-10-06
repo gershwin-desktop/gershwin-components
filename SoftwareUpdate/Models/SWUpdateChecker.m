@@ -18,6 +18,7 @@
   NSString *_incomingRepositoriesPlistTarget; // the branch its pins were read from, so we only read it once
   NSDictionary<NSString *, NSString *> *_incomingPins; // Name -> Pin, from the incoming gershwin-developer
   NSString *_localFailureReason;
+  NSMutableDictionary<NSString *, NSNumber *> *_serverStatus; // Name -> SWBuildStatus, read before any fetch
 }
 @property (nonatomic, copy, readwrite) NSString *localFailureReason;
 @end
@@ -95,6 +96,14 @@
     if (completion) completion(@[], NO);
     return;
   }
+
+  // Fail fast: ask the server what it says about the build of every branch
+  // before anything is fetched. These are small requests that run side by
+  // side and need nothing from git's network round trips, and a branch that is
+  // building or has failed is known at once instead of after the slowest
+  // fetch. The branch is named, not its tip commit: the tip is only known
+  // after the fetch, and GitHub answers for a branch name as for a commit.
+  [self preloadServerStatusForRepositories:repositories stopRequested:stopRequested];
 
   NSMutableArray<SWRepository *> *remaining = [repositories mutableCopy];
   __block NSUInteger completedCount = 0;
@@ -213,9 +222,55 @@
   [repo setCommits:[git commitsBehindTarget:target]];
 
   if ([repo commitCount] > 0) {
-    NSString *tipSha = [[[repo commits] objectAtIndex:0] sha];
-    [repo setBuildStatus:[_buildStatusClient statusForRepositoryNamed:[repo name] sha:tipSha]];
+    // What the server said about the branch before the fetch, when it said
+    // anything; the tip commit is asked for only if it did not.
+    NSNumber *early = nil;
+    @synchronized (self) { early = [_serverStatus objectForKey:[repo name]]; }
+    if (early && [early integerValue] != SWBuildStatusUnknown) {
+      [repo setBuildStatus:(SWBuildStatus)[early integerValue]];
+    } else {
+      NSString *tipSha = [[[repo commits] objectAtIndex:0] sha];
+      [repo setBuildStatus:[_buildStatusClient statusForRepositoryNamed:[repo name] sha:tipSha]];
+    }
   }
+}
+
+// The branch a repository is checked against, from what is already on disk:
+// dev when asked for and known from the last fetch, else the default branch.
+- (NSString *)branchToAskAboutForRepository:(SWRepository *)repo git:(SWGitTool *)git
+{
+  if (_useDevBranch && [git fullShaForRef:@"origin/dev"]) return @"dev";
+  return [git defaultBranch];
+}
+
+- (void)preloadServerStatusForRepositories:(NSArray<SWRepository *> *)repositories
+                              stopRequested:(BOOL (^)(void))stopRequested
+{
+  _serverStatus = [NSMutableDictionary dictionary];
+  dispatch_semaphore_t limit = dispatch_semaphore_create(6);
+  dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+  dispatch_group_t group = dispatch_group_create();
+
+  for (SWRepository *repo in repositories) {
+    if ([repo isPinned]) continue;   // pins move with gershwin-developer, not with a build
+    dispatch_group_async(group, queue, ^{
+      dispatch_semaphore_wait(limit, DISPATCH_TIME_FOREVER);
+      if (!(stopRequested && stopRequested())) {
+        NSString *branch = [self branchToAskAboutForRepository:repo
+                                                            git:[self gitToolForRepository:repo]];
+        // A branch that is where this checkout is has nothing to install, so
+        // its build does not matter: one request less against the rate limit.
+        SWGitTool *git = [self gitToolForRepository:repo];
+        NSString *tip = branch ? [git remoteTipOfBranch:branch] : nil;
+        if (branch && !(tip && [tip isEqualToString:[git fullShaForRef:@"HEAD"]])) {
+          SWBuildStatus status = [self->_buildStatusClient statusForRepositoryNamed:[repo name] sha:branch];
+          @synchronized (self) { [self->_serverStatus setObject:@(status) forKey:[repo name]]; }
+        }
+      }
+      dispatch_semaphore_signal(limit);
+    });
+  }
+  dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 }
 
 // Pinned upstream libraries never follow a branch: they are listed only

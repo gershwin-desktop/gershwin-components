@@ -390,14 +390,14 @@ static const float kBottomBarHeight =
   // list above, so this pane holds only what the list cannot show: a warning
   // for the selected repository and its changelog.
   _detailsWarningField = [[NSTextField alloc] initWithFrame:
-    NSMakeRect(0, NSHeight(bounds) - kWarningHeight, NSWidth(bounds), kWarningHeight)];
+    NSMakeRect(0, 0, NSWidth(bounds), kWarningHeight)];
   [_detailsWarningField setFont:METRICS_FONT_SYSTEM_REGULAR_11];
   [_detailsWarningField setBezeled:NO];
   [_detailsWarningField setDrawsBackground:NO];
   [_detailsWarningField setEditable:NO];
   [_detailsWarningField setSelectable:NO];
   [_detailsWarningField setHidden:YES];
-  [_detailsWarningField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+  [_detailsWarningField setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
   [container addSubview:_detailsWarningField];
 
   // Only the commit list scrolls. A text view sitting directly in a
@@ -424,14 +424,15 @@ static const float kBottomBarHeight =
   [container addSubview:_commitsScroll];
 }
 
-// The warning line takes its slot from the top of the changelog only while
-// it has something to say.
+// The warning line sits under the changelog, taking its slot from the bottom
+// of it only while it has something to say.
 - (void)setDetailsWarningVisible:(BOOL)visible
 {
   [_detailsWarningField setHidden:!visible];
   NSRect bounds = [[_commitsScroll superview] bounds];
   NSRect frame = bounds;
   if (visible) {
+    frame.origin.y += kWarningHeight + METRICS_SPACE_8;
     frame.size.height -= kWarningHeight + METRICS_SPACE_8;
   }
   [_commitsScroll setFrame:frame];

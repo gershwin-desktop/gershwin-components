@@ -32,6 +32,12 @@
     // GitHub's API rejects requests with no User-Agent.
     [request setValue:@"gershwin-desktop-software-update" forHTTPHeaderField:@"User-Agent"];
     [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    // Without a token GitHub allows 60 requests an hour per address, which a
+    // few checks use up; with one, the limit is far higher.
+    NSDictionary *env = [[NSProcessInfo processInfo] environment];
+    NSString *token = [env objectForKey:@"GITHUB_TOKEN"] ?: [env objectForKey:@"GH_TOKEN"];
+    if ([token length] > 0)
+      [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
     NSURLResponse *response = nil;
     NSError *error = nil;
     return [NSURLConnection sendSynchronousRequest:request
@@ -70,8 +76,12 @@
   NSData *data = _fetcher([NSURL URLWithString:urlString]);
   SWBuildStatus status = [self statusFromResponseData:data];
 
-  @synchronized (self) {
-    [_cache setObject:@(status) forKey:sha];
+  // An answer that is no answer (rate limit, no network) is not kept, so the
+  // next ask asks again, and it is not a pass.
+  if (status != SWBuildStatusUnavailable) {
+    @synchronized (self) {
+      [_cache setObject:@(status) forKey:sha];
+    }
   }
   return status;
 }
@@ -88,15 +98,18 @@
 // without a name are told apart by their position.
 - (SWBuildStatus)statusFromResponseData:(NSData *)data
 {
-  if (!data) return SWBuildStatusUnknown;
+  if (!data) return SWBuildStatusUnavailable;
 
   NSError *error = nil;
   id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
-  if (![json isKindOfClass:[NSDictionary class]]) return SWBuildStatusUnknown;
+  if (![json isKindOfClass:[NSDictionary class]]) return SWBuildStatusUnavailable;
 
   NSArray *checkRuns = [(NSDictionary *)json objectForKey:@"check_runs"];
-  if (![checkRuns isKindOfClass:[NSArray class]] || [checkRuns count] == 0) {
-    return SWBuildStatusUnknown;
+  if (![checkRuns isKindOfClass:[NSArray class]]) {
+    return SWBuildStatusUnavailable;       // an error body, e.g. the rate limit message
+  }
+  if ([checkRuns count] == 0) {
+    return SWBuildStatusUnknown;           // a commit with no checks at all
   }
 
   NSMutableSet *passedChecks = [NSMutableSet set];

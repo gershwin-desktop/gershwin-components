@@ -31,6 +31,8 @@
       return @"Build failed on server, please retry later";
     case SWBuildStatusRunning:
       return @"Build still in progress on server, please retry later";
+    case SWBuildStatusUnavailable:
+      return @"Couldn't ask GitHub whether the build is done (rate limit?), please retry later";
     case SWBuildStatusPassed:
     case SWBuildStatusUnknown:
     default:

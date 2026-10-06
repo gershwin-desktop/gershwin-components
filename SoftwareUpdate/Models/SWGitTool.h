@@ -192,4 +192,7 @@ typedef void (^SWGitLogLine)(NSString *line);
 // present locally (e.g. a pin that has not been fetched yet).
 - (NSString *)fullShaForRef:(NSString *)ref;
 
+// The commit origin's branch is at now, asked of the server (no fetch), or nil.
+- (NSString *)remoteTipOfBranch:(NSString *)branch;
+
 @end

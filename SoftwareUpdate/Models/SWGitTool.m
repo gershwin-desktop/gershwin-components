@@ -749,4 +749,13 @@ static NSString *SWFirstErrorLine(NSString *output)
     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
+- (NSString *)remoteTipOfBranch:(NSString *)branch
+{
+  NSString *output = nil;
+  if ([self runGit:@[@"ls-remote", @"--heads", @"origin", branch] output:&output] != 0) return nil;
+  NSArray *parts = [[output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                     componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+  return [parts count] > 0 && [parts[0] length] == 40 ? parts[0] : nil;
+}
+
 @end
