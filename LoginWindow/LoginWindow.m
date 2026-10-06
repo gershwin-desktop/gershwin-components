@@ -823,7 +823,11 @@ static NSDictionary *parseStringsFile(NSString *path)
                                             XFreeCursor(display, cursor);
                                         }
                                     }
-                                    imgData = NULL; // XImage owns it
+                                    // The server keeps its own copy once the pixmap is set;
+                                    // XDestroyImage also frees imgData, which otherwise stays
+                                    // resident for the whole session.
+                                    XDestroyImage(ximg);
+                                    imgData = NULL;
                                     haveImage = NO; // mark as handled
                                     imageWasSet = YES;
                                     NSLog(@"[LoginWindow] Desktop background: "
