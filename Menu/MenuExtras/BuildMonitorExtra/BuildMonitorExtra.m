@@ -135,29 +135,70 @@ static NSString *ConfigKey(NSString *key)
             NSString *urlStr = [NSString stringWithFormat: @"https://api.github.com/repos/%@/%@/actions/runs?per_page=5",
                                  parts[0], parts[1]];
 
-            NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL: [NSURL URLWithString: urlStr]];
-            if ([token length] > 0) {
-                [req setValue: [NSString stringWithFormat: @"token %@", token] forHTTPHeaderField: @"Authorization"];
-            }
-            [req setValue: @"BuildMonitorExtra/1.0" forHTTPHeaderField: @"User-Agent"];
-
-            NSURLResponse *response = nil;
-            NSError *error = nil;
-            NSData *data = [NSURLConnection sendSynchronousRequest: req
-                                                 returningResponse: &response
-                                                             error: &error];
             NSInteger statusCode = 0;
-            if ([response isKindOfClass: [NSHTTPURLResponse class]]) {
-                statusCode = [(NSHTTPURLResponse *)response statusCode];
-            }
+            NSData *data = [BuildMonitorExtra curlBodyForURL: urlStr
+                                                       token: token
+                                                  statusCode: &statusCode];
 
             NSMutableDictionary *result = [NSMutableDictionary dictionary];
             [result setObject: @(statusCode) forKey: @"statusCode"];
-            if (data && !error) [result setObject: data forKey: @"data"];
+            if (data) [result setObject: data forKey: @"data"];
             [results setObject: result forKey: repoStr];
         }
     }
     return results;
+}
+
+/* Runs curl as a short-lived child instead of NSURLConnection: the TLS stack
+   behind NSURLConnection loads the system trust store into about 19 MB of
+   heap that this resident menu bar process would keep for the whole session.
+   The token goes through stdin so it never shows up in the process list. */
++ (NSData *)curlBodyForURL:(NSString *)urlStr
+                     token:(NSString *)token
+                statusCode:(NSInteger *)statusCode
+{
+    *statusCode = 0;
+
+    NSTask *task = [[NSTask alloc] init];
+    NSPipe *out = [NSPipe pipe];
+    NSPipe *in = [NSPipe pipe];
+    [task setLaunchPath: @"/usr/bin/env"];
+    [task setArguments: @[@"curl", @"--silent", @"--max-time", @"30",
+                          @"--user-agent", @"BuildMonitorExtra/1.0",
+                          @"--write-out", @"\n%{http_code}",
+                          @"--config", @"-", urlStr]];
+    [task setStandardOutput: out];
+    [task setStandardInput: in];
+    [task setStandardError: [NSFileHandle fileHandleWithNullDevice]];
+
+    NSData *raw = nil;
+    @try {
+        [task launch];
+        if ([token length] > 0) {
+            NSString *cfg = [NSString stringWithFormat:
+                @"header = \"Authorization: token %@\"\n", token];
+            [[in fileHandleForWriting] writeData: [cfg dataUsingEncoding: NSUTF8StringEncoding]];
+        }
+        [[in fileHandleForWriting] closeFile];
+        raw = [[out fileHandleForReading] readDataToEndOfFile];
+        [task waitUntilExit];
+    } @catch (NSException *e) {
+        NSLog(@"BuildMonitorExtra: could not run curl: %@", e);
+        raw = nil;
+    }
+    int rc = (raw != nil) ? [task terminationStatus] : -1;
+    if (rc != 0) return nil;
+
+    /* The body is followed by "\n<http code>". */
+    NSRange nl = [raw rangeOfData: [NSData dataWithBytes: "\n" length: 1]
+                          options: NSDataSearchBackwards
+                            range: NSMakeRange(0, [raw length])];
+    if (nl.location == NSNotFound) return nil;
+    NSString *code = [[NSString alloc] initWithData:
+        [raw subdataWithRange: NSMakeRange(NSMaxRange(nl), [raw length] - NSMaxRange(nl))]
+                                           encoding: NSUTF8StringEncoding];
+    *statusCode = [code integerValue];
+    return [raw subdataWithRange: NSMakeRange(0, nl.location)];
 }
 
 - (void)applyPollResults:(NSDictionary *)results
