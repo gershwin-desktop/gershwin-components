@@ -81,6 +81,7 @@
 - (void)loadDefaultDevices;
 - (void)pickDefaultFromAsoundrc;
 - (NSString *)cardIDForCardIndex:(int)cardIndex;
+- (NSString *)hwCardRefForCardIndex:(int)cardIndex;
 - (BOOL)saveDefaultDevice:(AudioDevice *)device isOutput:(BOOL)isOutput;
 - (NSString *)buildAsoundrcContent;
 

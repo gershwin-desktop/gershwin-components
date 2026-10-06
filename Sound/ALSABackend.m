@@ -1925,11 +1925,15 @@ static NSString *const kMicControl = @"Mic";
             NSRange slavePcm = [dmixBody rangeOfString:@"slave"];
             if (slavePcm.location != NSNotFound) {
                 NSString *slavePart = [dmixBody substringFromIndex:slavePcm.location];
-                int foundCard = -1, foundDev = -1;
+                NSString *foundCard = nil;
+                int foundDev = -1;
                 s = [NSScanner scannerWithString:slavePart];
                 [s scanUpToString:@"card" intoString:NULL];
                 if ([s scanString:@"card" intoString:NULL]) {
-                    [s scanInt:&foundCard];
+                    [s scanCharactersFromSet:[NSCharacterSet whitespaceCharacterSet]
+                                  intoString:NULL];
+                    [s scanCharactersFromSet:[[NSCharacterSet whitespaceAndNewlineCharacterSet] invertedSet]
+                                  intoString:&foundCard];
                 }
                 // Reset scanner for device
                 s = [NSScanner scannerWithString:slavePart];
@@ -1937,14 +1941,13 @@ static NSString *const kMicControl = @"Mic";
                 if ([s scanString:@"device" intoString:NULL]) {
                     [s scanInt:&foundDev];
                 }
-                if (foundCard >= 0 && foundDev >= 0) {
-                    for (AudioDevice *dev in cachedOutputDevices) {
-                        if (dev.cardIndex == foundCard && dev.deviceIndex == foundDev) {
-                            dev.isDefault = YES;
-                            defaultOutput = [dev retain];
-                            currentOutputCard = dev.cardIndex;
-                            return;
-                        }
+                if (foundCard && foundDev >= 0) {
+                    AudioDevice *dev = matchCardRef(foundCard, foundDev);
+                    if (dev) {
+                        dev.isDefault = YES;
+                        defaultOutput = [dev retain];
+                        currentOutputCard = dev.cardIndex;
+                        return;
                     }
                 }
             }
@@ -2518,7 +2521,7 @@ static NSString *const kMicControl = @"Mic";
         [content appendString:@"    type plug\n"];
         [content appendString:@"    slave.pcm {\n"];
         [content appendFormat:@"        type hw\n"];
-        [content appendFormat:@"        card %d\n", inDev.cardIndex];
+        [content appendFormat:@"        card %@\n", [self hwCardRefForCardIndex:inDev.cardIndex]];
         [content appendFormat:@"        device %d\n", inDev.deviceIndex];
         [content appendString:@"    }\n"];
         [content appendString:@"}\n\n"];
@@ -2581,7 +2584,7 @@ static NSString *const kMicControl = @"Mic";
         [content appendFormat:@"    slave {\n"];
         [content appendFormat:@"        pcm {\n"];
         [content appendFormat:@"            type hw\n"];
-        [content appendFormat:@"            card %d\n", outDev.cardIndex];
+        [content appendFormat:@"            card %@\n", [self hwCardRefForCardIndex:outDev.cardIndex]];
         [content appendFormat:@"            device %d\n", outDev.deviceIndex];
         [content appendFormat:@"        }\n"];
         [content appendFormat:@"        rate %d\n", rate];
@@ -2601,7 +2604,7 @@ static NSString *const kMicControl = @"Mic";
         [content appendFormat:@"    type plug\n"];
         [content appendFormat:@"    slave.pcm {\n"];
         [content appendFormat:@"        type hw\n"];
-        [content appendFormat:@"        card %d\n", inDev.cardIndex];
+        [content appendFormat:@"        card %@\n", [self hwCardRefForCardIndex:inDev.cardIndex]];
         [content appendFormat:@"        device %d\n", inDev.deviceIndex];
         [content appendFormat:@"    }\n"];
         [content appendFormat:@"}\n"];
@@ -2635,6 +2638,15 @@ static NSString *const kMicControl = @"Mic";
     cardId = [cardId stringByTrimmingCharactersInSet:
                        [NSCharacterSet whitespaceCharacterSet]];
     return [cardId length] > 0 ? cardId : nil;
+}
+
+// Card reference for hw blocks in .asoundrc.  Numeric indices are assigned
+// in probe order, so plugging in a USB MIDI keyboard shifts them and a
+// numeric reference then points at the wrong card; the card ID is stable.
+- (NSString *)hwCardRefForCardIndex:(int)cardIndex
+{
+    NSString *cid = [self cardIDForCardIndex:cardIndex];
+    return cid ?: [NSString stringWithFormat:@"%d", cardIndex];
 }
 
 // Build a stable, cross-reboot device identifier from the ALSA card ID
