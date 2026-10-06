@@ -498,15 +498,18 @@ static dispatch_once_t _sharedDisplayOnce;
     }
     
     Window root = DefaultRootWindow(display);
-    Window parent, *children;
-    unsigned int nchildren;
+    Window parent, *children = NULL;
+    unsigned int nchildren = 0;
     
     NSMutableArray *windows = [NSMutableArray array];
     
-    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) == Success) {
+    /* XQueryTree and XGetWindowAttributes return a nonzero Status on success;
+       comparing it with Success (0) skipped the scan and leaked the child
+       list Xlib allocated on every healthy call. */
+    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) != 0) {
         for (unsigned int i = 0; i < nchildren; i++) {
             XWindowAttributes attrs;
-            if (XGetWindowAttributes(display, children[i], &attrs) == Success) {
+            if (XGetWindowAttributes(display, children[i], &attrs) != 0) {
                 /* Skip override-redirect windows: dropdown menus, popups and
                  * tooltips are transient, churn constantly while being
                  * opened/closed, and are never menu-bar or menu-service hosts.
@@ -593,15 +596,16 @@ static dispatch_once_t _sharedDisplayOnce;
     }
     
     Window root = DefaultRootWindow(display);
-    Window parent, *children;
-    unsigned int nchildren;
+    Window parent, *children = NULL;
+    unsigned int nchildren = 0;
     unsigned long desktopWindow = 0;
     
     // Atoms for checks
     Atom desktopTypeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
     Atom windowTypeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
     
-    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) == Success) {
+    /* Nonzero Status means success, see getAllWindows. */
+    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) != 0) {
         for (unsigned int i = 0; i < nchildren; i++) {
             Window w = children[i];
             

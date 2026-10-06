@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -157,5 +157,11 @@ t_MediaHub_OBJC_FILES = t_MediaHub.m ../../MediaHub.m ../../MPRISMediaController
 t_MediaHub_OBJCFLAGS += -I../../../MediaRemote
 t_MediaHub_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
 t_MediaHub_TOOL_LIBS += -ldbus-1 -ldispatch
+
+# The window scans in MenuUtils.m are ARC in Menu; the test tool itself stays
+# non-ARC.  Needs an X display to do anything (it says so when there is none).
+t_MenuUtilsWindows_OBJC_FILES = t_MenuUtilsWindows.m ../../MenuUtils.m
+../../MenuUtils.m_FILE_FLAGS += $(ARCFLAGS)
+t_MenuUtilsWindows_TOOL_LIBS += -lX11 -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

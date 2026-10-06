@@ -637,10 +637,11 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error) {
             NSDebugLog(@"GTKMenuImporter: _NET_CLIENT_LIST not available, falling back to root children");
         }
         
-        Window parent, *children;
-        unsigned int numChildren;
+        Window parent, *children = NULL;
+        unsigned int numChildren = 0;
         
-        if (XQueryTree(display, root, &root, &parent, &children, &numChildren) == Success && children) {
+        /* Nonzero Status means success; == Success never scanned and leaked. */
+        if (XQueryTree(display, root, &root, &parent, &children, &numChildren) != 0 && children) {
             for (unsigned int i = 0; i < numChildren; i++) {
                 Window window = children[i];
                 
