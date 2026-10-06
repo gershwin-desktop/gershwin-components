@@ -83,8 +83,11 @@ static NSTimeInterval _lastCaptivePortalCheckTime = 0;
             return;
         }
 
+        /* This file is built without ARC: -copy returns an owned block, and
+           performSelectorInBackground: retains its argument for the thread,
+           so the copy must be balanced here or every check leaks a block. */
         [self performSelectorInBackground:@selector(_runCheckWithCompletion:)
-                               withObject:[completion copy]];
+                               withObject:[[completion copy] autorelease]];
     }
 }
 
@@ -100,7 +103,7 @@ static NSTimeInterval _lastCaptivePortalCheckTime = 0;
         _lastCaptivePortalCheckTime = [NSDate timeIntervalSinceReferenceDate];
 
         [self performSelectorInBackground:@selector(_runCheckWithCompletion:)
-                               withObject:[completion copy]];
+                               withObject:[[completion copy] autorelease]];
     }
 }
 
