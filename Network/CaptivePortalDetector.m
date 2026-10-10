@@ -8,15 +8,17 @@
 #include <curl/curl.h>
 #include <string.h>
 
-#define CAPTIVE_PORTAL_PROBE_URL "http://example.com"
 #define CAPTIVE_PORTAL_PROBE_BASE_URL @"http://example.com"
 #define CAPTIVE_PORTAL_MIN_INTERVAL 60.0
 // example.com returns this string in the body on success
 #define EXPECTED_PROBE_MARKER "Example Domain"
 
+#define CAPTIVE_PORTAL_MAX_HOPS 5
+// A portal page is small; this bounds memory and the work of the parser
+#define CAPTIVE_PORTAL_MAX_BODY (64 * 1024)
+
 struct CaptivePortalResponse {
-    char *location;
-    char *body;   // response body for content check
+    char *body;   // response body for content check, capped
     size_t bodyLen;
 };
 
@@ -24,38 +26,106 @@ static size_t captivePortalWriteCallback(char *ptr, size_t size, size_t nmemb, v
 {
     size_t total = size * nmemb;
     struct CaptivePortalResponse *resp = (struct CaptivePortalResponse *)userdata;
-    char *newBody = realloc(resp->body, resp->bodyLen + total + 1);
-    if (newBody) {
-        memcpy(newBody + resp->bodyLen, ptr, total);
-        resp->bodyLen += total;
-        newBody[resp->bodyLen] = '\0';
-        resp->body = newBody;
+    size_t keep = total;
+    if (resp->bodyLen >= CAPTIVE_PORTAL_MAX_BODY) {
+        keep = 0;
+    } else if (keep > CAPTIVE_PORTAL_MAX_BODY - resp->bodyLen) {
+        keep = CAPTIVE_PORTAL_MAX_BODY - resp->bodyLen;
     }
+    if (keep > 0) {
+        char *newBody = realloc(resp->body, resp->bodyLen + keep + 1);
+        if (newBody) {
+            memcpy(newBody + resp->bodyLen, ptr, keep);
+            resp->bodyLen += keep;
+            newBody[resp->bodyLen] = '\0';
+            resp->body = newBody;
+        }
+    }
+    // Report everything as consumed so curl does not abort the transfer
     return total;
 }
 
-static size_t captivePortalHeaderCallback(char *buffer, size_t size, size_t nitems, void *userdata)
+/* Text between <tag ...> and </tag>, tags matched case-insensitively, or nil.
+   Returns the range after the closing tag through *after when given. */
+static NSString *captivePortalElement(NSString *s, NSString *tag, NSUInteger from, NSUInteger *after)
 {
-    size_t total = size * nitems;
-    struct CaptivePortalResponse *resp = (struct CaptivePortalResponse *)userdata;
-
-    const char *prefix = "Location: ";
-    size_t prefixLen = strlen(prefix);
-    if (total >= prefixLen && strncasecmp(buffer, prefix, prefixLen) == 0) {
-        size_t valueLen = total - prefixLen;
-        char *loc = malloc(valueLen + 1);
-        if (loc) {
-            memcpy(loc, buffer + prefixLen, valueLen);
-            loc[valueLen] = '\0';
-            char *nl = strchr(loc, '\r');
-            if (nl) *nl = '\0';
-            nl = strchr(loc, '\n');
-            if (nl) *nl = '\0';
-            if (resp->location) free(resp->location);
-            resp->location = loc;
+    NSString *open = [@"<" stringByAppendingString:tag];
+    NSString *close = [@"</" stringByAppendingString:tag];
+    NSUInteger len = [s length];
+    NSUInteger pos = from;
+    while (pos < len) {
+        NSRange r = [s rangeOfString:open options:NSCaseInsensitiveSearch
+                               range:NSMakeRange(pos, len - pos)];
+        if (r.location == NSNotFound) return nil;
+        NSUInteger n = NSMaxRange(r);
+        // "<Redirect" must not match "<RedirectFoo"
+        if (n < len) {
+            unichar c = [s characterAtIndex:n];
+            if (c != '>' && c != '/' && c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+                pos = n;
+                continue;
+            }
         }
+        NSRange gt = [s rangeOfString:@">" options:0 range:NSMakeRange(n, len - n)];
+        if (gt.location == NSNotFound) return nil;
+        NSUInteger start = NSMaxRange(gt);
+        NSRange e = [s rangeOfString:close options:NSCaseInsensitiveSearch
+                               range:NSMakeRange(start, len - start)];
+        if (e.location == NSNotFound) return nil;
+        if (after) *after = e.location;
+        return [s substringWithRange:NSMakeRange(start, e.location - start)];
     }
-    return total;
+    return nil;
+}
+
+/* The text of an element: real CDATA is verbatim, the CDATA[[...]] spelling
+   some gateways use is unwrapped, everything else has its entities resolved. */
+static NSString *captivePortalText(NSString *raw)
+{
+    NSString *t = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([t hasPrefix:@"<![CDATA["]) {
+        NSRange e = [t rangeOfString:@"]]>" options:NSBackwardsSearch];
+        if (e.location == NSNotFound || e.location < 9) return nil;
+        return [t substringWithRange:NSMakeRange(9, e.location - 9)];
+    }
+    if ([t hasPrefix:@"CDATA[["] && [t hasSuffix:@"]]"] && [t length] >= 9) {
+        return [t substringWithRange:NSMakeRange(7, [t length] - 9)];
+    }
+    // &amp; last so that "&amp;lt;" stays "&lt;"
+    t = [t stringByReplacingOccurrencesOfString:@"&lt;" withString:@"<"];
+    t = [t stringByReplacingOccurrencesOfString:@"&gt;" withString:@">"];
+    t = [t stringByReplacingOccurrencesOfString:@"&quot;" withString:@"\""];
+    t = [t stringByReplacingOccurrencesOfString:@"&apos;" withString:@"'"];
+    return [t stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+}
+
+/* Absolute http or https URL for s resolved against base, else nil.  A
+   portal controls these strings, and the result is opened in a browser, so
+   no other scheme may come out. */
+static NSString *captivePortalHTTPURL(NSString *s, NSString *base)
+{
+    NSString *t = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([t length] == 0) return nil;
+    NSURL *baseURL = base ? [NSURL URLWithString:base] : nil;
+    NSURL *url = [NSURL URLWithString:t relativeToURL:baseURL];
+    NSURL *abs = [url absoluteURL];
+    NSString *scheme = [[abs scheme] lowercaseString];
+    if (!([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"])) return nil;
+    if ([[abs host] length] == 0) return nil;
+    return [abs absoluteString];
+}
+
+static NSString *captivePortalBodyString(const char *bytes, size_t len)
+{
+    if (!bytes) return nil;
+    NSString *s = [[[NSString alloc] initWithBytes:bytes length:len
+                                          encoding:NSUTF8StringEncoding] autorelease];
+    // A page cut at the size cap may end inside a UTF-8 sequence
+    if (!s) {
+        s = [[[NSString alloc] initWithBytes:bytes length:len
+                                    encoding:NSISOLatin1StringEncoding] autorelease];
+    }
+    return s;
 }
 
 static volatile int32_t _captivePortalCheckPending = 0;
@@ -107,6 +177,81 @@ static NSTimeInterval _lastCaptivePortalCheckTime = 0;
     }
 }
 
++ (NSDictionary *)wisprRedirectInResponseBody:(NSString *)body
+{
+    if ([body length] == 0) return nil;
+    if ([body length] > CAPTIVE_PORTAL_MAX_BODY) {
+        body = [body substringToIndex:CAPTIVE_PORTAL_MAX_BODY];
+    }
+
+    NSUInteger paramStart = [body rangeOfString:@"<WISPAccessGatewayParam"
+                                        options:NSCaseInsensitiveSearch].location;
+    if (paramStart == NSNotFound) return nil;
+    NSString *redirect = captivePortalElement(body, @"Redirect", paramStart, NULL);
+    if (!redirect) return nil;
+
+    // Only "redirect, no error" sends a client to a login page; the other
+    // message types and the gateway's error codes do not.
+    NSString *type = captivePortalText(captivePortalElement(redirect, @"MessageType", 0, NULL) ?: @"");
+    NSString *code = captivePortalText(captivePortalElement(redirect, @"ResponseCode", 0, NULL) ?: @"");
+    if (![type isEqualToString:@"100"] || ![code isEqualToString:@"0"]) return nil;
+
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    NSArray *keys = @[@"LoginURL", @"AbortLoginURL", @"LocationName", @"AccessLocation"];
+    for (NSString *key in keys) {
+        NSString *raw = captivePortalElement(redirect, key, 0, NULL);
+        NSString *value = raw ? captivePortalText(raw) : nil;
+        if (value) [result setObject:value forKey:key];
+    }
+    return result;
+}
+
++ (BOOL)captiveVerdictForStatus:(long)status
+                       location:(NSString *)location
+                           body:(NSString *)body
+                       probeURL:(NSString *)probeURL
+                     currentURL:(NSString *)currentURL
+                    redirectURL:(NSString **)redirectURL
+                      followURL:(NSString **)followURL
+{
+    if (redirectURL) *redirectURL = nil;
+    if (followURL) *followURL = nil;
+
+    BOOL isRedirect = (status == 301 || status == 302 || status == 303
+                       || status == 307 || status == 308);
+    NSString *target = isRedirect ? captivePortalHTTPURL(location, currentURL) : nil;
+
+    // WISPr wins: the gateway says outright that this is a portal.  The
+    // redirect target is what a browser should open; the LoginURL is a
+    // machine endpoint and only the fallback.
+    NSDictionary *wispr = [self wisprRedirectInResponseBody:body];
+    if (wispr) {
+        if (redirectURL) {
+            *redirectURL = target ?: captivePortalHTTPURL([wispr objectForKey:@"LoginURL"], currentURL);
+        }
+        return YES;
+    }
+
+    if (target) {
+        NSString *probeHost = [[[NSURL URLWithString:probeURL] host] lowercaseString];
+        NSString *targetHost = [[[NSURL URLWithString:target] host] lowercaseString];
+        if (probeHost && [probeHost isEqualToString:targetHost]) {
+            // http -> https upgrade, trailing slash: the probe host itself
+            if (followURL) *followURL = target;
+            return NO;
+        }
+        if (redirectURL) *redirectURL = target;
+        return YES;
+    }
+
+    // Answered by the probe host itself: only the expected page proves the
+    // internet is reachable.
+    if (body && [body rangeOfString:@EXPECTED_PROBE_MARKER].location != NSNotFound) {
+        return NO;
+    }
+    return YES;
+}
+
 + (void)_runCheckWithCompletion:(void (^)(BOOL, NSString *))completion
 {
     @autoreleasepool {
@@ -116,74 +261,83 @@ static NSTimeInterval _lastCaptivePortalCheckTime = 0;
             return;
         }
 
-        struct CaptivePortalResponse resp;
-        memset(&resp, 0, sizeof(resp));
-        resp.body = NULL;
-        resp.bodyLen = 0;
-
-        curl_easy_setopt(curl, CURLOPT_URL, CAPTIVE_PORTAL_PROBE_URL);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
+        // Redirects are judged one by one: the portal's first answer is
+        // the result, whether or not its login host can be reached.
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, captivePortalWriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, captivePortalHeaderCallback);
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp);
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "CaptivePortalDetector/1.0");
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
-        CURLcode res = curl_easy_perform(curl);
+        // A portal usually intercepts only IPv4: example.com also has IPv6
+        // addresses, and over those the probe reached the real internet past
+        // a portal that was holding back every IPv4 page (hotel and train
+        // networks), so no login page was offered.  The probe goes out over
+        // IPv4; only when that cannot even be tried (an IPv6-only network)
+        // the first hop is repeated over whichever family works.
+        curl_easy_setopt(curl, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
+        BOOL triedAnyFamily = NO;
 
-        BOOL isCaptive = NO;
+        BOOL isCaptive = YES;   // stays so when the hops run out undecided
         NSString *redirectURL = nil;
+        NSString *current = CAPTIVE_PORTAL_PROBE_BASE_URL;
 
-        char *effectiveURL = NULL;
-        curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveURL);
+        for (int hop = 0; hop < CAPTIVE_PORTAL_MAX_HOPS; hop++) {
+            struct CaptivePortalResponse resp;
+            memset(&resp, 0, sizeof(resp));
+            curl_easy_setopt(curl, CURLOPT_URL, [current UTF8String]);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
 
-        if (res == CURLE_OK) {
-            if (effectiveURL
-                && strcasecmp(effectiveURL, CAPTIVE_PORTAL_PROBE_URL) != 0
-                && strcasecmp(effectiveURL, CAPTIVE_PORTAL_PROBE_URL "/") != 0) {
-                // The portal redirected us - the effective URL is the
-                // actual login page.
-                redirectURL = [NSString stringWithUTF8String:effectiveURL];
-                isCaptive = YES;
-            } else {
-                // Same probe URL (no redirect). Check body for the
-                // expected marker to distinguish internet from portal.
-                if (resp.body && strstr(resp.body, EXPECTED_PROBE_MARKER) != NULL) {
-                    isCaptive = NO;
-                } else {
-                    isCaptive = YES;
-                }
+            CURLcode res = curl_easy_perform(curl);
+            if (res != CURLE_OK && hop == 0 && !triedAnyFamily) {
+                // No answer over IPv4 says nothing about a portal (there may
+                // be no IPv4 at all); only an answer does.
+                if (resp.body) free(resp.body);
+                curl_easy_setopt(curl, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_WHATEVER);
+                triedAnyFamily = YES;
+                hop = -1;
+                continue;
             }
-        } else if (res == CURLE_GOT_NOTHING
-                   || res == CURLE_COULDNT_RESOLVE_HOST
-                   || res == CURLE_COULDNT_CONNECT
-                   || res == CURLE_OPERATION_TIMEDOUT) {
-            // These failures are common behind a captive portal that
-            // intercepts DNS, drops connections, or times out.
+            if (res != CURLE_OK) {
+                // These failures are common behind a captive portal that
+                // intercepts DNS, drops connections, or times out.
+                isCaptive = (res == CURLE_GOT_NOTHING
+                             || res == CURLE_COULDNT_RESOLVE_HOST
+                             || res == CURLE_COULDNT_CONNECT
+                             || res == CURLE_OPERATION_TIMEDOUT);
+                if (resp.body) free(resp.body);
+                break;
+            }
+
+            long status = 0;
+            char *locationC = NULL;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+            curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &locationC);
+            NSString *location = locationC ? [NSString stringWithUTF8String:locationC] : nil;
+            NSString *body = captivePortalBodyString(resp.body, resp.bodyLen);
+            if (resp.body) free(resp.body);
+
+            NSString *follow = nil;
+            isCaptive = [self captiveVerdictForStatus:status
+                                             location:location
+                                                 body:body
+                                             probeURL:CAPTIVE_PORTAL_PROBE_BASE_URL
+                                           currentURL:current
+                                          redirectURL:&redirectURL
+                                            followURL:&follow];
+            if (!follow) break;
+            current = follow;
             isCaptive = YES;
         }
 
-        if (resp.location) {
-            free(resp.location);
-        }
-        if (resp.body) {
-            free(resp.body);
-        }
         curl_easy_cleanup(curl);
 
-        if (isCaptive && redirectURL) {
-            [self performSelectorOnMainThread:@selector(_callCompletionOnMainThread:)
-                                   withObject:@[redirectURL, completion]
-                                waitUntilDone:NO];
-        } else {
-            [self performSelectorOnMainThread:@selector(_callCompletionOnMainThread:)
-                                   withObject:@[[NSNull null], completion]
-                                waitUntilDone:NO];
-        }
+        [self performSelectorOnMainThread:@selector(_callCompletionOnMainThread:)
+                               withObject:@[redirectURL ?: (id)[NSNull null],
+                                            [NSNumber numberWithBool:isCaptive],
+                                            completion]
+                            waitUntilDone:NO];
 
         __sync_lock_release(&_captivePortalCheckPending);
     }
@@ -192,10 +346,13 @@ static NSTimeInterval _lastCaptivePortalCheckTime = 0;
 + (void)_callCompletionOnMainThread:(NSArray *)args
 {
     id urlOrNull = [args objectAtIndex:0];
-    void (^completion)(BOOL, NSString *) = [args objectAtIndex:1];
+    BOOL isCaptive = [[args objectAtIndex:1] boolValue];
+    void (^completion)(BOOL, NSString *) = [args objectAtIndex:2];
 
+    // A portal that names no login page is still a portal, so the callers
+    // do not mistake it for working internet.
     NSString *redirectURL = ([urlOrNull isKindOfClass:[NSString class]]) ? urlOrNull : nil;
-    completion(redirectURL != nil, redirectURL);
+    completion(isCaptive, redirectURL);
 }
 
 @end

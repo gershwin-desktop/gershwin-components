@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -169,5 +169,10 @@ t_MenuUtilsWindows_TOOL_LIBS += -lX11 -ldispatch
 t_CaptivePortalBlock_OBJC_FILES = t_CaptivePortalBlock.m ../../../Network/CaptivePortalDetector.m
 t_CaptivePortalBlock_OBJCFLAGS += -I../../../Network $(shell pkg-config --cflags libcurl 2>/dev/null)
 t_CaptivePortalBlock_TOOL_LIBS += $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl) -ldispatch
+
+# Same source, linked for the pure verdict and WISPr parsing tests.
+t_CaptivePortalWISPr_OBJC_FILES = t_CaptivePortalWISPr.m ../../../Network/CaptivePortalDetector.m
+t_CaptivePortalWISPr_OBJCFLAGS += -I../../../Network $(shell pkg-config --cflags libcurl 2>/dev/null)
+t_CaptivePortalWISPr_TOOL_LIBS += $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl) -ldispatch
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make
