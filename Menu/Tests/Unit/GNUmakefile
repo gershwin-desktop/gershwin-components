@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -174,5 +174,48 @@ t_CaptivePortalBlock_TOOL_LIBS += $(shell pkg-config --libs libcurl 2>/dev/null 
 t_CaptivePortalWISPr_OBJC_FILES = t_CaptivePortalWISPr.m ../../../Network/CaptivePortalDetector.m
 t_CaptivePortalWISPr_OBJCFLAGS += -I../../../Network $(shell pkg-config --cflags libcurl 2>/dev/null)
 t_CaptivePortalWISPr_TOOL_LIBS += $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl) -ldispatch
+
+# JackSupport is Foundation-only MRC and loads libjack at run time; the unit
+# test needs no jackd, the live test starts its own on a private server name
+# and skips when none is installed.
+JACKSUPPORT_LIBS :=
+ifeq ($(LIDBACKEND_UNAME_S),Linux)
+JACKSUPPORT_LIBS := -ldl
+endif
+t_JackSupport_OBJC_FILES = t_JackSupport.m ../../../Sound/JackSupport.m
+t_JackSupport_OBJCFLAGS += -I../../..
+t_JackSupport_TOOL_LIBS += $(JACKSUPPORT_LIBS)
+t_JackSupportLive_OBJC_FILES = t_JackSupportLive.m ../../../Sound/JackSupport.m
+t_JackSupportLive_OBJCFLAGS += -I../../..
+t_JackSupportLive_TOOL_LIBS += $(JACKSUPPORT_LIBS)
+
+# JackSupervisor drives the JACK sources above; the unit test runs it in a
+# fake world, the live test against a private jackd with the dummy driver.
+t_JackSupervisor_OBJC_FILES = t_JackSupervisor.m ../../../Sound/JackSupervisor.m ../../../Sound/JackSupport.m
+t_JackSupervisor_OBJCFLAGS += -I../../..
+t_JackSupervisor_TOOL_LIBS += $(JACKSUPPORT_LIBS)
+t_JackSupervisorLive_OBJC_FILES = t_JackSupervisorLive.m ../../../Sound/JackSupervisor.m ../../../Sound/JackSupport.m
+t_JackSupervisorLive_OBJCFLAGS += -I../../..
+t_JackSupervisorLive_TOOL_LIBS += $(JACKSUPPORT_LIBS)
+
+# The Sound pane's JACK decisions; Foundation only.
+t_SoundJackSettingsModel_OBJC_FILES = t_SoundJackSettingsModel.m \
+	../../../Sound/SoundJackSettingsModel.m ../../../Sound/JackSupport.m
+t_SoundJackSettingsModel_OBJCFLAGS += -I../../..
+t_SoundJackSettingsModel_TOOL_LIBS += $(JACKSUPPORT_LIBS)
+
+# The alert sound decisions of the Sound pane in JACK mode; Foundation only.
+t_SoundJackAlertPolicy_OBJC_FILES = t_SoundJackAlertPolicy.m \
+	../../../Sound/SoundJackAlertPolicy.m
+t_SoundJackAlertPolicy_OBJCFLAGS += -I../../..
+
+# The ALSA backend with the JACK support it must not destroy: built from the
+# sources (not libSoundBackend) so the test needs nothing installed.
+t_ALSABackendJack_OBJC_FILES = t_ALSABackendJack.m \
+	../../../Sound/ALSABackend.m ../../../Sound/SoundModels.m ../../../Sound/WavScale.m \
+	../../../Sound/JackSupport.m ../../../Sound/SoundJackSettingsModel.m \
+	../../../Sound/SoundJackAlertPolicy.m
+t_ALSABackendJack_OBJCFLAGS += -I../../..
+t_ALSABackendJack_TOOL_LIBS += -lgnustep-gui -ldispatch $(JACKSUPPORT_LIBS)
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

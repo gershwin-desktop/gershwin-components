@@ -11,6 +11,7 @@
  */
 
 #import "SoundBackend.h"
+#import "SoundJackAlertPolicy.h"
 
 @interface ALSABackend : NSObject <SoundBackend>
 {
@@ -50,6 +51,11 @@
     NSString *asoundrcPath;
     NSString *defaultsFilePath;
 
+    // Whether the in-memory defaults follow the JACK card choices
+    BOOL jackModeApplied;
+    // jack-status.plist of the supervisor, under the same home as the settings
+    NSString *jackStatusPath;
+
     // Deferred save timer (dispatch-based, replaces performSelector:afterDelay:)
     dispatch_source_t deferredSaveTimer;
 }
@@ -57,6 +63,7 @@
 @property (assign) id<SoundBackendDelegate> delegate;
 
 // Initialization
+- (id)initWithHomeDirectory:(NSString *)home;
 - (BOOL)findToolPaths;
 
 // Device enumeration
@@ -83,6 +90,17 @@
 - (NSString *)cardIDForCardIndex:(int)cardIndex;
 - (NSString *)hwCardRefForCardIndex:(int)cardIndex;
 - (BOOL)saveDefaultDevice:(AudioDevice *)device isOutput:(BOOL)isOutput;
+- (BOOL)savePreferences;
+- (BOOL)jackModeEnabled;
+// The device alerts and feedback sounds play on: "default" (the jack plugin)
+// while JACK is used and its server runs, else the selected card.
+- (NSString *)alertPlaybackDevice;
+// What the pane does after an output device click while JACK is on.
+- (SoundJackAlertAction)jackAlertActionForElapsed:(NSTimeInterval)elapsed
+                                          timeout:(NSTimeInterval)timeout;
+- (void)syncSelectionWithJackMode;
+- (void)adoptDefaultOutputIdentifier:(NSString *)identifier;
+- (void)adoptDefaultInputIdentifier:(NSString *)identifier;
 - (NSString *)buildAsoundrcContent;
 
 // Immediate device switching (force switch even if audio is playing)

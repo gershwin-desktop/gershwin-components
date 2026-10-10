@@ -136,6 +136,17 @@ The Sound preference pane follows the classic system preferences design:
 - Output device for alerts popup
 - "Play sound effects through" option
 
+### JACK (Linux, only shown when jackd is installed)
+
+Tick "Use JACK" on the Output tab; nothing else is needed.
+
+- The Sound menu extra starts jackd on the output device selected in the list.
+- Selecting another output device later bridges it into the running JACK;
+  jackd is not restarted and the pane never asks for a restart.
+- Applications that only speak ALSA are routed into JACK automatically.
+- Input selection works the same way; volume and mute stay on the card's mixer.
+- "Buffer size" and "Sample rate" are optional; the status line shows what is running.
+
 ### Building
 
 ```bash

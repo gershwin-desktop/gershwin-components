@@ -8,6 +8,8 @@
 
 #import "ALSABackend.h"
 #import "WavScale.h"
+#import "JackSupport.h"
+#import "SoundJackSettingsModel.h"
 #import <AppKit/AppKit.h>
 #import <dispatch/dispatch.h>
 
@@ -27,6 +29,13 @@ static NSString *const kMicControl = @"Mic";
 
 - (id)init
 {
+    return [self initWithHomeDirectory:NSHomeDirectory()];
+}
+
+// A home other than the user's is for tests, which must never touch the
+// real ~/.asoundrc or sound-defaults.plist.
+- (id)initWithHomeDirectory:(NSString *)home
+{
     self = [super init];
     if (self) {
         cachedOutputDevices = [[NSMutableArray alloc] init];
@@ -44,15 +53,17 @@ static NSString *const kMicControl = @"Mic";
         currentOutputCard = 0;
         currentInputCard = 0;
         // Set up file paths
-        NSString *home = NSHomeDirectory();
         asoundrcPath = [[home stringByAppendingPathComponent:@".asoundrc"] retain];
         defaultsFilePath = [[home stringByAppendingPathComponent:
                             @".config/gershwin/sound-defaults.plist"] retain];
+        jackStatusPath = [[home stringByAppendingPathComponent:
+                          @".cache/gershwin/jack-status.plist"] retain];
         
         [self findToolPaths];
         [self enumerateDevices];
         [self loadAlertSounds];
         [self loadDefaultDevices];
+        [self syncSelectionWithJackMode];
     }
     return self;
 }
@@ -77,6 +88,7 @@ static NSString *const kMicControl = @"Mic";
     [alertDevice release];
     [amixerPath release];
     [aplayPath release];
+    [jackStatusPath release];
     [arecordPath release];
     [alsactlPath release];
     [asoundrcPath release];
@@ -930,23 +942,27 @@ static NSString *const kMicControl = @"Mic";
 
 - (float)parseVolumeFromMixerOutput:(NSString *)output
 {
-    // Look for [XX%]
+    // The first bracket that holds a percentage: other brackets ([on], [off],
+    // [17.00dB]) may come before it, and pairing the first "[" with the next
+    // "%]" anywhere below read such a control as 0.
+    NSUInteger length = [output length];
     NSRange start = [output rangeOfString:@"["];
     while (start.location != NSNotFound) {
-        NSRange end = [output rangeOfString:@"%]" 
-            options:0 
-            range:NSMakeRange(start.location, [output length] - start.location)];
-        if (end.location != NSNotFound) {
-            NSString *numStr = [output substringWithRange:
-                NSMakeRange(start.location + 1, end.location - start.location - 1)];
-            return [numStr floatValue] / 100.0;
+        NSUInteger from = start.location + 1;
+        NSRange close = [output rangeOfString:@"]"
+                                      options:0
+                                        range:NSMakeRange(from, length - from)];
+        if (close.location == NSNotFound) break;
+        NSString *inside = [output substringWithRange:
+            NSMakeRange(from, close.location - from)];
+        if ([inside hasSuffix:@"%"]) {
+            return [inside floatValue] / 100.0;
         }
-        
-        NSUInteger nextStart = start.location + 1;
-        if (nextStart >= [output length]) break;
-        start = [output rangeOfString:@"[" 
-            options:0 
-            range:NSMakeRange(nextStart, [output length] - nextStart)];
+        NSUInteger next = close.location + 1;
+        if (next >= length) break;
+        start = [output rangeOfString:@"["
+                              options:0
+                                range:NSMakeRange(next, length - next)];
     }
     return 0.0;
 }
@@ -976,16 +992,7 @@ static NSString *const kMicControl = @"Mic";
         return NO;
     }
     
-    // Update the cached default
-    for (AudioDevice *dev in cachedOutputDevices) {
-        dev.isDefault = [dev.identifier isEqualToString:device.identifier];
-        if (dev.isDefault) {
-            [defaultOutput release];
-            defaultOutput = [dev retain];
-            currentOutputCard = dev.cardIndex;
-            NSDebugLLog(@"gwcomp", @"ALSABackend:   set card index to %d", currentOutputCard);
-        }
-    }
+    [self adoptDefaultOutputIdentifier:device.identifier];
     
     // Save to configuration
     BOOL success = [self saveDefaultDevice:device isOutput:YES];
@@ -1023,15 +1030,7 @@ static NSString *const kMicControl = @"Mic";
         return NO;
     }
     
-    for (AudioDevice *dev in cachedInputDevices) {
-        dev.isDefault = [dev.identifier isEqualToString:device.identifier];
-        if (dev.isDefault) {
-            [defaultInput release];
-            defaultInput = [dev retain];
-            currentInputCard = dev.cardIndex;
-            NSDebugLLog(@"gwcomp", @"ALSABackend:   set card index to %d", currentInputCard);
-        }
-    }
+    [self adoptDefaultInputIdentifier:device.identifier];
     
     BOOL success = [self saveDefaultDevice:device isOutput:NO];
     NSDebugLLog(@"gwcomp", @"ALSABackend: setDefaultInputDevice: %@", success ? @"SUCCESS" : @"FAILED");
@@ -1660,8 +1659,7 @@ static NSString *const kMicControl = @"Mic";
         return YES;
     }
 
-    NSString *device = defaultOutput ?
-        [NSString stringWithFormat:@"plughw:%d", currentOutputCard] : @"default";
+    NSString *device = [self alertPlaybackDevice];
 
     // --- Scale the sound file itself so only the alert plays quieter ---
     NSString *playPath = sound.path;
@@ -2031,9 +2029,33 @@ static NSString *const kMicControl = @"Mic";
 
 - (BOOL)saveDefaultDevice:(AudioDevice *)device isOutput:(BOOL)isOutput
 {
+    // JACK owns the cards while it is on: the choice goes to the settings the
+    // JACK supervisor reads, and ~/.asoundrc keeps pointing at JACK.
+    if ([self jackModeEnabled]) {
+        return [self saveJackSelectionForDevice:device isOutput:isOutput];
+    }
+
     // Update .asoundrc for ALSA default device
     NSString *asoundrc = [self buildAsoundrcContent];
     NSError *error = nil;
+
+    // The generated text knows nothing of the block that the JACK supervisor
+    // keeps in this file; dropping it would silently turn the ALSA side of
+    // JACK off.
+    NSString *previous = [NSString stringWithContentsOfFile:asoundrcPath
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:NULL];
+    if (previous) {
+        NSString *problem = nil;
+        if ([JackSupport asoundrcByRemovingJackBlockFrom:previous error:&problem] == nil) {
+            NSLog(@"ALSABackend: not writing %@: %@", asoundrcPath, problem);
+            return NO;
+        }
+        if ([JackSupport asoundrcHasJackBlock:previous]) {
+            asoundrc = [JackSupport asoundrcByApplyingJackBlockTo:asoundrc error:&problem];
+            NSAssert(asoundrc != nil, @"generated .asoundrc rejected the JACK block: %@", problem);
+        }
+    }
     
     [asoundrc writeToFile:asoundrcPath 
                atomically:YES 
@@ -2071,10 +2093,13 @@ static NSString *const kMicControl = @"Mic";
         }
     }
     
-    // Step 2: Silence other output devices to force switching
+    // Step 2: Silence other output devices to force switching.  Not with
+    // JACK: it mixes all cards, and silencing the others would mute devices
+    // that its bridges feed.
     NSDebugLLog(@"gwcomp", @"ALSABackend:   silencing other output devices...");
+    BOOL jackMode = [self jackModeEnabled];
     for (AudioDevice *otherDevice in cachedOutputDevices) {
-        if (otherDevice.cardIndex != device.cardIndex) {
+        if (!jackMode && otherDevice.cardIndex != device.cardIndex) {
             NSDebugLLog(@"gwcomp", @"ALSABackend:   muting card %d", otherDevice.cardIndex);
             [self setMixerControl:kMasterControl 
                             value:@"mute" 
@@ -2115,8 +2140,9 @@ static NSString *const kMicControl = @"Mic";
     
     // Step 2: Disable input capture on other devices
     NSDebugLLog(@"gwcomp", @"ALSABackend:   disabling capture on other input devices...");
+    BOOL jackMode = [self jackModeEnabled];
     for (AudioDevice *otherDevice in cachedInputDevices) {
-        if (otherDevice.cardIndex != device.cardIndex) {
+        if (!jackMode && otherDevice.cardIndex != device.cardIndex) {
             NSDebugLLog(@"gwcomp", @"ALSABackend:   disabling capture on card %d", otherDevice.cardIndex);
             [self setMixerControl:kCaptureControl 
                             value:@"nocap" 
@@ -2167,13 +2193,17 @@ static NSString *const kMicControl = @"Mic";
 {
     NSMutableDictionary *prefs = [NSMutableDictionary dictionary];
 
-    if (defaultOutput) {
-        [prefs setObject:(defaultOutput.stableDeviceId ?: defaultOutput.identifier)
-                  forKey:@"defaultOutput"];
-    }
-    if (defaultInput) {
-        [prefs setObject:(defaultInput.stableDeviceId ?: defaultInput.identifier)
-                  forKey:@"defaultInput"];
+    // With JACK on, defaultOutput/defaultInput follow the JACK card choice;
+    // the ALSA defaults in the file must survive for when JACK is turned off.
+    if (![self jackModeEnabled]) {
+        if (defaultOutput) {
+            [prefs setObject:(defaultOutput.stableDeviceId ?: defaultOutput.identifier)
+                      forKey:@"defaultOutput"];
+        }
+        if (defaultInput) {
+            [prefs setObject:(defaultInput.stableDeviceId ?: defaultInput.identifier)
+                      forKey:@"defaultInput"];
+        }
     }
     if (alertDevice) {
         [prefs setObject:(alertDevice.stableDeviceId ?: alertDevice.identifier)
@@ -2185,16 +2215,205 @@ static NSString *const kMicControl = @"Mic";
     [prefs setObject:@(cachedAlertVolume) forKey:@"alertVolume"];
     [prefs setObject:@(playUIEffects) forKey:@"playUIEffects"];
     [prefs setObject:@(playVolumeChangeFeedback) forKey:@"playVolumeFeedback"];
-    
+
+    // The file is shared with the JACK settings and whatever else is added to
+    // it; only the keys of this backend are changed, and nothing is written
+    // when none differs (the JACK supervisor watches the file).
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableDictionary *merged = [NSMutableDictionary dictionary];
+    BOOL exists = [fm fileExistsAtPath:defaultsFilePath];
+    if (exists) {
+        NSDictionary *existing = [NSDictionary dictionaryWithContentsOfFile:defaultsFilePath];
+        if (existing == nil) {
+            NSLog(@"ALSABackend: not overwriting %@: not a readable property list",
+                  defaultsFilePath);
+            return NO;
+        }
+        [merged addEntriesFromDictionary:existing];
+    }
+    NSDictionary *before = [[merged copy] autorelease];
+    [merged addEntriesFromDictionary:prefs];
+    if (exists && [merged isEqualToDictionary:before]) {
+        return YES;
+    }
+
     NSString *configDir = [defaultsFilePath stringByDeletingLastPathComponent];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:configDir]) {
-        [[NSFileManager defaultManager] createDirectoryAtPath:configDir 
-                                  withIntermediateDirectories:YES 
-                                                   attributes:nil 
-                                                        error:nil];
+    if (![fm fileExistsAtPath:configDir]) {
+        [fm createDirectoryAtPath:configDir
+      withIntermediateDirectories:YES
+                       attributes:nil
+                            error:nil];
     }
     
-    return [prefs writeToFile:defaultsFilePath atomically:YES];
+    return [merged writeToFile:defaultsFilePath atomically:YES];
+}
+
+#pragma mark - JACK mode
+
+- (BOOL)jackModeEnabled
+{
+    return [[[JackSupport settingsAtPath:defaultsFilePath]
+             objectForKey:JackSettingUseJack] boolValue];
+}
+
+// The cards belong to jackd while it runs, so aiming aplay at one fails as
+// busy; the default PCM is the jack plugin, which the supervisor routes to the
+// selected device.  Read fresh each time: the files are tiny and the state
+// changes under us.
+- (NSString *)alertPlaybackDevice
+{
+    NSString *card = defaultOutput ?
+        [NSString stringWithFormat:@"plughw:%d", currentOutputCard] : @"default";
+    return [SoundJackAlertPolicy
+        playbackDeviceForSettings:[JackSupport settingsAtPath:defaultsFilePath]
+                           status:[NSDictionary dictionaryWithContentsOfFile:jackStatusPath]
+                       cardDevice:card];
+}
+
+- (SoundJackAlertAction)jackAlertActionForElapsed:(NSTimeInterval)elapsed
+                                          timeout:(NSTimeInterval)timeout
+{
+    NSDictionary *settings = [JackSupport settingsAtPath:defaultsFilePath];
+    // a status file left behind by an earlier JACK session means nothing
+    if (![[settings objectForKey:JackSettingUseJack] boolValue]) {
+        return SoundJackAlertPlayOnCard;
+    }
+    return [SoundJackAlertPolicy
+        actionForStatus:[NSDictionary dictionaryWithContentsOfFile:jackStatusPath]
+           selectedCard:[settings objectForKey:JackSettingOutputCard]
+                elapsed:elapsed
+                timeout:timeout];
+}
+
+- (NSArray *)jackDeviceDictionariesForDevices:(NSArray *)devices
+{
+    NSMutableArray *result = [NSMutableArray array];
+    for (AudioDevice *dev in devices) {
+        NSMutableDictionary *d = [NSMutableDictionary dictionary];
+        NSString *cardId = [self cardIDForCardIndex:dev.cardIndex];
+        if (cardId) [d setObject:cardId forKey:SoundJackDeviceCardId];
+        [d setObject:@(dev.cardIndex) forKey:SoundJackDeviceCardIndex];
+        [d setObject:@(dev.deviceIndex) forKey:SoundJackDeviceDeviceIndex];
+        [result addObject:d];
+    }
+    return result;
+}
+
+- (BOOL)saveJackSelectionForDevice:(AudioDevice *)device isOutput:(BOOL)isOutput
+{
+    NSArray *devices = isOutput ? cachedOutputDevices : cachedInputDevices;
+    NSArray *dicts = [self jackDeviceDictionariesForDevices:devices];
+    NSUInteger index = [devices indexOfObject:device];
+    if (index == NSNotFound) {
+        for (NSUInteger i = 0; i < [devices count]; i++) {
+            if ([[[devices objectAtIndex:i] identifier] isEqualToString:device.identifier]) {
+                index = i;
+                break;
+            }
+        }
+    }
+    NSDictionary *settings = (index == NSNotFound) ? nil :
+        [SoundJackSettingsModel settingsForSelectingDevice:[dicts objectAtIndex:index]
+                                              amongDevices:dicts
+                                                  isOutput:isOutput];
+    if (!settings) {
+        NSLog(@"ALSABackend: cannot name %@ for JACK (no ALSA card id)", device.name);
+        return NO;
+    }
+    NSString *problem = nil;
+    if (![SoundJackSettingsModel writeSettings:settings atPath:defaultsFilePath error:&problem]) {
+        NSLog(@"ALSABackend: cannot save the JACK device choice: %@", problem);
+        return NO;
+    }
+    return YES;
+}
+
+- (void)adoptDefaultOutputIdentifier:(NSString *)identifier
+{
+    for (AudioDevice *dev in cachedOutputDevices) {
+        dev.isDefault = [dev.identifier isEqualToString:identifier];
+        if (dev.isDefault) {
+            [defaultOutput release];
+            defaultOutput = [dev retain];
+            currentOutputCard = dev.cardIndex;
+            NSDebugLLog(@"gwcomp", @"ALSABackend:   set card index to %d", currentOutputCard);
+        }
+    }
+}
+
+- (void)adoptDefaultInputIdentifier:(NSString *)identifier
+{
+    for (AudioDevice *dev in cachedInputDevices) {
+        dev.isDefault = [dev.identifier isEqualToString:identifier];
+        if (dev.isDefault) {
+            [defaultInput release];
+            defaultInput = [dev retain];
+            currentInputCard = dev.cardIndex;
+            NSDebugLLog(@"gwcomp", @"ALSABackend:   set card index to %d", currentInputCard);
+        }
+    }
+}
+
+// Index in devices of the device JACK plays to (or records from): the card
+// the user chose, else the ALSA default of the file, else the first present
+// device - the chain the supervisor follows, so the volume controls act on
+// the card that is really heard.
+- (NSUInteger)jackSelectedIndexInDevices:(NSArray *)devices
+                                 cardKey:(NSString *)cardKey
+                             alsaDefault:(NSString *)alsaDefault
+{
+    NSArray *dicts = [self jackDeviceDictionariesForDevices:devices];
+    if (cardKey != nil) {
+        return [SoundJackSettingsModel indexOfDeviceNamed:cardKey inDevices:dicts];
+    }
+    // JackSupport matches the device number through the hw name
+    NSMutableArray *withHW = [NSMutableArray array];
+    for (NSDictionary *d in dicts) {
+        NSMutableDictionary *m = [[d mutableCopy] autorelease];
+        NSString *cardId = [d objectForKey:SoundJackDeviceCardId];
+        NSString *ref = cardId ?: [[d objectForKey:SoundJackDeviceCardIndex] stringValue];
+        [m setObject:[NSString stringWithFormat:@"hw:CARD=%@,DEV=%@", ref,
+                      [d objectForKey:SoundJackDeviceDeviceIndex]]
+              forKey:JackDeviceHW];
+        [withHW addObject:m];
+    }
+    NSDictionary *sel = [JackSupport selectedDeviceInDevices:withHW
+                                                    jackCard:nil
+                                                 alsaDefault:alsaDefault
+                                                   selection:NULL];
+    if (sel != nil) {
+        return [withHW indexOfObject:sel];
+    }
+    return [devices count] > 0 ? 0 : NSNotFound;
+}
+
+// Makes the in-memory defaults (which the volume and mute controls act on)
+// the ones of the current mode: the JACK selection while JACK is on, the ALSA
+// defaults of the file after it was turned off again.
+- (void)syncSelectionWithJackMode
+{
+    BOOL jack = [self jackModeEnabled];
+    NSDictionary *raw = [NSDictionary dictionaryWithContentsOfFile:defaultsFilePath];
+    if (jack) {
+        NSUInteger i = [self jackSelectedIndexInDevices:cachedOutputDevices
+            cardKey:[raw objectForKey:JackSettingOutputCard]
+            alsaDefault:[raw objectForKey:JackSettingALSAOutput]];
+        if (i != NSNotFound) {
+            [self adoptDefaultOutputIdentifier:[[cachedOutputDevices objectAtIndex:i] identifier]];
+        }
+        i = [self jackSelectedIndexInDevices:cachedInputDevices
+            cardKey:[raw objectForKey:JackSettingInputCard]
+            alsaDefault:[raw objectForKey:JackSettingALSAInput]];
+        if (i != NSNotFound) {
+            [self adoptDefaultInputIdentifier:[[cachedInputDevices objectAtIndex:i] identifier]];
+        }
+    } else if (jackModeApplied) {
+        AudioDevice *dev = [self outputDeviceWithStableId:[raw objectForKey:@"defaultOutput"]];
+        if (dev) [self adoptDefaultOutputIdentifier:dev.identifier];
+        dev = [self inputDeviceWithStableId:[raw objectForKey:@"defaultInput"]];
+        if (dev) [self adoptDefaultInputIdentifier:dev.identifier];
+    }
+    jackModeApplied = jack;
 }
 
 #pragma mark - Device Capability Probing
@@ -2758,6 +2977,7 @@ static NSString *const kMicControl = @"Mic";
     [savedOutputId release];
     [savedInputId release];
     [savedAlertId release];
+    [self syncSelectionWithJackMode];
 
     if ([delegate respondsToSelector:@selector(soundBackend:didUpdateOutputDevices:)]) {
         [delegate soundBackend:self didUpdateOutputDevices:cachedOutputDevices];

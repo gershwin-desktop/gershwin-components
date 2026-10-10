@@ -8,9 +8,11 @@
 #import "SoundBackendFactory.h"
 #import "GSMenuExtraContext.h"
 #import "MediaKeyController.h"
+#import "JackSupervisor.h"
 
 
 static const BOOL kShowTextInMenuBar = NO;
+static const NSInteger kJackStatusTag = 4711;
 
 @implementation SoundExtra
 {
@@ -20,6 +22,7 @@ static const BOOL kShowTextInMenuBar = NO;
     BOOL _backendAvailable;
     GSMenuExtraContext *_context;
     id<SoundBackend> _backend;
+    JackSupervisor *_jack;
 }
 
 - (void)dealloc
@@ -66,6 +69,17 @@ static const BOOL kShowTextInMenuBar = NO;
 
 #pragma mark - GSMenuExtra
 
+// The JACK line exists only while UseJack is on.
+- (void)addJackStatusItemTo:(NSMenu *)m
+{
+    NSString *title = [JackSupervisor menuTitleForStatus:[_jack statusDictionary]];
+    if (title == nil) return;
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:NULL keyEquivalent:@""];
+    [item setTag:kJackStatusTag];
+    [item setEnabled:NO];
+    [m addItem:item];
+}
+
 - (NSMenu *)menu
 {
     if (!_backendAvailable) {
@@ -75,6 +89,7 @@ static const BOOL kShowTextInMenuBar = NO;
                                              keyEquivalent:@""];
         [na setEnabled:NO];
         [m addItem:na];
+        [self addJackStatusItemTo:m];
         return m;
     }
 
@@ -89,6 +104,7 @@ static const BOOL kShowTextInMenuBar = NO;
                                                 keyEquivalent:@""];
     [volItem setEnabled:NO];
     [m addItem:volItem];
+    [self addJackStatusItemTo:m];
 
     [m addItem:[NSMenuItem separatorItem]];
 
@@ -154,6 +170,10 @@ static const BOOL kShowTextInMenuBar = NO;
     @try {
         _running = YES;
         _backend = SoundBackendCreateDefault();
+        /* Menu runs for the whole session, so it is the one place that can
+           keep jackd and its bridges going while the user has JACK on. */
+        _jack = [[JackSupervisor alloc] init];
+        [_jack start];
         [self updateState];
         /* The volume keys are handled by Menu itself, so they keep working
            when this extra is not shown; it only has to reflect the change. */
@@ -164,6 +184,8 @@ static const BOOL kShowTextInMenuBar = NO;
     } @catch (NSException *e) {
         NSLog(@"SoundExtra: exception in menuExtraDidLoad: %@", e);
         _running = NO;
+        [_jack stop];
+        _jack = nil;
         DESTROY(_backend);
     }
 }
@@ -191,7 +213,10 @@ static const BOOL kShowTextInMenuBar = NO;
     BOOL muted = _muted;
     for (NSMenuItem *item in [submenu itemArray]) {
         NSString *title = [item title];
-        if ([title isEqualToString:@"Volume Up"] || [title isEqualToString:@"Volume Down"]) {
+        if ([item tag] == kJackStatusTag) {
+            NSString *jack = [JackSupervisor menuTitleForStatus:[_jack statusDictionary]];
+            if (jack) [item setTitle:jack];
+        } else if ([title isEqualToString:@"Volume Up"] || [title isEqualToString:@"Volume Down"]) {
             [item setEnabled:!muted];
         } else if ([title hasPrefix:@"Volume "]) {
             [item setTitle:[NSString stringWithFormat:@"Volume %d%%", pct]];
@@ -204,6 +229,10 @@ static const BOOL kShowTextInMenuBar = NO;
 - (void)menuExtraWillUnload
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    /* Before the backend goes: ALSA applications must not be left on a
+       ~/.asoundrc that points at a jackd being stopped. */
+    [_jack stop];
+    _jack = nil;
     DESTROY(_backend);
 }
 
