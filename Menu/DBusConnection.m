@@ -13,6 +13,48 @@
 // Use typedef to avoid naming conflicts
 typedef struct DBusConnection DBusConnectionStruct;
 
+/* Waits for the reply of a method call while still servicing the calls that
+ * arrive on this connection. dbus_connection_send_with_reply_and_block()
+ * queues incoming method calls until it returns, so an application that
+ * calls us (for example Qt's UnregisterWindow, which it waits on) while we
+ * call it (GetLayout) stalls both sides until our timeout runs out, and the
+ * application shows no window in the meantime. Dispatching here lets us
+ * answer the application's call and so lets it answer ours. */
+static DBusMessage *gw_send_and_service(DBusConnectionStruct *connection,
+                                        DBusMessage *message,
+                                        int timeoutMs,
+                                        DBusError *error)
+{
+    DBusPendingCall *pending = NULL;
+    if (!dbus_connection_send_with_reply(connection, message, &pending, timeoutMs) || !pending) {
+        dbus_set_error(error, DBUS_ERROR_NO_MEMORY, "Could not send the method call");
+        return NULL;
+    }
+
+    const int sliceMs = 10;
+    for (int waited = 0; !dbus_pending_call_get_completed(pending) && waited < timeoutMs + sliceMs; waited += sliceMs) {
+        if (!dbus_connection_read_write_dispatch(connection, sliceMs)) {
+            break;
+        }
+    }
+
+    if (!dbus_pending_call_get_completed(pending)) {
+        dbus_pending_call_cancel(pending);
+        dbus_pending_call_unref(pending);
+        dbus_set_error(error, DBUS_ERROR_NO_REPLY, "Did not receive a reply");
+        return NULL;
+    }
+
+    DBusMessage *reply = dbus_pending_call_steal_reply(pending);
+    dbus_pending_call_unref(pending);
+    if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        dbus_set_error_from_message(error, reply);
+        dbus_message_unref(reply);
+        return NULL;
+    }
+    return reply;
+}
+
 // Forward declaration for internal method
 @interface GNUDBusConnection (Private)
 - (id)parseDBusMessageIterator:(DBusMessageIter *)iter;
@@ -372,8 +414,7 @@ static DBusHandlerResult gw_dbus_object_path_message_handler(DBusConnection *con
     DBusError error;
     dbus_error_init(&error);
     
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block((DBusConnectionStruct *)self.connection, 
-                                                                  message, 5000, &error);
+    DBusMessage *reply = gw_send_and_service((DBusConnectionStruct *)self.connection, message, 5000, &error);
     dbus_message_unref(message);
     
     if (dbus_error_is_set(&error)) {
@@ -555,8 +596,7 @@ static DBusHandlerResult gw_dbus_object_path_message_handler(DBusConnection *con
     DBusError error;
     dbus_error_init(&error);
     
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block((DBusConnectionStruct *)self.connection, 
-                                                                  message, 5000, &error);
+    DBusMessage *reply = gw_send_and_service((DBusConnectionStruct *)self.connection, message, 5000, &error);
     dbus_message_unref(message);
     
     if (dbus_error_is_set(&error)) {
