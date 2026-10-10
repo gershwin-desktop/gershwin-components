@@ -45,6 +45,18 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     [super sendEvent:event];
 }
 
+/* Menu has no File menu whose Close item would provide Command-W. */
+- (BOOL)performKeyEquivalent:(NSEvent *)event
+{
+    NSUInteger modifiers = [event modifierFlags] & NSDeviceIndependentModifierFlagsMask;
+    if ((modifiers & (NSCommandKeyMask | NSShiftKeyMask | NSControlKeyMask)) == NSCommandKeyMask
+        && [[event charactersIgnoringModifiers] isEqualToString:@"w"]) {
+        [self performClose:nil];
+        return YES;
+    }
+    return [super performKeyEquivalent:event];
+}
+
 @end
 
 /* A plain text cell draws the name at the top of the row; it has to sit on
@@ -328,11 +340,15 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     NSString *name = [app objectForKey:@"name"];
     pid_t pid = (pid_t)[[app objectForKey:@"pid"] intValue];
 
-    NSString *title = [NSString stringWithFormat:NSLocalizedString(@"Do you want to force \"%@\" to quit?", nil), name];
-    if (NSRunAlertPanel(title,
-                        NSLocalizedString(@"You will lose any unsaved changes.", nil),
-                        NSLocalizedString(@"Force Quit", nil),
-                        NSLocalizedString(@"Cancel", nil), nil) != NSAlertDefaultReturn) {
+    /* NSAlert rather than NSRunAlertPanel so the theme shows the caution
+       icon, like the other system warnings, instead of Menu's own icon. */
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setAlertStyle:NSWarningAlertStyle];
+    [alert setMessageText:[NSString stringWithFormat:NSLocalizedString(@"Do you want to force \"%@\" to quit?", nil), name]];
+    [alert setInformativeText:NSLocalizedString(@"You will lose any unsaved changes.", nil)];
+    [alert addButtonWithTitle:NSLocalizedString(@"Force Quit", nil)];
+    [alert addButtonWithTitle:NSLocalizedString(@"Cancel", nil)];
+    if ([alert runModal] != NSAlertFirstButtonReturn) {
         return;
     }
 
@@ -340,10 +356,13 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
        application is not responding to a normal quit request. */
     NSLog(@"ForceQuitPanel: Force quitting %@ (pid %d)", name, (int)pid);
     if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
-        NSRunAlertPanel(NSLocalizedString(@"Force Quit", nil),
-                        [NSString stringWithFormat:NSLocalizedString(@"\"%@\" could not be forced to quit: %s", nil),
-                                                   name, strerror(errno)],
-                        NSLocalizedString(@"OK", nil), nil, nil);
+        NSAlert *failure = [[NSAlert alloc] init];
+        [failure setAlertStyle:NSWarningAlertStyle];
+        [failure setMessageText:NSLocalizedString(@"Force Quit", nil)];
+        [failure setInformativeText:[NSString stringWithFormat:NSLocalizedString(@"\"%@\" could not be forced to quit: %s", nil),
+                                                               name, strerror(errno)]];
+        [failure addButtonWithTitle:NSLocalizedString(@"OK", nil)];
+        [failure runModal];
     }
     [self reloadApplications];
 }

@@ -5,6 +5,7 @@
  */
 
 #import "YTDLPBackend.h"
+#import "PlayerAsync.h"
 
 /**
  * yt-dlp output format (via --print):
@@ -125,7 +126,7 @@ static NSString *const kDefaultFormat = @"best/best";
         [_task launch];
 
         // Read output in background to avoid deadlock on large output
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        PlayerRunInBackground(^{
             NSData *outData = [[[_task standardOutput] fileHandleForReading] readDataToEndOfFile];
             NSData *errData = [[[_task standardError] fileHandleForReading] readDataToEndOfFile];
 
@@ -137,7 +138,7 @@ static NSString *const kDefaultFormat = @"best/best";
             // Wait for the task to finish
             [_task waitUntilExit];
 
-            dispatch_async(dispatch_get_main_queue(), ^{
+            PlayerRunOnMainThread(^{
                 if (_isRunning) {
                     int status = [_task terminationStatus];
                     if (status == 0) {
@@ -279,7 +280,7 @@ static NSString *const kDefaultFormat = @"best/best";
 
 - (void)_taskTerminated:(NSNotification *)note
 {
-    // Cleanup is handled in the dispatch_async block in resolveURL:
+    // Cleanup is handled in the background block in resolveURL:
     // This notification is just to know the task ended.
 }
 

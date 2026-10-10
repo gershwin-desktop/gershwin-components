@@ -18,8 +18,10 @@
         NSString *ext = [[URL pathExtension] lowercaseString];
         _isGSMenuExtra = [ext isEqualToString:@"gsmenuextra"];
 
-        NSString *infoPath = [_bundle pathForResource:@"Info" ofType:@"plist"];
-        NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
+        // Installed bundles only carry Info-gnustep.plist; NSBundle knows
+        // where to find it, a lookup of "Info.plist" misses it and loses the
+        // identifier and GSMenuExtraPriority (menu bar order).
+        NSDictionary *info = [_bundle infoDictionary];
 
         NSString *bundleId = [info objectForKey:@"CFBundleIdentifier"];
         if (bundleId) {

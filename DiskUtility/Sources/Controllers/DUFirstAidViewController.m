@@ -198,18 +198,37 @@ static NSString * const kDefaultsConfirmDestructive =
     CGFloat instructionsHeight = NSHeight(_instructions.frame);
     CGFloat instructionsY = height - METRICS_CONTENT_TOP_MARGIN -
         instructionsHeight;
+
+    // Room between the button cluster and the instruction block must hold
+    // an 8px gap, the 18px details row, an 8px gap and a usable log.
+    CGFloat detailsAndGaps =
+        METRICS_RADIO_BUTTON_LINE_SPACING + 2 * METRICS_SPACE_8;
+    CGFloat minimumLog = 48.0;
+    CGFloat availableSpace = instructionsY - METRICS_SPACE_8 - logBottom;
+
+    /* The instruction block is a long explanatory paragraph; the log is the
+     * pane's actual output. When the pane is too short to hold both, the
+     * instructions give way rather than the log disappearing: a log that
+     * collapses to nothing makes "Show Details" silently do nothing, so the
+     * user starts an operation, watches it run, and is never told what
+     * happened. Clipping the paragraph costs readability, not function. */
+    if (showDetails &&
+        availableSpace < detailsAndGaps + minimumLog &&
+        instructionsHeight > 2 * METRICS_SPACE_16) {
+        CGFloat shortfall = (detailsAndGaps + minimumLog) - availableSpace;
+        instructionsHeight -=
+            MIN(shortfall, instructionsHeight - 2 * METRICS_SPACE_16);
+        instructionsY = height - METRICS_CONTENT_TOP_MARGIN -
+            instructionsHeight;
+        availableSpace = instructionsY - METRICS_SPACE_8 - logBottom;
+    }
     _instructions.frame = NSMakeRect(
         x, instructionsY, contentWidth, instructionsHeight);
 
-    // Room between the button cluster and the instruction block must hold
-    // an 8px gap, the 18px details row and an 8px gap before any log.
-    CGFloat availableSpace = instructionsY - METRICS_SPACE_8 - logBottom;
-    BOOL logVisible = showDetails && availableSpace >=
-        (METRICS_RADIO_BUTTON_LINE_SPACING + 2 * METRICS_SPACE_8 + 24);
+    BOOL logVisible = showDetails && availableSpace >= detailsAndGaps;
     CGFloat availableHeight = 0.0;
     if (logVisible) {
-        availableHeight = availableSpace -
-            (METRICS_RADIO_BUTTON_LINE_SPACING + 2 * METRICS_SPACE_8);
+        availableHeight = availableSpace - detailsAndGaps;
         _logView.scrollView.hidden = NO;
     } else {
         _logView.scrollView.hidden = YES;

@@ -65,6 +65,7 @@ Whisper_RESOURCE_FILES = \
 #
 Whisper_HEADER_FILES = \
 	WhisperController.h \
+	WRecordButton.h \
 	WAudioLoader.h \
 	WCapture.h
 
@@ -73,7 +74,9 @@ Whisper_HEADER_FILES = \
 #
 Whisper_OBJC_FILES = \
 	WhisperController.m \
-	Whisper_main.m
+	WRecordButton.m \
+	Whisper_main.m \
+	../MediaRemote/GSMediaPlayer2.m
 
 Whisper_C_FILES = \
 	WAudioLoader.c \
@@ -84,7 +87,7 @@ Whisper_C_FILES = \
 # directory. This must stay relative: an absolute /Developer/Library/Sources
 # path only resolves on an installed Gershwin system, so CI and any checkout
 # elsewhere failed with "'ALSABackend.h' file not found". Matches Menu's -I../Sound.
-ADDITIONAL_INCLUDE_DIRS += -I/usr/local/include -I../Sound
+ADDITIONAL_INCLUDE_DIRS += -I/usr/local/include -I../Sound -I../MediaRemote
 
 #
 # Link libraries
@@ -104,11 +107,6 @@ ADDITIONAL_GUI_LIBS += $(WHISPER_CURL_LIBS)
 -include GNUmakefile.preamble
 
 include $(GNUSTEP_MAKEFILES)/application.make
-
-# Override desktop file creation
-$(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop:
-	$(ECHO_NOTHING)echo "Desktop file generation disabled" > /dev/null$(END_ECHO)
-	$(ECHO_NOTHING)touch $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop; chmod a+x $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop$(END_ECHO)
 
 -include GNUmakefile.postamble
 

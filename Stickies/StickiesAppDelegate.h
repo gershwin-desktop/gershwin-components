@@ -38,6 +38,7 @@
 
 - (void)loadDefaults;
 - (void)saveDefaults;
+- (void)saveNotes;
 - (StickyNoteController *)createNewNoteWithText:(NSString *)text color:(NSColor *)color frame:(NSRect)frame font:(NSFont *)font floatOnTop:(BOOL)floatOnTop translucent:(BOOL)translucent collapsed:(BOOL)collapsed creationDate:(NSDate *)creationDate modificationDate:(NSDate *)modificationDate;
 - (void)newNote:(id)sender;
 - (void)closeNote:(id)sender;

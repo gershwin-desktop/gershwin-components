@@ -37,6 +37,47 @@
     return self;
 }
 
+- (NSDictionary *)propertyList
+{
+    NSMutableDictionary *plist = [NSMutableDictionary dictionary];
+    [plist setValue:_stationId forKey:@"stationId"];
+    [plist setValue:_name forKey:@"name"];
+    [plist setValue:_subtext forKey:@"subtext"];
+    [plist setValue:_imageURL forKey:@"imageURL"];
+    [plist setValue:_tuneURL forKey:@"tuneURL"];
+    [plist setValue:_streamURL forKey:@"streamURL"];
+    return plist;
+}
+
++ (instancetype)stationWithPropertyList:(NSDictionary *)plist
+{
+    if (![plist isKindOfClass:[NSDictionary class]]
+        || ([plist objectForKey:@"tuneURL"] == nil && [plist objectForKey:@"streamURL"] == nil)) {
+        return nil;
+    }
+    RadioStation *station = [[[self alloc] init] autorelease];
+    [station setStationId:[plist objectForKey:@"stationId"]];
+    [station setName:[plist objectForKey:@"name"]];
+    [station setSubtext:[plist objectForKey:@"subtext"]];
+    [station setImageURL:[plist objectForKey:@"imageURL"]];
+    [station setTuneURL:[plist objectForKey:@"tuneURL"]];
+    [station setStreamURL:[plist objectForKey:@"streamURL"]];
+    return station;
+}
+
+- (BOOL)isSameStationAs:(RadioStation *)other
+{
+    if (other == nil) {
+        return NO;
+    }
+    if (_stationId || [other stationId]) {
+        return [_stationId isEqualToString:[other stationId]];
+    }
+    NSString *mine = _streamURL ?: _tuneURL;
+    NSString *theirs = [other streamURL] ?: [other tuneURL];
+    return mine != nil && [mine isEqualToString:theirs];
+}
+
 - (void)dealloc
 {
     [_stationId release];

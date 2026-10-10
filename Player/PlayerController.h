@@ -8,228 +8,205 @@
 #define PlayerController_h
 
 #import <AppKit/AppKit.h>
-#import <AVFoundation/AVFoundation.h>
 #import "ItemFlowView.h"
 #import "RadioManager.h"
-#import "StreamPlayer.h"
 #import "YTDLPBackend.h"
 #import "PreferencesController.h"
+#import "PlayerSession.h"
+#import "PlayerViews.h"
+#import "PlayerMediaRemote.h"
 
-typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
-    PlayerPlaybackStateStopped,
-    PlayerPlaybackStatePlaying,
-    PlayerPlaybackStatePaused
-};
+#import "PodcastManager.h"
+
+@class RadioStation;
+@class Podcast;
+@class PodcastEpisode;
 
 typedef NS_ENUM(NSInteger, PlayerMode) {
     PlayerModeLocal,
-    PlayerModeRadio
+    PlayerModeRadio,
+    PlayerModePodcast
 };
 
-@interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource, ItemFlowViewDelegate, RadioManagerDelegate, YTDLPBackendDelegate, StreamPlayerDelegate>
+/**
+ * The player window: shows what the PlayerSession (local files and stream
+ * URLs) or the RadioManager (Internet radio mode) is doing and forwards the
+ * user's commands to them.
+ */
+@interface PlayerController : NSObject <NSWindowDelegate, ItemFlowViewDataSource,
+    ItemFlowViewDelegate, RadioManagerDelegate, YTDLPBackendDelegate,
+    PlayerSessionDelegate, PlayerContentViewController, PlayerMediaRemoteTarget,
+    PodcastManagerDelegate, NSTableViewDataSource, NSTableViewDelegate>
 {
-    // Main window
-    NSWindow *mainWindow;
-    BOOL isFullscreen;
+    PlayerWindow *mainWindow;
+    PlayerContentView *contentView;
 
-    // Video display
-    NSView *videoView;
+    // Cover art carousel and video
     ItemFlowView *flowView;
-    BOOL isVideo;
+    // The toolbar-like gradient strip behind Radio/Podcast's search row,
+    // above the carousel; hidden in Local mode, which has no such row
+    PlayerBarView *topBarView;
+    NSView *videoView;
+    VideoRenderView *videoRenderView;
+    NSProgressIndicator *progressIndicator;
 
-    // Playback controls
-    NSButton *playButton;
-    NSButton *stopButton;
-    NSButton *previousButton;
-    NSButton *nextButton;
-    NSButton *openButton;
-    NSSlider *timeSlider;
-    NSTextField *currentTimeLabel;
-    NSTextField *totalTimeLabel;
-    NSButton *fullscreenButton;
-
-    // Overlay control bar (fullscreen)
-    NSView *overlayBar;
-    NSTimer *overlayHideTimer;
-
-    // Metadata display
+    // Track information
     NSTextField *titleLabel;
     NSTextField *artistLabel;
     NSTextField *albumLabel;
     NSTextField *detailsLabel;
-    NSProgressIndicator *progressIndicator;
 
-    // Layout geometry cache (recomputed on resize)
-    CGFloat coverAreaHeight;
-    CGFloat controlRowHeight;
-    CGFloat metadataAreaHeight;
+    // Position
+    NSTextField *currentTimeLabel;
+    NSSlider *timeSlider;
+    NSTextField *totalTimeLabel;
 
-    // AVFoundation objects
-    AVPlayer *avPlayer;
-    AVPlayerItem *playerItem;
-    AVURLAsset *urlAsset;
-    AVAudioPlayer *audioPlayer;
-    NSString *currentFilePath;
-    PlayerPlaybackState playbackState;
+    // Transport
+    NSButton *previousButton;
+    NSButton *playButton;
+    NSButton *stopButton;
+    NSButton *nextButton;
+    NSImage *playImage;
+    NSImage *pauseImage;
 
-    // Timer for updating UI during playback
-    NSTimer *playbackTimer;
-
-    // Playlist support
-    NSMutableArray *playlist;
-    int currentIndex;
-    BOOL repeatEnabled;
-    BOOL shuffleEnabled;
-
-    // Menu items (to update checkmarks)
-    NSMenuItem *repeatMenuItem;
-    NSMenuItem *shuffleMenuItem;
-    NSMenuItem *radioModeMenuItem;
-
-    // Cover art cache
-    NSMutableDictionary *coverImages;
-
-    // ---- Radio Mode ---- //
-    PlayerMode playerMode;
-    NSTextField *searchField;
-    NSTextField *statusLabel;       // "Connecting...", "Playing: Station Name"
-    NSTextField *radioTextLabel;    // ICY StreamTitle updates from the radio stream
+    // Bottom row
     NSTextField *volumeLabel;
     NSSlider *volumeSlider;
     NSButton *muteCheckbox;
 
-    // Track if we have radio delegate set up
-    BOOL radioInitialized;
+    // Full screen
+    BOOL isFullscreen;
 
-    // Persisted volume level for local (non-radio) playback
-    float localVolume;
-    // Persisted volume level for radio playback
-    float radioVolume;
+    // Local playback
+    PlayerSession *session;
+    NSMutableDictionary *coverImages;     // playlist item -> NSImage
+    NSMutableDictionary *streamTitles;    // stream URL -> title from yt-dlp
+    NSTimer *positionTimer;
+    NSUInteger pendingFlowIndex;
+    BOOL suppressFlowSelection;
+    BOOL errorAlertShown;
 
-    // Debounce radio station selection - don't play until 200ms idle
-    RadioStation *_pendingRadioStation;
-    NSTimeInterval _lastSelectionTime;
-    BOOL _debounceScheduled;
+    // Internet radio
+    PlayerMode playerMode;
+    NSTextField *searchField;
+    NSTextField *statusLabel;
+    NSTextField *radioTextLabel;
+    RadioStation *pendingRadioStation;
+    // The station of the last run, selected (and played, if it played at
+    // quit) once the stations are there
+    RadioStation *restoredRadioStation;
+    BOOL resumeRadioPlayback;
 
-    // ---- yt-dlp / URL Streaming ---- //
-    YTDLPBackend *_ytdlpBackend;
-    BOOL _ytdlpAvailable;
-    NSString *_pendingStreamTitle;
-    PreferencesController *_preferencesController;
+    // Podcasts: search/subscriptions carousel (shares flowView above) and,
+    // once a show is drilled into, an episode table in its place
+    NSSearchField *podcastSearchField;
+    NSButton *subscribeButton;
+    NSButton *backButton;
+    NSScrollView *episodeScrollView;
+    NSTableView *episodeTableView;
+    NSScrollView *showNotesScrollView;
+    NSTextView *showNotesTextView;
+    PlayerTimelineView *podcastTimelineView;
+    PodcastEpisode *currentPlayingEpisode;
+    // The show currentPlayingEpisode belongs to; kept apart from
+    // PodcastManager's currentShow because Back returns to the Shows
+    // screen (clearing currentShow) without stopping playback
+    Podcast *currentPlayingPodcast;
+    // Set once at launch from the defaults saved at the last quit; consumed
+    // (seeked to, then cleared) the first time any episode starts playing
+    NSString *pendingResumeEpisodeIdentifier;
+    NSTimeInterval pendingResumePosition;
+    BOOL pendingResumeShouldPlay;
+
+    // Streaming sites
+    YTDLPBackend *ytdlpBackend;
+    PreferencesController *preferencesController;
+
+    // Quit-time fade-out of running sound
+    BOOL quittingAfterFade;
+    NSTimer *fadeTimer;
+    NSDate *fadeStartDate;
+    float fadeStartVolume;
+
+    // Remote control for other programs in this session (GSMediaPlayer2,
+    // MediaRemote/PROTOCOL.md): Whisper pauses us while its mic is open
+    PlayerMediaRemote *mediaRemote;
+    NSConnection *mediaRemoteConnection;
 }
 
-// Properties
-@property (retain) NSWindow *mainWindow;
-@property (retain) NSView *videoView;
-@property (retain) ItemFlowView *flowView;
-@property (retain) NSButton *playButton;
-@property (retain) NSButton *stopButton;
-@property (retain) NSButton *previousButton;
-@property (retain) NSButton *nextButton;
-@property (retain) NSButton *openButton;
-@property (retain) NSButton *fullscreenButton;
-@property (retain) NSSlider *timeSlider;
-@property (retain) NSTextField *currentTimeLabel;
-@property (retain) NSTextField *totalTimeLabel;
-@property (retain) NSTextField *titleLabel;
-@property (retain) NSTextField *artistLabel;
-@property (retain) NSTextField *albumLabel;
-@property (retain) NSTextField *detailsLabel;
-@property (retain) NSProgressIndicator *progressIndicator;
+@property (nonatomic, readonly) NSWindow *mainWindow;
 
-// UI Creation
-- (void)createUI;
-- (void)createMenu;
-
-// Layout
-- (void)layoutSubviews;
-- (void)layoutNormalMode;
-- (void)layoutFullscreenMode;
-
-// Window delegate
-- (void)windowDidResize:(NSNotification *)notification;
-
-// Application delegate methods
-- (void)applicationDidFinishLaunching:(NSNotification *)notification;
-- (void)applicationWillTerminate:(NSNotification *)notification;
-- (BOOL)application:(NSApplication *)application openFile:(NSString *)filename;
-
-// Playback actions
+// Player commands (menu items and buttons)
 - (IBAction)openFile:(id)sender;
 - (IBAction)openURL:(id)sender;
+- (IBAction)openPreferences:(id)sender;
 - (IBAction)playPause:(id)sender;
 - (IBAction)stop:(id)sender;
-- (IBAction)previousTrack:(id)sender;
 - (IBAction)nextTrack:(id)sender;
+- (IBAction)previousTrack:(id)sender;
 - (IBAction)seekToTime:(id)sender;
-
-// View actions
-- (IBAction)toggleFullscreen:(id)sender;
+- (IBAction)increaseVolume:(id)sender;
+- (IBAction)decreaseVolume:(id)sender;
+- (IBAction)volumeChanged:(id)sender;
+- (IBAction)toggleMute:(id)sender;
 - (IBAction)toggleRepeat:(id)sender;
 - (IBAction)toggleShuffle:(id)sender;
+- (IBAction)toggleFullscreen:(id)sender;
+/// Replaces the playlist with these files (folders are searched) and plays.
+- (BOOL)openPaths:(NSArray *)paths;
 
-// Playback control
-- (void)loadFile:(NSString *)filePath;
-- (void)play;
-- (void)pause;
-- (void)stopPlayback;
-- (void)updatePlaybackUI;
-- (void)togglePlayPause;
+@end
 
-// Metadata
-- (void)updateMetadata;
-- (NSString *)formatTime:(CMTime)time;
-- (NSString *)formatTimeInterval:(NSTimeInterval)interval;
-
-// Cover Art
-- (NSImage *)extractCoverArtForFile:(NSString *)filePath;
-
-// Playlist
-- (BOOL)addToPlaylist:(NSString *)filePath;
-- (void)playFromPlaylistAtIndex:(int)index;
-
-// Timer
-- (void)playbackTimerFired:(NSTimer *)timer;
-
-// Overlay controls (fullscreen)
-- (void)showOverlay;
-- (void)hideOverlay;
-- (void)overlayAutoHideTimerFired:(NSTimer *)timer;
-- (void)mouseMoved:(NSEvent *)event;
-
-// Utility
-- (void)updateStatus:(NSString *)status;
-- (void)showOpenPanel;
-- (BOOL)isVideoFile:(NSString *)path;
-- (BOOL)isAudioFile:(NSString *)path;
-
-// Command line handling
-- (void)handleCommandLineArguments;
-- (void)printUsageAndExit;
-- (void)exitApp;
-
-// ---- Radio Mode ---- //
+/// Internet radio mode, in PlayerController+Radio.m
+@interface PlayerController (Radio)
 - (IBAction)toggleRadioMode:(id)sender;
+- (void)createRadioViews;
 - (void)enterRadioMode;
+/// Radio mode as it was left: the last search and station, playing again
+/// when `resume` and it played when the app quit.
+- (void)enterRadioModeResuming:(BOOL)resume;
 - (void)exitRadioMode;
-- (void)radioSearchAction:(id)sender;
-- (void)openRadioStream:(id)sender;
-- (void)radioVolumeChanged:(id)sender;
-- (void)radioMuteToggled:(id)sender;
-- (void)updateRadioUI;
+- (void)layoutRadioMode;
+- (void)updateRadioControls;
+- (void)radioPlayPause;
+- (void)radioStop;
+- (void)radioNextStation;
+- (void)radioPreviousStation;
+- (void)radioSelectStationAtIndex:(NSUInteger)index;
+- (void)rebuildRadioStationMenu;
+- (BOOL)validateRadioMenuItem:(NSMenuItem *)item;
+@end
 
-// ---- Open URL / yt-dlp ---- //
-- (IBAction)openPreferences:(id)sender;
-- (void)playStreamURL:(NSString *)url withTitle:(NSString *)title;
-- (void)checkYTDLPAvailability;
-
-// YTDLPBackendDelegate
-- (void)ytdlpBackend:(YTDLPBackend *)backend didResolveURL:(NSString *)streamURL
-              title:(NSString *)title thumbnail:(NSString *)thumbnailURL
-            duration:(NSTimeInterval)duration;
-- (void)ytdlpBackend:(YTDLPBackend *)backend didFailWithError:(NSString *)error;
-- (void)ytdlpBackendDidCancel:(YTDLPBackend *)backend;
-
+/// Podcast search/subscribe/stream mode, in PlayerController+Podcast.m
+@interface PlayerController (Podcast)
+- (IBAction)toggleBrowsePodcasts:(id)sender;
+- (void)createPodcastViews;
+- (void)enterPodcastMode;
+/// Podcast mode as it was left: the last search and show, resuming the
+/// episode and position saved at quit when `resume` and it was playing.
+- (void)enterPodcastModeResuming:(BOOL)resume;
+- (void)exitPodcastMode;
+- (void)layoutPodcastMode;
+- (void)updatePodcastControls;
+- (void)podcastPlayPause;
+- (void)podcastStop;
+- (void)podcastNextEpisode;
+- (void)podcastPreviousEpisode;
+- (void)rebuildPodcastSubscriptionMenu;
+- (BOOL)validatePodcastMenuItem:(NSMenuItem *)item;
+/// Search results while the podcast search field has a query, else the
+/// subscriptions - whichever the Shows screen (the flowView) is showing.
+- (NSArray *)podcastShowsList;
+/// Browsing (arrow keys) rested on this show; drills into its episodes
+/// shortly, unless the selection moves on first.
+- (void)podcastBrowseToShowAtIndex:(NSUInteger)index;
+- (void)podcastDidStartPlayingEpisode;
+- (void)podcastDidStop;
+- (void)podcastDidFailWithError:(NSString *)errorMessage;
+- (void)updatePodcastPosition;
+/// Called from -applicationShouldTerminate: before playback stops, so
+/// the next launch can resume it.
+- (void)savePodcastPlaybackStateForQuit;
 @end
 
 #endif /* PlayerController_h */

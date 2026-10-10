@@ -47,6 +47,18 @@
     ];
 }
 
+// The tools without which discovery, verify, format, mount and imaging cannot
+// happen at all. mdadm, qemu-img, xorriso, wipefs and the resize/tune tools
+// each gate one feature and are already reported per-feature in the
+// capabilities report, so their absence must not block startup.
+- (NSArray<NSString *> *)requiredToolNames
+{
+    return @[
+        @"lsblk", @"blkid", @"mount", @"umount", @"dd", @"cat", @"gzip",
+        @"parted",
+    ];
+}
+
 #pragma mark - Discovery
 
 - (NSArray<DUStorageObject *> *)discoverStorageObjects:(NSError **)error
@@ -168,7 +180,8 @@
             kDUFormatIdentifierKey : type,
             kDUFormatDisplayNameKey :
                 [DUPartitionTableParser filesystemDisplayName:type],
-            kDUFormatCanFormatKey : @YES,
+            kDUFormatCanFormatKey :
+                @([DULinuxFilesystemTool canFormatFilesystemType:type]),
         }];
     }
     return formats;
@@ -433,6 +446,7 @@
          completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
+        [DULinuxFilesystemTool setCancelCheck:options[@"duCancelCheck"]];
         NSString *devicePath = object.backendPath;
         NSString *fstype = options[kDUFormatIdentifierKey];
         NSString *name = options[@"name"];
@@ -453,7 +467,12 @@
             sizeBytes = ((DUStorageVolume *)object).capacityBytes;
         }
 
-        NSError *result = nil;
+        NSError *result =
+            [DULinuxFilesystemTool unmountAllMountsOfDevicePath:devicePath];
+        if (result != nil) {
+            completion(result);
+            return;
+        }
         if ([method isEqualToString:kDUEraseMethodZerosKey] && sizeBytes > 0) {
             // Zero overwrite is the slow phase; it owns most of the bar.
             result = [DULinuxFilesystemTool zeroFillDevicePath:devicePath
@@ -474,15 +493,45 @@
             return;
         }
 
-        progress(0.85, NSLocalizedString(@"Creating filesystem...", nil));
-        result = [DULinuxFilesystemTool formatVolumeAtDevicePath:devicePath
-                                                  filesystemType:fstype
-                                                           label:name
-                                                        progress:^(double fraction, NSString *line) {
-            // mkfs stage fractions (0.1..0.92) fold into the erase bar's
-            // final 15% after wipefs.
-            progress(0.85 + fraction * 0.14, line);
-        }];
+        if ([object isKindOfClass:[DUStorageDevice class]]) {
+            // A whole-disk erase leaves a usable disk: fresh table, one
+            // partition spanning it, formatted as chosen.
+            NSError *planError = nil;
+            DUPartitionPlan *plan =
+                [DUPartitionPlan planForWholeDiskErase:object
+                                            filesystem:fstype
+                                                  name:name
+                                                 error:&planError];
+            if (plan == nil) {
+                completion(planError);
+                return;
+            }
+            progress(0.8, NSLocalizedString(@"Writing the partition table...", nil));
+            result = [[DULinuxPartitionTool new]
+                applyPlan:plan
+             toDevicePath:devicePath
+                 progress:^(double fraction, NSString *message) {
+                progress(0.8 + fraction * 0.1, message);
+            }];
+            if (result == nil) {
+                progress(0.9, NSLocalizedString(@"Creating filesystem...", nil));
+                result = [self formatPartitionsOfPlan:plan
+                                       diskDevicePath:devicePath
+                                             progress:^(double fraction, NSString *line) {
+                    progress(0.9 + fraction * 0.09, line);
+                }];
+            }
+        } else {
+            progress(0.85, NSLocalizedString(@"Creating filesystem...", nil));
+            result = [DULinuxFilesystemTool formatVolumeAtDevicePath:devicePath
+                                                      filesystemType:fstype
+                                                               label:name
+                                                            progress:^(double fraction, NSString *line) {
+                // mkfs stage fractions (0.1..0.92) fold into the erase bar's
+                // final 15% after wipefs.
+                progress(0.85 + fraction * 0.14, line);
+            }];
+        }
         progress(1.0,
                  result == nil
                      ? NSLocalizedString(@"Erase completed successfully.", nil)
@@ -499,20 +548,80 @@
              completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
+        [DULinuxFilesystemTool setCancelCheck:plan.cancelCheck];
+        NSError *result = [DULinuxFilesystemTool
+            unmountAllMountsOfDevicePath:device.backendPath];
+        if (result != nil) {
+            completion(result);
+            return;
+        }
         progress(0.1, NSLocalizedString(@"Applying partition layout...", nil));
-        NSError *result =
-            [[DULinuxPartitionTool new] applyPlan:plan
+        result = [[DULinuxPartitionTool new] applyPlan:plan
                                     toDevicePath:device.backendPath
                                         progress:^(double fraction,
                                                    NSString *message) {
             progress(0.1 + fraction * 0.85, message);
         }];
+        if (result == nil) {
+            result = [self formatPartitionsOfPlan:plan
+                                     diskDevicePath:device.backendPath
+                                           progress:progress];
+        }
         progress(1.0,
                  result == nil
                      ? NSLocalizedString(@"Partitioning completed.", nil)
                      : NSLocalizedString(@"Partitioning failed.", nil));
         completion(result);
     });
+}
+
+// parted only records a filesystem hint; without mkfs the chosen formats
+// never exist and every partition comes out blank.
+- (NSError *)formatPartitionsOfPlan:(DUPartitionPlan *)plan
+                      diskDevicePath:(NSString *)diskPath
+                            progress:(void (^)(double, NSString *))progress
+{
+    NSArray<DUPartition *> *entries = plan.entries;
+    NSString *disk = [diskPath stringByResolvingSymlinksInPath];
+    // Names like nvme0n1 and mmcblk0 take a "p" before the number.
+    BOOL separator = [[disk substringFromIndex:disk.length - 1]
+        rangeOfCharacterFromSet:[NSCharacterSet decimalDigitCharacterSet]]
+            .location != NSNotFound;
+    for (NSUInteger i = 0; i < entries.count; i++) {
+        DUPartition *entry = entries[i];
+        if ([DULinuxFilesystemTool cancelRequested]) {
+            return DUErrorMake(DUErrorCancelled,
+                               NSLocalizedString(@"Cancelled.", nil));
+        }
+        if (entry.filesystemType.length == 0) {
+            continue;
+        }
+        NSString *node = [NSString stringWithFormat:@"%@%@%lu", disk,
+                          separator ? @"p" : @"", (unsigned long)(i + 1)];
+        // The kernel creates the node asynchronously after the table write.
+        for (int wait = 0; wait < 100 &&
+             ![[NSFileManager defaultManager] fileExistsAtPath:node]; wait++) {
+            [NSThread sleepForTimeInterval:0.1];
+        }
+        NSError *error =
+            [DULinuxFilesystemTool unmountAllMountsOfDevicePath:node];
+        if (error != nil) {
+            return error;
+        }
+        double base = 0.1 + 0.85 * ((double)i / (double)entries.count);
+        double span = 0.85 / (double)entries.count;
+        error = [DULinuxFilesystemTool
+            formatVolumeAtDevicePath:node
+                      filesystemType:entry.filesystemType
+                               label:entry.name
+                            progress:^(double fraction, NSString *line) {
+            progress(base + fraction * span, line);
+        }];
+        if (error != nil) {
+            return error;
+        }
+    }
+    return nil;
 }
 
 #pragma mark - Mount management

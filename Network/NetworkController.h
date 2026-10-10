@@ -13,7 +13,7 @@
 #import <AppKit/AppKit.h>
 #import "NetworkBackend.h"
 
-@interface NetworkController : NSObject <NSTableViewDataSource, NSTableViewDelegate, NetworkBackendDelegate>
+@interface NetworkController : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NetworkBackendDelegate>
 {
     // Backend
     id<NetworkBackend> backend;
@@ -83,6 +83,7 @@
     NSPanel *joinNetworkPanel;
     NSTextField *joinNetworkSSIDField;
     NSPopUpButton *joinNetworkSecurityPopup;
+    NSButton *joinNetworkJoinButton;
     
     // WLAN refresh timer
     NSTimer *wlanRefreshTimer;
@@ -167,6 +168,7 @@
 - (NSImage *)statusIconForInterface:(NetworkInterface *)interface;
 - (NSString *)descriptionForInterface:(NetworkInterface *)interface;
 - (void)showErrorAlert:(NSString *)message informativeText:(NSString *)info;
+- (void)showErrorAlert:(NSString *)message forException:(NSException *)exception;
 - (void)showWarningAlert:(NSString *)message informativeText:(NSString *)info;
 - (BOOL)validateSelectedInterface;
 

@@ -17,6 +17,11 @@
 
 @required
 
+// Whether packageName is currently installed, checked the native way for
+// this platform (dpkg-query/pacman -Qi/pkg info -e/pkg_info -e). Used to
+// find which of a prerequisite list are missing before installing them.
+- (BOOL)isPackageInstalled:(NSString *)packageName;
+
 // Install/uninstall with progress support
 - (BOOL)installPackages:(NSArray<NSString *> *)packageNames
         localFilePaths:(NSArray<NSString *> *)filePaths

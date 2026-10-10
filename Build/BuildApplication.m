@@ -25,6 +25,20 @@ static NSString *toolPath(NSString *name)
 
 @implementation BuildApplication
 
+/* Shallow clone by default; repos that vendor their dependencies as git
+   submodules get --recurse-submodules so the third_party trees exist before
+   the make runs.  All catalog clone sites share this so the flag cannot drift. */
+- (NSArray *)cloneArgumentsForEntry:(CatalogEntry *)entry URL:(NSString *)url dir:(NSString *)dir
+{
+    NSMutableArray *args = [NSMutableArray arrayWithObjects:@"clone", @"--depth=1", nil];
+    if (entry.submodules) {
+        [args addObject:@"--recurse-submodules"];
+    }
+    [args addObject:url];
+    [args addObject:dir];
+    return args;
+}
+
 - (id)init
 {
     self = [super init];
@@ -156,7 +170,12 @@ static NSString *toolPath(NSString *name)
 
     BuildController *controller = [[BuildController alloc] init];
     [controller setMakefilePath:guessedMakefile];
-    [controller setExtraArgs:self.extraArgs ? self.extraArgs : @[]];
+    /* Explicit command-line arguments win; otherwise use whatever the catalog
+       entry asks for (e.g. OMD_SKIP_TESTS=1 to skip an unbuildable test
+       subproject in an aggregate). */
+    NSArray *args = self.extraArgs;
+    if (!args || [args count] == 0) args = entry.makeArgs;
+    [controller setExtraArgs:args ?: @[]];
     [controller setAutoInstallLaunch:self.autoInstallLaunch];
     [controller setKeepBuildDir:self.keepBuildDir];
     [controller setBuildDir:cloneDir];
@@ -168,7 +187,7 @@ static NSString *toolPath(NSString *name)
     dispatch_async(buildQueue(), ^{
         NSTask *gitTask = [[NSTask alloc] init];
         [gitTask setLaunchPath:toolPath(@"git")];
-        [gitTask setArguments:@[@"clone", @"--depth=1", entry.gitURL, cloneDir]];
+        [gitTask setArguments:[self cloneArgumentsForEntry:entry URL:entry.gitURL dir:cloneDir]];
         [gitTask setEnvironment:[[NSProcessInfo processInfo] environment]];
 
     NSPipe *gitPipe = [[NSPipe alloc] init];

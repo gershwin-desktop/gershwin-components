@@ -8,6 +8,12 @@ TOOL_NAME = PackageManagerTest
 
 PackageManagerTest_OBJC_FILES = PackageManagerTest.m
 
+# AGAppImageAssetPickerTests.m is deliberately NOT listed here. It is
+# #include'd by PackageManagerTest.m, right after the TAssert macros and
+# runTest() are defined, because its cases use those macros and they expand
+# to a `return NO` that only means anything inside a function that file owns.
+# Do not "fix" this by adding it: it would be compiled twice.
+
 # All PackageManager code uses ARC
 ADDITIONAL_OBJCFLAGS += -fobjc-arc -fobjc-arc-exceptions
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra

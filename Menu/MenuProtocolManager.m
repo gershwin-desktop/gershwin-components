@@ -115,9 +115,28 @@
 
 #pragma mark - Unified Menu Interface
 
+/* A window whose client pushed its complete menu over the GNUstep protocol
+   (GTK and Qt programs, through the toolkit modules) uses that, whatever the
+   D-Bus and GTK importers also know about it. */
+- (id<MenuProtocolHandler>)authoritativeHandlerForWindow:(unsigned long)windowId
+{
+    id<MenuProtocolHandler> handler = [self handlerForType:MenuProtocolTypeGNUstep];
+    if (handler && [handler respondsToSelector:@selector(menuIsAuthoritativeForWindow:)]
+        && [handler menuIsAuthoritativeForWindow:windowId]) {
+        [self.windowToProtocolMap setObject:[NSNumber numberWithInteger:MenuProtocolTypeGNUstep]
+                                     forKey:[NSNumber numberWithUnsignedLong:windowId]];
+        return handler;
+    }
+    return nil;
+}
+
 - (BOOL)hasMenuForWindow:(unsigned long)windowId
 {
     MENU_PROFILE_BEGIN(protocolManagerHasMenuForWindow);
+    if ([self authoritativeHandlerForWindow:windowId]) {
+        MENU_PROFILE_END(protocolManagerHasMenuForWindow);
+        return YES;
+    }
     NSNumber *windowKey = [NSNumber numberWithUnsignedLong:windowId];
     NSNumber *protocolTypeNum = [self.windowToProtocolMap objectForKey:windowKey];
     
@@ -190,6 +209,14 @@
 {
     MENU_PROFILE_BEGIN(protocolManagerGetMenuForWindow);
     @try {
+        id<MenuProtocolHandler> authoritative = [self authoritativeHandlerForWindow:windowId];
+        if (authoritative) {
+            NSMenu *menu = [authoritative getMenuForWindow:windowId];
+            if (menu) {
+                MENU_PROFILE_END(protocolManagerGetMenuForWindow);
+                return menu;
+            }
+        }
         NSNumber *windowKey = [NSNumber numberWithUnsignedLong:windowId];
         NSNumber *protocolTypeNum = [self.windowToProtocolMap objectForKey:windowKey];        if (protocolTypeNum) {
             // We know which protocol handles this window

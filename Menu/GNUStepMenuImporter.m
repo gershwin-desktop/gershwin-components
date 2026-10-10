@@ -8,6 +8,8 @@
 #import "GNUStepMenuActionHandler.h"
 #import "AppMenuWidget.h"
 #import "MenuUtils.h"
+#import "MenuShortcutItems.h"
+#import "X11ShortcutManager.h"
 #import <Foundation/NSConnection.h>
 #import <AppKit/NSMenu.h>
 #import <AppKit/NSMenuItem.h>
@@ -123,6 +125,65 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
 // (connectionWithRegisteredName:) must never run on the main thread, or the
 // whole menu bar freezes while a window switch is being processed.
 @property (nonatomic) dispatch_queue_t menuScanQueue;
+@end
+
+/* What a rebuild of the menu bar shows: titles, separators, shortcuts and
+   submenus.  Enabled and check states are left out; they are applied to the
+   displayed menu in place. */
+static id _menuStructure(NSDictionary *menuData)
+{
+    NSMutableArray *structure = [NSMutableArray array];
+    for (NSDictionary *item in [menuData objectForKey:@"items"]) {
+        NSDictionary *submenu = [item objectForKey:@"submenu"];
+        [structure addObject:@[[item objectForKey:@"title"] ?: @"",
+                               [item objectForKey:@"isSeparator"] ?: @NO,
+                               [item objectForKey:@"keyEquivalent"] ?: @"",
+                               [item objectForKey:@"keyEquivalentModifierMask"] ?: @0,
+                               submenu ? _menuStructure(submenu) : (id)[NSNull null]]];
+    }
+    return structure;
+}
+
+/* Windows whose menu the client says is complete (the toolkit modules for GTK and
+   Qt read the program's own menu bar).  Guarded by @synchronized. */
+static NSMutableSet *_authoritativeWindows(void)
+{
+    static NSMutableSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [[NSMutableSet alloc] init]; });
+    return set;
+}
+
+/* Carries one menu item's action for a global shortcut: the client is asked
+   to activate the item exactly as if it had been chosen in the menu bar. */
+@interface GNUStepShortcutTarget : NSObject
+{
+    NSString *_title;
+    NSDictionary *_info;
+}
+- (instancetype)initWithTitle:(NSString *)title info:(NSDictionary *)info;
+- (void)fire:(id)sender;
+@end
+
+@implementation GNUStepShortcutTarget
+
+- (instancetype)initWithTitle:(NSString *)title info:(NSDictionary *)info
+{
+    if ((self = [super init])) {
+        _title = [title copy];
+        _info = [info copy];
+    }
+    return self;
+}
+
+- (void)fire:(id)sender
+{
+    (void)sender;
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:_title ?: @"" action:NULL keyEquivalent:@""];
+    [item setRepresentedObject:_info];
+    [GNUStepMenuActionHandler performMenuAction:item];
+}
+
 @end
 
 @implementation GNUStepMenuImporter
@@ -272,7 +333,14 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     NSTimeInterval delay = MIN(30.0, pow(2.0, attempt));
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        [self attemptRegisterRetry:attempt];
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased in the block is held
+           until the process ends. Asking another application for its menu
+           does that a hundred times over, once per window that appears. */
+        @autoreleasepool {
+            [self attemptRegisterRetry:attempt];
+        }
     });
 }
 
@@ -478,6 +546,18 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
 /* A cached menu is only used while it still belongs to the process that owns
    the window (see forgetMenusOfPreviousOwnerOfWindow:). */
+/* Menu bars of GTK and Qt programs are also offered by the D-Bus and GTK protocols
+   (their windows carry the properties for those); the menu the toolkit module
+   pushed is the complete one and wins. */
+- (BOOL)menuIsAuthoritativeForWindow:(unsigned long)windowId
+{
+    BOOL authoritative;
+    @synchronized (_authoritativeWindows()) {
+        authoritative = [_authoritativeWindows() containsObject:@(windowId)];
+    }
+    return authoritative && [self findCachedMenuForWindow:windowId];
+}
+
 - (BOOL)hasMenuForWindow:(unsigned long)windowId
 {
     if ([self findCachedMenuForWindow:windowId]
@@ -626,44 +706,46 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
         // Use background queue to avoid blocking main thread during window switch
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            @try {
-                NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
-                if (connection && [connection isValid]) {
-                    /* Cache the connection so the main-thread state refresh can
-                       use it without a blocking name lookup (which would wedge
-                       the menu bar if this client is stalled). */
-                    [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
-                    id proxy = [connection rootProxy];
-                    if (proxy) {
-                        // Log success if we connect
-                        static unsigned long lastConnectedWindow = 0;
-                        if (lastConnectedWindow != windowId) {
-                             NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Connected to %@ for window %lu", clientName, windowId);
-                             lastConnectedWindow = windowId;
-                        }
+            @autoreleasepool {
+                @try {
+                    NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
+                    if (connection && [connection isValid]) {
+                        /* Cache the connection so the main-thread state refresh can
+                           use it without a blocking name lookup (which would wedge
+                           the menu bar if this client is stalled). */
+                        [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
+                        id proxy = [connection rootProxy];
+                        if (proxy) {
+                            // Log success if we connect
+                            static unsigned long lastConnectedWindow = 0;
+                            if (lastConnectedWindow != windowId) {
+                                 NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Connected to %@ for window %lu", clientName, windowId);
+                                 lastConnectedWindow = windowId;
+                            }
 
-                        @try {
-                            [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
-                        } @catch (NSException *e) {
-                            // Protocol might not be known or needed depending on runtime
-                        }
+                            @try {
+                                [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
+                            } @catch (NSException *e) {
+                                // Protocol might not be known or needed depending on runtime
+                            }
                         
-                        // Request update
-                        [(id)proxy requestMenuUpdateForWindow:@(windowId)];
+                            // Request update
+                            [(id)proxy requestMenuUpdateForWindow:@(windowId)];
+                        } else {
+                            NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to get root proxy for client %@", clientName);
+                        }
                     } else {
-                        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to get root proxy for client %@", clientName);
+                        // Only log connection failure once per window to avoid spam
+                        // (Scanning logic might retry, so we want to see it at least once)
+                         static unsigned long lastFailedWindow = 0;
+                         if (lastFailedWindow != windowId) {
+                              NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to connect to client name %@", clientName);
+                              lastFailedWindow = windowId;
+                         }
                     }
-                } else {
-                    // Only log connection failure once per window to avoid spam
-                    // (Scanning logic might retry, so we want to see it at least once)
-                     static unsigned long lastFailedWindow = 0;
-                     if (lastFailedWindow != windowId) {
-                          NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to connect to client name %@", clientName);
-                          lastFailedWindow = windowId;
-                     }
+                } @catch (NSException *e) {
+                    NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Exception probing client %@: %@", clientName, e);
                 }
-            } @catch (NSException *e) {
-                NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Exception probing client %@: %@", clientName, e);
             }
         });
     } else {
@@ -697,6 +779,9 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
 - (void)unregisterWindow:(unsigned long)windowId
 {
+    @synchronized (_authoritativeWindows()) {
+        [_authoritativeWindows() removeObject:@(windowId)];
+    }
     [self forgetWindow:@(windowId)];
 
     if (self.appMenuWidget && self.appMenuWidget.currentWindowId == windowId) {
@@ -735,43 +820,45 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
         probesDispatched++;
         dispatch_async(self.menuScanQueue, ^{
-            // Try to determine PID for the window
-            pid_t pid = [MenuUtils getWindowPID:windowId];
-            if (pid == 0) {
-                // Not all windows provide PID - skip
-                return;
-            }
+            @autoreleasepool {
+                // Try to determine PID for the window
+                pid_t pid = [MenuUtils getWindowPID:windowId];
+                if (pid == 0) {
+                    // Not all windows provide PID - skip
+                    return;
+                }
 
-            NSString *clientName = [self _clientNameForPID:pid];
-            NSDebugLog(@"GNUStepMenuImporter: Found window %@ (pid: %d) - probing client %@", windowNum, pid, clientName);
+                NSString *clientName = [self _clientNameForPID:pid];
+                NSDebugLog(@"GNUStepMenuImporter: Found window %@ (pid: %d) - probing client %@", windowNum, pid, clientName);
 
-            @try {
-                NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
-                if (connection && [connection isValid]) {
-                    /* Cache for the main-thread refresh path (avoids a blocking
-                       DO name lookup if this client stalls later). */
-                    [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
-                    id proxy = [connection rootProxy];
-                    if (proxy) {
-                        // Tell the proxy which protocol it implements so selectors are known
-                        @try {
-                            [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
-                        } @catch (NSException *e) {
-                            NSDebugLog(@"GNUStepMenuImporter: Failed to set protocol for proxy of %@: %@", clientName, e);
-                        }
+                @try {
+                    NSConnection *connection = [NSConnection connectionWithRegisteredName:clientName host:nil];
+                    if (connection && [connection isValid]) {
+                        /* Cache for the main-thread refresh path (avoids a blocking
+                           DO name lookup if this client stalls later). */
+                        [GNUStepMenuActionHandler cacheConnection:connection forClient:clientName];
+                        id proxy = [connection rootProxy];
+                        if (proxy) {
+                            // Tell the proxy which protocol it implements so selectors are known
+                            @try {
+                                [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
+                            } @catch (NSException *e) {
+                                NSDebugLog(@"GNUStepMenuImporter: Failed to set protocol for proxy of %@: %@", clientName, e);
+                            }
 
-                        // Ask client to send its menu for this window
-                        @try {
-                            NSDebugLog(@"GNUStepMenuImporter: Requesting menu update from client %@ for window %lu", clientName, windowId);
-                            [(id)proxy requestMenuUpdateForWindow:@(windowId)];
-                        } @catch (NSException *e) {
-                            NSDebugLog(@"GNUStepMenuImporter: Exception requesting menu update from %@: %@", clientName, e);
+                            // Ask client to send its menu for this window
+                            @try {
+                                NSDebugLog(@"GNUStepMenuImporter: Requesting menu update from client %@ for window %lu", clientName, windowId);
+                                [(id)proxy requestMenuUpdateForWindow:@(windowId)];
+                            } @catch (NSException *e) {
+                                NSDebugLog(@"GNUStepMenuImporter: Exception requesting menu update from %@: %@", clientName, e);
+                            }
                         }
                     }
                 }
-            }
-            @catch (NSException *ex) {
-                NSDebugLog(@"GNUStepMenuImporter: Exception probing client %@: %@", clientName, ex);
+                @catch (NSException *ex) {
+                    NSDebugLog(@"GNUStepMenuImporter: Exception probing client %@: %@", clientName, ex);
+                }
             }
         });
     }
@@ -954,6 +1041,14 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     unsigned long windowValue = [windowId unsignedLongValue];
 
+    @synchronized (_authoritativeWindows()) {
+        if ([[menuData objectForKey:@"authoritative"] boolValue]) {
+            [_authoritativeWindows() addObject:windowId];
+        } else {
+            [_authoritativeWindows() removeObject:windowId];
+        }
+    }
+
     /* If the Info submenu contains an "Info Panel..." or Cmd-? item,
        move it to the parent menu and rename it "About...". */
     menuData = [self promoteAboutItemFromMenuData:menuData];
@@ -970,10 +1065,26 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     // NSLog(@"GNUStepMenuImporter: Successfully built menu with %ld top-level items", (long)[menu numberOfItems]);
     NSString *oldClient = [self.clientNamesByWindow objectForKey:windowId];
+    NSMenu *oldMenu = [self.menusByWindow objectForKey:windowId];
+    NSDictionary *oldData = [self.lastMenuDataByWindow objectForKey:windowId];
+    BOOL structureChanged = (oldData == nil
+        || ![_menuStructure(oldData) isEqual:_menuStructure(menuData)]);
     self.menusByWindow[windowId] = menu;
     self.clientNamesByWindow[windowId] = clientName;
     self.lastMenuDataByWindow[windowId] = [menuData copy];
     self.lastMenuUpdateTimeByWindow[windowId] = @(now);
+
+    /* findCachedMenuForWindow: files the menu under the top-level window's ID
+       as well; that copy must follow, or the menu bar keeps showing the
+       window's first menu (e.g. without the items an app adds later). */
+    if (oldMenu) {
+        for (NSNumber *key in [self.menusByWindow allKeys]) {
+            if ([self.menusByWindow objectForKey:key] == oldMenu) {
+                self.menusByWindow[key] = menu;
+                self.clientNamesByWindow[key] = clientName;
+            }
+        }
+    }
 
     /* If the client (app instance) changed for a window that is currently
        displayed, the visible menu still carries menu items bound to the OLD
@@ -985,6 +1096,20 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         && self.appMenuWidget
         && self.appMenuWidget.currentWindowId == windowValue) {
         [self.appMenuWidget loadMenu:menu forWindow:windowValue];
+    }
+
+    /* Shown in the menu bar (possibly through the top-level window's ID):
+       rebuild it when items were added, removed or renamed.  loadMenu:forWindow:
+       would keep the old menu while the top-level titles are unchanged, so
+       it is told to forget it first. */
+    AppMenuWidget *shownIn = self.appMenuWidget;
+    if (oldMenu && shownIn && shownIn.currentMenu == oldMenu) {
+        if (structureChanged) {
+            shownIn.currentMenu = nil;
+            [shownIn loadMenu:menu forWindow:shownIn.currentWindowId];
+        } else {
+            [self applyEnabledStatesFromData:menuData toMenu:shownIn.currentMenu depth:0];
+        }
     }
 
     // If this window is currently displayed, apply the fresh enabled/state values
@@ -1484,6 +1609,146 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     }
 }
 
+/* Clients that returned menu data from refreshedMenuDataForWindow:, and
+   clients that turned out not to implement it.  Guarded by @synchronized. */
+static NSMutableSet *_clientsWithDynamicMenus(void)
+{
+    static NSMutableSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [[NSMutableSet alloc] init]; });
+    return set;
+}
+
+static NSMutableSet *_clientsWithoutDynamicMenuSupport(void)
+{
+    static NSMutableSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [[NSMutableSet alloc] init]; });
+    return set;
+}
+
+/* Asks a client whose submenus are filled when they are used (GTK programs)
+   to fill them again, and puts any change into the menu in place.  Runs when
+   the user starts using the menu bar, before a dropdown exists, so the items
+   can be exchanged without disturbing a menu that is being tracked. */
+- (void)refreshDynamicMenusViaProxy:(id)proxy
+                          forWindow:(unsigned long)windowId
+                         clientName:(NSString *)clientName
+{
+    if (clientName == nil) return;
+    @synchronized (self) {
+        if ([_clientsWithoutDynamicMenuSupport() containsObject:clientName]) return;
+    }
+
+    id result = nil;
+    @try {
+        result = [(id<GSGNUstepMenuClient>)proxy refreshedMenuDataForWindow:@(windowId)];
+        if (result && [result isProxy]) {
+            NSData *plist = [NSPropertyListSerialization dataWithPropertyList:result
+                                                                       format:NSPropertyListBinaryFormat_v1_0
+                                                                      options:0
+                                                                        error:NULL];
+            result = plist ? [NSPropertyListSerialization propertyListWithData:plist
+                                                                       options:NSPropertyListImmutable
+                                                                        format:NULL
+                                                                         error:NULL] : nil;
+        }
+    } @catch (NSException *e) {
+        /* A timeout says nothing about support; only a client that does not
+           know the method is left alone from now on. */
+        if ([[e name] isEqualToString:NSInvalidArgumentException]) {
+            @synchronized (self) {
+                [_clientsWithoutDynamicMenuSupport() addObject:clientName];
+            }
+        }
+        return;
+    }
+
+    @synchronized (self) {
+        if (result == nil) {
+            [_clientsWithDynamicMenus() removeObject:clientName];
+        } else {
+            [_clientsWithDynamicMenus() addObject:clientName];
+        }
+    }
+    if ([result isKindOfClass:[NSDictionary class]] && [(NSDictionary *)result count] > 0) {
+        [self applyRefreshedMenuData:result forWindow:windowId clientName:clientName];
+    }
+}
+
+/* Exchanges the items of the submenus whose structure differs from the menu
+   shown, keeping the NSMenu objects (and the menu bar's items) in place. */
+- (void)applyRefreshedMenuData:(NSDictionary *)data
+                     forWindow:(unsigned long)windowId
+                    clientName:(NSString *)clientName
+{
+    NSNumber *key = @(windowId);
+    NSDictionary *fresh = [self promoteAboutItemFromMenuData:data];
+    NSDictionary *old = [self.lastMenuDataByWindow objectForKey:key];
+    NSMenu *menu = [self.menusByWindow objectForKey:key];
+    NSArray *oldItems = [old objectForKey:@"items"];
+    NSArray *newItems = [fresh objectForKey:@"items"];
+    if (!menu || !oldItems || [oldItems count] != [newItems count]) {
+        /* Top-level items came or went: a full rebuild is the only way. */
+        NSDictionary *payload = @{ @"windowId": key, @"menuData": fresh, @"clientName": clientName };
+        [self processMenuUpdateWithPayload:payload];
+        return;
+    }
+
+    NSMenu *shown = (self.appMenuWidget && self.appMenuWidget.currentWindowId == windowId)
+                    ? self.appMenuWidget.currentMenu : nil;
+    for (NSUInteger i = 0; i < [newItems count]; i++) {
+        NSDictionary *oldSub = [[oldItems objectAtIndex:i] objectForKey:@"submenu"];
+        NSDictionary *newSub = [[newItems objectAtIndex:i] objectForKey:@"submenu"];
+        if (!newSub || [_menuStructure(oldSub ?: @{}) isEqual:_menuStructure(newSub)]) continue;
+
+        NSString *title = [[newItems objectAtIndex:i] objectForKey:@"title"];
+        for (NSMenu *candidate in @[menu, shown ?: (id)[NSNull null]]) {
+            if (![candidate isKindOfClass:[NSMenu class]]) continue;
+            /* Matched by title: Menu.app adds items of its own at the front. */
+            for (NSMenuItem *item in [candidate itemArray]) {
+                if (![[item title] isEqualToString:title] || ![item hasSubmenu]) continue;
+                NSMenu *target = [item submenu];
+                /* Built per target: an item can belong to one menu only. */
+                NSMenu *built = [self menuFromData:newSub
+                                          windowId:windowId
+                                        clientName:clientName
+                                              path:@[@(i)]];
+                while ([target numberOfItems] > 0) [target removeItemAtIndex:0];
+                for (NSMenuItem *moved in [[built itemArray] copy]) {
+                    [built removeItem:moved];
+                    [target addItem:moved];
+                }
+                break;
+            }
+        }
+    }
+    self.lastMenuDataByWindow[key] = [fresh copy];
+}
+
+/* Called when this window's menu comes to the front, after the grabs of the
+   previous application were released. */
+- (void)reregisterShortcutsForMenu:(NSMenu *)menu windowId:(unsigned long)windowId
+{
+    (void)windowId;
+    for (NSMenuItem *item in MenuItemsWithShortcutsHandledBy([menu itemArray], [GNUStepMenuActionHandler class])) {
+        NSDictionary *info = [item representedObject];
+        if (![info isKindOfClass:[NSDictionary class]] || ![[info objectForKey:@"shortcutViaMenu"] boolValue]) {
+            continue;
+        }
+        if ([item keyEquivalentModifierMask] == 0) {
+            continue;
+        }
+        GNUStepShortcutTarget *target = [[GNUStepShortcutTarget alloc] initWithTitle:[item title] info:info];
+        NSString *identifier = [NSString stringWithFormat:@"%@_%@", [info objectForKey:@"windowId"],
+                                [[info objectForKey:@"indexPath"] componentsJoinedByString:@"."]];
+        [[X11ShortcutManager sharedManager] registerAppShortcutForMenuItem:item
+                                                                    target:target
+                                                                    action:@selector(fire:)
+                                                                identifier:identifier];
+    }
+}
+
 - (BOOL)refreshMenuStateForWindow:(unsigned long)windowId
 {
     NSNumber *key = @(windowId);
@@ -1517,7 +1782,13 @@ static GNUStepMenuImporter *sSharedImporter = nil;
        offer, so fall through to the stale-state path instead of blocking. */
     NSConnection *connection = [GNUStepMenuActionHandler existingConnectionForClient:clientName];
     if (connection && [connection isValid]) {
+        /* -rootProxy waits on the REPLY timeout, not the request timeout
+           (it has no request of its own to bound yet) - GNUstep defaults
+           that to 1.0E12s, effectively forever.  A cached connection whose
+           peer died without invalidating it (isValid still YES) would
+           otherwise wedge the whole menu bar here indefinitely. */
         [connection setRequestTimeout:0.3];
+        [connection setReplyTimeout:0.3];
         id proxy = [connection rootProxy];
         if (proxy) {
             [proxy setProtocolForProxy:@protocol(GSGNUstepMenuClient)];
@@ -1535,6 +1806,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
                     if (!rawResult) rawResult = [rawResult copy];
                 }
             } @catch (NSException *e) {}
+            [self refreshDynamicMenusViaProxy:proxy forWindow:windowId clientName:clientName];
         }
     }
 
@@ -1570,6 +1842,10 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     NSMenu *menu = nil;
     @synchronized (self) {
         menu = [self.menusByWindow objectForKey:key];
+        /* Submenus the client rebuilds when they are used are never fresh. */
+        if (menu && [_clientsWithDynamicMenus() containsObject:[self.clientNamesByWindow objectForKey:key]]) {
+            return NO;
+        }
         if (menu) {
             NSNumber *ts = [self.lastStateRefreshByWindow objectForKey:key];
             if (!ts) return NO;
@@ -1776,9 +2052,15 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
             // Build a safe representedObject using simple types
             NSArray *safeIndexPath = [NSArray arrayWithArray:itemPath];
-            NSDictionary *repObj = @{ @"windowId": @(windowId),
-                                      @"clientName": clientName ?: @"",
-                                      @"indexPath": safeIndexPath };
+            NSMutableDictionary *repObj = [@{ @"windowId": @(windowId),
+                                              @"clientName": clientName ?: @"",
+                                              @"indexPath": safeIndexPath } mutableCopy];
+            /* A client whose program does not react to the key combination
+               shown here (GTK shows Command for its Control) lets Menu grab
+               the shortcut and activate the item itself. */
+            if ([[itemData objectForKey:@"shortcutViaMenu"] boolValue]) {
+                repObj[@"shortcutViaMenu"] = @YES;
+            }
             [menuItem setRepresentedObject:repObj];
         }
 

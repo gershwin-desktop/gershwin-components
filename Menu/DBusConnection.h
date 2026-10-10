@@ -9,7 +9,9 @@
 #import <AppKit/AppKit.h>
 
 // DBus connection wrapper for GNUstep
-@interface GNUDBusConnection : NSObject
+#import "DBusMenuLayout.h"
+
+@interface GNUDBusConnection : NSObject <DBusMenuLayoutSource>
 
 @property (nonatomic, assign) void *connection; // DBusConnection pointer (opaque)
 @property (nonatomic, assign) BOOL connected;

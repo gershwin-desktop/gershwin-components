@@ -237,9 +237,19 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
         [self.searchPanel orderFront:nil];
     }
     if ([self.searchPanel isVisible]) {
-        [self.searchPanel makeKeyWindow];
-        [self.searchPanel makeFirstResponder:self.searchField];
-        [self.searchField selectText:nil];
+        /* Once the field is being edited it has the keyboard.  Taking it again
+           would select what the user typed since the box opened, and the next
+           key would replace it: a quick typist lost the first letters. */
+        NSText *editor = [self.searchPanel fieldEditor:NO forObject:self.searchField];
+        BOOL editing = [self.searchPanel isKeyWindow]
+            && editor != nil
+            && [self.searchPanel firstResponder] == editor;
+
+        if (!editing) {
+            [self.searchPanel makeKeyWindow];
+            [self.searchPanel makeFirstResponder:self.searchField];
+            [self.searchField selectText:nil];
+        }
     }
 }
 
@@ -396,6 +406,31 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
 - (void)setAppMenuWidget:(AppMenuWidget *)widget
 {
     _appMenuWidget = widget;
+}
+
+- (void)scaleFactorDidChange
+{
+    if ([self.searchPanel isVisible]) [self hideSearchPopup];
+
+    /* The box is one menu item high.  The window keeps the device size it was
+       given at the old scale, and a frame equal to the current one is not set
+       again, so the size is moved off and back to make the backend measure it
+       anew. */
+    CGFloat itemHeight = [[GSTheme theme] menuItemHeight];
+    NSSize content = [[self.searchPanel contentView] frame].size;
+    [self.searchPanel setContentSize:NSMakeSize(content.width, itemHeight + 1.0)];
+    [self.searchPanel setContentSize:NSMakeSize(content.width, itemHeight)];
+    NSRect field = [self.searchField frame];
+    field.origin.y = 0;
+    field.size.height = itemHeight;
+    [self.searchField setFrame:field];
+
+    /* The results menu keeps the row height and the window of the scale it was
+       first shown at; a new one is measured at the scale there is now. */
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:nil object:self.resultsMenu];
+    [self.resultsMenu setDelegate:nil];
+    self.resultsMenu = nil;
+    [self createResultsMenu];
 }
 
 - (void)showSearchPopupAtPoint:(NSPoint)point
@@ -753,18 +788,38 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
 
     NSString *lowercaseSearch = [searchString lowercaseString];
 
+    /* Rank before truncating: a title that starts with the query must beat one
+       that merely contains it ("Player" before "MPlayer" for "play"), and
+       the menu order only breaks ties. */
+    NSMutableArray *ranked = [NSMutableArray array];
+    NSMutableArray *ranks = [NSMutableArray array];
     for (ActionSearchResult *result in self.allMenuItems) {
         NSString *lowercaseTitle = [[result title] lowercaseString];
         NSString *lowercasePath = [[result path] lowercaseString];
+        NSUInteger rank;
 
-        if ([lowercaseTitle rangeOfString:lowercaseSearch].location != NSNotFound ||
-            [lowercasePath rangeOfString:lowercaseSearch].location != NSNotFound) {
-            [self.filteredResults addObject:result];
+        if ([lowercaseTitle hasPrefix:lowercaseSearch]) {
+            rank = 0;
+        } else if ([lowercaseTitle rangeOfString:[@" " stringByAppendingString:lowercaseSearch]].location != NSNotFound) {
+            rank = 1;
+        } else if ([lowercaseTitle rangeOfString:lowercaseSearch].location != NSNotFound) {
+            rank = 2;
+        } else if ([lowercasePath rangeOfString:lowercaseSearch].location != NSNotFound) {
+            rank = 3;
+        } else {
+            continue;
         }
+        [ranked addObject:result];
+        [ranks addObject:[NSNumber numberWithUnsignedInteger:rank]];
+    }
 
-        if ([self.filteredResults count] >= kMaxResultsShown) {
-            break;
+    for (NSUInteger rank = 0; rank <= 3; rank++) {
+        for (NSUInteger i = 0; i < [ranked count]; i++) {
+            if ([[ranks objectAtIndex:i] unsignedIntegerValue] != rank) continue;
+            [self.filteredResults addObject:[ranked objectAtIndex:i]];
+            if ([self.filteredResults count] >= kMaxResultsShown) break;
         }
+        if ([self.filteredResults count] >= kMaxResultsShown) break;
     }
 
     /* When the query matches no (or very few) menu items, fall back to Run /
@@ -875,21 +930,27 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
        readDataToEndOfFile blocks until mdfind exits (terminating the task
        from -cancelIndexSearch closes the pipe and unblocks the read). */
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-        NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        NSMutableArray *paths = [NSMutableArray array];
-        if (output) {
-            NSArray *lines = [output componentsSeparatedByCharactersInSet:
-                [NSCharacterSet newlineCharacterSet]];
-            for (NSString *line in lines) {
-                if ([line length] == 0) continue;
-                [paths addObject:line];
-                if ([paths count] >= kMaxResultsShown) break;
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased while doing this work is
+           held until the process ends. */
+        @autoreleasepool {
+            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+            NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSMutableArray *paths = [NSMutableArray array];
+            if (output) {
+                NSArray *lines = [output componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet newlineCharacterSet]];
+                for (NSString *line in lines) {
+                    if ([line length] == 0) continue;
+                    [paths addObject:line];
+                    if ([paths count] >= kMaxResultsShown) break;
+                }
             }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf indexSearchFinished:paths forQuery:query];
+            });
         }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf indexSearchFinished:paths forQuery:query];
-        });
     });
 }
 

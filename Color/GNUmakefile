@@ -8,9 +8,14 @@ HAVE_LCMS2 := $(shell pkg-config --exists lcms2 2>/dev/null && echo yes || echo 
 ifeq ($(HAVE_LCMS2),yes)
 
 BUNDLE_NAME = Color
-Color_OBJC_FILES = ColorPrefPane.m DisplayManager.m ProfileParser.m ProfileApplier.m
+Color_OBJC_FILES = ColorPrefPane.m DisplayManager.m ProfileParser.m
 Color_RESOURCE_FILES = Color.png
-Color_BUNDLE_LIBS = -lPreferencePanes -lXrandr -lX11 -llcms2
+# ProfileApplier lives in libColorProfileBackend (Libraries/ColorProfileBackend,
+# sources in this directory), shared with gershwin-apply-settings, which loads
+# the recorded profiles again at login.  The build-tree directory comes first
+# so an uninstalled build links the library it was built with.
+Color_BUNDLE_LIBS = -lPreferencePanes -lColorProfileBackend -lXrandr -lX11 -llcms2
+ADDITIONAL_LIB_DIRS += -L../Libraries/ColorProfileBackend/obj
 Color_PRINCIPAL_CLASS = ColorPrefPane
 PREF_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Bundles
 BUNDLE_EXTENSION = .prefPane

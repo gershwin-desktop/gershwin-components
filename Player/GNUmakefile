@@ -34,29 +34,53 @@ Player_LANGUAGES = English
 #
 Player_HEADER_FILES = \
 	PlayerController.h \
+	PlayerController+Private.h \
+	PlayerMediaRemote.h \
+	PlayerSession.h \
+	PlayerPlaylist.h \
+	PlayerMenu.h \
+	PlayerViews.h \
+	PlayerAsync.h \
+	PlayerMediaInfo.h \
 	RadioStation.h \
 	RadioBrowser.h \
 	StreamPlayer.h \
 	RadioManager.h \
 	YTDLPBackend.h \
-	PreferencesController.h
+	PreferencesController.h \
+	Podcast.h \
+	PodcastEpisode.h \
+	PodcastChapter.h \
+	PodcastSearch.h \
+	PodcastFeedParser.h \
+	PodcastManager.h
 
 Player_OBJC_FILES = \
 	PlayerController.m \
+	PlayerController+Radio.m \
+	PlayerMediaRemote.m \
+	../MediaRemote/GSMediaPlayer2.m \
+	PlayerSession.m \
+	PlayerPlaylist.m \
+	PlayerMenu.m \
+	PlayerViews.m \
+	PlayerAsync.m \
+	PlayerMediaInfo.m \
 	RadioStation.m \
 	RadioBrowser.m \
 	StreamPlayer.m \
 	RadioManager.m \
 	YTDLPBackend.m \
-	PreferencesController.m
+	PreferencesController.m \
+	Podcast.m \
+	PodcastEpisode.m \
+	PodcastChapter.m \
+	PodcastSearch.m \
+	PodcastFeedParser.m \
+	PodcastManager.m \
+	PlayerController+Podcast.m
 
 Player_OBJC_FILES += Player_main.m
-
-#
-# AVFoundation framework - referenced from libs-av build tree
-#
-# Link with AVFoundation framework (installed system-wide via libs-av)
-Player_GUI_LIBS += -lAVFoundation
 
 #
 # ItemFlow framework for album-art carousel
@@ -68,26 +92,28 @@ Player_GUI_LIBS += -lAVFoundation
 ITEMFLOW_SRC := $(CURDIR)/../ItemFlow
 ITEMFLOW_LIB := $(ITEMFLOW_SRC)/ItemFlow.framework/Versions/Current
 ADDITIONAL_INCLUDE_DIRS += -I$(ITEMFLOW_SRC)
+# The media remote protocol shared with Whisper (GSMediaPlayer2)
+ADDITIONAL_INCLUDE_DIRS += -I../MediaRemote
 ADDITIONAL_LDFLAGS += -L$(ITEMFLOW_LIB)
 ADDITIONAL_GUI_LIBS += -lItemFlow -lGL -lGLU
-# ItemFlow uses libdispatch internally; on FreeBSD the strict linker needs it explicitly.
+# ItemFlow itself still uses libdispatch; on FreeBSD the strict linker needs it explicitly.
 ADDITIONAL_GUI_LIBS += -ldispatch
 
 #
-# FFmpeg and libao for internet radio streaming (StreamPlayer)
+# FFmpeg and libao: playback (StreamPlayer) and tags (PlayerMediaInfo)
 #
 ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)
 ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs libavformat libavcodec libavutil libswresample libswscale)
 ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs ao)
 
+#
+# Xlib, to ask the window manager for full screen (_NET_WM_STATE)
+#
+ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags x11)
+ADDITIONAL_GUI_LIBS += $(shell pkg-config --libs x11)
+
 -include GNUmakefile.preamble
 
 include $(GNUSTEP_MAKEFILES)/application.make
-
-# Override desktop file creation — we don't need .desktop files for Gershwin.
-$(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop:
-	$(ECHO_NOTHING)echo "Desktop file generation disabled" > /dev/null$(END_ECHO)
-	$(ECHO_NOTHING)touch $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop; chmod a+x $(APP_DIR)/Resources/$(GNUSTEP_INSTANCE).desktop$(END_ECHO)
-
 
 -include GNUmakefile.postamble

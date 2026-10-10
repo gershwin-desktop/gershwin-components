@@ -127,6 +127,14 @@ static NSString * const kDefaultsConfirmDestructive =
            selector:@selector(operationDidFinish:)
                name:DUOperationDidFinishNotification
              object:nil];
+    /* Same class of bug as the Restore tab: an erase that FAILS posts
+     * DidFail, which this controller did not observe, so the Erase button
+     * stayed disabled and the log never said why. */
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(operationDidFinish:)
+               name:DUOperationDidFailNotification
+             object:nil];
     return self;
 }
 
@@ -214,19 +222,25 @@ static NSString * const kDefaultsConfirmDestructive =
     if (object != nil) {
         NSArray<NSDictionary *> *formats =
             [self.storageManager supportedFormatsForObject:object];
+        // Unavailable filesystems stay visible but greyed out so the user
+        // sees what this machine lacks the tools for; the menu must not
+        // auto-enable them.
+        _formatPopup.menu.autoenablesItems = NO;
+        NSInteger firstEnabled = -1;
         for (NSDictionary *format in formats) {
-            if (![format[kDUFormatCanFormatKey] boolValue]) {
-                continue;
-            }
             NSMenuItem *item = [[NSMenuItem alloc]
                 initWithTitle:format[kDUFormatDisplayNameKey]
                        action:nil
                 keyEquivalent:@""];
             item.representedObject = format[kDUFormatIdentifierKey];
+            item.enabled = [format[kDUFormatCanFormatKey] boolValue];
             [_formatPopup.menu addItem:item];
+            if ([item isEnabled] && firstEnabled < 0) {
+                firstEnabled = (NSInteger)_formatPopup.itemArray.count - 1;
+            }
         }
-        if (_formatPopup.itemArray.count > 0) {
-            [_formatPopup selectItemAtIndex:0];
+        if (firstEnabled >= 0) {
+            [_formatPopup selectItemAtIndex:firstEnabled];
         }
 
         // Prefill with the current display name; users usually keep it.
@@ -298,6 +312,8 @@ static NSString * const kDefaultsConfirmDestructive =
              radios.count == 0)) {
             radio.state = NSOnState;
         }
+        [radio setTarget:self];
+        [radio setAction:@selector(securityRadioChosen:)];
         [content addSubview:radio];
         [radios addObject:radio];
         y -= METRICS_RADIO_BUTTON_LINE_SPACING;
@@ -329,6 +345,16 @@ static NSString * const kDefaultsConfirmDestructive =
     }
     [panel orderOut:nil];
     _pendingSecurityRadios = nil;
+}
+
+// Radio buttons only exclude each other inside one NSMatrix; these sit
+// loose in a view, so without this both stayed on and the first one always
+// won, which made the zero overwrite impossible to choose.
+- (void)securityRadioChosen:(id)sender
+{
+    for (NSButton *radio in _pendingSecurityRadios) {
+        radio.state = radio == sender ? NSOnState : NSOffState;
+    }
 }
 
 - (void)securityDialogDone:(id)sender
@@ -415,6 +441,12 @@ static NSString * const kDefaultsConfirmDestructive =
     } else {
         [strongSelf.logView appendLine:NSLocalizedString(
                                             @"Erase failed.", nil)];
+        [strongSelf.logView appendLine:error.localizedDescription ?: @""];
+        NSString *detail = DUErrorBackendDetail(error);
+        if (detail.length > 0) {
+            [strongSelf.logView appendLine:detail];
+            NSLog(@"Erase failed: %@ - %@", error.localizedDescription, detail);
+        }
     }
 }
 

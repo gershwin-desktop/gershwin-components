@@ -73,6 +73,9 @@
 - (void)keyboardLayoutChanged:(id)sender;
 - (void)resetLoginWindow;
 - (void)monitorSession;
+- (void)releaseLoginDaemons;
+- (void)reapStrayChildren;
+- (void)renderDesktopBackground;
 - (BOOL)trySystemAction:(NSString *)actionType;
 - (void)killAllSessionProcesses:(uid_t)uid;
 - (BOOL)isXServerRunning;
@@ -91,5 +94,6 @@
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector;
 - (void)showKeyboardLayoutLog:(id)sender;
 - (void)updateLocalizedStrings;
+- (void)releaseLoginUI;
 
 @end
