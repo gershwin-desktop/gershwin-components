@@ -8,6 +8,7 @@
 
 #import "SharingController.h"
 #import "GSServiceDiscoveryManager.h"
+#import "GSXrdpSession.h"
 #import <dispatch/dispatch.h>
 #import <sys/utsname.h>
 #import <arpa/inet.h>
@@ -802,6 +803,20 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     if (success) {
         rdpEnabled = shouldEnable;
 
+        // The helper only starts xrdp; without this wrapper a login over RDP
+        // lands in the distribution's default session instead of Gershwin.
+        NSError *sessionError = nil;
+        BOOL sessionOK = shouldEnable
+            ? [GSXrdpSession configureInHome:NSHomeDirectory()
+                               sessionScript:[GSXrdpSession defaultSessionScript]
+                                       error:&sessionError]
+            : [GSXrdpSession restoreInHome:NSHomeDirectory() error:&sessionError];
+        if (!sessionOK) {
+            NSRunAlertPanel(@"Remote Desktop Warning",
+                           @"Could not set up the Gershwin session for Remote Desktop:\n%@",
+                           @"OK", nil, nil, [sessionError localizedDescription]);
+        }
+
         if (shouldEnable) {
             GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
             if (mgr && [mgr isAvailable]) {
@@ -1467,6 +1482,9 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
             [rdpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
 
             NSString *info = [NSString stringWithFormat:@"Remote Desktop available at: %@:3389", serviceAddress];
+            if (![GSXrdpSession isConfiguredInHome:NSHomeDirectory()]) {
+                info = [info stringByAppendingString:@" (Gershwin session not set up)"];
+            }
             [rdpInfoLabel setStringValue:info];
             [rdpInfoLabel setHidden:NO];
 

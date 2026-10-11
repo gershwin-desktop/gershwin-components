@@ -6,7 +6,8 @@ BUNDLE_NAME = Sharing
 Sharing_OBJC_FILES = \
 	SharingPane.m \
 	SharingController.m \
-	GSServiceDiscoveryManager.m
+	GSServiceDiscoveryManager.m \
+	GSXrdpSession.m
 
 Sharing_RESOURCE_FILES = Sharing.png
 Sharing_BUNDLE_LIBS = -lPreferencePanes
