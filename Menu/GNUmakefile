@@ -41,6 +41,7 @@ Menu_OBJC_FILES = \
 	GTKSubmenuManager.m \
 	DBusConnection.m \
 	MenuUtils.m \
+	MenuInstanceTakeover.m \
 	MenuBarLayout.m \
 	X11ShortcutManager.m \
 	RoundedCornersView.m \
@@ -91,6 +92,7 @@ Menu_HEADER_FILES = \
 	GTKSubmenuManager.h \
 	DBusConnection.h \
 	MenuUtils.h \
+	MenuInstanceTakeover.h \
 	X11ShortcutManager.h \
 	RoundedCornersView.h \
 	ActionSearch.h \
