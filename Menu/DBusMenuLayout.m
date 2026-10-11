@@ -138,4 +138,78 @@ withLazySubmenusFilledFromService:(NSString *)serviceName
                           depth:0];
 }
 
++ (NSString *)displayLabel:(NSString *)label
+{
+    if (![label isKindOfClass:[NSString class]]) {
+        return @"";
+    }
+    return [label stringByReplacingOccurrencesOfString:@"_" withString:@""];
+}
+
++ (BOOL)layoutItemIsVisible:(NSArray *)item
+{
+    id visible = [[self propertiesOfLayoutItem:item] objectForKey:@"visible"];
+    return ![visible respondsToSelector:@selector(boolValue)] || [visible boolValue];
+}
+
++ (NSNumber *)currentIdForTitlePath:(NSArray *)titles
+                        fromService:(NSString *)serviceName
+                         objectPath:(NSString *)objectPath
+                         connection:(id<DBusMenuLayoutSource>)connection
+{
+    if ([titles count] == 0) {
+        return nil;
+    }
+    id reply = [connection callMethod:@"GetLayout"
+                            onService:serviceName
+                           objectPath:objectPath
+                            interface:kDBusMenuInterface
+                            arguments:[NSArray arrayWithObjects:[NSNumber numberWithInt:0],
+                                       [NSNumber numberWithInt:-1],
+                                       [NSArray array], nil]];
+    if (![reply isKindOfClass:[NSArray class]] || [reply count] < 2) {
+        return nil;
+    }
+    NSArray *current = [reply objectAtIndex:1];
+    for (NSUInteger level = 0; level < [titles count]; level++) {
+        if (![current isKindOfClass:[NSArray class]] || [current count] < 3) {
+            return nil;
+        }
+        /* After a renumbering the submenu on the way may be empty again */
+        if (level > 0 && [self layoutItemIsEmptySubmenu:current]) {
+            NSArray *fetched = [self fetchSubtreeForItemId:[current objectAtIndex:0]
+                                               serviceName:serviceName
+                                                objectPath:objectPath
+                                                connection:connection];
+            if (fetched == nil) {
+                return nil;
+            }
+            current = fetched;
+        }
+        NSString *wanted = [titles objectAtIndex:level];
+        NSArray *match = nil;
+        id children = [current objectAtIndex:2];
+        if (![children isKindOfClass:[NSArray class]]) {
+            return nil;
+        }
+        for (id child in children) {
+            if (![child isKindOfClass:[NSArray class]] || [child count] < 3
+                || ![self layoutItemIsVisible:child]) {
+                continue;
+            }
+            NSString *label = [[self propertiesOfLayoutItem:child] objectForKey:@"label"];
+            if ([[self displayLabel:label] isEqualToString:wanted]) {
+                match = child;
+                break;
+            }
+        }
+        if (match == nil) {
+            return nil;
+        }
+        current = match;
+    }
+    id itemId = [current objectAtIndex:0];
+    return [itemId isKindOfClass:[NSNumber class]] ? itemId : nil;
+}
+
 @end

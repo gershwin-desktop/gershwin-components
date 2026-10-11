@@ -486,17 +486,8 @@ static void cacheShortcut(NSString *service, NSNumber *itemId,
         return (NSMenuItem *)[NSMenuItem separatorItem];
     }
     
-    // Process label - remove underscores (mnemonics) entirely
-    if (!label) {
-        label = @"";
-    } else {
-        // Check if the label contains underscores and log the transformation
-        if ([label containsString:@"_"]) {
-            NSString *originalLabel = label;
-            label = [label stringByReplacingOccurrencesOfString:@"_" withString:@""];
-            NSDebugLog(@"DBusMenuParser: Transformed label '%@' -> '%@' (removed mnemonics)", originalLabel, label);
-        }
-    }
+    // The same title DBusMenuLayout looks items up by when they are clicked
+    label = [DBusMenuLayout displayLabel:label];
     
     // Process shortcut to get key equivalent
     NSString *keyEquivalent = @"";

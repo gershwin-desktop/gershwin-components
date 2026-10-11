@@ -174,6 +174,64 @@ int main(void)
     PASS([conn.calls count] <= 2 * DBusMenuLayoutMaxDepth,
          "fetching stops at the depth limit");
 
+    /* --- the id of an item as the app knows it now ---
+       Electron renumbers its whole menu now and then (VS Code: every few
+       seconds while it is in use) and announces it only with LayoutUpdated.
+       Menu keeps the ids of its last fetch, so a click must look the item up
+       again by its title path, or the app ignores the stale id. */
+    conn = [[FakeConnection new] autorelease];
+    conn.subtrees = [NSDictionary dictionaryWithObjectsAndKeys:
+        node(0, [NSDictionary dictionaryWithObject:@"Root" forKey:@"label"],
+             [NSArray arrayWithObjects:lazyItem(148, @"_File"), lazyItem(149, @"_View"), nil]),
+        [NSNumber numberWithInt:0],
+        node(148, [NSDictionary dictionaryWithObject:@"_File" forKey:@"label"],
+             [NSArray arrayWithObjects:leafItem(153, @"_New"), leafItem(154, @"_Quit"), nil]),
+        [NSNumber numberWithInt:148], nil];
+    NSArray *path = [NSArray arrayWithObjects:@"File", @"Quit", nil];
+    NSNumber *current = [DBusMenuLayout currentIdForTitlePath:path
+                                                  fromService:@":1.607"
+                                                   objectPath:@"/m"
+                                                   connection:conn];
+    PASS_EQUAL(current, [NSNumber numberWithInt:154],
+               "a renumbered item is found by its title path, mnemonics ignored");
+    NSArray *expectedCalls = [NSArray arrayWithObjects:@"GetLayout 0", @"AboutToShow 148",
+                              @"GetLayout 148", nil];
+    PASS_EQUAL(conn.calls, expectedCalls,
+               "only the empty submenu on the path is asked for its children");
+
+    conn = [[FakeConnection new] autorelease];
+    conn.subtrees = [NSDictionary dictionaryWithObject:
+        node(0, [NSDictionary dictionary],
+             [NSArray arrayWithObjects:
+              node(5, [NSDictionary dictionaryWithObject:@"Edit" forKey:@"label"],
+                   [NSArray arrayWithObjects:
+                    node(6, [NSDictionary dictionaryWithObjectsAndKeys:
+                             @"Copy", @"label", [NSNumber numberWithBool:NO], @"visible", nil],
+                         [NSArray array]),
+                    leafItem(7, @"Copy"), nil]), nil])
+        forKey:[NSNumber numberWithInt:0]];
+    path = [NSArray arrayWithObjects:@"Edit", @"Copy", nil];
+    current = [DBusMenuLayout currentIdForTitlePath:path fromService:@":1.9"
+                                         objectPath:@"/m" connection:conn];
+    PASS_EQUAL(current, [NSNumber numberWithInt:7],
+               "a hidden item with the same title is not the one shown in the menu");
+    expectedCalls = [NSArray arrayWithObject:@"GetLayout 0"];
+    PASS_EQUAL(conn.calls, expectedCalls,
+               "a complete tree costs one GetLayout and no AboutToShow");
+
+    path = [NSArray arrayWithObjects:@"Edit", @"Paste", nil];
+    PASS([DBusMenuLayout currentIdForTitlePath:path fromService:@":1.9"
+                                    objectPath:@"/m" connection:conn] == nil,
+         "an item the app no longer has is not found");
+    PASS([DBusMenuLayout currentIdForTitlePath:[NSArray array] fromService:@":1.9"
+                                    objectPath:@"/m" connection:conn] == nil,
+         "an empty path finds nothing");
+
+    PASS_EQUAL([DBusMenuLayout displayLabel:@"Save _As..."], @"Save As...",
+               "the shown title drops the mnemonic underscore");
+    PASS_EQUAL([DBusMenuLayout displayLabel:nil], @"",
+               "a missing label shows as an empty title");
+
     END_SET("DBusMenuLayout");
     [pool release];
     return 0;

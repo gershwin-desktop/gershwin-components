@@ -31,6 +31,9 @@ extern NSString * const AppMenuWidgetDidRebuildMenuNotification;
 @property (nonatomic, strong) NSMenu *currentMenu;
 @property (nonatomic, assign) pid_t currentWindowPID;
 @property (nonatomic, assign) BOOL needsRedraw;
+/* Set while a changed menu of the same window is loaded: loadMenu: then
+   rebuilds although the top-level titles are the same. */
+@property (nonatomic, assign) BOOL rebuildEvenIfUnchanged;
 
 /* The system submenu (contains Search, System Preferences, and dynamic application list) */
 @property (nonatomic, strong) NSMenu *systemMenu;
@@ -88,6 +91,9 @@ extern NSString * const AppMenuWidgetDidRebuildMenuNotification;
 - (void)displayMenuForWindow:(unsigned long)windowId;
 - (void)setupMenuViewWithMenu:(NSMenu *)menu;
 - (void)loadMenu:(NSMenu *)menu forWindow:(unsigned long)windowId;
+/* The app changed the menu of a window: rebuild if it is still on show and
+   something visible changed.  Waits while a menu of the bar is open. */
+- (void)reloadMenuAfterAppChangeForWindow:(unsigned long)windowId;
 - (void)loadApplicationMenu:(NSMenu *)menu forPID:(pid_t)pid;
 - (void)checkAndDisplayMenuForNewlyRegisteredWindow:(unsigned long)windowId;
 - (BOOL)isPlaceholderMenu:(NSMenu *)menu;

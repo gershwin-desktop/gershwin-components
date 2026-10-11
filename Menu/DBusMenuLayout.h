@@ -41,4 +41,16 @@ withLazySubmenusFilledFromService:(NSString *)serviceName
       objectPath:(NSString *)objectPath
       connection:(id<DBusMenuLayoutSource>)connection;
 
+/* The title an item is shown with: the label without its mnemonic markers. */
++ (NSString *)displayLabel:(NSString *)label;
+
+/* The id the app uses now for the visible item reached by the given titles
+   (top-level menu first), or nil.  Electron renumbers its whole menu now and
+   then, so an id remembered from an earlier GetLayout may no longer exist;
+   the title path still names the same item. */
++ (NSNumber *)currentIdForTitlePath:(NSArray *)titles
+                        fromService:(NSString *)serviceName
+                         objectPath:(NSString *)objectPath
+                         connection:(id<DBusMenuLayoutSource>)connection;
+
 @end

@@ -30,6 +30,7 @@ Menu_OBJC_FILES = \
 	GTKMenuImporter.m \
 	DBusMenuParser.m \
 	DBusMenuLayout.m \
+	MenuContentsMatch.m \
 	MenuItemSubmenuSwizzle.m \
 	GTKMenuParser.m \
 	DBusMenuShortcutParser.m \
@@ -83,6 +84,7 @@ Menu_HEADER_FILES = \
 	GTKMenuImporter.h \
 	DBusMenuParser.h \
 	DBusMenuLayout.h \
+	MenuContentsMatch.h \
 	GTKMenuParser.h \
 	DBusMenuShortcutParser.h \
 	GNUStepMenuActionHandler.h \

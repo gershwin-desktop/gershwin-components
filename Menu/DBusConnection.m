@@ -97,7 +97,88 @@ static DBusHandlerResult gw_dbus_object_path_message_handler(DBusConnection *con
     return handled ? DBUS_HANDLER_RESULT_HANDLED : DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
+/* Watched signal interfaces -> NSArray of {target, selector} entries. */
+static NSMutableDictionary *gw_signal_watchers;
+
+static DBusHandlerResult gw_dbus_signal_filter(DBusConnection *connection,
+                                               DBusMessage *message,
+                                               void *user_data)
+{
+    (void)connection;
+    if (!message || !user_data || dbus_message_get_type(message) != DBUS_MESSAGE_TYPE_SIGNAL) {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    const char *iface = dbus_message_get_interface(message);
+    const char *member = dbus_message_get_member(message);
+    const char *sender = dbus_message_get_sender(message);
+    const char *path = dbus_message_get_path(message);
+    if (!iface || !member || !sender || !path) {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    NSString *interfaceName = [NSString stringWithUTF8String:iface];
+    if ([gw_signal_watchers objectForKey:interfaceName] == nil) {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    NSDictionary *info = [NSDictionary dictionaryWithObjectsAndKeys:
+        interfaceName, @"interface",
+        [NSString stringWithUTF8String:member], @"member",
+        [NSString stringWithUTF8String:sender], @"sender",
+        [NSString stringWithUTF8String:path], @"path", nil];
+    GNUDBusConnection *self = (__bridge GNUDBusConnection *)user_data;
+    [self performSelector:@selector(deliverSignal:) withObject:info afterDelay:0];
+    /* other parts of libdbus (pending calls, match rules) may want it too */
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
 @implementation GNUDBusConnection
+
+- (BOOL)watchSignalsOfInterface:(NSString *)interfaceName
+                         target:(id)target
+                       selector:(SEL)selector
+{
+    if (!self.connected || !self.connection || !interfaceName || !target || !selector) {
+        return NO;
+    }
+    DBusConnectionStruct *conn = (DBusConnectionStruct *)self.connection;
+    if (gw_signal_watchers == nil) {
+        gw_signal_watchers = [NSMutableDictionary dictionary];
+        if (!dbus_connection_add_filter(conn, gw_dbus_signal_filter, (__bridge void *)self, NULL)) {
+            gw_signal_watchers = nil;
+            return NO;
+        }
+    }
+    NSMutableArray *watchers = [gw_signal_watchers objectForKey:interfaceName];
+    if (watchers == nil) {
+        DBusError error;
+        dbus_error_init(&error);
+        NSString *rule = [NSString stringWithFormat:@"type='signal',interface='%@'", interfaceName];
+        dbus_bus_add_match(conn, [rule UTF8String], &error);
+        if (dbus_error_is_set(&error)) {
+            NSLog(@"DBusConnection: cannot watch signals of %@: %s", interfaceName, error.message);
+            dbus_error_free(&error);
+            return NO;
+        }
+        watchers = [NSMutableArray array];
+        [gw_signal_watchers setObject:watchers forKey:interfaceName];
+    }
+    [watchers addObject:[NSArray arrayWithObjects:target, NSStringFromSelector(selector), nil]];
+    return YES;
+}
+
+- (void)deliverSignal:(NSDictionary *)info
+{
+    NSArray *watchers = [[gw_signal_watchers objectForKey:[info objectForKey:@"interface"]] copy];
+    for (NSArray *watcher in watchers) {
+        id target = [watcher objectAtIndex:0];
+        SEL selector = NSSelectorFromString([watcher objectAtIndex:1]);
+        if ([target respondsToSelector:selector]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [target performSelector:selector withObject:info];
+#pragma clang diagnostic pop
+        }
+    }
+}
 
 + (GNUDBusConnection *)sessionBus
 {

@@ -8,6 +8,7 @@
  */
 
 #import "AppMenuWidget.h"
+#import "MenuContentsMatch.h"
 #import "MenuProtocolManager.h"
 #import "WindowSwitchContext.h"
 #import "MenuUtils.h"
@@ -754,6 +755,46 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 #pragma mark - Menu loading & display
 
+- (BOOL)menuIsOpen
+{
+    for (NSWindow *win in [NSApp windows]) {
+        if ([NSStringFromClass([win class]) hasPrefix:@"NSMenu"] && [win isVisible]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (void)reloadMenuAfterAppChangeForWindow:(unsigned long)windowId
+{
+    if (windowId == 0 || windowId != self.currentWindowId) {
+        return;
+    }
+    /* Rebuilding under an open menu would close it in the user's hands */
+    if ([self menuIsOpen]) {
+        [self performSelector:@selector(retryReloadAfterAppChange:)
+                   withObject:[NSNumber numberWithUnsignedLong:windowId]
+                   afterDelay:0.5];
+        return;
+    }
+    NSMenu *fresh = [self.protocolManager getMenuForWindow:windowId];
+    if (fresh == nil || windowId != self.currentWindowId) {
+        return;
+    }
+    /* New ids alone need no rebuild: clicks look items up by title */
+    if (MenuContentsMatch(self.currentMenu, fresh)) {
+        return;
+    }
+    self.rebuildEvenIfUnchanged = YES;
+    [self loadMenu:fresh forWindow:windowId];
+    self.rebuildEvenIfUnchanged = NO;
+}
+
+- (void)retryReloadAfterAppChange:(NSNumber *)windowKey
+{
+    [self reloadMenuAfterAppChangeForWindow:[windowKey unsignedLongValue]];
+}
+
 - (void)loadMenu:(NSMenu *)menu forWindow:(unsigned long)windowId
 {
     MENU_PROFILE_BEGIN(loadMenuForWindow);
@@ -770,7 +811,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        process restarts (which change PID) can leave stale DBus service
        names embedded in menu items.  Window-ID reuse across restarts
        is rare but would also be caught by the PID change. */
-    if (newPID != 0 && self.currentWindowPID == newPID &&
+    if (!self.rebuildEvenIfUnchanged &&
+        newPID != 0 && self.currentWindowPID == newPID &&
         self.currentWindowId == windowId && self.currentMenu && self.menuView &&
         ![self.menuView isHidden] && [self.menuView menu] == self.currentMenu &&
         [self topLevelMenusMatch:self.currentMenu with:menu]) {
@@ -784,7 +826,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        rebuilt the whole menu view tree and drained huge autorelease pools -
        Menu.app would burn CPU and stop responding.  Rebuild is only needed
        when the structure actually changed. */
-    if (newPID == 0 && self.currentWindowId == windowId && self.currentMenu &&
+    if (!self.rebuildEvenIfUnchanged &&
+        newPID == 0 && self.currentWindowId == windowId && self.currentMenu &&
         self.menuView && ![self.menuView isHidden] &&
         [self.menuView menu] == self.currentMenu &&
         [self topLevelMenusMatch:self.currentMenu with:menu]) {
