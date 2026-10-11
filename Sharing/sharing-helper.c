@@ -230,6 +230,17 @@ static int sftp_subsystem_configured(void)
     return 0;
 }
 
+/* rc.d "status" refuses to run (exit 1, "Set X_enable to YES in rc.conf or
+ * use onestatus") while the rcvar is not YES, so a daemon that is running
+ * but not enabled in rc.conf, e.g. started by hand or by the Live system,
+ * would be reported as stopped. "onestatus" ignores the rcvar and reports
+ * the real state. */
+int rcd_status_command(char *buf, size_t len, const char *service)
+{
+    int n = snprintf(buf, len, "/usr/sbin/service %s onestatus >/dev/null 2>&1", service);
+    return (n > 0 && (size_t)n < len) ? 0 : -1;
+}
+
 /* Check if a service is running */
 static int check_service_running(const char *service)
 {
@@ -255,7 +266,9 @@ static int check_service_running(const char *service)
 #elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
     char cmd[256];
     /* Use full path to avoid PATH issues in GUI context */
-    snprintf(cmd, sizeof(cmd), "/usr/sbin/service %s status >/dev/null 2>&1", service);
+    if (rcd_status_command(cmd, sizeof(cmd), service) != 0) {
+        return 0;
+    }
     return (system(cmd) == 0);
 
 #elif defined(PLATFORM_OPENBSD)
