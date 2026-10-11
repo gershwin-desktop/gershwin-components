@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 APP_NAME = SudoAskPass
-SudoAskPass_OBJC_FILES = SudoAskPass.m
+SudoAskPass_OBJC_FILES = SudoAskPass.m GWSudoPolicy.m
 SudoAskPass_APPLICATION_ICON = SudoAskPass.png
 SudoAskPass_RESOURCE_FILES = \
 	Resources/SudoAskPass.png \
