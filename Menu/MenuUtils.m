@@ -246,20 +246,15 @@ static dispatch_once_t _sharedDisplayOnce;
         return NO;
     }
     
+    /* A failure means the window is gone: nonzero is success, see
+     * isWindowValid:. IsViewable (not just IsMapped) because a window under
+     * an unmapped ancestor is not visible either. */
     XWindowAttributes attrs;
     BOOL mapped = NO;
-    if (XGetWindowAttributes(display, (Window)windowId, &attrs) == Success) {
-        // Require IsViewable: window AND all ancestors must be mapped.
-        // IsUnviewable (window mapped but an ancestor is not) is treated as not visible.
+    if (XGetWindowAttributes(display, (Window)windowId, &attrs) != 0) {
         mapped = (attrs.map_state == IsViewable);
-    } else {
-        // XGetWindowAttributes failure does NOT mean the window is unmapped.
-        // It can fail due to X11 thread-safety issues with shared Display connections,
-        // or transient server states. Assume mapped (safe default) and let the caller
-        // use isWindowValid for definitive existence checks.
-        mapped = YES;
     }
-    
+
     XCloseDisplay(display);
     return mapped;
 }
