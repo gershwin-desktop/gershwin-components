@@ -11,7 +11,8 @@ LoginWindow_OBJC_FILES = \
     LoginWindow_main.m \
     LoginWindow.m \
     LoginWindowPAM.m \
-    KeyboardManager.m
+    KeyboardManager.m \
+    LWLanguageNames.m
 
 LoginWindow_RESOURCE_FILES = \
     Resources/English.lproj \

@@ -5,6 +5,7 @@
  */
 
 #import "LoginWindow.h"
+#import "LWLanguageNames.h"
 #import <pwd.h>
 #import <unistd.h>
 #import <sys/wait.h>
@@ -325,64 +326,16 @@ void signalHandler(int sig) {
 
 - (void)applyDetectedLanguage
 {
-    // Map ISO 639-1 language codes to GNUstep .lproj directory names.
-    static const char *langMap[][2] = {
-        {"de", "German"},    {"fr", "French"},    {"es", "Spanish"},
-        {"it", "Italian"},   {"pt", "Portuguese"}, {"ru", "Russian"},
-        {"nl", "Dutch"},     {"tr", "Turkish"},   {"il", "Hebrew"},
-        {"dk", "Danish"},    {"se", "Swedish"},   {"no", "Norwegian"},
-        {"fi", "Finnish"},   {"jp", "Japanese"},  {"kr", "Korean"},
-        {"cn", "Chinese"},   {"cz", "Czech"},     {"hu", "Hungarian"},
-        {"pl", "Polish"},    {"sk", "Slovak"},    {"bg", "Bulgarian"},
-        {"ua", "Ukrainian"}, {"hr", "Croatian"},  {"ro", "Romanian"},
-        {"si", "Slovenian"}, {"ee", "Estonian"},  {"lv", "Latvian"},
-        {"lt", "Lithuanian"},{"is", "Icelandic"}, {"gr", "Greek"},
-        {"vn", "Vietnamese"},{"th", "Thai"},      {"by", "Belarusian"},
-        {"mk", "Macedonian"},{"mt", "Maltese"},   {"ca", "French"},
-        {"gb", "English"},   {"us", "English"},   {"br", "Portuguese"},
-        {NULL, NULL}
-    };
-
     NSString *localeStr = _keyboardManager.language;  // e.g. "de_DE.UTF-8"
     if (!localeStr) {
         NSLog(@"[LoginWindow] Language: no locale from keyboard detection");
         return;
     }
 
-    // Extract the two-letter language code: "de_DE.UTF-8" → "de"
-    NSString *langCode = nil;
-    NSRange underscore = [localeStr rangeOfString:@"_"];
-    if (underscore.location != NSNotFound) {
-        langCode = [localeStr substringToIndex:underscore.location];
-    } else {
-        // No region part - try stripping encoding: "de.UTF-8" → "de"
-        NSRange dot = [localeStr rangeOfString:@"."];
-        if (dot.location != NSNotFound) {
-            langCode = [localeStr substringToIndex:dot.location];
-        } else {
-            langCode = localeStr;
-        }
-    }
-
-    if (!langCode || [langCode length] < 2) {
-        NSLog(@"[LoginWindow] Language: could not parse locale \"%@\"",
-              localeStr);
-        return;
-    }
-
-    // Look up GNUstep language name from the two-letter code
-    NSString *gsLanguage = nil;
-    for (int i = 0; langMap[i][0]; i++) {
-        if ([[NSString stringWithUTF8String:langMap[i][0]]
-                isEqualToString:langCode]) {
-            gsLanguage = [NSString stringWithUTF8String:langMap[i][1]];
-            break;
-        }
-    }
-
+    NSString *gsLanguage = LWLanguageNameForLocale(localeStr);
     if (!gsLanguage) {
         NSLog(@"[LoginWindow] Language: no mapping for \"%@\", keeping default",
-              langCode);
+              localeStr);
         return;
     }
 
@@ -398,48 +351,7 @@ void signalHandler(int sig) {
 
 - (NSString *)detectedGSLanguage
 {
-    // Extract the GNUstep language name from the detected keyboard language
-    // (same logic as applyDetectedLanguage but returns the name).
-    static const char *langMap[][2] = {
-        {"de","German"},{"fr","French"},{"es","Spanish"},
-        {"it","Italian"},{"pt","Portuguese"},{"ru","Russian"},
-        {"nl","Dutch"},{"tr","Turkish"},{"il","Hebrew"},
-        {"dk","Danish"},{"se","Swedish"},{"no","Norwegian"},
-        {"fi","Finnish"},{"jp","Japanese"},{"kr","Korean"},
-        {"cn","Chinese"},{"cz","Czech"},{"hu","Hungarian"},
-        {"pl","Polish"},{"sk","Slovak"},{"bg","Bulgarian"},
-        {"ua","Ukrainian"},{"hr","Croatian"},{"ro","Romanian"},
-        {"si","Slovenian"},{"ee","Estonian"},{"lv","Latvian"},
-        {"lt","Lithuanian"},{"is","Icelandic"},{"gr","Greek"},
-        {"vn","Vietnamese"},{"th","Thai"},{"by","Belarusian"},
-        {"mk","Macedonian"},{"mt","Maltese"},{"ca","French"},
-        {"gb","English"},{"us","English"},{"br","Portuguese"},
-        {NULL,NULL}
-    };
-
-    NSString *localeStr = _keyboardManager.language;
-    if (!localeStr) return nil;
-
-    NSString *langCode = nil;
-    NSRange underscore = [localeStr rangeOfString:@"_"];
-    if (underscore.location != NSNotFound)
-        langCode = [localeStr substringToIndex:underscore.location];
-    else {
-        NSRange dot = [localeStr rangeOfString:@"."];
-        if (dot.location != NSNotFound)
-            langCode = [localeStr substringToIndex:dot.location];
-        else
-            langCode = localeStr;
-    }
-    if (!langCode || [langCode length] < 2) return nil;
-
-    for (int i = 0; langMap[i][0]; i++) {
-        if ([[NSString stringWithUTF8String:langMap[i][0]]
-                isEqualToString:langCode]) {
-            return [NSString stringWithUTF8String:langMap[i][1]];
-        }
-    }
-    return nil;
+    return LWLanguageNameForLocale(_keyboardManager.language);
 }
 
 // Parse a GNUstep .strings file and return a dictionary of key→value pairs.
