@@ -5,3 +5,4 @@ t_SshdX11_C_FILES = ../sshd-x11.c
 ADDITIONAL_INCLUDE_DIRS += -I..
 ADDITIONAL_CFLAGS += -Wall -Wextra -Werror
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated
