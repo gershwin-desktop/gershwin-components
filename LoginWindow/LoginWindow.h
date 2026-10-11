@@ -53,6 +53,7 @@
     NSDate *sessionStartTime;
     BOOL didStartXServer;
     pid_t xServerPid;
+    pid_t _cjkFontHelperPid;
     BOOL isTerminating;
     KeyboardManager *_keyboardManager;
     NSWindow *_logWindow;
@@ -75,6 +76,8 @@
 - (void)monitorSession;
 - (void)releaseLoginDaemons;
 - (void)reapStrayChildren;
+- (void)startCJKFontInstall;
+- (void)reapCJKFontHelper;
 - (void)renderDesktopBackground;
 - (BOOL)trySystemAction:(NSString *)actionType;
 - (void)killAllSessionProcesses:(uid_t)uid;

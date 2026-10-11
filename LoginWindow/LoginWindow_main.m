@@ -27,6 +27,7 @@
 #import "LoginWindow.h"
 #import "KeyboardManager.h"
 #import "LWLanguageNames.h"
+#import "LWCJKFontInstaller.h"
 #include <X11/Xlib.h>
 #include <X11/Xauth.h>
 #include <signal.h>
@@ -632,6 +633,24 @@ int main(int argc, const char *argv[])
         [painter release];
         [pool drain];
         return 0;
+    }
+
+    // Helper mode, started by -startCJKFontInstall once the session language
+    // is final: fetches a CJK font in the background, so it never delays the
+    // login and never needs the display.
+    if (argc > 2 && strcmp(argv[1], "--install-cjk-font") == 0) {
+        NSString *license = [[NSBundle mainBundle]
+            pathForResource:@"SarasaGothic-OFL" ofType:@"txt"];
+        if (!license) {
+            fprintf(stderr, "FATAL: [LoginWindow] CJK font: "
+                    "SarasaGothic-OFL.txt missing from the LoginWindow bundle\n");
+            [pool drain];
+            return 1;
+        }
+        int status = LWInstallCJKFont([NSString stringWithUTF8String:argv[2]],
+                                      license);
+        [pool drain];
+        return status;
     }
 
     // Install X11 error handlers FIRST before any X operations
