@@ -1053,22 +1053,34 @@ static GNUStepMenuImporter *sSharedImporter = nil;
        move it to the parent menu and rename it "About...". */
     menuData = [self promoteAboutItemFromMenuData:menuData];
 
-    // NSLog(@"GNUStepMenuImporter: Building menu for window %lu", windowValue);
-    NSMenu *menu = [self menuFromData:menuData
-                             windowId:windowValue
-                           clientName:clientName
-                                path:@[]];
-    if (!menu) {
-        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to build menu for window %@", windowId);
-        return;
-    }
-
-    // NSLog(@"GNUStepMenuImporter: Successfully built menu with %ld top-level items", (long)[menu numberOfItems]);
     NSString *oldClient = [self.clientNamesByWindow objectForKey:windowId];
     NSMenu *oldMenu = [self.menusByWindow objectForKey:windowId];
     NSDictionary *oldData = [self.lastMenuDataByWindow objectForKey:windowId];
     BOOL structureChanged = (oldData == nil
         || ![_menuStructure(oldData) isEqual:_menuStructure(menuData)]);
+
+    /* An update that only changes enabled/state values must keep the menu
+       object the menu bar shows: the bar keeps showing the old one, so a new
+       object in the cache made the next real change (Emacs swapping its
+       major-mode menu) fail the "is it shown" test below.  The bar then
+       stayed stale and sent actions to index paths the app no longer had. */
+    BOOL keepMenu = (oldMenu && !structureChanged
+                     && [oldClient isEqualToString:clientName]);
+    NSMenu *menu;
+    if (keepMenu) {
+        menu = oldMenu;
+        [self applyEnabledStatesFromData:menuData toMenu:menu depth:0];
+    } else {
+        menu = [self menuFromData:menuData
+                         windowId:windowValue
+                       clientName:clientName
+                            path:@[]];
+    }
+    if (!menu) {
+        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Failed to build menu for window %@", windowId);
+        return;
+    }
+
     self.menusByWindow[windowId] = menu;
     self.clientNamesByWindow[windowId] = clientName;
     self.lastMenuDataByWindow[windowId] = [menuData copy];

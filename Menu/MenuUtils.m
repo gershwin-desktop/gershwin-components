@@ -227,8 +227,10 @@ static dispatch_once_t _sharedDisplayOnce;
         return NO;
     }
     
+    /* XGetWindowAttributes returns a nonzero Status on success, not Success
+     * (0), so comparing with Success called every live window gone. */
     XWindowAttributes attrs;
-    BOOL ok = (XGetWindowAttributes(display, (Window)windowId, &attrs) == Success);
+    BOOL ok = (XGetWindowAttributes(display, (Window)windowId, &attrs) != 0);
     XCloseDisplay(display);
     return ok;
 }
