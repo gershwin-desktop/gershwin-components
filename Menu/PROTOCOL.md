@@ -1,7 +1,7 @@
 # GNUStep Menu IPC Architecture Documentation
 
 > [!NOTE]
-> This is a **discussion draft** reflecting the current implementation. Discussion is encouraged. Possibly this could evolve into a standard within GNUstep if there is sufficient interest in this. The name `org.gnustep.Gershwin.MenuServer` is a placeholder and is subject to change. Suggestions are welcome.
+> This is a **discussion draft** reflecting the current implementation. Discussion is encouraged. Possibly this could evolve into a standard within GNUstep if there is sufficient interest in this. The name `io.github.gershwin-desktop.MenuServer` is a placeholder and is subject to change. Suggestions are welcome.
 
 ## Overview
 
@@ -37,7 +37,7 @@ Purpose: Allows applications to register their menus and receive updates
 @end
 ```
 
-**Registration Name:** `org.gnustep.Gershwin.MenuServer`
+**Registration Name:** `io.github.gershwin-desktop.MenuServer`
 
 **Methods:**
 - `updateMenuForWindow:menuData:clientName:` - Application sends serialized menu structure to Menu.app
@@ -60,7 +60,7 @@ Purpose: Allows Menu.app to trigger menu actions in the application
 @end
 ```
 
-**Registration Name:** `org.gnustep.Gershwin.MenuClient.<PID>` (e.g., `org.gnustep.Gershwin.MenuClient.23857`)
+**Registration Name:** `io.github.gershwin-desktop.MenuClient.<PID>` (e.g., `io.github.gershwin-desktop.MenuClient.23857`)
 
 **Methods:**
 - `activateMenuItemAtPath:forWindow:` - Menu.app invokes this when user clicks a menu item
@@ -102,7 +102,7 @@ Protocol must be declared in the **header file** (.h), not just implementation (
 3. **Name Registration**
    ```objectivec
    NSString *clientName = [NSString stringWithFormat:
-       @"org.gnustep.Gershwin.MenuClient.%d", getpid()];
+       @"io.github.gershwin-desktop.MenuClient.%d", getpid()];
    BOOL registered = [menuClientConnection registerName:clientName];
    ```
    
@@ -114,7 +114,7 @@ Protocol must be declared in the **header file** (.h), not just implementation (
 4. **Server Connection** (`-_ensureMenuServerConnection`)
    ```objectivec
    NSConnection *connection = [NSConnection connectionWithRegisteredName:
-       @"org.gnustep.Gershwin.MenuServer" host:nil];
+       @"io.github.gershwin-desktop.MenuServer" host:nil];
    id proxy = [connection rootProxy];
    [proxy setProtocolForProxy:@protocol(GSGNUstepMenuServer)];
    menuServerProxy = proxy;
@@ -407,7 +407,7 @@ NSApplication's sendAction:to:from: implementation:
 5. ✅ **Register unique name**
    ```objectivec
    NSString *name = [NSString stringWithFormat:
-       @"org.gnustep.Gershwin.MenuClient.%d", getpid()];
+       @"io.github.gershwin-desktop.MenuClient.%d", getpid()];
    [menuClientConnection registerName:name];
    ```
 
@@ -433,7 +433,7 @@ NSApplication's sendAction:to:from: implementation:
    ```objectivec
    serverConnection = [[NSConnection alloc] init];
    [serverConnection setRootObject:menuManager];
-   [serverConnection registerName:@"org.gnustep.Gershwin.MenuServer"];
+   [serverConnection registerName:@"io.github.gershwin-desktop.MenuServer"];
    ```
 
 2. ✅ **Store client metadata with menus**
@@ -490,7 +490,7 @@ NSApplication's sendAction:to:from: implementation:
 
 A GNUstep application with no windows (e.g. a menu-only app) can still show its
 main menu in Menu.app.  The menu is keyed by the application rather than by a
-window, using the client name (`org.gnustep.Gershwin.MenuClient.<pid>`).
+window, using the client name (`io.github.gershwin-desktop.MenuClient.<pid>`).
 
 ### Server protocol additions
 
@@ -580,7 +580,7 @@ NSLog(@"Responds: %d", [proxy respondsToSelector:@selector(activateMenuItemAtPat
 
 **Fix:** 
 1. Ensure all client-side checklist items completed
-2. Check NSLog output: "Eau: Registered GNUstep menu client as org.gnustep.Gershwin.MenuClient.PID"
+2. Check NSLog output: "Eau: Registered GNUstep menu client as io.github.gershwin-desktop.MenuClient.PID"
 3. Verify menuByWindowId is being populated in setMenu:forWindow:
 4. Check Menu.app is actually running and registering as MenuServer
 
@@ -649,7 +649,7 @@ NSLog(@"Responds: %d", [proxy respondsToSelector:@selector(activateMenuItemAtPat
 
 ```objectivec
 - (void)testClientRegistration {
-    NSString *name = @"org.gnustep.Gershwin.MenuClient.99999";
+    NSString *name = @"io.github.gershwin-desktop.MenuClient.99999";
     NSConnection *conn = [[NSConnection alloc] init];
     [conn setRootObject:self];
     XCTAssertTrue([conn registerName:name]);
@@ -718,7 +718,7 @@ Watch logs with:
 
 **Client registration success:**
 ```
-Eau: Registered GNUstep menu client as org.gnustep.Gershwin.MenuClient.12345 with receive port
+Eau: Registered GNUstep menu client as io.github.gershwin-desktop.MenuClient.12345 with receive port
 ```
 
 **Menu update sent:**

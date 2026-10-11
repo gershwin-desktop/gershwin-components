@@ -12,8 +12,8 @@
 
 #import "../../GNUStepMenuIPC.h"
 
-static NSString *const kServerName = @"org.gnustep.Gershwin.MenuServer";
-static NSString *const kClientPrefix = @"org.gnustep.Gershwin.MenuClient.";
+static NSString *const kServerName = @"io.github.gershwin-desktop.MenuServer";
+static NSString *const kClientPrefix = @"io.github.gershwin-desktop.MenuClient.";
 static const NSTimeInterval kMaintenanceInterval = 2.0;
 static const NSTimeInterval kCallTimeout = 0.5;
 

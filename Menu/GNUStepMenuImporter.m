@@ -99,7 +99,8 @@ static inline BOOL _shouldThrottleDO(struct timespec *last, long long minNS) {
     return NO;
 }
 
-static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServer";
+static NSString *const kGershwinMenuServerName = @"io.github.gershwin-desktop.MenuServer";
+static NSString *const kGershwinMenuClientNamePrefix = @"io.github.gershwin-desktop.MenuClient";
 
 @interface GNUStepMenuImporter ()
 @property (nonatomic, strong) NSMutableDictionary *menusByWindow;
@@ -110,7 +111,7 @@ static NSString *const kGershwinMenuServerName = @"org.gnustep.Gershwin.MenuServ
 // push.  Lets the click path skip the synchronous DO pull when states are
 // known to be current, so repeated menu opens are lag-free.
 @property (nonatomic, strong) NSMutableDictionary *lastStateRefreshByWindow;
-// Application-level menus, keyed by clientName ("org.gnustep.Gershwin.MenuClient.<pid>").
+// Application-level menus, keyed by clientName ("io.github.gershwin-desktop.MenuClient.<pid>").
 // These back the menu bar for windowless frontmost apps.  clientPidByClientName
 // lets us advertise the set of menu-bearing apps to the WM (root property
 // _GERSHWIN_MENU_APPS) so Alt-Tab can list windowless apps.
@@ -1157,7 +1158,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 #pragma mark - Application-level menus
 
 /* Parse the pid embedded in a GNUstep menu client name
-   ("org.gnustep.Gershwin.MenuClient.<pid>").  Returns 0 when unparseable. */
+   ("io.github.gershwin-desktop.MenuClient.<pid>").  Returns 0 when unparseable. */
 - (pid_t)_pidFromClientName:(NSString *)clientName
 {
     if (!clientName || [clientName length] == 0) return 0;
@@ -1170,7 +1171,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 /* Eau registers each app instance's menu client under this name. */
 - (NSString *)_clientNameForPID:(pid_t)pid
 {
-    return [NSString stringWithFormat:@"org.gnustep.Gershwin.MenuClient.%d", (int)pid];
+    return [NSString stringWithFormat:@"%@.%d", kGershwinMenuClientNamePrefix, (int)pid];
 }
 
 /* Rewrite the _GERSHWIN_MENU_APPS root property with the PIDs of every app

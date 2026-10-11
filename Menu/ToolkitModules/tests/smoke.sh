@@ -19,7 +19,7 @@ check() { # name file pattern
 }
 
 run() { # name script activate-path [script argument]
-  export GAD_MENU_SERVER_NAME=org.gnustep.Gershwin.MenuServer.GadTest$$$1
+  export GAD_MENU_SERVER_NAME=io.github.gershwin-desktop.MenuServer.GadTest$$$1
   xvfb-run -a bash -c '
     MOCK_ACTIVATE_PATH=$3 "$0"/obj/mock-menu-server > "$1/$2.server" 2>&1 &
     SERVER=$!
