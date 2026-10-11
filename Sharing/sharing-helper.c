@@ -257,8 +257,10 @@ static int check_service_running(const char *service)
     
 #elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD)
     char cmd[256];
-    /* Use full path to avoid PATH issues in GUI context */
-    snprintf(cmd, sizeof(cmd), "/usr/sbin/service %s status >/dev/null 2>&1", service);
+    /* Use full path to avoid PATH issues in GUI context. onestatus, because
+     * status refuses to run (exit 1) unless the service is enabled in
+     * rc.conf, so a daemon started by hand would be reported as stopped. */
+    snprintf(cmd, sizeof(cmd), "/usr/sbin/service %s onestatus >/dev/null 2>&1", service);
     return (system(cmd) == 0);
 
 #elif defined(PLATFORM_OPENBSD)
