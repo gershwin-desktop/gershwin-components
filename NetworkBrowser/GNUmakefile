@@ -15,13 +15,15 @@ NetworkBrowser_APPLICATION_ICON =
 NetworkBrowser_HEADER_FILES = \
 	NetworkBrowser.h \
 	ServiceListView.h \
-	ServiceDetailsView.h
+	ServiceDetailsView.h \
+	TXTRecordFormatter.h
 
 NetworkBrowser_OBJC_FILES = \
 	Main.m \
 	NetworkBrowser.m \
 	ServiceListView.m \
-	ServiceDetailsView.m
+	ServiceDetailsView.m \
+	TXTRecordFormatter.m
 
 NetworkBrowser_RESOURCE_FILES =
 
