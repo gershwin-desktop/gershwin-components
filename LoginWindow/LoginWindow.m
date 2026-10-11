@@ -6,6 +6,7 @@
 
 #import "LoginWindow.h"
 #import "LWLanguageNames.h"
+#import "LWCJKFont.h"
 #import <pwd.h>
 #import <unistd.h>
 #import <sys/wait.h>
@@ -1754,6 +1755,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         [self releaseLoginUI];
         
         [self releaseLoginDaemons];
+        [self startCJKFontInstall];
         NSDebugLLog(@"gwcomp", @"[DEBUG] LoginWindow hidden, monitoring session PID %d", pid);
         
         // Start monitoring the session in the background
@@ -2213,6 +2215,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         // Hide the login window (it's already visible from startup)
         [loginWindow orderOut:nil];
         [self releaseLoginDaemons];
+        [self startCJKFontInstall];
         
         NSDebugLLog(@"gwcomp", @"[DEBUG] LoginWindow hidden, monitoring auto-login session PID %d", pid);
         
@@ -2228,6 +2231,8 @@ static NSDictionary *parseStringsFile(NSString *path)
 
 - (void)monitorSession
 {
+    [self reapCJKFontHelper];
+
     // Check if the session process is still running
     if (sessionPid <= 0) {
         NSDebugLLog(@"gwcomp", @"[DEBUG] No session to monitor");
@@ -2553,6 +2558,61 @@ static bool isDetachedDaemon(const char *comm)
     });
 }
 
+/* The session language is final once the session starts: the dropdown and
+   keyboard detection both end up in _keyboardManager.language. A CJK font
+   is about 50 MB to download, so a copy of ourselves fetches it in the
+   background and the login never waits for it. It is forked by hand rather
+   than through NSTask, whose reaper would take the session's exit status
+   away from monitorSession (see reapStrayChildren). */
+- (void)startCJKFontInstall
+{
+    NSString *locale = _keyboardManager.language;
+    [self reapCJKFontHelper];
+    if (_cjkFontHelperPid > 0 || !LWCJKFontLanguageForLocale(locale)) {
+        return;
+    }
+
+    const char *exe = [[[NSBundle mainBundle] executablePath] fileSystemRepresentation];
+    const char *loc = [locale UTF8String];
+    char *const argv[] = { (char *)exe, "--install-cjk-font", (char *)loc, NULL };
+    long maxfd = sysconf(_SC_OPEN_MAX);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Only async-signal-safe calls between fork and exec. The X
+        // connection and PAM descriptors must not leak into the helper.
+        for (long fd = 3; fd < maxfd; fd++) {
+            close((int)fd);
+        }
+        execv(exe, argv);
+        _exit(127);
+    }
+    if (pid < 0) {
+        NSLog(@"FATAL: [LoginWindow] CJK font: fork failed: %s", strerror(errno));
+        return;
+    }
+    _cjkFontHelperPid = pid;
+    NSLog(@"[LoginWindow] CJK font: helper PID %d started for %@", pid, locale);
+}
+
+- (void)reapCJKFontHelper
+{
+    if (_cjkFontHelperPid <= 0) {
+        return;
+    }
+    int status;
+    pid_t result = waitpid(_cjkFontHelperPid, &status, WNOHANG);
+    if (result == 0) {
+        return;
+    }
+    if (result == _cjkFontHelperPid && WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        NSLog(@"[LoginWindow] CJK font: helper exited with status %d",
+              WEXITSTATUS(status));
+    }
+    // ECHILD: the logout cleanup's waitpid(-1) reaped it first.
+    _cjkFontHelperPid = 0;
+}
+
 /* The login screen needed its own notification and pasteboard servers. They are
    started on demand and stay behind owned by root, next to the user's own
    pair, for the whole session. They are started again when the login screen
@@ -2594,9 +2654,11 @@ static bool isDetachedDaemon(const char *comm)
     // Clear existing items
     [languageDropdown removeAllItems];
 
-    // List all available .lproj language directories
+    // One entry per .lproj, plus languages whose login screen text stays
+    // English but whose session needs the locale and a CJK font
     NSArray *languageNames = @[
-        @"English", @"German", @"French", @"Spanish"
+        @"English", @"German", @"French", @"Spanish",
+        @"Chinese", @"Japanese", @"Korean"
     ];
     [languageDropdown addItemsWithTitles:languageNames];
 
