@@ -102,8 +102,8 @@ Code style
 - Never mention Apple, Mac, macOS, Cocoa, NeXT in comments, strings or the
   Info.plist description. "Mac-like" is the user's shorthand for the visual
   target; the code and the product text never say it.
-- Reverse-DNS identifier: `io.github.gershwin-desktop.AppGarden`. Never
-  `org.gershwin.*`.
+- Reverse-DNS identifier: `io.github.gershwin-desktop.AppGarden`. Never a
+  domain we do not own.
 - Fail hard, no fallbacks. A missing `curl`, an unparsable feed, an HTTP
   error, a download that produced no file: each is an `NSError` with a
   human-readable `NSLocalizedDescriptionKey` that reaches the user in an
