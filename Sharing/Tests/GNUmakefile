@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_GSXrdpSession
+TEST_TOOL_NAME =  t_SshdX11 t_GSXrdpSession
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -22,6 +22,7 @@ ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 
 
 t_GSXrdpSession_OBJC_FILES=t_GSXrdpSession.m
+t_SshdX11_OBJC_FILES=t_SshdX11.m
 
 -include GNUmakefile.preamble
 -include make-check.mak

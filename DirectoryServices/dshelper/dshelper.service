@@ -1,6 +1,6 @@
 [Unit]
 Description=Gershwin Directory Services Helper
-After=network.target rpcbind.service gdomap.service
+After=network.target gdomap.service
 Before=display-manager.service
 Wants=gdomap.service
 

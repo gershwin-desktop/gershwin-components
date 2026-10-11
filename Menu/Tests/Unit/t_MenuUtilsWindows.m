@@ -73,9 +73,24 @@ int main(void)
   PASS([MenuUtils isWindowValid:(unsigned long)plain],
     "isWindowValid: is true for an existing window");
 
+  /* isWindowMapped: had the same comparison, so it assumed every window
+     mapped and the watchdog never noticed an unmapped one. */
+  PASS([MenuUtils isWindowMapped:(unsigned long)plain],
+    "isWindowMapped: is true for a mapped window");
+
+  XUnmapWindow(dpy, plain);
+  XSync(dpy, False);
+  PASS(![MenuUtils isWindowMapped:(unsigned long)plain],
+    "isWindowMapped: is false for an unmapped window");
+  PASS([MenuUtils isWindowValid:(unsigned long)plain],
+    "an unmapped window is still valid");
+
   XDestroyWindow(dpy, plain);
   XDestroyWindow(dpy, desktop);
   XSync(dpy, False);
+
+  PASS(![MenuUtils isWindowMapped:(unsigned long)plain],
+    "isWindowMapped: is false for a destroyed window");
 
   PASS(![MenuUtils isWindowValid:(unsigned long)plain],
     "isWindowValid: is false for a destroyed window");

@@ -20,6 +20,9 @@
 #include <sys/utsname.h>
 #include <syslog.h>
 #include <ctype.h>
+#include <sys/wait.h>
+
+#include "sshd-x11.h"
 
 #define MAX_HOSTNAME_LEN 256
 
@@ -373,6 +376,140 @@ static void cmd_ssh_stop(void)
 }
 
 /* VNC status - checks for various VNC servers */
+/* X11 forwarding - the X11Forwarding directive of sshd_config */
+
+static const char *find_sshd(void)
+{
+    static const char *candidates[] = {
+        "/usr/sbin/sshd", "/usr/local/sbin/sshd",
+        "/usr/bin/sshd", "/usr/local/bin/sshd", NULL
+    };
+    for (int i = 0; candidates[i] != NULL; i++) {
+        if (access(candidates[i], X_OK) == 0) {
+            return candidates[i];
+        }
+    }
+    return NULL;
+}
+
+/* The configuration belongs to the sshd that is installed: one from the
+ * ports/packages tree reads /usr/local/etc/ssh, the base system one /etc/ssh. */
+static const char *sshd_config_path(const char *sshd)
+{
+    return strncmp(sshd, "/usr/local/", 11) == 0
+        ? "/usr/local/etc/ssh/sshd_config" : "/etc/ssh/sshd_config";
+}
+
+static int sshd_running(void)
+{
+#ifdef PLATFORM_LINUX
+    return check_service_running("sshd.service") ||
+           check_service_running("ssh.service") ||
+           check_service_running("sshd") ||
+           check_service_running("ssh");
+#else
+    return check_service_running("sshd");
+#endif
+}
+
+/* sshd reads its configuration at start and on SIGHUP only, so a running
+ * daemon has to be told; new sessions then see the change while existing ones
+ * are not dropped.  Returns 0 on success. */
+static int reload_sshd(void)
+{
+    if (!sshd_running()) {
+        return 0;
+    }
+#ifdef PLATFORM_LINUX
+    if (system("systemctl reload sshd.service >/dev/null 2>&1") == 0 ||
+        system("systemctl reload ssh.service >/dev/null 2>&1") == 0 ||
+        system("service sshd reload >/dev/null 2>&1") == 0 ||
+        system("service ssh reload >/dev/null 2>&1") == 0 ||
+        system("/etc/init.d/sshd reload >/dev/null 2>&1") == 0 ||
+        system("/etc/init.d/ssh reload >/dev/null 2>&1") == 0) {
+        return 0;
+    }
+    return 1;
+#elif defined(PLATFORM_OPENBSD)
+    return system("/usr/sbin/rcctl reload sshd >/dev/null 2>&1") == 0 ? 0 : 1;
+#else
+    return system("/usr/sbin/service sshd reload >/dev/null 2>&1") == 0 ? 0 : 1;
+#endif
+}
+
+static int validate_with_sshd(const char *path, void *ctx)
+{
+    const char *sshd = ctx;
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid == 0) {
+        freopen("/dev/null", "w", stdout);
+        execl(sshd, "sshd", "-t", "-f", path, (char *)NULL);
+        _exit(127);
+    }
+    int status;
+    if (waitpid(pid, &status, 0) < 0) {
+        return -1;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+static void cmd_x11_installed(void)
+{
+    const char *sshd = find_sshd();
+    if (sshd && access(sshd_config_path(sshd), R_OK) == 0 && binary_exists("xauth")) {
+        printf("installed\n");
+    } else {
+        printf("not-installed\n");
+    }
+    exit(0);
+}
+
+static void cmd_x11_status(void)
+{
+    const char *sshd = find_sshd();
+    int enabled;
+    char err[512];
+
+    if (!sshd) {
+        fprintf(stderr, "sshd not found\n");
+        exit(1);
+    }
+    if (sshd_x11_read_file(sshd_config_path(sshd), &enabled, err, sizeof(err)) != 0) {
+        fprintf(stderr, "%s\n", err);
+        exit(1);
+    }
+    printf("%s\n", enabled ? "enabled" : "disabled");
+    exit(0);
+}
+
+static void cmd_x11_set(int enable)
+{
+    const char *sshd = find_sshd();
+    int changed;
+    char err[512];
+
+    if (!sshd) {
+        fprintf(stderr, "sshd not found\n");
+        exit(1);
+    }
+    syslog(LOG_INFO, "sharing-helper: %s X11 forwarding", enable ? "Enabling" : "Disabling");
+    if (sshd_x11_rewrite_file(sshd_config_path(sshd), enable, validate_with_sshd,
+                              (void *)sshd, &changed, err, sizeof(err)) != 0) {
+        fprintf(stderr, "%s\n", err);
+        syslog(LOG_ERR, "sharing-helper: X11 forwarding: %s", err);
+        exit(1);
+    }
+    if (changed && reload_sshd() != 0) {
+        fprintf(stderr, "Configuration written but sshd could not be reloaded\n");
+        syslog(LOG_ERR, "sharing-helper: sshd reload failed");
+        exit(1);
+    }
+    exit(0);
+}
+
 static void cmd_vnc_status(void)
 {
     int running = 0;
@@ -1328,6 +1465,10 @@ static void usage(const char *progname)
     fprintf(stderr, "  ssh-installed         Check if SSH daemon is installed\n");
     fprintf(stderr, "  ssh-start             Start SSH daemon\n");
     fprintf(stderr, "  ssh-stop              Stop SSH daemon\n");
+    fprintf(stderr, "  x11-status            Check if sshd allows X11 forwarding\n");
+    fprintf(stderr, "  x11-installed         Check if sshd and xauth are installed\n");
+    fprintf(stderr, "  x11-start             Allow X11 forwarding in sshd_config\n");
+    fprintf(stderr, "  x11-stop              Disallow X11 forwarding in sshd_config\n");
     fprintf(stderr, "  sftp-status           Check SFTP status\n");
     fprintf(stderr, "  sftp-installed        Check if SFTP subsystem is installed\n");
     fprintf(stderr, "  sftp-start            Start SFTP (enables SSH)\n");
@@ -1376,6 +1517,10 @@ int main(int argc, char *argv[])
         cmd_ssh_status();
     } else if (strcmp(cmd, "ssh-installed") == 0) {
         cmd_ssh_installed();
+    } else if (strcmp(cmd, "x11-status") == 0) {
+        cmd_x11_status();
+    } else if (strcmp(cmd, "x11-installed") == 0) {
+        cmd_x11_installed();
     } else if (strcmp(cmd, "sftp-status") == 0) {
         cmd_sftp_status();
     } else if (strcmp(cmd, "sftp-installed") == 0) {
@@ -1424,6 +1569,10 @@ int main(int argc, char *argv[])
         cmd_ssh_start();
     } else if (strcmp(cmd, "ssh-stop") == 0) {
         cmd_ssh_stop();
+    } else if (strcmp(cmd, "x11-start") == 0) {
+        cmd_x11_set(1);
+    } else if (strcmp(cmd, "x11-stop") == 0) {
+        cmd_x11_set(0);
     } else if (strcmp(cmd, "sftp-start") == 0) {
         cmd_sftp_start();
     } else if (strcmp(cmd, "sftp-stop") == 0) {

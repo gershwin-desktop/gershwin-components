@@ -18,6 +18,7 @@
 #import "MenuUtils.h"
 #import "MenuExtraManager.h"
 #import "MenuBarLayout.h"
+#import "MenuWindowWatchdog.h"
 #import "WindowMonitor.h"
 #import "AppMenuImporter.h"
 #import "MenuProfiler.h"
@@ -76,6 +77,7 @@
     int _powerKeyFDs[16];
     int _powerKeyFDCount;
     NSTimeInterval _lastMenuAtomsReassertTime;
+    MenuWatchdogState _watchdogState;
 }
 @end
 
@@ -1807,6 +1809,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
 
         unsigned long shownWindow = self.appMenuWidget.currentWindowId;
         if (shownWindow == 0) {
+            MenuWatchdogReset(&_watchdogState);
             MENU_PROFILE_END(windowValidationTick);
             return;
         } // no menu shown
@@ -1823,12 +1826,14 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
             // - and unregistered its shortcuts.  Keep the menu until we know
             // what is actually active.
             NSDebugLLog(@"gwcomp", @"MenuController: No active window - keeping current menu");
+            MenuWatchdogReset(&_watchdogState);
             MENU_PROFILE_END(windowValidationTick);
             return;
         }
         if (activeWindow != 0 && shownWindow != activeWindow) {
             // We've switched to a different window - the shown window ID is stale
             // Don't validate it, let the normal window change handling take care of it
+            MenuWatchdogReset(&_watchdogState);
             MENU_PROFILE_END(windowValidationTick);
             return;
         }
@@ -1839,6 +1844,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         if (shownWindow == activeWindow && self.appMenuWidget.currentMenu != nil) {
             // We have a menu for the current active window - keep it!
             // Don't validate with X11 calls that might fail during WM operations
+            MenuWatchdogReset(&_watchdogState);
             MENU_PROFILE_END(windowValidationTick);
             return;
         }
@@ -1846,9 +1852,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         // Only validate and potentially clear if:
         // 1. Window is shown but we have no menu for it, OR
         // 2. Active window is 0 (no window focused)
-        if (![MenuUtils isWindowValid:shownWindow] || ![MenuUtils isWindowMapped:shownWindow]) {
+        BOOL shownValid = [MenuUtils isWindowValid:shownWindow];
+        BOOL shownMapped = shownValid && [MenuUtils isWindowMapped:shownWindow];
+        if (MenuWatchdogShouldClear(&_watchdogState, shownWindow, shownValid, shownMapped)) {
             NSDebugLog(@"MenuController: Watchdog detected invalid/closed window 0x%lx - clearing menu", shownWindow);
-            NSDebugLog(@"MenuController: Watchdog detected invalid/closed window 0x%lx - clearing menu", shownWindow);
+            MenuWatchdogReset(&_watchdogState);
             [self.appMenuWidget clearMenuAndHideView];
             self.lastClearedWindowId = shownWindow;
             self.lastClearedTime = now;
