@@ -77,7 +77,7 @@ int main(void)
       NSConnection *c = [[NSConnection alloc] init];
       [c setRootObject:[[Mock alloc] init]];
       if (![c registerName:name ? [NSString stringWithUTF8String:name]
-                                : @"org.gnustep.Gershwin.MenuServer"])
+                                : @"io.github.gershwin-desktop.MenuServer"])
         {
           fprintf(stderr, "mock-menu-server: cannot register server name\n");
           return 1;

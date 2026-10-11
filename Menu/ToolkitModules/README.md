@@ -3,8 +3,8 @@
 Part of Menu: the protocol these modules speak is `../GNUStepMenuIPC.h`.
 
 They show the menu bar of GTK 2/3/4 and Qt 5/6 programs in Menu.app, using the same
-Distributed Objects protocol (`org.gnustep.Gershwin.MenuServer` and
-`org.gnustep.Gershwin.MenuClient.<pid>`) that GNUstep applications use through the Eau
+Distributed Objects protocol (`io.github.gershwin-desktop.MenuServer` and
+`io.github.gershwin-desktop.MenuClient.<pid>`) that GNUstep applications use through the Eau
 theme. No D-Bus is involved.
 
 Nothing here is built against GTK, GLib or Qt: there are no headers, no development
