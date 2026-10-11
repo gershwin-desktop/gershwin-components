@@ -44,6 +44,7 @@ Menu_OBJC_FILES = \
 	MenuUtils.m \
 	MenuInstanceTakeover.m \
 	MenuBarLayout.m \
+	MenuWindowWatchdog.m \
 	X11ShortcutManager.m \
 	RoundedCornersView.m \
 	ActionSearch.m \
@@ -95,6 +96,7 @@ Menu_HEADER_FILES = \
 	DBusConnection.h \
 	MenuUtils.h \
 	MenuInstanceTakeover.h \
+	MenuWindowWatchdog.h \
 	X11ShortcutManager.h \
 	RoundedCornersView.h \
 	ActionSearch.h \
