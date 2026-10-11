@@ -66,8 +66,20 @@ int main(void)
   PASS([MenuUtils findDesktopWindow] == (unsigned long)desktop,
     "findDesktopWindow finds the window of desktop type");
 
+  /* isWindowValid: made the same comparison with XGetWindowAttributes, so
+     it called every live window gone: the periodic reconcile then dropped
+     the cached menu of each open window, and a later menu change from that
+     window (Emacs switching its major-mode menu) never reached the menu bar. */
+  PASS([MenuUtils isWindowValid:(unsigned long)plain],
+    "isWindowValid: is true for an existing window");
+
   XDestroyWindow(dpy, plain);
   XDestroyWindow(dpy, desktop);
+  XSync(dpy, False);
+
+  PASS(![MenuUtils isWindowValid:(unsigned long)plain],
+    "isWindowValid: is false for a destroyed window");
+
   XCloseDisplay(dpy);
 
   [arp release];
