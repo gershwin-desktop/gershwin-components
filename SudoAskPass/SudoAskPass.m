@@ -5,6 +5,7 @@
  */
 
 
+#import "GWSudoPolicy.h"
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #include <fcntl.h>
@@ -524,6 +525,18 @@ static int savedStdoutFd = -1;
 
     if (password && [password length] > 0) {
         if ([self validatePassword:password]) {
+            /* The password is right, but sudo still refuses a user no
+               sudoers rule allows anything: say so instead of handing on a
+               password that cannot succeed (issue #2). */
+            if (GWSudoPolicyForPassword(password, @"sudo") == GWSudoPolicyRefused) {
+                [window orderOut:nil];
+                NSRunAlertPanel(@"You are not allowed to administer this computer.",
+                                @"To make this change, ask someone who administers this computer to enter their password.",
+                                @"OK", nil, nil);
+                cancelled = YES;
+                [NSApp terminate:nil];
+                return;
+            }
             // Password is correct, write to saved stdout fd and exit.
             // We use the saved fd because GNUstep may have written
             // startup messages to stdout, corrupting the askpass protocol.
