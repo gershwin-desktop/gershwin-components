@@ -3,6 +3,7 @@
 #import <pwd.h>
 #import <grp.h>
 #import "DSPlatform.h"
+#import "DSUserCheck.h"
 
 // Network paths (checked first - used when mounted from server)
 #define DS_NETWORK_USERS_PLIST @"/Network/Library/DirectoryServices/Users.plist"
@@ -415,9 +416,24 @@ static int cmdUserAdd(NSArray *args) {
         }
     }
 
-    // Auto-assign UID if not specified
+    // Auto-assign UID if not specified; skip UIDs that /etc/passwd, NIS etc.
+    // already hand out, since the Gershwin store does not know about them.
     if (uid == 0) {
-        uid = findNextUID(users);
+        uid = [DSUserCheck firstFreeUIDFrom:findNextUID(users)
+                                  uidLookup:[DSUserCheck systemUIDLookup]];
+        if (uid == 0) {
+            fprintf(stderr, "Cannot find a free UID in the system user database\n");
+            return 1;
+        }
+    }
+
+    NSString *conflict = [DSUserCheck errorForNewUserName:username
+                                                      uid:uid
+                                               nameLookup:[DSUserCheck systemNameLookup]
+                                                uidLookup:[DSUserCheck systemUIDLookup]];
+    if (conflict) {
+        fprintf(stderr, "%s\n", [conflict UTF8String]);
+        return 1;
     }
 
     // Auto-assign GID (create user's private group) if not specified
