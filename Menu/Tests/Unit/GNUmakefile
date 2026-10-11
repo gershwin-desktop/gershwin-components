@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -223,5 +223,7 @@ t_ALSABackendJack_TOOL_LIBS += -lgnustep-gui -ldispatch $(JACKSUPPORT_LIBS)
 t_MenuInstanceTakeover_OBJC_FILES = t_MenuInstanceTakeover.m ../../MenuInstanceTakeover.m
 ../../MenuInstanceTakeover.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 t_MenuInstanceTakeover_TOOL_LIBS += -lX11
+
+t_MenuWindowWatchdog_OBJC_FILES = t_MenuWindowWatchdog.m ../../MenuWindowWatchdog.m
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make
