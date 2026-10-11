@@ -517,6 +517,7 @@ static const char *hw_access_groups[] = {
     "cups",     /* printing (Arch, Fedora, Gentoo) */
     "lpadmin",  /* printing (Debian, Ubuntu) */
     "webcamd",  /* webcam userland drivers */
+    "vboxusers", /* VirtualBox USB and device access */
     NULL
 };
 
@@ -821,6 +822,7 @@ static const char *hw_access_groups_bsd[] = {
     "audio", "video", "render", "input",
     "cups",     /* printing */
     "webcamd",  /* webcam userland drivers */
+    "vboxusers", /* VirtualBox USB and device access */
     NULL
 };
 
