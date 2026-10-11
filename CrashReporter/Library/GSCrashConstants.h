@@ -10,7 +10,7 @@
 #import <Foundation/Foundation.h>
 
 /*
- * Reverse-DNS namespace for Gershwin CrashReporter. We never use org.gershwin.
+ * Reverse-DNS namespace for Gershwin CrashReporter. We only use the io.github.gershwin-desktop namespace.
  */
 #define GSCrashReverseDNS @"io.github.gershwin-desktop.CrashReporter"
 
