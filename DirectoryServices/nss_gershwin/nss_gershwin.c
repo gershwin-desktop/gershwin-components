@@ -514,6 +514,9 @@ static const char *hw_access_groups[] = {
     "video",    /* GPU, framebuffer, webcam */
     "render",   /* DRM render nodes */
     "input",    /* input devices (gamepads, tablets) */
+    "cups",     /* printing (Arch, Fedora, Gentoo) */
+    "lpadmin",  /* printing (Debian, Ubuntu) */
+    "webcamd",  /* webcam userland drivers */
     NULL
 };
 
@@ -815,7 +818,10 @@ group_gid_from_etc(const char *groupname)
 
 /* Hardware access groups - shared with Linux via same names */
 static const char *hw_access_groups_bsd[] = {
-    "audio", "video", "render", "input", NULL
+    "audio", "video", "render", "input",
+    "cups",     /* printing */
+    "webcamd",  /* webcam userland drivers */
+    NULL
 };
 
 /*
