@@ -326,12 +326,43 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     unsigned long windowId = self.pendingCoalesceWindowId;
 
     if (windowId == 0) {
+        /* The 0 can be stale: the controller hears of active window changes
+           on two paths, and the late "no active window" of a quick
+           None -> window sequence would otherwise undo the switch to the
+           window, leaving the previous application's menu up. */
+        unsigned long activeWindow = [MenuUtils getActiveWindowFresh];
+        if (activeWindow != 0) {
+            [self updateForActiveWindowId:activeWindow];
+            return;
+        }
+
         /* No active window reported.  If the WM reports a frontmost
          * application without a window (a windowless app selected via Alt-Tab
          * or whose last window just closed), show its application-level menu.
          */
         pid_t activeAppPid = [MenuUtils getActiveApplicationPID];
         if ([self displayApplicationMenuForPID:activeAppPid]) {
+            return;
+        }
+
+        /* The application menu on show is gone: its application (without a
+           window) quit.  Nothing tells the window manager of a new frontmost
+           application then, so the menu of the window that has the keyboard
+           (usually the desktop) is shown, or none. */
+        if (self.currentWindowId == 0 && self.currentWindowPID != 0
+            && ![self.protocolManager hasApplicationMenuForPID:self.currentWindowPID]) {
+            Window focus = None;
+            int revert = 0;
+            Display *display = [MenuUtils sharedDisplay];
+            if (display) {
+                XGetInputFocus(display, &focus, &revert);
+            }
+            if (focus != None && focus != PointerRoot) {
+                self.currentWindowPID = 0;
+                [self updateForActiveWindowId:(unsigned long)focus];
+            } else {
+                [self clearToSystemOnly];
+            }
             return;
         }
 
@@ -859,6 +890,12 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        correctly returns NO and we keep the shortcuts. */
     BOOL switchingApp = (previousPID != 0 && self.currentWindowPID != 0 && previousPID != self.currentWindowPID);
     if (!switchingApp && self.currentWindowPID == 0 && previousWindowId != 0 && previousWindowId != windowId) {
+        switchingApp = YES;
+    }
+    /* Leaving an application menu (shown while the app had no window): its
+       shortcuts were taken by Menu because the app had no keyboard; now one
+       of its windows has it and handles them itself. */
+    if (!switchingApp && previousWindowId == 0 && previousPID != 0) {
         switchingApp = YES;
     }
     if (switchingApp) {

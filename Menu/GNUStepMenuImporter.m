@@ -493,20 +493,19 @@ static GNUStepMenuImporter *sSharedImporter = nil;
         }
     }
 
-    if ([staleKeys count] == 0) {
-        return;
-    }
-
-    NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Reconcile purging %lu stale window(s)",
-          (unsigned long)[staleKeys count]);
-    for (NSNumber *windowKey in staleKeys) {
-        [self forgetWindow:windowKey];
+    if ([staleKeys count] > 0) {
+        NSDebugLLog(@"gwcomp", @"GNUStepMenuImporter: Reconcile purging %lu stale window(s)",
+              (unsigned long)[staleKeys count]);
+        for (NSNumber *windowKey in staleKeys) {
+            [self forgetWindow:windowKey];
+        }
     }
 
     /* Drop application-level menus whose owning process has exited.  A
        windowless app can disappear without sending unregisterApplication:
-       (crash, SIGKILL); without this sweep its menu stays in menusByClient
-       and the Alt-Tab menu-app list goes stale. */
+       (crash, SIGKILL); without this sweep its menu stays in menusByClient,
+       on show in the bar, and the Alt-Tab menu-app list goes stale.  It runs
+       whether or not a window went stale: such an app has no window. */
     [self reconcileApplicationMenusWithLiveProcesses];
 }
 
@@ -1214,7 +1213,6 @@ static GNUStepMenuImporter *sSharedImporter = nil;
                   clientName:(NSString *)clientName
 {
     BOOL isNew = ([self.menusByClient objectForKey:clientName] == nil);
-    NSString *oldClient = nil;
     if (isNew) {
         /* If the same PID previously pushed under a differently-formatted name,
            drop it so we do not end up with two entries for one app. */
@@ -1225,8 +1223,6 @@ static GNUStepMenuImporter *sSharedImporter = nil;
                 [self removeApplicationMenuForClient:candidate];
             }
         }
-    } else {
-        oldClient = clientName;
     }
 
     self.menusByClient[clientName] = menu;
@@ -1241,14 +1237,13 @@ static GNUStepMenuImporter *sSharedImporter = nil;
 
     /* If this client's app menu is currently displayed (windowless app shown
        in the bar) and its menu changed, reload the visible menu so the user
-       sees the update immediately. */
+       sees the update immediately.  Only for the app on display: every app
+       sends its menu again when it becomes inactive, and another app's menu
+       must not replace the one shown. */
     AppMenuWidget *widget = self.appMenuWidget;
-    if (widget && widget.currentWindowId == 0 && widget.currentWindowPID != 0) {
-        pid_t widgetPid = widget.currentWindowPID;
-        if ((pid > 0 && widgetPid == pid)
-            || (oldClient && [oldClient isEqualToString:clientName])) {
-            [self.appMenuWidget loadApplicationMenu:menu forPID:widgetPid];
-        }
+    if (widget && widget.currentWindowId == 0 && pid > 0
+        && widget.currentWindowPID == pid) {
+        [self.appMenuWidget loadApplicationMenu:menu forPID:pid];
     }
 }
 
@@ -1741,16 +1736,64 @@ static NSMutableSet *_clientsWithoutDynamicMenuSupport(void)
 
 /* Called when this window's menu comes to the front, after the grabs of the
    previous application were released. */
+/* The client a menu built by -menuFromData:... came from. */
+static NSString *GNUStepClientNameOfMenu(NSMenu *menu)
+{
+    for (NSMenuItem *item in [menu itemArray]) {
+        NSDictionary *info = [item representedObject];
+        if ([info isKindOfClass:[NSDictionary class]]
+            && [[info objectForKey:@"clientName"] length] > 0) {
+            return [info objectForKey:@"clientName"];
+        }
+        NSString *name = [item submenu] ? GNUStepClientNameOfMenu([item submenu]) : nil;
+        if (name) return name;
+    }
+    return nil;
+}
+
+/* Whether the application that sent clientName's menu has the keyboard.
+   A GNUstep application handles its own shortcuts in its key window; one
+   without a window (shown in the bar through its application menu) gets no
+   key presses at all, so Menu has to take its shortcuts. */
+- (BOOL)clientOwnsKeyboardFocus:(NSString *)clientName
+{
+    Display *display = [MenuUtils sharedDisplay];
+    pid_t pid = [self _pidFromClientName:clientName];
+    Window focus = None;
+    int revert = 0;
+
+    if (!display || pid <= 0) return NO;
+    XGetInputFocus(display, &focus, &revert);
+    if (focus == None || focus == PointerRoot) return NO;
+    return [MenuUtils getWindowPID:focus] == pid;
+}
+
 - (void)reregisterShortcutsForMenu:(NSMenu *)menu windowId:(unsigned long)windowId
 {
-    (void)windowId;
+    /* The application menu of an application that does not have the
+       keyboard: every shortcut in it goes through Menu. */
+    NSString *clientName = (windowId == 0) ? GNUStepClientNameOfMenu(menu) : nil;
+    BOOL takeAll = clientName && ![self clientOwnsKeyboardFocus:clientName];
+    /* As AppKit does, a key combination belongs to the first enabled item
+       that has it (Terminal's Shell menu has Cmd-N on New and on the
+       disabled Run Command...). */
+    NSMutableSet *taken = [NSMutableSet set];
     for (NSMenuItem *item in MenuItemsWithShortcutsHandledBy([menu itemArray], [GNUStepMenuActionHandler class])) {
         NSDictionary *info = [item representedObject];
-        if (![info isKindOfClass:[NSDictionary class]] || ![[info objectForKey:@"shortcutViaMenu"] boolValue]) {
+        if (![info isKindOfClass:[NSDictionary class]]
+            || (!takeAll && ![[info objectForKey:@"shortcutViaMenu"] boolValue])) {
             continue;
         }
         if ([item keyEquivalentModifierMask] == 0) {
             continue;
+        }
+        if (takeAll) {
+            NSString *combination = [NSString stringWithFormat:@"%@|%lu", [item keyEquivalent],
+                                     (unsigned long)[item keyEquivalentModifierMask]];
+            if (![item isEnabled] || [taken containsObject:combination]) {
+                continue;
+            }
+            [taken addObject:combination];
         }
         GNUStepShortcutTarget *target = [[GNUStepShortcutTarget alloc] initWithTitle:[item title] info:info];
         NSString *identifier = [NSString stringWithFormat:@"%@_%@", [info objectForKey:@"windowId"],

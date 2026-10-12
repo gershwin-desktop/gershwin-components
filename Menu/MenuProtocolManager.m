@@ -295,7 +295,11 @@
     NSNumber *windowKey = [NSNumber numberWithUnsignedLong:windowId];
     NSNumber *protocolTypeNum = [self.windowToProtocolMap objectForKey:windowKey];
     id<MenuProtocolHandler> handler = nil;
-    if (protocolTypeNum) {
+    if (windowId == 0) {
+        /* An application menu (an app without a window): only GNUstep
+           applications send those. */
+        handler = [self handlerForType:MenuProtocolTypeGNUstep];
+    } else if (protocolTypeNum) {
         handler = [self handlerForType:[protocolTypeNum integerValue]];
     } else {
         /* No cached protocol mapping yet (e.g. the menu came from a retry path);

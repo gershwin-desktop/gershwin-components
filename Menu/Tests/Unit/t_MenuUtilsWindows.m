@@ -13,6 +13,7 @@
 #import <Foundation/Foundation.h>
 #import <X11/Xlib.h>
 #import <X11/Xatom.h>
+#import <X11/Xutil.h>
 #include <unistd.h>
 #import "Testing.h"
 #import "../../MenuUtils.h"
@@ -77,6 +78,21 @@ int main(void)
      mapped and the watchdog never noticed an unmapped one. */
   PASS([MenuUtils isWindowMapped:(unsigned long)plain],
     "isWindowMapped: is true for a mapped window");
+
+  /* isRealApplicationWindow:onDisplay: had it too and called every
+     managed, mapped application window not real: the window monitor then
+     kept reporting the previous active window, and Menu showed the previous
+     application's menu over Claude or TextEdit. */
+  Atom wmState = XInternAtom(dpy, "WM_STATE", False);
+  long normalState[2] = { NormalState, None };
+  XChangeProperty(dpy, plain, wmState, wmState, 32, PropModeReplace,
+    (unsigned char *)normalState, 2);
+  Atom normalAtom = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+  XChangeProperty(dpy, plain, typeAtom, XA_ATOM, 32, PropModeReplace,
+    (unsigned char *)&normalAtom, 1);
+  XSync(dpy, False);
+  PASS([MenuUtils isRealApplicationWindow:(unsigned long)plain onDisplay:dpy],
+    "isRealApplicationWindow:onDisplay: is true for a managed, mapped window");
 
   XUnmapWindow(dpy, plain);
   XSync(dpy, False);

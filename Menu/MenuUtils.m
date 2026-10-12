@@ -265,7 +265,8 @@ static dispatch_once_t _sharedDisplayOnce;
 
     XWindowAttributes attrs;
     BOOL real = NO;
-    if (XGetWindowAttributes(display, (Window)windowId, &attrs) == Success) {
+    /* A nonzero Status is success here, unlike most X calls. */
+    if (XGetWindowAttributes(display, (Window)windowId, &attrs) != 0) {
         /* Mapped (window and ancestors) and not an override-redirect popup. */
         if (attrs.map_state == IsViewable && !attrs.override_redirect) {
             /* WM-managed, or a GNUstep window.  Chromium keeps internal helper
