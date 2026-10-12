@@ -55,6 +55,15 @@ typedef NS_ENUM(NSInteger, SWRepositoryUpdateOutcome) {
 - (SWRepositoryUpdateOutcome)rebuildRepository:(SWRepository *)repository
                                    stepHandler:(void (^)(NSString *stepVerb))stepHandler;
 
+// Runs a command from the checkout root and logs it and every output line,
+// as the build steps are logged. lineHandler, if given, also sees each line
+// (the system package upgrade watches for pkg's "database is locked").
+// Returns the exit status, or -1 when the command could not be started.
+- (int)runCommand:(NSString *)launchPath
+         arguments:(NSArray<NSString *> *)args
+       environment:(NSDictionary *)extraEnv
+       lineHandler:(void (^)(NSString *line))lineHandler;
+
 // Valid after -updateRepository:... returns SWRepositoryUpdateOutcomeStashKept
 // for this repository: the files git reported as conflicted when the stash
 // could not be popped, for the stash alert (spec screen 6).

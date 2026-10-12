@@ -37,6 +37,8 @@ typedef NS_ENUM(NSInteger, SWBuildStatus) {
   NSString *_unreachableReason; // set when the fetch itself failed
   BOOL _selected;
   BOOL _pinAdvanced;
+  BOOL _isSystemPackages;
+  NSArray *_systemPackageUpgrades;
 }
 
 @property (nonatomic, copy) NSString *name;
@@ -59,6 +61,13 @@ typedef NS_ENUM(NSInteger, SWBuildStatus) {
 // Commits column shows the word "new" for these instead of a count; there
 // is no commit list to show (per spec, "pin" is never surfaced in the UI).
 @property (nonatomic) BOOL pinAdvanced;
+
+// The synthetic item for the operating system's own packages (see
+// SWSystemPackages.h), not a git repository: it has no checkout, no branch
+// and no commits, so everything that would look for one asks this first.
+@property (nonatomic) BOOL isSystemPackages;
+// SWSystemPackageUpgrade objects; only meaningful for that item.
+@property (nonatomic, copy) NSArray *systemPackageUpgrades;
 
 @property (nonatomic, readonly) BOOL isPinned;
 @property (nonatomic, readonly) NSUInteger commitCount;

@@ -7,6 +7,7 @@
 #import "SWMainWindowController.h"
 #import "SWSelectionRules.h"
 #import "SWGitTool.h"
+#import "SWSystemPackages.h"
 #import "AppearanceMetrics.h"
 
 static const float kWinWidth = 490.0;
@@ -524,12 +525,18 @@ static const float kBottomBarHeight =
 - (void)presentConfirmationSheetForRepositories:(NSArray<SWRepository *> *)selected
 {
   BOOL anyRestart = NO, anyDirty = NO;
+  SWRepository *systemPackages = nil;
   for (SWRepository *repo in selected) {
     if ([repo restartRequired]) anyRestart = YES;
     if ([repo dirty]) anyDirty = YES;
+    if ([repo isSystemPackages]) systemPackages = repo;
   }
 
   NSMutableArray *notes = [NSMutableArray array];
+  if (systemPackages) {
+    [notes addObject:[NSString stringWithFormat:
+      @"The %@ packages are upgraded first; if that fails, no repository is updated.", [systemPackages name]]];
+  }
   if (anyRestart) {
     [notes addObject:@"Your computer will need to restart to finish this update."];
   }
@@ -608,6 +615,10 @@ static const float kBottomBarHeight =
   }
   if ([identifier isEqualToString:@"commits"]) {
     if ([repo isPinned]) return [repo pinAdvanced] ? @"new" : @"";
+    // The packages to upgrade: it has no commits.
+    if ([repo isSystemPackages]) {
+      return [NSString stringWithFormat:@"%lu", (unsigned long)[[repo systemPackageUpgrades] count]];
+    }
     return [NSString stringWithFormat:@"%lu", (unsigned long)[repo commitCount]];
   }
   return nil;
@@ -615,6 +626,7 @@ static const float kBottomBarHeight =
 
 - (NSString *)branchDisplayStringForRepository:(SWRepository *)repo
 {
+  if ([repo isSystemPackages]) return @"";
   if ([repo isPinned]) {
     NSString *sha = [repo pin];
     return [sha length] >= 7 ? [sha substringToIndex:7] : (sha ?: @"");
@@ -674,6 +686,15 @@ static const float kBottomBarHeight =
   }
 
   NSMutableAttributedString *commitsText = [[NSMutableAttributedString alloc] init];
+  if ([repo isSystemPackages]) {
+    NSDictionary *textAttrs = @{NSFontAttributeName: METRICS_FONT_SYSTEM_REGULAR_11};
+    for (SWSystemPackageUpgrade *upgrade in [repo systemPackageUpgrades]) {
+      [commitsText appendAttributedString:[[NSAttributedString alloc]
+        initWithString:[[upgrade displayLine] stringByAppendingString:@"\n"] attributes:textAttrs]];
+    }
+    [[_detailsCommitsView textStorage] setAttributedString:commitsText];
+    return;
+  }
   for (SWGitCommit *commit in [repo commits]) {
     NSDictionary *shaAttrs = @{
       NSFontAttributeName: METRICS_FONT_SYSTEM_REGULAR_11,

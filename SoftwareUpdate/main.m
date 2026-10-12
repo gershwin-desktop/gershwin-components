@@ -10,6 +10,7 @@
 #import "Models/SWRepositoryUpdater.h"
 #import "Models/SWPrerequisitesInstaller.h"
 #import "Models/SWRunGuard.h"
+#import "Models/SWSystemPackages.h"
 #include <string.h>
 
 // There is no main nib (NSMainNibFile is empty), so NSApplicationMain would
@@ -105,6 +106,45 @@ static BOOL runPrerequisitesPhase(NSString *osSupportDirectory)
   return YES;
 }
 
+// Phase 0 of the update run, when the system packages item was selected:
+// "pkg update" and "pkg upgrade -y". It goes before any git work so the
+// repositories are then built on the upgraded system, and a failure stops
+// the whole run: building against a half-upgraded base system would leave
+// both broken. Emits the item's REPO/DONE pair like a repository, so the
+// progress and completion windows need no special row for it.
+static BOOL runSystemPackagesPhase(SWRepositoryUpdater *updater)
+{
+  const char *name = [SWNextBSDRepositoryName UTF8String];
+  printf("PHASE:%s\n", [SWSystemPackagesPhaseIdentifier UTF8String]);
+  printf("REPO:%s:1:1\n", name);
+  fflush(stdout);
+
+  SWSystemPackageUpgrader *upgrader = [[SWSystemPackageUpgrader alloc]
+    initWithCommandRunner:^int(NSString *launchPath, NSArray<NSString *> *arguments,
+                               NSDictionary<NSString *, NSString *> *environment,
+                               void (^lineHandler)(NSString *line)) {
+      return [updater runCommand:launchPath arguments:arguments
+                     environment:environment lineHandler:lineHandler];
+    }
+               logHandler:^(NSString *line) { emitLog(line); }];
+  NSString *error = nil;
+  BOOL upgraded = [upgrader upgradeWithStepHandler:^(NSString *verb) {
+    printf("STEP:%s\n", [verb UTF8String]);
+    fflush(stdout);
+  } error:&error];
+
+  printf("DONE:%s:%ld:\n", name,
+         (long)(upgraded ? SWRepositoryUpdateOutcomeUpdated : SWRepositoryUpdateOutcomeInstallFailed));
+  if (!upgraded) {
+    printf("FATAL:SYSPKG:%s\n", [error UTF8String]);
+    fflush(stdout);
+    return NO;
+  }
+  printf("PHASE_DONE:%s\n", [SWSystemPackagesPhaseIdentifier UTF8String]);
+  fflush(stdout);
+  return YES;
+}
+
 // Refuses to start when another run is already going. Two runs building
 // /Developer at once configure the same tree simultaneously and corrupt each
 // other, which is not a theoretical hazard: it produced a "C compiler cannot
@@ -133,8 +173,9 @@ static int runPrivilegedUpdate(NSString *argsPath)
   NSString *sourcesDirectory = [args objectForKey:@"SourcesDirectory"];
   NSString *installScriptPath = [args objectForKey:@"InstallScriptPath"];
   NSString *osSupportDirectory = [args objectForKey:@"OSSupportDirectory"];
+  BOOL systemPackages = [[args objectForKey:@"SystemPackages"] boolValue];
 
-  if (![repoDicts count] || !sourcesDirectory || !installScriptPath) {
+  if ((![repoDicts count] && !systemPackages) || !sourcesDirectory || !installScriptPath) {
     printf("FATAL:Malformed update arguments\n");
     fflush(stdout);
     return 1;
@@ -146,6 +187,11 @@ static int runPrivilegedUpdate(NSString *argsPath)
                                                                              logHandler:^(NSString *line) {
     emitLog(line);
   }];
+
+  if (systemPackages && !runSystemPackagesPhase(updater)) return 1;
+  // Only the system packages were selected: there is no checked-out code
+  // whose prerequisites would need installing.
+  if (![repoDicts count]) return 0;
 
   // Phase 1: gershwin-developer, if it was selected (always first in list
   // order, per Repositories.csv - never re-sorted).

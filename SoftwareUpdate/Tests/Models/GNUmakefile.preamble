@@ -75,3 +75,11 @@ ADDITIONAL_LDFLAGS += -Wl,-rpath,/System/Library/Frameworks/PackageManager.frame
 ../../Models/SWRunGuard.m_FILE_FLAGS += $(ARCFLAGS)
 t_SWRunGuard_OBJC_FILES += t_SWRunGuard.m \
   ../../Models/SWRunGuard.m
+
+# The pkg parsers, checker and upgrader take their commands as injected
+# blocks, so this needs neither pkg nor a network; Foundation only.
+../../Models/SWSystemPackages.m_FILE_FLAGS += $(ARCFLAGS)
+t_SWSystemPackages_OBJC_FILES += \
+  ../../Models/SWSystemPackages.m \
+  ../../Models/SWRepository.m \
+  ../../Models/SWSelectionRules.m

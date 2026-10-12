@@ -97,6 +97,14 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
          arguments:(NSArray<NSString *> *)args
        environment:(NSDictionary *)extraEnv
 {
+  return [self runCommand:launchPath arguments:args environment:extraEnv lineHandler:nil];
+}
+
+- (int)runCommand:(NSString *)launchPath
+         arguments:(NSArray<NSString *> *)args
+       environment:(NSDictionary *)extraEnv
+       lineHandler:(void (^)(NSString *line))lineHandler
+{
   _logHandler([NSString stringWithFormat:@"# %@ %@", launchPath, [args componentsJoinedByString:@" "]]);
 
   NSTask *task = [[NSTask alloc] init];
@@ -136,6 +144,7 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
   NSThread *reader = [[NSThread alloc] initWithBlock:^{
     SWDrainPipe(handle, ^(NSString *line) {
       self->_logHandler(line);
+      if (lineHandler) lineHandler(line);
     });
     drained = YES;
   }];

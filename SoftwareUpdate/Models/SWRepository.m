@@ -22,6 +22,8 @@
 @synthesize unreachableReason = _unreachableReason;
 @synthesize selected = _selected;
 @synthesize pinAdvanced = _pinAdvanced;
+@synthesize isSystemPackages = _isSystemPackages;
+@synthesize systemPackageUpgrades = _systemPackageUpgrades;
 
 - (instancetype)initWithPlistEntry:(NSDictionary *)entry
 {
@@ -54,6 +56,7 @@
 
 - (BOOL)hasUpdate
 {
+  if (_isSystemPackages) return [_systemPackageUpgrades count] > 0;
   return [self isPinned] ? _pinAdvanced : [_commits count] > 0;
 }
 

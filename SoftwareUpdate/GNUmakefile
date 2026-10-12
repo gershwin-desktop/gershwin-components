@@ -19,6 +19,7 @@ SoftwareUpdate_OBJC_FILES = \
   Models/SWCompletionSummary.m \
   Models/SWRunGuard.m \
   Models/SWPrerequisitesInstaller.m \
+  Models/SWSystemPackages.m \
   Controllers/SWAppDelegate.m \
   Controllers/SWCheckingWindowController.m \
   Controllers/SWMainWindowController.m \

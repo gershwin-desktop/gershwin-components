@@ -13,8 +13,10 @@
 #import "SWRepositoryList.h"
 #import "SWUpdateChecker.h"
 #import "SWRepositoryUpdater.h"
+#import "SWSystemPackages.h"
 #import <PackageManager/ODLogWindowController.h>
 #import <PackageManager/GWSudoHelper.h>
+#import <PackageManager/GWOSDetector.h>
 
 // /Developer is the gershwin-developer clone; never hard-code anything about
 // its contents beyond these well-known, spec-defined paths.
@@ -31,6 +33,10 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   SWCompletionWindowController *_completionWindow;
   SWUpdateChecker *_checker;
   NSArray<SWRepository *> *_allCheckedRepositories; // every repository the last check reached
+  // The base system's packages, when they have upgrades; nil otherwise. Kept
+  // out of _allCheckedRepositories because it is no repository: a rebuild
+  // must not touch it and the up-to-date count must not count it.
+  SWRepository *_systemPackagesItem;
   BOOL _useDevBranch;
   BOOL _stopRequested;
 
@@ -177,6 +183,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   [[_checkingWindow window] makeKeyAndOrderFront:nil];
 
   _stopRequested = NO;
+  _systemPackagesItem = nil;
   __weak SWAppDelegate *weakSelf = self;
   SWGitLogLine logHandler = ^(NSString *line) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -195,6 +202,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
     SWAppDelegate *strongSelf = weakSelf;
     if (!strongSelf) return;
+    SWRepository *systemPackagesItem = [SWAppDelegate systemPackagesItemWithLogHandler:logHandler];
     [strongSelf->_checker checkRepositories:repositories
                                stopRequested:^BOOL { return strongSelf->_stopRequested; }
                                     progress:^(SWRepository *repo, NSUInteger index, NSUInteger total) {
@@ -205,12 +213,31 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     }
                                   completion:^(NSArray<SWRepository *> *withUpdates, BOOL anyReachable) {
       dispatch_async(dispatch_get_main_queue(), ^{
-        [weakSelf finishCheckWithAllRepositories:repositories
+        SWAppDelegate *innerSelf = weakSelf;
+        if (!innerSelf) return;
+        innerSelf->_systemPackagesItem = systemPackagesItem;
+        [innerSelf finishCheckWithAllRepositories:repositories
                                   repositoriesWithUpdates:withUpdates
                                              anyReachable:anyReachable];
       });
     }];
   });
+}
+
+// Only NextBSD ships its base system as pkg packages; everywhere else there
+// is no such item. Runs on the check's background queue, as the user, and
+// returns nil (having logged why) whenever it cannot tell, so a missing
+// network or a pkg hiccup never stands between the user and the git updates.
++ (SWRepository *)systemPackagesItemWithLogHandler:(SWGitLogLine)logHandler
+{
+  if (![[GWOSDetector currentOSIdentifier] isEqualToString:@"nextbsd"]) return nil;
+  SWSystemPackageChecker *checker =
+    [[SWSystemPackageChecker alloc] initWithRepositoryName:SWNextBSDRepositoryName
+                                             commandRunner:nil
+                                                logHandler:logHandler];
+  NSArray<SWSystemPackageUpgrade *> *upgrades = [checker pendingUpgrades];
+  if ([upgrades count] == 0) return nil;
+  return [SWRepository systemPackagesItemNamed:SWNextBSDRepositoryName upgrades:upgrades];
 }
 
 - (void)finishCheckWithAllRepositories:(NSArray<SWRepository *> *)all
@@ -272,7 +299,11 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     if (![repo isReachable]) [unchecked addObject:repo];
   }
 
-  if ([withUpdates count] == 0 && [unchecked count] > 0) {
+  // Upgradable system packages are an update like any other, and the only one
+  // there is still has to be offered rather than reported as up to date.
+  BOOL systemPackagesPending = _systemPackagesItem != nil;
+
+  if ([withUpdates count] == 0 && !systemPackagesPending && [unchecked count] > 0) {
     NSMutableString *detail = [NSMutableString string];
     for (SWRepository *repo in unchecked) {
       [detail appendFormat:@"%@: %@\n", [repo name],
@@ -291,7 +322,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     return;
   }
 
-  if ([withUpdates count] == 0) {
+  if ([withUpdates count] == 0 && !systemPackagesPending) {
     // Being up to date is not a problem, so it should not wear the same
     // caution icon as a real error - NSAlert defaults to that icon unless
     // given one explicitly.
@@ -335,6 +366,10 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   NSUInteger upToDateCount = 0;
   for (SWRepository *repo in all) {
     if ([repo isReachable] && ![repo hasUpdate]) upToDateCount++;
+  }
+  // First in the list, because it is also what the run does first.
+  if (_systemPackagesItem) {
+    withUpdates = [@[_systemPackagesItem] arrayByAddingObjectsFromArray:withUpdates];
   }
   [_mainWindow setRepositories:withUpdates upToDateCount:upToDateCount useDevelopmentBranch:_useDevBranch];
   [[_mainWindow window] makeKeyAndOrderFront:nil];
@@ -401,8 +436,21 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   _updateRepositories = repositories;
   _updateIsRebuild = rebuild;
 
-  NSMutableArray *repoDicts = [NSMutableArray array];
+  // The system packages item travels as a flag, not as a repository: the
+  // helper upgrades it with pkg before any git work. A rebuild only ever
+  // compiles what is checked out, so it never upgrades packages.
+  BOOL systemPackages = NO;
+  NSMutableArray<SWRepository *> *gitRepositories = [NSMutableArray array];
   for (SWRepository *repo in repositories) {
+    if ([repo isSystemPackages]) {
+      systemPackages = !rebuild;
+    } else {
+      [gitRepositories addObject:repo];
+    }
+  }
+
+  NSMutableArray *repoDicts = [NSMutableArray array];
+  for (SWRepository *repo in gitRepositories) {
     NSMutableDictionary *dict = [NSMutableDictionary dictionary];
     [dict setObject:[repo name] forKey:@"Name"];
     if ([repo pin]) [dict setObject:[repo pin] forKey:@"Pin"];
@@ -415,6 +463,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     @"SourcesDirectory": sourcesDirectory,
     @"InstallScriptPath": installScriptPath,
     @"OSSupportDirectory": osSupportDirectory,
+    @"SystemPackages": @(systemPackages),
   };
   NSString *argsPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
     [NSString stringWithFormat:@"SoftwareUpdate-run-%d.plist", getpid()]];
@@ -425,34 +474,49 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   // no developer phase: nothing is being fetched, so gershwin-developer is
   // just one more repository to compile, and it reports no build step anyway.
   BOOL hasDeveloperPhase = !rebuild &&
-    [[[repositories firstObject] name] isEqualToString:@"gershwin-developer"];
+    [[[gitRepositories firstObject] name] isEqualToString:@"gershwin-developer"];
   NSArray<SWRepository *> *phase3Repos = hasDeveloperPhase
-    ? [repositories subarrayWithRange:NSMakeRange(1, [repositories count] - 1)]
-    : repositories;
+    ? [gitRepositories subarrayWithRange:NSMakeRange(1, [gitRepositories count] - 1)]
+    : gitRepositories;
+  // With only the system packages selected the helper stops after them, so
+  // listing prerequisites and repositories would leave rows that never run.
+  BOOL hasGitPhases = [gitRepositories count] > 0;
 
   NSMutableArray<SWProgressPhase *> *phases = [NSMutableArray array];
+  if (systemPackages) {
+    SWProgressPhase *systemPhase = [[SWProgressPhase alloc] init];
+    [systemPhase setIdentifier:SWSystemPackagesPhaseIdentifier];
+    [systemPhase setTitle:[NSString stringWithFormat:@"Update %@", SWNextBSDRepositoryName]];
+    SWProgressItem *item = [[SWProgressItem alloc] init];
+    [item setTitle:SWNextBSDRepositoryName];
+    [[systemPhase items] addObject:item];
+    [phases addObject:systemPhase];
+  }
   if (hasDeveloperPhase) {
     SWProgressPhase *developerPhase = [[SWProgressPhase alloc] init];
     [developerPhase setIdentifier:@"developer"];
     [developerPhase setTitle:@"Update gershwin-developer"];
     [phases addObject:developerPhase];
   }
-  SWProgressPhase *prereqsPhase = [[SWProgressPhase alloc] init];
-  [prereqsPhase setIdentifier:@"prereqs"];
-  [prereqsPhase setTitle:@"Install prerequisites"];
-  [phases addObject:prereqsPhase];
+  if (hasGitPhases) {
+    SWProgressPhase *prereqsPhase = [[SWProgressPhase alloc] init];
+    [prereqsPhase setIdentifier:@"prereqs"];
+    [prereqsPhase setTitle:@"Install prerequisites"];
+    [phases addObject:prereqsPhase];
 
-  SWProgressPhase *reposPhase = [[SWProgressPhase alloc] init];
-  [reposPhase setIdentifier:@"repos"];
-  [reposPhase setTitle:rebuild ? @"Rebuild repositories" : @"Update repositories"];
-  for (SWRepository *repo in phase3Repos) {
-    SWProgressItem *item = [[SWProgressItem alloc] init];
-    [item setTitle:[repo name]];
-    [[reposPhase items] addObject:item];
+    SWProgressPhase *reposPhase = [[SWProgressPhase alloc] init];
+    [reposPhase setIdentifier:@"repos"];
+    [reposPhase setTitle:rebuild ? @"Rebuild repositories" : @"Update repositories"];
+    for (SWRepository *repo in phase3Repos) {
+      SWProgressItem *item = [[SWProgressItem alloc] init];
+      [item setTitle:[repo name]];
+      [[reposPhase items] addObject:item];
+    }
+    [phases addObject:reposPhase];
   }
-  [phases addObject:reposPhase];
 
-  _updateUnitsTotal = (hasDeveloperPhase ? 1 : 0) + 1 /* prereqs counts as one unit */ + [phase3Repos count];
+  _updateUnitsTotal = (systemPackages ? 1 : 0) + (hasDeveloperPhase ? 1 : 0) +
+    (hasGitPhases ? 1 /* prereqs counts as one unit */ : 0) + [phase3Repos count];
   _updateUnitsCompleted = 0;
   _updateResultRows = [NSMutableArray array];
   _updateStashConflicts = [NSMutableArray array];
@@ -570,6 +634,16 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   [_progressWindow setOverallProgress:fraction];
 }
 
+// The progress window's phase that REPO:/STEP:/DONE: events of the
+// helper's current phase belong to.
+- (NSString *)progressPhaseIdentifierForCurrentPhase
+{
+  for (NSString *identifier in @[@"developer", @"prereqs", SWSystemPackagesPhaseIdentifier]) {
+    if ([_updateCurrentPhase isEqualToString:identifier]) return identifier;
+  }
+  return @"repos";
+}
+
 - (void)handleUpdateEventLine:(NSString *)line
 {
   if ([line hasPrefix:@"LOG:"]) {
@@ -586,6 +660,8 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
   } else if ([line hasPrefix:@"PHASE:"]) {
     _updateCurrentPhase = [line substringFromIndex:6];
     NSString *headline =
+      [_updateCurrentPhase isEqualToString:SWSystemPackagesPhaseIdentifier]
+        ? [NSString stringWithFormat:@"Updating %@…", SWNextBSDRepositoryName] :
       [_updateCurrentPhase isEqualToString:@"developer"] ? @"Updating gershwin-developer…" :
       [_updateCurrentPhase isEqualToString:@"prereqs"] ? @"Installing prerequisites…" :
       (_updateIsRebuild ? @"Rebuilding repositories…" : @"Applying updates…");
@@ -620,7 +696,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     NSArray *parts = [[line substringFromIndex:5] componentsSeparatedByString:@":"];
     if ([parts count] >= 3) {
       NSUInteger idx = (NSUInteger)[parts[1] integerValue];
-      NSString *phaseId = [_updateCurrentPhase isEqualToString:@"developer"] ? @"developer" : @"repos";
+      NSString *phaseId = [self progressPhaseIdentifierForCurrentPhase];
       // Remembered so the DONE: event, which carries the repository name but
       // no position, can mark this same row as finished. Without it the row
       // kept the tick the next REPO: gave it, and a repository that had failed
@@ -628,16 +704,16 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
       _updateCurrentItemIndex = idx - 1;
       _updateCurrentPhaseId = phaseId;
       [_progressWindow beginItemAtIndex:idx - 1 inPhaseWithIdentifier:phaseId trailingText:@""];
-      [_progressWindow setStatusText:[NSString stringWithFormat:@"Checking out %@ (repository %@ of %@)",
-        parts[0], parts[1], parts[2]]];
+      [_progressWindow setStatusText:[phaseId isEqualToString:SWSystemPackagesPhaseIdentifier]
+        ? [NSString stringWithFormat:@"Upgrading %@ packages", parts[0]]
+        : [NSString stringWithFormat:@"Checking out %@ (repository %@ of %@)",
+            parts[0], parts[1], parts[2]]];
     }
 
   } else if ([line hasPrefix:@"STEP:"]) {
     NSString *verb = [line substringFromIndex:5];
     [_progressWindow setStatusText:verb];
-    NSString *phaseId =
-      [_updateCurrentPhase isEqualToString:@"developer"] ? @"developer" :
-      [_updateCurrentPhase isEqualToString:@"prereqs"] ? @"prereqs" : @"repos";
+    NSString *phaseId = [self progressPhaseIdentifierForCurrentPhase];
     SWProgressPhase *phase = [_progressWindow phaseWithIdentifier:phaseId];
     NSUInteger runningIndex = NSNotFound;
     for (NSUInteger i = 0; i < [[phase items] count]; i++) {
@@ -698,6 +774,17 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     NSAlert *alert = [[NSAlert alloc] init];
     [alert setMessageText:@"A required package could not be installed."];
     [alert setInformativeText:[reason substringFromIndex:7]];
+    [alert addButtonWithTitle:@"OK"];
+    _updateFatalAlertShown = YES;
+    [alert runModal];
+  } else if ([reason hasPrefix:@"SYSPKG:"]) {
+    // Said here rather than only in the completion row, because what did
+    // not happen matters as much: no repository was touched.
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:[NSString stringWithFormat:@"%@ could not be updated.", SWNextBSDRepositoryName]];
+    [alert setInformativeText:[NSString stringWithFormat:
+      @"%@ No repositories were updated, so that nothing is built on a partly upgraded system. "
+       @"The log shows what pkg reported.", [reason substringFromIndex:7]]];
     [alert addButtonWithTitle:@"OK"];
     _updateFatalAlertShown = YES;
     [alert runModal];
