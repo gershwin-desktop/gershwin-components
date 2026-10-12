@@ -151,8 +151,103 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
     }
 }
 
+// The source files the makefiles actually compile, taken from the gnustep-make
+// variables that list them (xxx_OBJC_FILES and friends) and followed through
+// SUBPROJECTS.  A repository often carries sources for other platforms next to
+// the ones built here - a project with an iOS and a macOS target, say - and
+// scanning those demands headers that this build never needs.
+- (NSArray<NSString *> *)sourceFilesFromMakefile:(NSString *)makefilePath
+                                           seen:(NSMutableSet *)seenMakefiles
+{
+    NSString *standardized = [makefilePath stringByStandardizingPath];
+    if (!standardized || [seenMakefiles containsObject:standardized]) return @[];
+    [seenMakefiles addObject:standardized];
+
+    NSString *text = [NSString stringWithContentsOfFile:standardized
+                                               encoding:NSUTF8StringEncoding error:NULL];
+    if (!text) return @[];
+
+    NSString *dir = [standardized stringByDeletingLastPathComponent];
+    NSMutableArray *files = [NSMutableArray array];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // Join continuation lines so a list spanning several lines is one line.
+    NSMutableArray *lines = [NSMutableArray array];
+    NSString *pending = nil;
+    for (NSString *raw in [text componentsSeparatedByString:@"\n"]) {
+        NSString *line = raw;
+        BOOL continues = [line hasSuffix:@"\\"];
+        if (continues) line = [line substringToIndex:[line length] - 1];
+        pending = (pending ? [pending stringByAppendingString:line] : line);
+        if (!continues) { [lines addObject:pending]; pending = nil; }
+    }
+    if (pending) [lines addObject:pending];
+
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix:@"#"]) continue;
+
+        NSRange assign = [trimmed rangeOfString:@"="];
+        if (assign.location == NSNotFound) continue;
+        NSString *name = [[trimmed substringToIndex:assign.location]
+            stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" \t+:"]];
+        NSString *value = [trimmed substringFromIndex:NSMaxRange(assign)];
+
+        BOOL listsSources = ([name hasSuffix:@"_OBJC_FILES"] || [name hasSuffix:@"_C_FILES"]
+            || [name hasSuffix:@"_OBJCC_FILES"] || [name hasSuffix:@"_CC_FILES"]
+            || [name hasSuffix:@"_CPP_FILES"] || [name hasSuffix:@"_HEADER_FILES"]);
+        BOOL listsSubprojects = [name hasSuffix:@"SUBPROJECTS"];
+        if (!listsSources && !listsSubprojects) continue;
+
+        for (NSString *token in [value componentsSeparatedByCharactersInSet:
+                 [NSCharacterSet whitespaceCharacterSet]]) {
+            if ([token length] == 0) continue;
+            // A list built from a variable or a wildcard cannot be resolved
+            // here; the caller falls back to scanning the whole tree.
+            if ([token rangeOfString:@"$("].location != NSNotFound) return nil;
+
+            NSString *path = [dir stringByAppendingPathComponent:token];
+            if (listsSubprojects) {
+                NSArray *nested = [self sourceFilesFromMakefile:
+                    [path stringByAppendingPathComponent:@"GNUmakefile"] seen:seenMakefiles];
+                if (!nested) return nil;
+                [files addObjectsFromArray:nested];
+                continue;
+            }
+            if ([fm fileExistsAtPath:path]) [files addObject:[path stringByStandardizingPath]];
+        }
+    }
+
+    return files;
+}
+
 - (NSArray<NSString *> *)collectSourceFiles
 {
+    if ([_makefilePath length] > 0) {
+        NSArray *listed = [self sourceFilesFromMakefile:_makefilePath
+                                                   seen:[NSMutableSet set]];
+        if ([listed count] > 0) {
+            // Headers next to a compiled source belong to the build as well.
+            NSMutableSet *directories = [NSMutableSet set];
+            for (NSString *file in listed)
+                [directories addObject:[file stringByDeletingLastPathComponent]];
+
+            NSMutableArray *files = [NSMutableArray arrayWithArray:listed];
+            NSFileManager *fm = [NSFileManager defaultManager];
+            for (NSString *directory in directories) {
+                for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:NULL]) {
+                    if (![[name pathExtension] isEqualToString:@"h"]) continue;
+                    [files addObject:[directory stringByAppendingPathComponent:name]];
+                }
+            }
+            [self outputLine:[NSString stringWithFormat:
+                @"Preflight: %lu source file(s) listed by the makefiles.",
+                (unsigned long)[files count]]];
+            return files;
+        }
+    }
+
     NSMutableArray *files = [NSMutableArray array];
     [self collectFilesInDirectory:_sourceRoot withSuffix:@"" results:files];
     return files;

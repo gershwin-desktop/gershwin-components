@@ -130,6 +130,48 @@ int main(void)
     PASS([d1 isEqualToString:@"<"], "second include is angle (external)");
   }
 
+  /* A repository often carries sources for other platforms next to the ones
+     the makefiles build; only the listed ones may be scanned, or the build is
+     refused over headers it never needs. */
+  {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat: @"t_Preflight-%d", (int)getpid()]];
+    NSString *sub = [root stringByAppendingPathComponent: @"Lib"];
+    [fm createDirectoryAtPath: sub withIntermediateDirectories: YES
+                   attributes: nil error: NULL];
+
+    [@"#import <AppKit/AppKit.h>\n" writeToFile:
+      [root stringByAppendingPathComponent: @"Built.m"]
+      atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+    [@"#import <UIKit/UIKit.h>\n" writeToFile:
+      [root stringByAppendingPathComponent: @"ForAnotherPlatform.m"]
+      atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+    [@"#import <Foundation/Foundation.h>\n" writeToFile:
+      [sub stringByAppendingPathComponent: @"Sub.m"]
+      atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+    [@"Lib_OBJC_FILES = Sub.m\n" writeToFile:
+      [sub stringByAppendingPathComponent: @"GNUmakefile"]
+      atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+
+    NSString *makefile = [root stringByAppendingPathComponent: @"GNUmakefile"];
+    [@"App_SUBPROJECTS = Lib\nApp_OBJC_FILES = \\\n\tBuilt.m\n" writeToFile: makefile
+      atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+
+    GWBuildPreflight *pf = [[GWBuildPreflight alloc] initWithSourceRoot: root
+                                                          makefilePath: makefile];
+    NSArray *files = [pf collectSourceFiles];
+    NSMutableSet *names = [NSMutableSet set];
+    for (NSString *f in files) [names addObject: [f lastPathComponent]];
+
+    PASS([names containsObject: @"Built.m"], "a source the makefile lists is scanned");
+    PASS([names containsObject: @"Sub.m"], "a source of a subproject is scanned");
+    PASS(![names containsObject: @"ForAnotherPlatform.m"],
+         "a source no makefile builds is not scanned");
+    [pf release];
+    [fm removeItemAtPath: root error: NULL];
+  }
+
   [arp release];
   return 0;
 }
