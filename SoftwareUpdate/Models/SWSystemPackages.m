@@ -333,10 +333,13 @@ SWCommandOutputRunner SWDefaultCommandOutputRunner(void)
 - (BOOL)upgradeWithStepHandler:(void (^)(NSString *stepVerb))stepHandler
                          error:(NSString **)outError
 {
+  /* Only the NextBSD repository: refreshing the others (pkg upgrade
+   * refreshes every repository it uses) would let one that cannot be
+   * reached fail the system upgrade. */
   if (stepHandler) stepHandler(@"Updating the package catalogue");
-  if (![self runPkg:@[@"update"] error:outError]) return NO;
+  if (![self runPkg:@[@"update", @"-r", SWNextBSDRepositoryName] error:outError]) return NO;
   if (stepHandler) stepHandler(@"Upgrading packages");
-  return [self runPkg:@[@"upgrade", @"-y"] error:outError];
+  return [self runPkg:@[@"upgrade", @"-y", @"-r", SWNextBSDRepositoryName] error:outError];
 }
 
 @end

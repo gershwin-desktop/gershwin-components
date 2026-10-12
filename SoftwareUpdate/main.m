@@ -107,8 +107,9 @@ static BOOL runPrerequisitesPhase(NSString *osSupportDirectory)
 }
 
 // Phase 0 of the update run, when the system packages item was selected:
-// "pkg update" and "pkg upgrade -y". It goes before any git work so the
-// repositories are then built on the upgraded system, and a failure stops
+// "pkg update" and "pkg upgrade -y" on the NextBSD repository. It goes
+// before any git work so the repositories are then built on the upgraded
+// system, and a failure stops
 // the whole run: building against a half-upgraded base system would leave
 // both broken. Emits the item's REPO/DONE pair like a repository, so the
 // progress and completion windows need no special row for it.

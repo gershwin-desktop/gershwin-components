@@ -104,7 +104,8 @@ SWCommandOutputRunner SWDefaultCommandOutputRunner(void);
 @property (nonatomic) NSUInteger maxLockAttempts;
 @property (nonatomic) NSTimeInterval lockRetryDelay;
 
-// "pkg update", then "pkg upgrade -y". NO with outError set on failure.
+// "pkg update", then "pkg upgrade -y", both limited to the NextBSD
+// repository. NO with outError set on failure.
 - (BOOL)upgradeWithStepHandler:(void (^)(NSString *stepVerb))stepHandler
                          error:(NSString **)outError;
 

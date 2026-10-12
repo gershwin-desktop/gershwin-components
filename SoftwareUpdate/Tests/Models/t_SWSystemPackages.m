@@ -199,8 +199,9 @@ int main(void)
     NSString *error = nil;
     BOOL ok = [upgrader upgradeWithStepHandler:nil error:&error];
     PASS(ok, "a locked database is waited out, then the upgrade succeeds");
-    NSArray *want = @[ @"update", @"update", @"upgrade -y" ];
-    PASS_EQUAL(calls, want, "pkg update is retried, then pkg upgrade -y runs");
+    NSArray *want = @[ @"update -r NextBSD", @"update -r NextBSD", @"upgrade -y -r NextBSD" ];
+    PASS_EQUAL(calls, want,
+      "pkg update is retried, then pkg upgrade -y runs, both on the NextBSD repository only");
     PASS_EQUAL(seenAssumeYes, @"yes", "ASSUME_ALWAYS_YES=yes is set for pkg");
 
     [calls removeAllObjects];
