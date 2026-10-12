@@ -114,7 +114,7 @@ static NSString *const kGershwinMenuClientNamePrefix = @"io.github.gershwin-desk
 // Application-level menus, keyed by clientName ("io.github.gershwin-desktop.MenuClient.<pid>").
 // These back the menu bar for windowless frontmost apps.  clientPidByClientName
 // lets us advertise the set of menu-bearing apps to the WM (root property
-// _GERSHWIN_MENU_APPS) so Alt-Tab can list windowless apps.
+// _MENU_APPLICATIONS) so Alt-Tab can list windowless apps.
 @property (nonatomic, strong) NSMutableDictionary *menusByClient;
 @property (nonatomic, strong) NSMutableDictionary *clientPidByClientName;
 @property (nonatomic, strong) NSMutableDictionary *lastApplicationMenuDataByClient;
@@ -1185,7 +1185,7 @@ static GNUStepMenuImporter *sSharedImporter = nil;
     return [NSString stringWithFormat:@"%@.%d", kGershwinMenuClientNamePrefix, (int)pid];
 }
 
-/* Rewrite the _GERSHWIN_MENU_APPS root property with the PIDs of every app
+/* Rewrite the _MENU_APPLICATIONS root property with the PIDs of every app
    that currently has an application-level menu.  The window manager reads
    this so its Alt-Tab switcher can list windowless apps (apps with a menu
    but no windows) alongside regular windows. */

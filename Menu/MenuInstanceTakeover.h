@@ -13,7 +13,7 @@ NSString *MenuExecutablePathForProcess(pid_t pid);
 
 // The process a newly started Menu may terminate, or 0.
 // ownerPID is the _NET_WM_PID of the previous owner of this display's
-// _GERSHWIN_MENU_S<n> selection (0 when there was none), so a Menu serving
+// _MENU_S<n> selection (0 when there was none), so a Menu serving
 // another display is never a candidate even when it runs the same program as
 // the same user.
 pid_t MenuPreviousInstanceToTerminate(pid_t ownerPID,

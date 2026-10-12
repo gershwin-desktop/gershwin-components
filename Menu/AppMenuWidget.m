@@ -471,10 +471,10 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     /* Windowless-app precedence.  When the WM falls back to focusing the
        desktop after the frontmost app's last window closed (or the app was
-       selected via Alt-Tab with no window), _GERSHWIN_ACTIVE_APP points at
+       selected via Alt-Tab with no window), _ACTIVE_APPLICATION points at
        that app while the focused desktop window belongs to Workspace.  Show
        the windowless app's application-level menu instead of the desktop
-       menu.  When the user clicks the desktop the WM sets _GERSHWIN_ACTIVE_APP
+       menu.  When the user clicks the desktop the WM sets _ACTIVE_APPLICATION
        to Workspace's own PID, so an explicit click always wins. */
     pid_t activeAppPid = [MenuUtils getActiveApplicationPID];
     if (ctx.isDesktop && activeAppPid != 0 && ctx.pid != 0 && ctx.pid != activeAppPid

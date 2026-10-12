@@ -679,7 +679,7 @@ static dispatch_once_t _sharedDisplayOnce;
     Display *display = [self sharedDisplay];
     if (!display) return 0;
 
-    Atom atom = XInternAtom(display, "_GERSHWIN_ACTIVE_APP", False);
+    Atom atom = XInternAtom(display, "_ACTIVE_APPLICATION", False);
     if (atom == None) return 0;
 
     Atom actualType;
@@ -706,7 +706,7 @@ static dispatch_once_t _sharedDisplayOnce;
     Display *display = [self sharedDisplay];
     if (!display) return @[];
 
-    Atom atom = XInternAtom(display, "_GERSHWIN_MENU_APPS", False);
+    Atom atom = XInternAtom(display, "_MENU_APPLICATIONS", False);
     if (atom == None) return @[];
 
     Atom actualType;
@@ -736,7 +736,7 @@ static dispatch_once_t _sharedDisplayOnce;
     Display *display = [self sharedDisplay];
     if (!display) return;
 
-    Atom atom = XInternAtom(display, "_GERSHWIN_MENU_APPS", False);
+    Atom atom = XInternAtom(display, "_MENU_APPLICATIONS", False);
     if (atom == None) return;
 
     NSUInteger count = [pids count];

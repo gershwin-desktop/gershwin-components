@@ -110,7 +110,7 @@ BOOL MenuTakeOverDisplay(void)
     XErrorHandler previousHandler = XSetErrorHandler(MenuIgnoreXError);
 
     char atomName[64];
-    snprintf(atomName, sizeof(atomName), "_GERSHWIN_MENU_S%d", DefaultScreen(dpy));
+    snprintf(atomName, sizeof(atomName), "_MENU_S%d", DefaultScreen(dpy));
     Atom selection = XInternAtom(dpy, atomName, False);
 
     Window owner = XGetSelectionOwner(dpy, selection);

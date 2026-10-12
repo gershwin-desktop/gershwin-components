@@ -522,23 +522,23 @@ when it started after the windowless app, so the app re-pushes its menu.
 
 Two Gershwin root properties connect Menu.app and the WM:
 
-- `_GERSHWIN_ACTIVE_APP` (Cardinal, PID; **WM-owned**).  The WM writes the PID
+- `_ACTIVE_APPLICATION` (Cardinal, PID; **WM-owned**).  The WM writes the PID
   of the frontmost application on every focus change, including when the
   frontmost app has no window.  Desktop windows are skipped on purpose: when
   the WM falls back to focusing the desktop after the frontmost app's last
   window closed, this property still names the windowless app.  An explicit
   desktop click writes the desktop app's own PID so a deliberate click always
   wins over the fallback.
-- `_GERSHWIN_MENU_APPS` (Cardinal array of PIDs; **Menu.app-owned**).  Menu.app
+- `_MENU_APPLICATIONS` (Cardinal array of PIDs; **Menu.app-owned**).  Menu.app
   republishes this whenever an app menu is stored or removed.  The WM's Alt-Tab
   switcher reads it to add windowless apps as switch targets (skipping PIDs
   already represented by a window), and selecting such an app clears
-  `_NET_ACTIVE_WINDOW` and sets `_GERSHWIN_ACTIVE_APP`.
+  `_NET_ACTIVE_WINDOW` and sets `_ACTIVE_APPLICATION`.
 
 Menu.app display rule for the menu bar:
 
 1. The active window with a registered window menu wins.
-2. Otherwise, show the application-level menu of `_GERSHWIN_ACTIVE_APP` when
+2. Otherwise, show the application-level menu of `_ACTIVE_APPLICATION` when
    the active window is 0, or when the active window is the desktop and its PID
    differs from the active app (windowless fallback).
 3. Otherwise keep the current menu if one is shown, else the system-only menu.

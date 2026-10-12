@@ -152,7 +152,7 @@ NSString * const WindowMonitorViewableActiveWindowNotification = @"WindowMonitor
         }
         _rootWindow = DefaultRootWindow(_display);
         _netActiveWindowAtom = XInternAtom(_display, "_NET_ACTIVE_WINDOW", False);
-        _gershwinActiveAppAtom = XInternAtom(_display, "_GERSHWIN_ACTIVE_APP", False);
+        _gershwinActiveAppAtom = XInternAtom(_display, "_ACTIVE_APPLICATION", False);
         Atom netSupportedAtom = XInternAtom(_display, "_NET_SUPPORTED", False);
         XSelectInput(_display, _rootWindow, PropertyChangeMask | SubstructureNotifyMask);
         XSync(_display, False);
