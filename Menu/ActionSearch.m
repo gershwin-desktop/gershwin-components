@@ -556,7 +556,8 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     Window xid = (Window)(uintptr_t)[self.searchPanel windowRef];
     if (xid == 0) return NO;
     XWindowAttributes attrs;
-    return (XGetWindowAttributes(display, xid, &attrs) == Success
+    /* A nonzero Status is success here, not Success (0). */
+    return (XGetWindowAttributes(display, xid, &attrs) != 0
             && attrs.map_state == IsViewable);
 }
 

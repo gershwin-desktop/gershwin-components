@@ -101,6 +101,21 @@ int main(void)
   PASS([MenuUtils isWindowValid:(unsigned long)plain],
     "an unmapped window is still valid");
 
+  /* _getApplicationNameForWindow:display: made the same comparison with
+     XGetWindowAttributes and returned nil for every existing window; its
+     XGetClassHint and XGetWMName checks were inverted too, so
+     getApplicationNameForWindow: never named any window. */
+  PASS_EQUAL([MenuUtils getApplicationNameForWindow:(unsigned long)plain],
+    @"t_MenuUtilsWindows",
+    "getApplicationNameForWindow: falls back to WM_NAME without WM_CLASS");
+
+  XClassHint hint = { "t-menuutils", "TMenuUtilsClass" };
+  XSetClassHint(dpy, plain, &hint);
+  XSync(dpy, False);
+  PASS_EQUAL([MenuUtils getApplicationNameForWindow:(unsigned long)plain],
+    @"TMenuUtilsClass",
+    "getApplicationNameForWindow: names a window by its WM_CLASS class");
+
   XDestroyWindow(dpy, plain);
   XDestroyWindow(dpy, desktop);
   XSync(dpy, False);

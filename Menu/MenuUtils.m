@@ -96,9 +96,9 @@ static dispatch_once_t _sharedDisplayOnce;
 
     // First validate that the window still exists before accessing properties
     XWindowAttributes attrs;
-    // Set an error handler? XGetWindowAttributes is reasonably safe if we check return,
-    // but a global error handler might be needed if we were really paranoid.
-    if (XGetWindowAttributes(display, (Window)windowId, &attrs) != Success) {
+    /* XGetWindowAttributes, XGetClassHint and XGetWMName return a nonzero
+       Status on success, not Success (0). */
+    if (XGetWindowAttributes(display, (Window)windowId, &attrs) == 0) {
         // NSLog(@"MenuUtils: Window 0x%lx no longer exists, skipping name lookup", windowId);
         return nil;
     }
@@ -107,7 +107,7 @@ static dispatch_once_t _sharedDisplayOnce;
     XClassHint classHint = {NULL, NULL};
     NSString *className = nil;
 
-    if (XGetClassHint(display, (Window)windowId, &classHint) == Success) {
+    if (XGetClassHint(display, (Window)windowId, &classHint) != 0) {
         if (classHint.res_class != NULL) {
             className = [NSString stringWithUTF8String:classHint.res_class];
         }
@@ -161,7 +161,7 @@ static dispatch_once_t _sharedDisplayOnce;
 
     // Fallback to WM_NAME
     XTextProperty windowName;
-    if (XGetWMName(display, (Window)windowId, &windowName) == Success) {
+    if (XGetWMName(display, (Window)windowId, &windowName) != 0) {
         NSString *title = nil;
         if (windowName.value) {
             title = [NSString stringWithUTF8String:(char *)windowName.value];
