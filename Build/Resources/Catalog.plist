@@ -68,6 +68,14 @@
 	</dict>
 	<dict>
 		<key>Name</key>
+		<string>Colloquy</string>
+		<key>GitURL</key>
+		<string>https://github.com/probonopd/colloquy</string>
+		<key>Description</key>
+		<string>Chat on IRC with styled transcripts, several connections at once and file transfers</string>
+	</dict>
+	<dict>
+		<key>Name</key>
 		<string>EasyDiff</string>
 		<key>GitURL</key>
 		<string>https://github.com/gnustep/apps-easydiff</string>
