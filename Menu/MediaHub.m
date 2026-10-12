@@ -559,7 +559,7 @@ static NSString *MediaPlayersSignature(NSArray<MediaPlayerEntry *> *entries)
  * in it.  A string is a value and arrives as one, so the list travels as a
  * property list and the client's GSMediaControlPlayers() reads it back into
  * real objects.  See GSMediaControl.h. */
-- (NSString *)playersPropertyList
+- (bycopy NSString *)playersPropertyList
 {
     NSArray *described = [self players];
     if ([described count] == 0) {
