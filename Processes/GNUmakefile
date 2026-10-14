@@ -15,12 +15,14 @@ Processes_OBJC_FILES = \
 	main.m \
 	ProcessInfo.m \
 	ProcessHealth.m \
+	ProcessSampler.m \
 	SparklineView.m \
 	ProcessesController.m
 
 Processes_HEADERS = \
 	ProcessInfo.h \
 	ProcessHealth.h \
+	ProcessSampler.h \
 	SparklineView.h \
 	ProcessesController.h
 
@@ -36,6 +38,7 @@ Processes_LDFLAGS = -lgnustep-base -lgnustep-gui -ldispatch -Wl,-rpath,/System/L
 
 # Enable ARC for implementation files in this target
 ProcessInfo.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
+ProcessSampler.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
 ProcessHealth.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
 SparklineView.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions
 ProcessesController.m_FILE_FLAGS += -DGS_WITH_ARC=1 -fobjc-arc -fobjc-arc-exceptions

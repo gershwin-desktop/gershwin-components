@@ -50,6 +50,10 @@ Menu_OBJC_FILES = \
 	ActionSearch.m \
 	SystemActions.m \
 	RunningApplicationList.m \
+	ProcessHogMonitor.m \
+	../Processes/ProcessSampler.m \
+	../Processes/ProcessInfo.m \
+	../Processes/ProcessHealth.m \
 	ForceQuitPanel.m \
 	MenuExtraManager.m \
 	GSExtrasMenuView.m \
@@ -102,6 +106,7 @@ Menu_HEADER_FILES = \
 	ActionSearch.h \
 	SystemActions.h \
 	RunningApplicationList.h \
+	ProcessHogMonitor.h \
 	ForceQuitPanel.h \
 	GSMenuExtra.h \
 	GSMenuExtraContext.h \
@@ -197,7 +202,14 @@ ifeq ($(PROFILE),1)
 ADDITIONAL_OBJCFLAGS += -DMENU_PROFILING=1
 endif
 
-ADDITIONAL_OBJCFLAGS += -I../Sound -I../Network -I../MediaRemote -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
+# The Force Quit panel reads the process table with the sampler the Processes
+# application is built from, so there is one reader.  Those sources spell ARC
+# as GS_WITH_ARC; the flags are keyed by the path exactly as listed above.
+../Processes/ProcessSampler.m_FILE_FLAGS += -DGS_WITH_ARC=1
+../Processes/ProcessInfo.m_FILE_FLAGS += -DGS_WITH_ARC=1
+../Processes/ProcessHealth.m_FILE_FLAGS += -DGS_WITH_ARC=1
+
+ADDITIONAL_OBJCFLAGS += -I../Processes -I../Sound -I../Network -I../MediaRemote -I/System/Library/Headers/SoundBackend -I/System/Library/Headers/NetworkBackend
 # --as-needed avoids unnecessary libm dependency (needed on FreeBSD)
 ADDITIONAL_LDFLAGS = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo '-Wl,--as-needed' || echo '')
 AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo 'ADDITIONAL_LDFLAGS=-Wl,--as-needed' || echo '')

@@ -6,11 +6,15 @@
 
 #import "ForceQuitPanel.h"
 #import "RunningApplicationList.h"
+#import "ProcessHogMonitor.h"
+#import "ProcessSampler.h"
 #import "AppearanceMetrics.h"
 
 #import <errno.h>
 #import <signal.h>
 #import <string.h>
+#import <time.h>
+#import <unistd.h>
 
 static const CGFloat kForceQuitPanelWidth = 400.0;
 static const CGFloat kForceQuitPanelHeight = 320.0;
@@ -22,9 +26,24 @@ static const CGFloat kForceQuitHintHeight = 28.0;
 static const CGFloat kForceQuitRowHeight = 22.0;
 static const CGFloat kForceQuitIconSize = 22.0;
 static const CGFloat kForceQuitIconColumnWidth = 26.0;
+static const CGFloat kForceQuitDetailColumnWidth = 130.0;
 /* Applications come and go while the panel is open; the list must follow
    without the user having to reopen it. */
 static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
+/* Processes hogging the machine are found by reading the whole process table,
+   which is dearer than asking the window manager, so it is done less often.
+   CPU use is a difference between two readings: when the panel opens, the
+   second reading follows this long after the first so that the list does not
+   stay without hogs for a whole refresh interval. */
+static const NSTimeInterval kForceQuitHogRefreshInterval = 2.0;
+static const NSTimeInterval kForceQuitHogFirstWindow = 0.7;
+
+static NSTimeInterval ForceQuitMonotonicTime(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (NSTimeInterval)now.tv_sec + (NSTimeInterval)now.tv_nsec / 1e9;
+}
 
 /* The table view is first responder and swallows Escape, so the panel
    closes itself before the event is dispatched. */
@@ -81,9 +100,22 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
 {
     NSTableView *_tableView;
     NSButton *_forceQuitButton;
+    /* The rows shown: the windowed applications, then the other processes
+       that hog the machine (see ProcessHogMonitor). */
     NSArray *_applications;
+    NSArray *_hogs;
     NSMutableDictionary *_iconsByName;
+    NSImage *_processIcon;
     NSTimer *_refreshTimer;
+    NSTimer *_hogTimer;
+    /* Table reads run one after the other on this queue, off the main thread;
+       the monitor is only touched from there. */
+    dispatch_queue_t _samplingQueue;
+    ProcessHogMonitor *_hogMonitor;
+    /* A sample that finishes after the panel was closed (or reopened) must
+       not repaint a list it no longer belongs to. */
+    NSUInteger _samplingGeneration;
+    BOOL _sampleInFlight;
 }
 @end
 
@@ -116,6 +148,8 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     self = [super initWithWindow:panel];
     if (self) {
         _applications = @[];
+        _hogs = @[];
+        _samplingQueue = dispatch_queue_create("ForceQuitPanel.sampling", DISPATCH_QUEUE_SERIAL);
         _iconsByName = [NSMutableDictionary dictionary];
         [panel setDelegate:self];
         [self buildContent];
@@ -195,9 +229,20 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     NSTableColumn *nameColumn = [[NSTableColumn alloc] initWithIdentifier:@"name"];
     [nameColumn setDataCell:[[ForceQuitNameCell alloc] init]];
     [nameColumn setEditable:NO];
-    [nameColumn setWidth:tableSize.width - kForceQuitIconColumnWidth];
+    [nameColumn setWidth:tableSize.width - kForceQuitIconColumnWidth - kForceQuitDetailColumnWidth];
     [nameColumn setResizingMask:NSTableColumnAutoresizingMask];
     [_tableView addTableColumn:nameColumn];
+
+    NSTableColumn *detailColumn = [[NSTableColumn alloc] initWithIdentifier:@"detail"];
+    ForceQuitNameCell *detailCell = [[ForceQuitNameCell alloc] init];
+    [detailCell setAlignment:NSRightTextAlignment];
+    [detailCell setTextColor:[NSColor darkGrayColor]];
+    [detailColumn setDataCell:detailCell];
+    [detailColumn setEditable:NO];
+    [detailColumn setWidth:kForceQuitDetailColumnWidth];
+    [detailColumn setMinWidth:kForceQuitDetailColumnWidth];
+    [detailColumn setMaxWidth:kForceQuitDetailColumnWidth];
+    [_tableView addTableColumn:detailColumn];
 
     [_tableView setDataSource:self];
     [_tableView setDelegate:self];
@@ -242,6 +287,7 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
                                                        userInfo:nil
                                                         repeats:YES];
     }
+    [self startHogSampling];
 }
 
 - (void)windowWillClose:(NSNotification *)notification
@@ -249,6 +295,7 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     (void)notification;
     [_refreshTimer invalidate];
     _refreshTimer = nil;
+    [self stopHogSampling];
 }
 
 - (void)refreshTimerFired:(NSTimer *)timer
@@ -257,17 +304,86 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     [self reloadApplications];
 }
 
+#pragma mark - Processes hogging the machine
+
+- (void)startHogSampling
+{
+    if (_hogTimer != nil) {
+        return;
+    }
+    _samplingGeneration++;
+    _hogs = @[];
+    _sampleInFlight = YES;
+    NSUInteger generation = _samplingGeneration;
+    ProcessHogMonitor *monitor = [[ProcessHogMonitor alloc]
+        initWithTotalMemoryKB:[ProcessSampler totalMemoryKB]
+               ticksPerSecond:sysconf(_SC_CLK_TCK)
+                  currentUser:[ProcessSampler userNameForUid:geteuid()]
+                       ownPid:(int)getpid()];
+    _hogMonitor = monitor;
+
+    dispatch_async(_samplingQueue, ^{
+        /* The first table only seeds the CPU measurement. */
+        [monitor hogsAfterSample:[ProcessSampler scanProcessesTruncated:NULL]
+                          atTime:ForceQuitMonotonicTime()];
+        [NSThread sleepForTimeInterval:kForceQuitHogFirstWindow];
+        [self sampleHogsWithMonitor:monitor generation:generation];
+    });
+
+    _hogTimer = [NSTimer scheduledTimerWithTimeInterval:kForceQuitHogRefreshInterval
+                                                 target:self
+                                               selector:@selector(hogTimerFired:)
+                                               userInfo:nil
+                                                repeats:YES];
+}
+
+- (void)stopHogSampling
+{
+    [_hogTimer invalidate];
+    _hogTimer = nil;
+    _hogMonitor = nil;
+    _samplingGeneration++;
+    _sampleInFlight = NO;
+}
+
+- (void)hogTimerFired:(NSTimer *)timer
+{
+    (void)timer;
+    /* A slow scan must not queue up behind itself. */
+    if (_sampleInFlight) {
+        return;
+    }
+    _sampleInFlight = YES;
+    ProcessHogMonitor *monitor = _hogMonitor;
+    NSUInteger generation = _samplingGeneration;
+    dispatch_async(_samplingQueue, ^{
+        [self sampleHogsWithMonitor:monitor generation:generation];
+    });
+}
+
+/* Runs on the sampling queue. */
+- (void)sampleHogsWithMonitor:(ProcessHogMonitor *)monitor generation:(NSUInteger)generation
+{
+    NSArray *hogs = [monitor hogsAfterSample:[ProcessSampler scanProcessesTruncated:NULL]
+                                      atTime:ForceQuitMonotonicTime()];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (generation != self->_samplingGeneration) {
+            return;
+        }
+        self->_sampleInFlight = NO;
+        self->_hogs = hogs;
+        [self reloadApplications];
+    });
+}
+
 #pragma mark - Application list
 
 - (void)reloadApplications
 {
     NSNumber *selectedPid = [self selectedApplicationPid];
 
-    NSArray *apps = [RunningApplicationList applicationsOwningWindows];
-    NSSortDescriptor *byName = [NSSortDescriptor sortDescriptorWithKey:@"name"
-                                                             ascending:YES
-                                                              selector:@selector(caseInsensitiveCompare:)];
-    apps = [apps sortedArrayUsingDescriptors:@[byName]];
+    NSArray *apps = [ProcessHogMonitor rowsForApplications:[RunningApplicationList applicationsOwningWindows]
+                                                      hogs:_hogs];
     if ([apps isEqualToArray:_applications]) {
         return;
     }
@@ -307,6 +423,26 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
    bundles have no icon to show.  -launchedApplications would give the exact
    bundle path, but it asks the Workspace over DO, and the Workspace may be
    the very application that hangs. */
+- (NSImage *)iconForRow:(NSDictionary *)row
+{
+    /* A process that owns no window is not an application bundle, even when
+       an application of the same name is installed. */
+    if (![[row objectForKey:@"application"] boolValue]) {
+        return [self iconForProcess];
+    }
+    return [self iconForApplicationNamed:[row objectForKey:@"name"]];
+}
+
+- (NSImage *)iconForProcess
+{
+    if (_processIcon == nil) {
+        NSImage *icon = [[[NSWorkspace sharedWorkspace] iconForFile:@"/bin/sh"] copy];
+        [icon setSize:NSMakeSize(kForceQuitIconSize, kForceQuitIconSize)];
+        _processIcon = icon;
+    }
+    return _processIcon;
+}
+
 - (NSImage *)iconForApplicationNamed:(NSString *)name
 {
     id icon = [_iconsByName objectForKey:name];
@@ -364,6 +500,10 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
         [failure addButtonWithTitle:NSLocalizedString(@"OK", nil)];
         [failure runModal];
     }
+    /* The next sample would drop the process anyway; do not leave it in the
+       list until then. */
+    NSPredicate *notKilled = [NSPredicate predicateWithFormat:@"pid != %d", (int)pid];
+    _hogs = [_hogs filteredArrayUsingPredicate:notKilled];
     [self reloadApplications];
 }
 
@@ -381,11 +521,14 @@ static const NSTimeInterval kForceQuitRefreshInterval = 1.0;
     if (row < 0 || (NSUInteger)row >= [_applications count]) {
         return nil;
     }
-    NSString *name = [[_applications objectAtIndex:row] objectForKey:@"name"];
+    NSDictionary *entry = [_applications objectAtIndex:row];
     if ([[column identifier] isEqual:@"icon"]) {
-        return [self iconForApplicationNamed:name];
+        return [self iconForRow:entry];
     }
-    return name;
+    if ([[column identifier] isEqual:@"detail"]) {
+        return [entry objectForKey:@"detail"];
+    }
+    return [entry objectForKey:@"name"];
 }
 
 - (BOOL)tableView:(NSTableView *)tableView shouldEditTableColumn:(NSTableColumn *)column row:(NSInteger)row

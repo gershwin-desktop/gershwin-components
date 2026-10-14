@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog t_ProcessHogMonitor
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -225,5 +225,15 @@ t_MenuInstanceTakeover_OBJC_FILES = t_MenuInstanceTakeover.m ../../MenuInstanceT
 t_MenuInstanceTakeover_TOOL_LIBS += -lX11
 
 t_MenuWindowWatchdog_OBJC_FILES = t_MenuWindowWatchdog.m ../../MenuWindowWatchdog.m
+
+# The hog finder reads ProcessInfo records from the Processes application's
+# shared sampler sources.  The units are ARC; the test tool is not.  Flags are
+# keyed by the path exactly as listed.
+t_ProcessHogMonitor_OBJC_FILES = t_ProcessHogMonitor.m ../../ProcessHogMonitor.m \
+	../../../Processes/ProcessInfo.m ../../../Processes/ProcessHealth.m
+t_ProcessHogMonitor_INCLUDE_DIRS += -I../../../Processes
+../../ProcessHogMonitor.m_FILE_FLAGS += $(ARCFLAGS)
+../../../Processes/ProcessInfo.m_FILE_FLAGS += -DGS_WITH_ARC=1 $(ARCFLAGS)
+../../../Processes/ProcessHealth.m_FILE_FLAGS += -DGS_WITH_ARC=1 $(ARCFLAGS)
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make
