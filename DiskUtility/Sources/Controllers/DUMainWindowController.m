@@ -1982,6 +1982,10 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
     if (value >= 3.0) {
         [defaults setDouble:value forKey:@"DURefreshInterval"];
     }
+    // The device monitor re-arms its timer on NSUserDefaultsDidChangeNotification,
+    // which libs-base posts only from -synchronize; without it the new
+    // interval would apply up to 30 s later.
+    [defaults synchronize];
 }
 
 - (void)windowWillClose:(NSNotification *)notification
