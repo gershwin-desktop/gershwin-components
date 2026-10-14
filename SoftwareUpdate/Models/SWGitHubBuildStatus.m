@@ -13,6 +13,155 @@
 }
 @end
 
+// --- Reading the Actions page ---------------------------------------------
+//
+// The page is a client side app: its run list is JSON in a script block, and
+// GitHub moves and renames things in it without notice.  The API that is the
+// alternative is limited to 60 requests an hour.  So runs are found by what a
+// run must say, not by where it says it: it names a commit and says how it
+// went.
+
+typedef NS_ENUM(NSInteger, SWStateClass) {
+  SWStateIgnored = 0,   // not a verdict: "completed" alone, "skipped", "active", ...
+  SWStateRunning,
+  SWStatePassed,
+  SWStateFailed,
+};
+
+// Tolerant reading of a status or conclusion: any casing, with or without a
+// WORKFLOW_RUN_STATUS_ style prefix.
+// "completed" on its own says the run is over but not how it went, so it is
+// ignored, as is anything unknown: neither can ever make a pass.
+static SWStateClass SWClassifyState(NSString *raw)
+{
+  if (![raw isKindOfClass:[NSString class]] || [raw length] == 0 || [raw length] > 64) return SWStateIgnored;
+  NSString *s = [raw lowercaseString];
+  for (NSString *prefix in @[ @"workflow_run_status_", @"workflow_run_conclusion_", @"check_conclusion_state_",
+                              @"check_status_state_" ]) {
+    if ([s hasPrefix:prefix]) s = [s substringFromIndex:[prefix length]];
+  }
+  s = [[s stringByReplacingOccurrencesOfString:@"_" withString:@" "]
+        stringByReplacingOccurrencesOfString:@"-" withString:@" "];
+  for (NSString *w in @[ @"fail", @"unsuccessful", @"cancel", @"timed out", @"timeout", @"action required",
+                         @"stopped", @"error" ]) {
+    if ([s containsString:w]) return SWStateFailed;
+  }
+  for (NSString *w in @[ @"in progress", @"running", @"queued", @"pending", @"waiting", @"requested" ]) {
+    if ([s containsString:w]) return SWStateRunning;
+  }
+  if ([s containsString:@"success"]) return SWStatePassed;
+  return SWStateIgnored;
+}
+
+static BOOL SWIsSha40(NSString *s)
+{
+  if ([s length] != 40) return NO;
+  NSCharacterSet *bad = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF"] invertedSet];
+  return [s rangeOfCharacterFromSet:bad].location == NSNotFound;
+}
+
+// The sha of the first /commit/<40 hex> in a string, lower case, or nil.
+static NSString *SWShaInCommitLink(NSString *s)
+{
+  NSRange at = [s rangeOfString:@"/commit/"];
+  if (at.location == NSNotFound || NSMaxRange(at) + 40 > [s length]) return nil;
+  NSString *sha = [s substringWithRange:NSMakeRange(NSMaxRange(at), 40)];
+  return SWIsSha40(sha) ? [sha lowercaseString] : nil;
+}
+
+static BOOL SWShaMatches(NSString *runSha, NSString *wanted)
+{
+  return [runSha hasPrefix:wanted] || [wanted hasPrefix:runSha];
+}
+
+// Evidence found in an object (a commit link anywhere in a
+// string value, or a 40 hex value under a key that has "sha" in its name; a
+// recognised value under a key that has status, conclusion or state in its
+// name) is passed up until an object holds both, and that object is a run.
+// Evidence of different list entries is never mixed, so one run's commit
+// cannot borrow another's verdict.
+static void SWWalkJSON(id node, NSMutableArray *shas, NSMutableArray *states, NSMutableArray *runs)
+{
+  if ([node isKindOfClass:[NSArray class]]) {
+    for (id element in node) {
+      SWWalkJSON(element, [NSMutableArray array], [NSMutableArray array], runs);
+    }
+    return;
+  }
+  if (![node isKindOfClass:[NSDictionary class]]) return;
+
+  NSMutableArray *ownShas = [NSMutableArray array], *ownStates = [NSMutableArray array];
+  [node enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+    if ([value isKindOfClass:[NSString class]]) {
+      NSString *lowerKey = [[key description] lowercaseString];
+      NSString *linked = SWShaInCommitLink(value);
+      if (linked) {
+        [ownShas addObject:linked];
+      } else if ([lowerKey containsString:@"sha"] && SWIsSha40(value)) {
+        [ownShas addObject:[value lowercaseString]];
+      }
+      if ([lowerKey containsString:@"status"] || [lowerKey containsString:@"conclusion"]
+          || [lowerKey containsString:@"state"]) {
+        SWStateClass c = SWClassifyState(value);
+        if (c != SWStateIgnored) [ownStates addObject:@(c)];
+      }
+    } else {
+      SWWalkJSON(value, ownShas, ownStates, runs);
+    }
+  }];
+
+  if ([ownShas count] > 0 && [ownStates count] > 0) {
+    [runs addObject:@{ @"shas": ownShas, @"states": ownStates }];
+  } else {
+    [shas addObjectsFromArray:ownShas];
+    [states addObjectsFromArray:ownStates];
+  }
+}
+
+// The verdict for one commit from a set of state classes, or nil when there is
+// none: any failed run makes it failed, else any run still going makes it
+// running, else a passed run makes it passed.
+static NSNumber *SWVerdict(BOOL failed, BOOL running, BOOL passed)
+{
+  if (failed) return @(SWBuildStatusFailed);
+  if (running) return @(SWBuildStatusRunning);
+  return passed ? @(SWBuildStatusPassed) : nil;
+}
+
+static NSNumber *SWStatusFromEmbeddedJSON(NSString *html, NSString *sha)
+{
+  NSRegularExpression *scripts = [NSRegularExpression regularExpressionWithPattern:@"<script\\b[^>]*>(.*?)</script>"
+                                                                           options:NSRegularExpressionDotMatchesLineSeparators
+                                                                             error:NULL];
+  BOOL failed = NO, running = NO, passed = NO;
+  for (NSTextCheckingResult *m in [scripts matchesInString:html options:0 range:NSMakeRange(0, [html length])]) {
+    NSString *body = [[html substringWithRange:[m rangeAtIndex:1]]
+                       stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([body length] == 0 || ([body characterAtIndex:0] != '{' && [body characterAtIndex:0] != '[')) continue;
+    id json = [NSJSONSerialization JSONObjectWithData:[body dataUsingEncoding:NSUTF8StringEncoding]
+                                              options:0 error:NULL];
+    if (!json) continue;
+    NSMutableArray *runs = [NSMutableArray array];
+    SWWalkJSON(json, [NSMutableArray array], [NSMutableArray array], runs);
+    for (NSDictionary *run in runs) {
+      BOOL mine = NO;
+      for (NSString *runSha in run[@"shas"]) {
+        if (SWShaMatches(runSha, sha)) { mine = YES; break; }
+      }
+      if (!mine) continue;
+      for (NSNumber *c in run[@"states"]) {
+        switch ((SWStateClass)[c integerValue]) {
+          case SWStateFailed: failed = YES; break;
+          case SWStateRunning: running = YES; break;
+          case SWStatePassed: passed = YES; break;
+          default: break;
+        }
+      }
+    }
+  }
+  return SWVerdict(failed, running, passed);
+}
+
 @implementation SWGitHubBuildStatus
 
 - (instancetype)initWithFetcher:(SWHTTPFetcher)fetcher
@@ -120,64 +269,20 @@
   return [self statusForRepositoryNamed:repoName sha:tipSha];
 }
 
-// Reads the run rows of an Actions page.  A row holds the commit its run is
-// for (a link to /commit/<sha>) and the state of the run in the label of its
-// icon: "currently running", "queued", "failed", "cancelled", "completed
-// successfully" and the like.  Of the rows for this commit: any failed run
-// makes it failed, else any run still going makes it running, else a passed
-// run makes it passed.  nil when no row is for this commit or the page is not
-// understood, so that the caller asks the API instead.
+// Reads the run list of an Actions page for one commit.  Of the runs for it:
+// any failed run makes it failed, else any run still going makes it running,
+// else a passed run makes it passed.  nil when the page has no verdict for the
+// commit or no JSON, so that the caller asks the API instead.  Never a guess.
 - (NSNumber *)statusFromActionsPageData:(NSData *)data forSha:(NSString *)sha
 {
   if (!data || [sha length] < 7) return nil;
   NSString *html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
   if ([html length] == 0) return nil;
-
-  NSError *error = nil;
-  NSRegularExpression *rowStart = [NSRegularExpression regularExpressionWithPattern:@"class=\"[^\"]*Box-row"
-                                                                              options:0
-                                                                                error:&error];
-  NSRegularExpression *label = [NSRegularExpression regularExpressionWithPattern:@"aria-label=\"([A-Za-z ]+): "
-                                                                         options:0
-                                                                           error:&error];
-  NSRegularExpression *commit = [NSRegularExpression regularExpressionWithPattern:@"/commit/([0-9a-f]{40})"
-                                                                          options:0
-                                                                            error:&error];
-  if (error) return nil;
-
-  NSArray<NSTextCheckingResult *> *starts = [rowStart matchesInString:html options:0 range:NSMakeRange(0, [html length])];
-  BOOL failed = NO, running = NO, passed = NO, seen = NO;
-  NSString *lowerSha = [sha lowercaseString];
-
-  for (NSUInteger i = 0; i < [starts count]; i++) {
-    NSUInteger from = [starts[i] range].location;
-    NSUInteger to = (i + 1 < [starts count]) ? [starts[i + 1] range].location : [html length];
-    NSRange rowRange = NSMakeRange(from, to - from);
-
-    NSTextCheckingResult *c = [commit firstMatchInString:html options:0 range:rowRange];
-    if (!c) continue;
-    NSString *rowSha = [html substringWithRange:[c rangeAtIndex:1]];
-    if (![rowSha hasPrefix:lowerSha] && ![lowerSha hasPrefix:rowSha]) continue;
-
-    NSTextCheckingResult *l = [label firstMatchInString:html options:0 range:rowRange];
-    if (!l) continue;
-    NSString *state = [[html substringWithRange:[l rangeAtIndex:1]] lowercaseString];
-
-    if ([state hasPrefix:@"failed"] || [state hasPrefix:@"cancel"] || [state hasPrefix:@"timed"]
-        || [state hasPrefix:@"stopped"]) {
-      failed = YES; seen = YES;
-    } else if ([state hasPrefix:@"currently"] || [state hasPrefix:@"queued"] || [state hasPrefix:@"waiting"]
-               || [state hasPrefix:@"pending"] || [state hasPrefix:@"in progress"]) {
-      running = YES; seen = YES;
-    } else if ([state hasPrefix:@"completed"] || [state hasPrefix:@"success"]) {
-      passed = YES; seen = YES;
-    }                                        // skipped and the like count for nothing
-  }
-
-  if (!seen) return nil;
-  if (failed) return @(SWBuildStatusFailed);
-  if (running) return @(SWBuildStatusRunning);
-  return passed ? @(SWBuildStatusPassed) : nil;
+  NSNumber *answer = SWStatusFromEmbeddedJSON(html, [sha lowercaseString]);
+  // Logged so that a future change of the page shows up as a missing answer.
+  NSDebugLog(@"SWGitHubBuildStatus: Actions page %@ for %@",
+             answer ? @"answered" : @"had no verdict", sha);
+  return answer;
 }
 
 // Parses a check-runs response: no runs -> unknown; any check that has not

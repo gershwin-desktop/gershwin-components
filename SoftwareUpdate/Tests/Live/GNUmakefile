@@ -3,12 +3,16 @@
 # they need the network and the operating system they are written for.
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TOOL_NAME = sw_pkg_check
+TOOL_NAME = sw_pkg_check sw_build_status_check
 
 sw_pkg_check_OBJC_FILES = sw_pkg_check.m ../../Models/SWSystemPackages.m ../../Models/SWRepository.m
 ../../Models/SWSystemPackages.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 ../../Models/SWRepository.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 sw_pkg_check.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+sw_build_status_check_OBJC_FILES = sw_build_status_check.m ../../Models/SWGitHubBuildStatus.m
+../../Models/SWGitHubBuildStatus.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+sw_build_status_check.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 
 ADDITIONAL_INCLUDE_DIRS += -I../../Models
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Wno-unused-parameter
