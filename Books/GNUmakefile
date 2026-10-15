@@ -60,6 +60,8 @@ Books_RESOURCE_FILES = \
 ADDITIONAL_OBJCFLAGS += -fobjc-arc -fobjc-runtime=gnustep-2.0 -Wno-protocol
 ADDITIONAL_GUI_LIBS += -lGL
 
+include $(GNUSTEP_MAKEFILES)/application.make
+
 # Register Books as the handler for .epub so double-click opens the app.
 # Run as the real (desktop) user, not root: make_services writes the
 # association cache into that user's ~/Library/Services, which is what the
@@ -71,5 +73,3 @@ after-install::
 	  else \
 	    /Local/Library/Tools/make_services 2>/dev/null || true; \
 	  fi
-
-include $(GNUSTEP_MAKEFILES)/application.make
