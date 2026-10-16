@@ -6,6 +6,7 @@
 
 #import "WhisperController.h"
 #import "GSMediaPlayer2.h"
+#import "WApplication.h"
 #import "AppearanceMetrics.h"
 #import "WAudioLoader.h"
 #import "WCapture.h"
@@ -120,15 +121,25 @@ static const char *langNames[] = {
     NULL
 };
 
+/* whisper.cpp calls these on the worker, inside wdlopen_full.  The context
+   ties each report to the job that produced it, so a late report of an
+   older take or file is recognised and dropped on the main thread. */
+typedef struct {
+    WhisperController *ctrl;
+    NSUInteger generation;
+} WJobContext;
+
 // C callback for progress
 static void whisper_progress_cb(struct whisper_context *ctx,
                                 struct whisper_state *state,
                                 int progress, void *user_data)
 {
-    WhisperController *ctrl = (WhisperController *)user_data;
-    [ctrl performSelectorOnMainThread:@selector(transcriptionProgress:)
-                           withObject:[NSNumber numberWithInt:progress]
-                        waitUntilDone:NO];
+    WJobContext *job = (WJobContext *)user_data;
+    [job->ctrl performSelectorOnMainThread:@selector(transcriptionProgress:)
+                                withObject:[NSArray arrayWithObjects:
+                                    [NSNumber numberWithUnsignedInteger:job->generation],
+                                    [NSNumber numberWithInt:progress], nil]
+                             waitUntilDone:NO];
 }
 
 // C callback for new segments (fires during whisper_full decoding)
@@ -136,11 +147,11 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
                                    struct whisper_state *state,
                                    int n_new, void *user_data)
 {
-    WhisperController *ctrl = (WhisperController *)user_data;
+    WJobContext *job = (WJobContext *)user_data;
+    WhisperController *ctrl = job->ctrl;
     int total = wdlopen_full_n_segments(ctx);
 
     NSMutableArray *newSegs = [NSMutableArray array];
-    NSMutableString *text = [NSMutableString string];
 
     for (int i = total - n_new; i < total; i++) {
         const char *seg_text = wdlopen_full_get_segment_text(ctx, i);
@@ -158,10 +169,6 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
             [NSNumber numberWithLongLong:t1], @"t1",
             nil];
         [newSegs addObject:seg];
-        [text appendFormat:@"[%@ --> %@] %@\n",
-            [ctrl formatTimestamp:t0],
-            [ctrl formatTimestamp:t1],
-            st];
 
         // Also stream to console
         fprintf(stdout, "Recognized: [%s --> %s] %s\n",
@@ -174,8 +181,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
     if ([newSegs count] > 0) {
         NSDictionary *result = [NSDictionary dictionaryWithObjectsAndKeys:
             newSegs, @"segments",
-            text, @"text",
-            [NSNumber numberWithInt:total], @"total",
+            [NSNumber numberWithUnsignedInteger:job->generation], @"generation",
             nil];
         [ctrl performSelectorOnMainThread:@selector(appendStreamingResult:)
                                withObject:result
@@ -183,10 +189,33 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
     }
 }
 
+/* whisper writes stretches without speech as a bracketed note instead of
+   words ("[BLANK_AUDIO]", "[Music]", "(wind blowing)"). */
+static BOOL isBlankSegmentText(const char *text)
+{
+    if (!text) return YES;
+    while (*text == ' ') text++;
+    size_t len = strlen(text);
+    while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\n')) len--;
+    if (len == 0) return YES;
+    return (text[0] == '[' && text[len - 1] == ']') ||
+           (text[0] == '(' && text[len - 1] == ')');
+}
+
 @interface WhisperController ()
-- (void)loadModel:(NSString *)modelPath;
+- (NSString *)ensureModelLoaded;
 - (void)unloadModel;
 - (NSString *)modelDirPath;
+- (NSString *)captureDevicePath;
+- (void)requestDownloadOfModel:(NSString *)name byUser:(BOOL)byUser;
+- (void)startCapture;
+- (void)stopCaptureAndFinish;
+- (void)cancelCapture;
+- (void)startFileTranscription;
+- (void)startDownload;
+- (void)stopRecordingTimers;
+- (void)transcriptionProgress:(NSArray *)report;
+- (void)appendStreamingResult:(NSDictionary *)result;
 @end
 
 @implementation WhisperController
@@ -269,7 +298,11 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
     if (self) {
         segments = [[NSMutableArray alloc] init];
         whisperCtx = NULL;
-        state = WhisperStateIdle;
+        machine = [[WDictationMachine alloc] init];
+        pendingEvents = [[NSMutableArray alloc] init];
+        whisperQueue = [[NSOperationQueue alloc] init];
+        [whisperQueue setMaxConcurrentOperationCount:1];
+        jobProgress = -1;
         downloadTask = nil;
         downloadData = nil;
         currentFilePath = nil;
@@ -301,7 +334,13 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 - (void)dealloc
 {
     [self resumePlayerIfPaused];
+    [whisperQueue waitUntilAllOperationsAreFinished];
     [self unloadModel];
+    [machine release];
+    [viewState release];
+    [pendingEvents release];
+    [whisperQueue release];
+    [loadedModelName release];
     [segments release];
     [availableModels release];
     [currentFilePath release];
@@ -324,13 +363,6 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
-    // Register pasteboard types and the service provider FIRST so incoming
-    // DO service requests are never missed (GSServicesManager raises
-    // "service request not implemented" if the provider is missing).
-    [NSApp registerServicesMenuSendTypes:@[]
-                             returnTypes:@[NSStringPboardType]];
-    [NSApp setServicesProvider:self];
-
     [self createUI];
     [self createMenu];
 
@@ -381,7 +413,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
     // saved preferences have been loaded.
     [self refreshMenuCheckmarks];
 
-    [self updateUIForState];
+    [self render];
 
     // ── Start-up dependency checks (before showing window) ────
     NSString *fail = nil;
@@ -402,7 +434,7 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
         if (mn) {
             NSString *mp = [self modelPathForName:mn];
             if (![[NSFileManager defaultManager] fileExistsAtPath:mp])
-                [self downloadModelWithName:mn];
+                [self requestDownloadOfModel:mn byUser:NO];
         }
     }
 
@@ -425,25 +457,23 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
 {
     // Never leave Player silent because of us (MediaRemote/PROTOCOL.md)
     [self resumePlayerIfPaused];
-    [self unloadModel];
+    /* A worker may still be inside whisper_full; freeing the context under
+       it would crash the quit, and the process ends anyway. */
+    if ([whisperQueue operationCount] == 0)
+        [self unloadModel];
     if (downloadTask && [downloadTask isRunning]) {
         [downloadTask terminate];
     }
-    [recordTimer invalidate];
-    [recordTimer release];
-    recordTimer = nil;
-    [streamTimer invalidate];
-    [streamTimer release];
-    streamTimer = nil;
+    [self stopRecordingTimers];
     if (captureHandle) wcapture_cancel(captureHandle);
+    captureHandle = NULL;
 }
 
 - (BOOL)application:(NSApplication *)application openFile:(NSString *)filename
 {
     [self setCurrentFilePath:filename];
-    if (statusLabel) {
-        [statusLabel setStringValue:filename];
-    }
+    [machine setDetail:filename];
+    [self render];
     return YES;
 }
 
@@ -485,28 +515,32 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
     return [[NSFileManager defaultManager] fileExistsAtPath:path];
 }
 
-- (void)loadModel:(NSString *)modelPath
+/* Loads the model chosen in the Model menu unless it is the one already
+   loaded, and returns why it could not, or nil.  It shows no alert itself:
+   it runs as the effect of a transition, so offers to download are
+   deferred until the transition has been rendered. */
+- (NSString *)ensureModelLoaded
 {
-    if (whisperCtx) {
-        [self unloadModel];
-    }
+    NSString *name = [[NSUserDefaults standardUserDefaults]
+        stringForKey:@"LastModel"];
+    if (!name)
+        return @"No model selected - choose one in the Model menu";
+    if (whisperCtx && [loadedModelName isEqualToString:name])
+        return nil;
+    if (!wdlopen_init())
+        return @"whisper.cpp library not found";
 
-    if (!wdlopen_init()) {
-        NSLog(@"loadModel: whisper library not available");
-        [self setState:WhisperStateError];
-        [statusLabel setStringValue:@"whisper.cpp library not found"];
-        return;
-    }
-
+    NSString *modelPath = [self modelPathForName:name];
     if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
-        NSLog(@"loadModel: model file not found at %@", modelPath);
-        [self setState:WhisperStateError];
-        [statusLabel setStringValue:@"Model file not found"];
-        return;
+        [self performSelector:@selector(offerDownloadOfModel:)
+                   withObject:name afterDelay:0];
+        return [NSString stringWithFormat:@"Model %@ is not downloaded", name];
     }
 
-    [self setState:WhisperStateLoadingModel];
-    [statusLabel setStringValue:@"Loading model..."];
+    /* A report of an earlier take may still be decoding with the old
+       context; it is short, and freeing the context under it would crash. */
+    [whisperQueue waitUntilAllOperationsAreFinished];
+    [self unloadModel];
 
     // Try GPU first, fall back to CPU
     struct whisper_context_params cparams = wdlopen_context_default_params();
@@ -514,70 +548,68 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
     cparams.flash_attn = true;
 
     NSLog(@"loadModel: trying GPU (%@)", modelPath);
-    whisperCtx = wdlopen_init_from_file(
-        [modelPath UTF8String], cparams);
-
+    whisperCtx = wdlopen_init_from_file([modelPath UTF8String], cparams);
     if (!whisperCtx) {
         NSLog(@"loadModel: GPU init failed, retrying with CPU");
         cparams.use_gpu = false;
         cparams.flash_attn = false;
-        whisperCtx = wdlopen_init_from_file(
-            [modelPath UTF8String], cparams);
-        if (whisperCtx) {
-            NSLog(@"loadModel: CPU init succeeded");
-        }
-    } else {
-        NSLog(@"loadModel: GPU init succeeded");
+        whisperCtx = wdlopen_init_from_file([modelPath UTF8String], cparams);
     }
 
     if (!whisperCtx) {
         NSLog(@"loadModel: all backends failed for %@", modelPath);
-        [self setState:WhisperStateError];
-        [statusLabel setStringValue:@"Failed to load model"];
-
-        // Check for corrupt/incomplete file
-        NSString *fname = [modelPath lastPathComponent];
         unsigned long long fileSize = [[[NSFileManager defaultManager]
             attributesOfItemAtPath:modelPath error:NULL] fileSize];
-        unsigned long long minSize = [self minimumModelSize:fname];
+        unsigned long long minSize = [self minimumModelSize:name];
         if (fileSize > 0 && fileSize < minSize) {
             NSLog(@"loadModel: file is only %llu bytes (expected >= %llu) - likely truncated",
                   fileSize, minSize);
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Corrupt model file"];
-            [alert setInformativeText:[NSString stringWithFormat:
-                @"%@ appears to be only %llu MB (expected ≥ %llu MB).\n"
-                "The download was probably interrupted.\n\n"
-                "Click Download to re-download it.",
-                fname, fileSize / 1000000, minSize / 1000000]];
-            [alert addButtonWithTitle:@"Re-download"];
-            [alert addButtonWithTitle:@"Cancel"];
-            [alert setAlertStyle:NSCriticalAlertStyle];
-            if ([alert runModal] == NSAlertFirstButtonReturn) {
-                // Remove the corrupt file and re-download
-                [[NSFileManager defaultManager] removeItemAtPath:modelPath
-                                                          error:NULL];
-                [self downloadModelWithName:
-                    [[NSUserDefaults standardUserDefaults]
-                        stringForKey:@"LastModel"]];
-            }
-            [alert release];
-        } else {
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Failed to load model"];
-            [alert setInformativeText:[NSString stringWithFormat:
-                @"Could not load %@.\n\nThe file may be corrupt. "
-                @"Try downloading it again.", fname]];
-            [alert addButtonWithTitle:@"OK"];
-            [alert runModal];
-            [alert release];
+            [self performSelector:@selector(offerRedownloadOfModel:)
+                       withObject:name afterDelay:0];
+            return [NSString stringWithFormat:
+                @"Model %@ is incomplete", name];
         }
-        return;
+        return [NSString stringWithFormat:@"Could not load model %@", name];
     }
 
-    [self setState:WhisperStateIdle];
-    [statusLabel setStringValue:[NSString stringWithFormat:
-        @"Loaded %@", [modelPath lastPathComponent]]];
+    [loadedModelName release];
+    loadedModelName = [name copy];
+    return nil;
+}
+
+- (void)offerDownloadOfModel:(NSString *)name
+{
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Model not downloaded"];
+    [alert setInformativeText:[NSString stringWithFormat:
+        @"The model \"%@\" needs to be downloaded first.\n\n"
+        @"Download it now?", name]];
+    [alert addButtonWithTitle:@"Download"];
+    [alert addButtonWithTitle:@"Cancel"];
+    if ([alert runModal] == NSAlertFirstButtonReturn)
+        [self requestDownloadOfModel:name byUser:YES];
+    [alert release];
+}
+
+- (void)offerRedownloadOfModel:(NSString *)name
+{
+    unsigned long long minSize = [self minimumModelSize:name];
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Corrupt model file"];
+    [alert setInformativeText:[NSString stringWithFormat:
+        @"%@ is smaller than %llu MB.\n"
+        "The download was probably interrupted.\n\n"
+        "Click Re-download to download it again.",
+        name, minSize / 1000000]];
+    [alert addButtonWithTitle:@"Re-download"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert setAlertStyle:NSCriticalAlertStyle];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [[NSFileManager defaultManager]
+            removeItemAtPath:[self modelPathForName:name] error:NULL];
+        [self requestDownloadOfModel:name byUser:YES];
+    }
+    [alert release];
 }
 
 - (void)unloadModel
@@ -586,6 +618,8 @@ static void whisper_new_segment_cb(struct whisper_context *ctx,
         wdlopen_free(whisperCtx);
         whisperCtx = NULL;
     }
+    [loadedModelName release];
+    loadedModelName = nil;
 }
 
 // ── libcurl helpers ───────────────────────────────────────────
@@ -615,9 +649,36 @@ static int download_progress_cb(void *clientp,
 
 - (void)downloadModelWithName:(NSString *)name
 {
+    [self requestDownloadOfModel:name byUser:YES];
+}
+
+/* Launch finds the chosen model missing (not the user), or the user picks
+   one that is not on disk; either way the machine decides whether a
+   download may start now. */
+- (void)requestDownloadOfModel:(NSString *)name byUser:(BOOL)byUser
+{
+    WDEvent e = byUser ? WDEventUserDownloadModel : WDEventLaunchDownloadModel;
+    /* The name is data of the download; it must not change under a
+       download that is already running. */
+    if ([WDictationMachine targetOfEvent:e inState:[machine state]]
+            != WDStateDownloading) {
+        NSLog(@"requestDownloadOfModel: %@ not now (%@)", name,
+              [WDictationMachine nameOfState:[machine state]]);
+        return;
+    }
+    [downloadingModel release];
+    downloadingModel = [name copy];
+    [self fireEvent:e generation:[machine generation] detail:nil];
+}
+
+- (void)startDownload
+{
+    NSUInteger gen = [machine generation];
+    NSString *name = downloadingModel;
     NSString *dir = [self modelDirPath];
     if (!dir) {
-        [statusLabel setStringValue:@"Error: cannot find Application Support directory"];
+        [self fireEvent:WDEventDownloadFailed generation:gen
+                 detail:@"cannot find Application Support directory"];
         return;
     }
 
@@ -635,19 +696,12 @@ static int download_progress_cb(void *clientp,
     NSLog(@"downloadModelWithName: URL: %@", urlStr);
     NSLog(@"downloadModelWithName: dest: %@", destPath);
 
-    [downloadProgress setDoubleValue:0.0];
-    [downloadProgress setHidden:NO];
-    [progressBar setIndeterminate:YES];
-    [progressBar startAnimation:nil];
-    [statusLabel setStringValue:[NSString stringWithFormat:
-        @"Downloading %@", name]];
-    [self setState:WhisperStateLoadingModel];
-
-    [downloadingModel release];
-    downloadingModel = [name retain];
+    jobProgress = -1;
 
     [self performSelectorInBackground:@selector(downloadThread:)
-                           withObject:@[urlStr, destPath, name]];
+                           withObject:[NSArray arrayWithObjects:urlStr,
+                               destPath, name,
+                               [NSNumber numberWithUnsignedInteger:gen], nil]];
 }
 
 - (void)downloadThread:(NSArray *)params
@@ -656,6 +710,7 @@ static int download_progress_cb(void *clientp,
     NSString *urlStr  = [params objectAtIndex:0];
     NSString *destPath = [params objectAtIndex:1];
     NSString *name    = [params objectAtIndex:2];
+    NSNumber *gen     = [params objectAtIndex:3];
 
     static BOOL curlInit = NO;
     if (!curlInit) { curl_global_init(CURL_GLOBAL_DEFAULT); curlInit = YES; }
@@ -664,7 +719,8 @@ static int download_progress_cb(void *clientp,
     if (!curl) {
         NSLog(@"downloadThread: curl_easy_init failed");
         [self performSelectorOnMainThread:@selector(downloadFinishedWithError:)
-                               withObject:@"Failed to initialize download"
+                               withObject:[NSArray arrayWithObjects:gen,
+                                   @"Failed to initialize download", nil]
                             waitUntilDone:NO];
         [pool release];
         return;
@@ -675,7 +731,8 @@ static int download_progress_cb(void *clientp,
         NSLog(@"downloadThread: cannot open %@ for writing", destPath);
         curl_easy_cleanup(curl);
         [self performSelectorOnMainThread:@selector(downloadFinishedWithError:)
-                               withObject:[NSString stringWithFormat:@"Cannot write to %@", destPath]
+                               withObject:[NSArray arrayWithObjects:gen,
+                                   [NSString stringWithFormat:@"Cannot write to %@", destPath], nil]
                             waitUntilDone:NO];
         [pool release];
         return;
@@ -698,12 +755,14 @@ static int download_progress_cb(void *clientp,
     if (res == CURLE_OK) {
         NSLog(@"downloadThread: download complete");
         [self performSelectorOnMainThread:@selector(downloadFinishedWithName:)
-                               withObject:name waitUntilDone:NO];
+                               withObject:[NSArray arrayWithObjects:gen, name, nil]
+                            waitUntilDone:NO];
     } else {
         NSLog(@"downloadThread: curl error %d", res);
         NSString *err = [NSString stringWithUTF8String:curl_easy_strerror(res)];
         [self performSelectorOnMainThread:@selector(downloadFinishedWithError:)
-                               withObject:err waitUntilDone:NO];
+                               withObject:[NSArray arrayWithObjects:gen, err, nil]
+                            waitUntilDone:NO];
     }
 
     curl_easy_cleanup(curl);
@@ -738,46 +797,37 @@ static const unsigned long long modelMinSizes[] = {
 
 - (void)downloadProgressUpdated:(NSNumber *)pct
 {
-    double v = [pct doubleValue];
-    [downloadProgress setDoubleValue:v];
-    [downloadProgress displayIfNeeded];
-    [progressBar setIndeterminate:NO];
-    [progressBar setDoubleValue:v];
-    [progressBar displayIfNeeded];
-    [statusLabel setStringValue:[NSString stringWithFormat:
-        @"Downloading %@ - %.0f%%", downloadingModel, v]];
+    if ([machine state] != WDStateDownloading) return;
+    jobProgress = [pct doubleValue];
+    [self render];
 }
 
-- (void)downloadFinishedWithName:(NSString *)name
+/* The model is loaded here, before the machine hears of it, so Ready
+   really means a model is there to record with. */
+- (void)downloadFinishedWithName:(NSArray *)report
 {
-    [downloadProgress setDoubleValue:100.0];
-    [downloadProgress setHidden:YES];
-    [progressBar stopAnimation:nil];
-    [progressBar setIndeterminate:NO];
-    [progressBar setDoubleValue:0.0];
-
+    NSUInteger gen = [[report objectAtIndex:0] unsignedIntegerValue];
+    NSString *name = [report objectAtIndex:1];
     NSLog(@"downloadFinishedWithName: successfully downloaded %@", name);
-    [statusLabel setStringValue:[NSString stringWithFormat:@"Downloaded %@", name]];
-    [self loadModel:[self modelPathForName:name]];
 
-    [downloadingModel release];
-    downloadingModel = nil;
+    NSString *why = nil;
+    if ([name isEqualToString:[[NSUserDefaults standardUserDefaults]
+                                  stringForKey:@"LastModel"]])
+        why = [self ensureModelLoaded];
+    if (why)
+        [self fireEvent:WDEventDownloadFailed generation:gen detail:why];
+    else
+        [self fireEvent:WDEventDownloadDone generation:gen
+                 detail:[NSString stringWithFormat:@"Downloaded %@", name]];
 }
 
-- (void)downloadFinishedWithError:(NSString *)error
+- (void)downloadFinishedWithError:(NSArray *)report
 {
-    [downloadProgress setDoubleValue:100.0];
-    [downloadProgress setHidden:YES];
-    [progressBar stopAnimation:nil];
-    [progressBar setIndeterminate:NO];
-    [progressBar setDoubleValue:0.0];
-
+    NSUInteger gen = [[report objectAtIndex:0] unsignedIntegerValue];
+    NSString *error = [report objectAtIndex:1];
     NSLog(@"downloadFinishedWithError: %@", error);
-    [statusLabel setStringValue:[NSString stringWithFormat:@"Download failed: %@", error]];
-    [self setState:WhisperStateError];
-
-    [downloadingModel release];
-    downloadingModel = nil;
+    [self fireEvent:WDEventDownloadFailed generation:gen
+             detail:[NSString stringWithFormat:@"Download failed: %@", error]];
 }
 
 #pragma mark - Audio Loading
@@ -829,10 +879,6 @@ static const unsigned long long modelMinSizes[] = {
 
 - (IBAction)transcribe:(id)sender
 {
-    if (state == WhisperStateTranscribing || state == WhisperStateRecording) {
-        return;
-    }
-
     if (!currentFilePath) {
         NSAlert *alert = [[NSAlert alloc] init];
         [alert setMessageText:@"No audio file selected"];
@@ -842,218 +888,225 @@ static const unsigned long long modelMinSizes[] = {
         [alert release];
         return;
     }
+    [self fireUserEvent:WDEventUserTranscribeFile];
+}
 
+- (void)startFileTranscription
+{
+    NSUInteger gen = [machine generation];
     if (![[NSFileManager defaultManager] fileExistsAtPath:currentFilePath]) {
-        [statusLabel setStringValue:@"Error: file not found"];
+        [self fireEvent:WDEventFileFailed generation:gen
+                 detail:@"Audio file not found"];
         return;
     }
-
-    if (!whisperCtx) {
-        NSString *selectedName = [[NSUserDefaults standardUserDefaults]
-            stringForKey:@"LastModel"];
-        if (!selectedName) {
-            [statusLabel setStringValue:@"Please select a model from the Whisper menu"];
-            return;
-        }
-        NSString *modelPath = [self modelPathForName:selectedName];
-        if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
-            [statusLabel setStringValue:@"Model not downloaded - select from Whisper menu"];
-            return;
-        }
-        [self loadModel:modelPath];
-        if (!whisperCtx) return;
+    NSString *why = [self ensureModelLoaded];
+    if (why) {
+        [self fireEvent:WDEventFileFailed generation:gen detail:why];
+        return;
     }
 
     [[self segments] removeAllObjects];
     [typedText release]; typedText = nil;
-    if (resultTextView) {
-        [resultTextView setString:@""];
-    }
-
-    [self setState:WhisperStateTranscribing];
-    [statusLabel setStringValue:@"Preparing..."];
-
+    [resultTextView setString:@""];
+    jobProgress = -1;
     transcriptionStartTime = [NSDate timeIntervalSinceReferenceDate];
 
-    [NSThread detachNewThreadSelector:@selector(transcriptionThread:)
-                             toTarget:self
-                           withObject:nil];
+    NSInvocationOperation *op = [[NSInvocationOperation alloc]
+        initWithTarget:self selector:@selector(fileJob:)
+                object:[NSArray arrayWithObjects:
+                    [[currentFilePath copy] autorelease],
+                    [NSNumber numberWithUnsignedInteger:gen], nil]];
+    [whisperQueue addOperation:op];
+    [op release];
 }
 
-- (void)transcriptionThread:(id)object
+/* Runs on whisperQueue. */
+- (void)fileJob:(NSArray *)args
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    NSString *path = [args objectAtIndex:0];
+    NSNumber *gen = [args objectAtIndex:1];
+    NSString *error = nil;
 
     int n_samples = 0;
     int sample_rate = 0;
-    float *samples = [self loadAudio:currentFilePath
+    float *samples = [self loadAudio:path
                           outSamples:&n_samples
                         outSampleRate:&sample_rate];
 
     if (!samples) {
-        [self performSelectorOnMainThread:@selector(transcriptionFailed:)
-                               withObject:@"Failed to decode audio file"
-                            waitUntilDone:NO];
-        [pool release];
-        return;
-    }
-
-    struct whisper_full_params wparams = wdlopen_full_default_params(
-        WHISPER_SAMPLING_GREEDY);
-
-    wparams.n_threads = currentThreads;
-
-    NSString *langCode = currentLangCode;
-    if (langCode && ![langCode isEqualToString:@"auto"]) {
-        wparams.language = [langCode UTF8String];
-        wparams.detect_language = false;
+        error = @"Failed to decode audio file";
     } else {
-        wparams.detect_language = false;
-        wdlopen_pcm_to_mel(whisperCtx, samples, n_samples, wparams.n_threads);
-        int lang_id = wdlopen_lang_auto_detect(whisperCtx, 0, wparams.n_threads, NULL);
-        if (lang_id >= 0) {
-            wparams.language = wdlopen_lang_str(lang_id);
+        WJobContext job = { self, [gen unsignedIntegerValue] };
+        struct whisper_full_params wparams = wdlopen_full_default_params(
+            WHISPER_SAMPLING_GREEDY);
+
+        wparams.n_threads = currentThreads;
+
+        NSString *langCode = currentLangCode;
+        if (langCode && ![langCode isEqualToString:@"auto"]) {
+            wparams.language = [langCode UTF8String];
+            wparams.detect_language = false;
         } else {
-            wparams.language = "en";
+            wparams.detect_language = false;
+            wdlopen_pcm_to_mel(whisperCtx, samples, n_samples, wparams.n_threads);
+            int lang_id = wdlopen_lang_auto_detect(whisperCtx, 0, wparams.n_threads, NULL);
+            wparams.language = lang_id >= 0 ? wdlopen_lang_str(lang_id) : "en";
         }
+
+        wparams.no_timestamps = false;
+        wparams.print_progress = false;
+        wparams.print_realtime = false;
+        wparams.print_special = false;
+
+        // Stream segments live as whisper decodes them
+        wparams.new_segment_callback = whisper_new_segment_cb;
+        wparams.new_segment_callback_user_data = &job;
+        wparams.progress_callback = whisper_progress_cb;
+        wparams.progress_callback_user_data = &job;
+
+        if (vocabularyPrompt) {
+            wparams.initial_prompt = [vocabularyPrompt UTF8String];
+            wparams.carry_initial_prompt = true;
+        }
+
+        if (wdlopen_full(whisperCtx, wparams, samples, n_samples) != 0)
+            error = @"Transcription failed";
+        free(samples);
     }
 
-    wparams.no_timestamps = false;
-    wparams.print_progress = false;
-    wparams.print_realtime = false;
-    wparams.print_special = false;
-
-    // Stream segments live as whisper decodes them
-    wparams.new_segment_callback = whisper_new_segment_cb;
-    wparams.new_segment_callback_user_data = self;
-
-    wparams.progress_callback = whisper_progress_cb;
-    wparams.progress_callback_user_data = self;
-
-    if (vocabularyPrompt) {
-        wparams.initial_prompt = [vocabularyPrompt UTF8String];
-        wparams.carry_initial_prompt = true;
-    }
-
-    int ret = wdlopen_full(whisperCtx, wparams, samples, n_samples);
-
-    free(samples);
-
-    if (ret != 0) {
-        [self performSelectorOnMainThread:@selector(transcriptionFailed:)
-                               withObject:@"Transcription failed"
-                            waitUntilDone:NO];
-        [pool release];
-        return;
-    }
-
-    // Segments were added incrementally by whisper_new_segment_cb → appendStreamingResult:
-
-    [self performSelectorOnMainThread:@selector(transcriptionFinished:)
-                           withObject:nil
+    [self performSelectorOnMainThread:@selector(fileJobEnded:)
+                           withObject:[NSArray arrayWithObjects:gen,
+                               error ? (id)error : (id)[NSNull null], nil]
                         waitUntilDone:NO];
     [pool release];
 }
 
-- (void)transcriptionProgress:(NSNumber *)progress
+- (void)fileJobEnded:(NSArray *)report
 {
-    int p = [progress intValue];
-    if (p > 0) {
-        [progressBar setHidden:NO];
-    }
-    [progressBar setDoubleValue:(double)p];
-    if (p < 100) {
-        NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate]
-                                 - transcriptionStartTime;
-        int remaining = (int)(elapsed * (100.0 - p) / p);
-        [statusLabel setStringValue:[NSString stringWithFormat:
-            @"Transcribing... %d%% (≈%d s remaining)", p, remaining]];
-    }
-}
-
-- (void)transcriptionFinished:(NSString *)result
-{
-    [progressBar setDoubleValue:100.0];
-    [progressBar setHidden:YES];
-    [self setState:WhisperStateDone];
-    [statusLabel setStringValue:@"Done"];
-
-    NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate]
-                             - transcriptionStartTime;
-    [statusLabel setStringValue:[NSString stringWithFormat:
-        @"Done (%.1f s)", elapsed]];
-
-    [self rebuildTextView];
-    [self syncTypedText];
-}
-
-- (void)streamingFlushDone
-{
-    if (captureHandle) return;
-    if ([segments count] == 0) {
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"No speech detected"];
-        [alert setInformativeText:@"The microphone did not pick up any recognizable speech."];
-        [alert addButtonWithTitle:@"OK"];
-        [alert runModal];
-        [alert release];
+    NSUInteger gen = [[report objectAtIndex:0] unsignedIntegerValue];
+    id error = [report objectAtIndex:1];
+    if (error != [NSNull null]) {
+        [self fireEvent:WDEventFileFailed generation:gen detail:error];
         return;
     }
-    [self syncTypedText];
+    NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate]
+                             - transcriptionStartTime;
+    [self fireEvent:WDEventFileDone generation:gen
+             detail:[NSString stringWithFormat:@"Done (%.1f s)", elapsed]];
 }
 
-- (void)transcriptionFailed:(NSString *)error
+- (void)transcriptionProgress:(NSArray *)report
 {
-    [progressBar setHidden:YES];
-    [self setState:WhisperStateError];
-    [statusLabel setStringValue:error];
+    NSUInteger gen = [[report objectAtIndex:0] unsignedIntegerValue];
+    if (gen != [machine generation] || [machine state] != WDStateTranscribing)
+        return;
+    jobProgress = [[report objectAtIndex:1] doubleValue];
+    [self render];
 }
 
-#pragma mark - UI State
+#pragma mark - State
 
-- (void)setState:(WhisperState)newState
+- (void)fireUserEvent:(WDEvent)event
 {
-    state = newState;
-    [self updateUIForState];
+    [self fireEvent:event generation:[machine generation] detail:nil];
 }
 
-- (void)updateUIForState
+/* The only way anything changes what Whisper is doing.  Events raised by
+   effects (a capture that does not open, a download with nowhere to go)
+   are queued and handled after the current one, so each transition is
+   complete - state, effects - before the next starts; the UI is rendered
+   once at the end. */
+- (void)fireEvent:(WDEvent)event generation:(NSUInteger)gen
+           detail:(NSString *)detail
 {
-    BOOL isWorking = (state == WhisperStateLoadingModel ||
-                      state == WhisperStateTranscribing);
-    BOOL isRecording = (state == WhisperStateRecording);
+    [pendingEvents addObject:[NSArray arrayWithObjects:
+        [NSNumber numberWithInteger:event],
+        [NSNumber numberWithUnsignedInteger:gen],
+        detail ? (id)detail : (id)[NSNull null], nil]];
+    if (dispatching) return;
 
-    if (isRecording) {
+    dispatching = YES;
+    while ([pendingEvents count] > 0) {
+        NSArray *ev = [[[pendingEvents objectAtIndex:0] retain] autorelease];
+        [pendingEvents removeObjectAtIndex:0];
+        WDEvent e = [[ev objectAtIndex:0] integerValue];
+        id d = [ev objectAtIndex:2];
+        WDState from = [machine state];
+        WDEffect fx = [machine handleEvent:e
+                                generation:[[ev objectAtIndex:1] unsignedIntegerValue]
+                                    detail:(d == [NSNull null] ? nil : d)];
+        if ([machine lastOutcome] != WDOutcomeTransitioned) {
+            NSDebugLLog(@"Whisper", @"%@ in %@: %@",
+                        [WDictationMachine nameOfEvent:e],
+                        [WDictationMachine nameOfState:from],
+                        [machine lastOutcome] == WDOutcomeStale ? @"stale"
+                            : [WDictationMachine ignoreReasonOfEvent:e
+                                                             inState:from]);
+            continue;
+        }
+        NSLog(@"Whisper: %@ --%@--> %@",
+              [WDictationMachine nameOfState:from],
+              [WDictationMachine nameOfEvent:e],
+              [WDictationMachine nameOfState:[machine state]]);
+        if (fx & WDEffectStartCapture) [self startCapture];
+        if (fx & WDEffectStopCaptureAndFinish) [self stopCaptureAndFinish];
+        if (fx & WDEffectCancelCapture) [self cancelCapture];
+        if (fx & WDEffectStartFileTranscription) [self startFileTranscription];
+        if (fx & WDEffectStartDownload) [self startDownload];
+        if (fx & WDEffectDeliverText) {
+            [self rebuildTextView];
+            [self syncTypedText];
+        }
+    }
+    dispatching = NO;
+    [self render];
+}
+
+- (void)render
+{
+    WDViewInputs in;
+    in.elapsed = ([machine state] == WDStateRecording)
+        ? [NSDate timeIntervalSinceReferenceDate] - recordStartTime : 0;
+    in.progress = jobProgress;
+    in.hearsSilence = [machine hearsSilence];
+    in.hasResults = [segments count] > 0;
+    in.detail = [machine detail];
+    in.downloadingModel = downloadingModel;
+
+    WDViewState *v = [WDViewState viewStateForState:[machine state] inputs:in];
+    [viewState release];
+    viewState = [v retain];
+
+    [recordButton setRecording:[v recordShowsStop]];
+    [recordButton setEnabled:[v recordEnabled]];
+    [recordMenuItem setTitle:[v recordMenuTitle]];
+
+    if ([v recordingIndicatorOn])
         [recordSpinner startAnimation:nil];
-        [progressBar setHidden:NO];
+    else
+        [recordSpinner stopAnimation:nil];
+
+    [downloadProgress setHidden:![v downloadBarVisible]];
+    [downloadProgress setDoubleValue:[v progressValue]];
+
+    [progressBar setHidden:![v progressVisible]];
+    if ([v progressVisible] && [v progressIndeterminate]) {
         [progressBar setIndeterminate:YES];
         [progressBar startAnimation:nil];
     } else {
-        [recordSpinner stopAnimation:nil];
         [progressBar stopAnimation:nil];
         [progressBar setIndeterminate:NO];
-        if (!isWorking) {
-            [progressBar setDoubleValue:0.0];
-            [progressBar setHidden:YES];
-        }
+        [progressBar setDoubleValue:[v progressValue]];
     }
 
-    // enModel check is done in modelSelected:
-    // [translateCheckbox setEnabled:(!isWorking && !isRecording)];
-    /* One button for both directions: it shows the stop square while the
-       microphone is open, and stays enabled then so it can stop the recording
-       again.  Only a busy transcription locks it out. */
-    [recordButton setRecording:isRecording];
-    [recordButton setEnabled:(!isWorking)];
-
-    BOOL hasResults = [segments count] > 0;
-    [copyTextButton setEnabled:hasResults];
+    [statusLabel setStringValue:[v statusText]];
+    [copyTextButton setEnabled:in.hasResults];
 
     // No button responds to Enter (avoids accidental re-trigger after alerts)
     [recordButton setKeyEquivalent:@""];
     [copyTextButton setKeyEquivalent:@""];
     [mainWindow setDefaultButtonCell:nil];
-
 }
 
 #pragma mark - Menu validation
@@ -1062,11 +1115,16 @@ static const unsigned long long modelMinSizes[] = {
 {
     SEL a = [item action];
     if (a == NULL) return YES; // Submenu title
-    BOOL hasRes = [segments count] > 0;
+    if (a == @selector(toggleRecording:))
+        return [viewState recordEnabled];
+    if (a == @selector(openFile:))
+        return [viewState fileMenuEnabled];
+    if (a == @selector(modelSelected:))
+        return [viewState modelMenuEnabled];
     if (a == @selector(saveAsTxt:) ||
         a == @selector(saveAsSrt:) ||
         a == @selector(saveAsVtt:)) {
-        return hasRes;
+        return [viewState saveEnabled];
     }
     // Standard edit actions are handled by the text view responder
     if (a == @selector(cut:) || a == @selector(copy:) ||
@@ -1078,16 +1136,17 @@ static const unsigned long long modelMinSizes[] = {
 
 #pragma mark - Actions
 
-/* The one button is both record and stop: it starts a recording when none is
-   running and stops the one that is.  The capture handle, not the state,
-   decides, because it is what actually holds the microphone open. */
+/* The record button, the menu item and its shortcut all come here; the
+   machine decides what a press means in the current state. */
 - (IBAction)toggleRecording:(id)sender
 {
-    if (captureHandle) {
-        [self stopRecording:sender];
-    } else {
-        [self recordAudio:sender];
+    /* Holding the shortcut (or Space on the focused button) repeats the
+       key; only the first press is the user's decision. */
+    if ([(WApplication *)NSApp currentKeyDownRepeats]) {
+        NSLog(@"toggleRecording: key repeat ignored");
+        return;
     }
+    [self fireUserEvent:WDEventUserToggle];
 }
 
 /* Ask Player to fall silent for us before the microphone opens, and
@@ -1111,154 +1170,59 @@ static const unsigned long long modelMinSizes[] = {
     [GSMediaPlayer2Client resumePlayer];
 }
 
-- (IBAction)recordAudio:(id)sender
+/* Effect of the user's toggle in Ready/Error: the machine is already in
+   Recording; a failure here is reported back as CaptureFailed. */
+- (void)startCapture
 {
-    if (captureHandle) {
-        NSLog(@"recordAudio: already recording (handle=%p)", captureHandle);
+    NSUInteger gen = [machine generation];
+    NSString *why = [self ensureModelLoaded];
+    if (why) {
+        [self fireEvent:WDEventCaptureFailed generation:gen detail:why];
         return;
     }
 
-    NSLog(@"recordAudio: starting capture at 16kHz");
-    int sr = 16000;
-    // Find the active SoundBackend (same selection as Sound PrefPane)
-    id<SoundBackend> snd = nil;
-    NSString *devPath = nil;  // ALSA: "plughw:N,M" - OSS: "/dev/dspN"
-
-#if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    OSSBackend *oss = [[OSSBackend alloc] init];
-    if ([oss isAvailable]) {
-        snd = oss;
-        AudioDevice *dev = [oss defaultInputDevice];
-        if (dev) {
-            devPath = [NSString stringWithFormat:@"/dev/dsp%d", [dev cardIndex]];
-        }
-        NSLog(@"recordAudio: using OSS backend, device=%@", devPath);
-    } else {
-        [oss release];
-    }
-#endif
-    if (!snd) {
-        ALSABackend *alsa = [[ALSABackend alloc] init];
-        if ([alsa isAvailable]) {
-            snd = alsa;
-            AudioDevice *dev = [alsa defaultInputDevice];
-            if (dev) {
-                devPath = [NSString stringWithFormat:@"plughw:%d,%d",
-                                    [dev cardIndex], [dev deviceIndex]];
-            }
-            NSLog(@"recordAudio: using ALSA backend, device=%@", devPath);
-        } else {
-            [alsa release];
-        }
-    }
-#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
-    if (!snd) {
-        OSSBackend *oss = [[OSSBackend alloc] init];
-        if ([oss isAvailable]) {
-            snd = oss;
-            AudioDevice *dev = [oss defaultInputDevice];
-            if (dev) {
-                devPath = [NSString stringWithFormat:@"/dev/dsp%d", [dev cardIndex]];
-            }
-            NSLog(@"recordAudio: using OSS fallback backend, device=%@", devPath);
-        } else {
-            [oss release];
-        }
-    }
-#endif
-    [snd release];
-
-    captureHandle = wcapture_start(sr, [devPath UTF8String]);
+    NSString *devPath = [self captureDevicePath];
+    NSLog(@"startCapture: device %@", devPath);
+    captureHandle = wcapture_start(16000, [devPath UTF8String]);
     if (!captureHandle) {
-        NSLog(@"recordAudio: wcapture_start returned NULL");
-        [statusLabel setStringValue:@"No microphone found"];
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"No microphone available"];
-        [alert setInformativeText:@"Connect a microphone to record audio for transcription."];
-        [alert addButtonWithTitle:@"OK"];
-        [alert runModal];
-        [alert release];
+        [self fireEvent:WDEventCaptureFailed generation:gen
+                 detail:@"No microphone available"];
         return;
     }
 
     /* The microphone is really open now: from here the recording can
        produce audio, so Player has to be quiet from here on. */
     [self pausePlayerForRecording];
-
-    // Ensure model is loaded before recording
-    if (!whisperCtx) {
-        NSLog(@"recordAudio: no model loaded, loading now...");
-        NSString *selectedName = [[NSUserDefaults standardUserDefaults]
-            stringForKey:@"LastModel"];
-        if (!selectedName) {
-            NSLog(@"recordAudio: no model selected, canceling capture");
-            wcapture_cancel(captureHandle);
-            captureHandle = NULL;
-            [self resumePlayerIfPaused];
-            [statusLabel setStringValue:@"Please select a model from the Whisper menu"];
-            return;
-        }
-        NSString *modelPath = [self modelPathForName:selectedName];
-        if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
-            NSLog(@"recordAudio: model '%@' not downloaded", selectedName);
-            wcapture_cancel(captureHandle);
-            captureHandle = NULL;
-            // Player comes back while the user decides about downloading
-            [self resumePlayerIfPaused];
-
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Model not downloaded"];
-            [alert setInformativeText:[NSString stringWithFormat:
-                @"The model \"%@\" needs to be downloaded first.\n\n"
-                @"Download it now?", selectedName]];
-            [alert addButtonWithTitle:@"Download"];
-            [alert addButtonWithTitle:@"Cancel"];
-            if ([alert runModal] == NSAlertFirstButtonReturn) {
-                [self downloadModelWithName:selectedName];
-            }
-            [alert release];
-            return;
-        }
-        [self loadModel:modelPath];
-        if (!whisperCtx) {
-            NSLog(@"recordAudio: model loading failed, canceling capture");
-            wcapture_cancel(captureHandle);
-            captureHandle = NULL;
-            [self resumePlayerIfPaused];
-            return;
-        }
-    }
-
-    NSLog(@"recordAudio: capture started, handle=%p", captureHandle);
     [self playSubmarineSound];
     copyDefaultConsumed = NO;
     [typedText release]; typedText = nil;
 
-    // Save target window for xdotool so it types into the correct app
+    /* The text goes to the window that was active when recording began.
+       Never to one of ours: typed into Whisper, a space presses the
+       focused record button and stops or starts a recording by itself.
+       A window whose owner cannot be told gets nothing either. */
+    targetWindowID = 0;
     {
-        FILE *fp = popen("xdotool getactivewindow 2>/dev/null", "r");
+        FILE *fp = popen("xdotool getactivewindow 2>/dev/null; "
+                         "xdotool getactivewindow getwindowpid 2>/dev/null", "r");
         if (fp) {
-            char buf[32];
-            if (fgets(buf, sizeof(buf), fp)) {
-                targetWindowID = strtoul(buf, NULL, 10);
-                NSLog(@"recordAudio: target window = %lu", targetWindowID);
+            char win[32], pid[32];
+            if (fgets(win, sizeof(win), fp) && fgets(pid, sizeof(pid), fp)) {
+                pid_t owner = (pid_t)strtol(pid, NULL, 10);
+                if (owner > 0 && owner != getpid())
+                    targetWindowID = strtoul(win, NULL, 10);
             }
             pclose(fp);
         }
     }
+    NSLog(@"startCapture: typing into window %lu (0: only shown here)",
+          targetWindowID);
 
-    [self setState:WhisperStateRecording];
     recordStartTime = [NSDate timeIntervalSinceReferenceDate];
-    lastSegmentCount = 0;
-    [statusLabel setStringValue:@"Recording 00:00"];
-
-    // Clear previous results
     [[self segments] removeAllObjects];
-    if (resultTextView) {
-        [resultTextView setString:@""];
-    }
+    [resultTextView setString:@""];
 
-    // Update elapsed time every second
+    // Elapsed time, and noticing an input that went away, every second
     [recordTimer invalidate];
     [recordTimer release];
     recordTimer = [[NSTimer scheduledTimerWithTimeInterval:1.0
@@ -1275,23 +1239,23 @@ static const unsigned long long modelMinSizes[] = {
                                                   selector:@selector(streamTimerFired:)
                                                   userInfo:nil
                                                    repeats:YES] retain];
-    NSLog(@"recordAudio: timers started (record=1s, stream=3s)");
 }
 
-- (IBAction)stopRecording:(id)sender
+- (void)stopRecordingTimers
 {
-    if (!captureHandle) {
-        NSLog(@"stopRecording: no capture handle");
-        return;
-    }
-
-    NSLog(@"stopRecording: stopping capture...");
     [recordTimer invalidate];
     [recordTimer release];
     recordTimer = nil;
     [streamTimer invalidate];
     [streamTimer release];
     streamTimer = nil;
+}
+
+/* Effect of the user's toggle in Recording. */
+- (void)stopCaptureAndFinish
+{
+    NSUInteger gen = [machine generation];
+    [self stopRecordingTimers];
 
     WCaptureData *capData = wcapture_stop(captureHandle);
     captureHandle = NULL;
@@ -1302,118 +1266,93 @@ static const unsigned long long modelMinSizes[] = {
     [self resumePlayerIfPaused];
 
     if (!capData || capData->n_samples == 0) {
-        NSLog(@"stopRecording: no audio captured");
         wcapture_free_data(capData);
-        [statusLabel setStringValue:@"No audio captured"];
-        [self setState:WhisperStateIdle];
+        [self fireEvent:WDEventFinishDone generation:gen
+                 detail:@"No audio captured"];
         return;
     }
 
-    NSLog(@"stopRecording: got %d samples at %d Hz",
+    NSLog(@"stopCaptureAndFinish: got %d samples at %d Hz",
           capData->n_samples, capData->sample_rate);
-
-    [self setState:WhisperStateIdle];
-    [statusLabel setStringValue:@"Recording stopped"];
-
-    // Save as current file path for later reuse
-    NSString *tmpDir = NSTemporaryDirectory();
-    NSString *tmpPath = [tmpDir stringByAppendingPathComponent:@"whisper_recording.wav"];
-    [self setCurrentFilePath:tmpPath];
-    [statusLabel setStringValue:@"[Microphone]"];
-
-    // Do a final flush transcription
-    if (whisperCtx && capData->n_samples > 0) {
-        NSLog(@"stopRecording: final flush with %d samples", capData->n_samples);
-        NSData *pcmData = [NSData dataWithBytes:capData->samples
-                                         length:capData->n_samples * sizeof(float)];
-        [self performSelectorInBackground:@selector(transcribeStreamingChunk:)
-                               withObject:pcmData];
-    } else if (!whisperCtx) {
-        NSLog(@"stopRecording: whisperCtx is NULL, no model loaded");
-    }
-
+    NSData *pcm = [NSData dataWithBytes:capData->samples
+                                 length:capData->n_samples * sizeof(float)];
     wcapture_free_data(capData);
+
+    /* Queued behind any chunk still decoding, so the final pass always
+       runs on the whole take. */
+    NSInvocationOperation *op = [[NSInvocationOperation alloc]
+        initWithTarget:self selector:@selector(takeJob:)
+                object:[NSDictionary dictionaryWithObjectsAndKeys:
+                    pcm, @"pcm",
+                    [NSNumber numberWithUnsignedInteger:gen], @"generation",
+                    [NSNumber numberWithBool:YES], @"final", nil]];
+    [whisperQueue addOperation:op];
+    [op release];
+}
+
+/* Effect of a failed start or a lost input: the take ends, the machine
+   is already in Error and says why. */
+- (void)cancelCapture
+{
+    [self stopRecordingTimers];
+    if (captureHandle) {
+        wcapture_cancel(captureHandle);
+        captureHandle = NULL;
+        [self playSubmarineSound];
+    }
+    [self resumePlayerIfPaused];
 }
 
 - (void)recordTimerFired:(NSTimer *)timer
 {
-    if (!captureHandle) {
-        [timer invalidate];
+    if ([machine state] != WDStateRecording) return;
+    if (!wcapture_is_active(captureHandle)) {
+        [self fireEvent:WDEventDeviceLost generation:[machine generation]
+                 detail:@"The audio input stopped"];
         return;
     }
-    NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate] - recordStartTime;
-    int sec = (int)elapsed;
-    int min = sec / 60;
-    sec %= 60;
-    [statusLabel setStringValue:[NSString stringWithFormat:
-        @"Recording %02d:%02d", min, sec]];
+    [self render];
 }
 
 - (void)streamTimerFired:(NSTimer *)timer
 {
-    if (!captureHandle) {
-        NSLog(@"streamTimerFired: no capture handle");
-        return;
-    }
-    if (!whisperCtx) {
-        NSLog(@"streamTimerFired: no whisper context loaded");
-        return;
-    }
+    if ([machine state] != WDStateRecording) return;
+    /* Each pass decodes the take so far; while one runs, a second would
+       only queue up stale work behind it. */
+    if ([whisperQueue operationCount] > 0) return;
 
-    NSLog(@"streamTimerFired: taking snapshot...");
     float *samples = NULL;
     int n = wcapture_snapshot(captureHandle, &samples);
-    if (n <= 0 || !samples) {
-        NSLog(@"streamTimerFired: snapshot returned %d samples", n);
-        return;
-    }
+    if (n <= 0 || !samples) return;
 
-    NSLog(@"streamTimerFired: got %d samples (%.1f seconds), dispatching",
-          n, (float)n / 16000.0f);
     NSData *pcmData = [NSData dataWithBytesNoCopy:samples length:n * sizeof(float)
                                     freeWhenDone:YES];
-    [self performSelectorInBackground:@selector(transcribeStreamingChunk:)
-                           withObject:pcmData];
+    NSInvocationOperation *op = [[NSInvocationOperation alloc]
+        initWithTarget:self selector:@selector(takeJob:)
+                object:[NSDictionary dictionaryWithObjectsAndKeys:
+                    pcmData, @"pcm",
+                    [NSNumber numberWithUnsignedInteger:[machine generation]],
+                        @"generation",
+                    [NSNumber numberWithBool:NO], @"final", nil]];
+    [whisperQueue addOperation:op];
+    [op release];
 }
 
-- (void)transcribeStreamingChunk:(NSData *)pcmData
+/* Runs on whisperQueue: one pass over the take so far (or, final, the
+   whole take).  It only reports; whether anything changes is the
+   machine's decision on the main thread. */
+- (void)takeJob:(NSDictionary *)args
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-
-    // Serialise: only one whisper_full at a time on the same context
-    if (isTranscribing) {
-        NSLog(@"transcribeStreamingChunk: skip - already transcribing");
-        [pool release];
-        return;
-    }
-    isTranscribing = YES;
-
+    NSData *pcmData = [args objectForKey:@"pcm"];
+    NSNumber *gen = [args objectForKey:@"generation"];
+    BOOL final = [[args objectForKey:@"final"] boolValue];
     float *samples = (float *)[pcmData bytes];
     int n = (int)([pcmData length] / sizeof(float));
-
-    if (!whisperCtx) {
-        NSLog(@"transcribeStreamingChunk: whisperCtx is NULL");
-        [pool release];
-        return;
-    }
-    if (n == 0) {
-        NSLog(@"transcribeStreamingChunk: empty PCM data");
-        [pool release];
-        return;
-    }
-
-    // Check audio level
-    float peak = 0.0f;
-    for (int i = 0; i < n; i++) {
-        float absv = fabsf(samples[i]);
-        if (absv > peak) peak = absv;
-    }
-    NSLog(@"transcribeStreamingChunk: %d samples (%.1f sec), peak=%.6f",
-          n, (float)n / 16000.0f, peak);
+    WJobContext job = { self, [gen unsignedIntegerValue] };
 
     struct whisper_full_params wparams = wdlopen_full_default_params(
         WHISPER_SAMPLING_GREEDY);
-
     wparams.n_threads = currentThreads;
 
     // Read language from ivar (set on main thread, safe for background read)
@@ -1421,71 +1360,79 @@ static const unsigned long long modelMinSizes[] = {
     if (langCode && ![langCode isEqualToString:@"auto"]) {
         wparams.language = [langCode UTF8String];
         wparams.detect_language = false;
-        NSLog(@"transcribeStreamingChunk: language=%@", langCode);
     } else {
         wparams.detect_language = false;
         wdlopen_pcm_to_mel(whisperCtx, samples, n, wparams.n_threads);
         int lang_id = wdlopen_lang_auto_detect(whisperCtx, 0, wparams.n_threads, NULL);
-        if (lang_id >= 0) {
-            wparams.language = wdlopen_lang_str(lang_id);
-        } else {
-            wparams.language = "en";
-        }
-        NSLog(@"transcribeStreamingChunk: auto-detected language=%s", wparams.language);
+        wparams.language = lang_id >= 0 ? wdlopen_lang_str(lang_id) : "en";
     }
 
-    // wparams.translate = [translateCheckbox state] == NSOnState ? true : false;
     wparams.no_timestamps = false;
     wparams.print_progress = false;
     wparams.print_realtime = false;
     wparams.print_special = false;
     wparams.new_segment_callback = whisper_new_segment_cb;
-    wparams.new_segment_callback_user_data = self;
+    wparams.new_segment_callback_user_data = &job;
 
     if (vocabularyPrompt) {
         wparams.initial_prompt = [vocabularyPrompt UTF8String];
         wparams.carry_initial_prompt = true;
     }
 
-    NSLog(@"transcribeStreamingChunk: calling whisper_full (segments appear via callback)...");
     int ret = wdlopen_full(whisperCtx, wparams, samples, n);
-    NSLog(@"transcribeStreamingChunk: whisper_full returned %d", ret);
+    int total = wdlopen_full_n_segments(whisperCtx);
+    /* Only the newest segment says whether the user is speaking now. */
+    BOOL silent = (total == 0) ||
+        isBlankSegmentText(wdlopen_full_get_segment_text(whisperCtx, total - 1));
+    NSLog(@"takeJob: %d samples (%.1f s), final=%d, ret=%d, segments=%d, silent=%d",
+          n, (float)n / 16000.0f, final, ret, total, silent);
 
-    lastSegmentCount = wdlopen_full_n_segments(whisperCtx);
-    NSLog(@"transcribeStreamingChunk: done, total segments=%d", lastSegmentCount);
-
-    // If whisper detected silence, stop recording
-    if (captureHandle) {
-        for (int i = 0; i < lastSegmentCount; i++) {
-            const char *segText = wdlopen_full_get_segment_text(whisperCtx, i);
-            if (segText && (strcasestr(segText, "[silence]") || strcasestr(segText, "[BLANK_AUDIO]"))) {
-                NSLog(@"transcribeStreamingChunk: silence detected, stopping");
-                [self performSelectorOnMainThread:@selector(stopRecording:)
-                                       withObject:nil
-                                    waitUntilDone:NO];
-                break;
-            }
-        }
-    }
-
-    [self performSelectorOnMainThread:@selector(syncTypedText)
-                           withObject:nil
+    [self performSelectorOnMainThread:@selector(takeJobEnded:)
+                           withObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                               gen, @"generation",
+                               [NSNumber numberWithBool:final], @"final",
+                               [NSNumber numberWithBool:(ret == 0)], @"ok",
+                               [NSNumber numberWithBool:silent], @"silent", nil]
                         waitUntilDone:NO];
-
-    isTranscribing = NO;
-
-    // If capture is gone (recording stopped), this was the final flush
-    if (!captureHandle) {
-        [self performSelectorOnMainThread:@selector(streamingFlushDone)
-                               withObject:nil
-                            waitUntilDone:NO];
-    }
     [pool release];
+}
+
+- (void)takeJobEnded:(NSDictionary *)report
+{
+    NSUInteger gen = [[report objectForKey:@"generation"] unsignedIntegerValue];
+    BOOL ok = [[report objectForKey:@"ok"] boolValue];
+
+    if ([[report objectForKey:@"final"] boolValue]) {
+        if (!ok)
+            [self fireEvent:WDEventFinishFailed generation:gen
+                     detail:@"Transcription failed"];
+        else
+            [self fireEvent:WDEventFinishDone generation:gen
+                     detail:([segments count] ? @"Done" : @"No speech detected")];
+        return;
+    }
+
+    if (!ok) return;
+    [self fireEvent:([[report objectForKey:@"silent"] boolValue]
+                         ? WDEventSilenceHeard : WDEventSpeechHeard)
+         generation:gen detail:nil];
+    /* Live typing follows the current take only. */
+    if (gen == [machine generation] && [machine state] == WDStateRecording)
+        [self syncTypedText];
 }
 
 - (void)appendStreamingResult:(NSDictionary *)result
 {
     NSArray *newSegs = [result objectForKey:@"segments"];
+    NSUInteger gen = [[result objectForKey:@"generation"] unsignedIntegerValue];
+    WDState st = [machine state];
+    if (gen != [machine generation] ||
+        !(st == WDStateRecording || st == WDStateFinishing ||
+          st == WDStateTranscribing)) {
+        NSLog(@"appendStreamingResult: dropping %lu segments of an old job",
+              (unsigned long)[newSegs count]);
+        return;
+    }
 
     NSLog(@"appendStreamingResult: %lu new segments",
           (unsigned long)[newSegs count]);
@@ -1542,8 +1489,6 @@ static const unsigned long long modelMinSizes[] = {
     if ([panel runModal] == NSOKButton) {
         NSString *path = [[panel URL] path];
         [self setCurrentFilePath:path];
-        [statusLabel setStringValue:path];
-        [self setState:WhisperStateIdle];
         [self transcribe:nil];
     }
 }
@@ -1567,7 +1512,7 @@ static const unsigned long long modelMinSizes[] = {
     // Auto-download if not present
     NSString *modelPath = [self modelPathForName:name];
     if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
-        [self downloadModelWithName:name];
+        [self requestDownloadOfModel:name byUser:YES];
     }
 
     // Models ending in .en only support English
@@ -1616,21 +1561,21 @@ static const unsigned long long modelMinSizes[] = {
 {
     [self saveTranscriptionWithFormat:@"txt"];
     copyDefaultConsumed = YES;
-    [self updateUIForState];
+    [self render];
 }
 
 - (IBAction)saveAsSrt:(id)sender
 {
     [self saveTranscriptionWithFormat:@"srt"];
     copyDefaultConsumed = YES;
-    [self updateUIForState];
+    [self render];
 }
 
 - (IBAction)saveAsVtt:(id)sender
 {
     [self saveTranscriptionWithFormat:@"vtt"];
     copyDefaultConsumed = YES;
-    [self updateUIForState];
+    [self render];
 }
 
 - (IBAction)copyText:(id)sender
@@ -1662,7 +1607,7 @@ static const unsigned long long modelMinSizes[] = {
     [pb declareTypes:[NSArray arrayWithObject:NSStringPboardType] owner:nil];
     [pb setString:stripped forType:NSStringPboardType];
     copyDefaultConsumed = YES;
-    [self updateUIForState];
+    [self render];
 }
 
 - (IBAction)timestampsToggled:(id)sender
@@ -1923,6 +1868,12 @@ static const unsigned long long modelMinSizes[] = {
                                                       action:@selector(openFile:)
                                                keyEquivalent:@"o"];
     [appMenu addItem:openItem];
+
+    recordMenuItem = [[NSMenuItem alloc] initWithTitle:@"Start Recording"
+                                                action:@selector(toggleRecording:)
+                                         keyEquivalent:@"r"];
+    [recordMenuItem setTarget:self];
+    [appMenu addItem:recordMenuItem];
 
     [appMenu addItem:[NSMenuItem separatorItem]];
 
@@ -2418,209 +2369,57 @@ static const unsigned long long modelMinSizes[] = {
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-#pragma mark - GNUstep Service: Dictate Text
+#pragma mark - Capture device
 
-- (void)dictateLoadModel
+/* The device the microphone is opened on: the CaptureDevice default when
+   the user named one (an ALSA PCM or an OSS device path), else the input
+   the Sound preferences chose.  nil lets the capture use the system's
+   default input. */
+- (NSString *)captureDevicePath
 {
-    NSString *mn = [[NSUserDefaults standardUserDefaults] stringForKey:@"LastModel"];
-    NSString *mp  = mn ? [self modelPathForName:mn] : nil;
-    NSLog(@"dictate: loading model %@ from %@", mn, mp);
-    if (mp && [[NSFileManager defaultManager] fileExistsAtPath:mp])
-        [self loadModel:mp];
-}
+    NSString *chosen = [[NSUserDefaults standardUserDefaults]
+        stringForKey:@"CaptureDevice"];
+    if ([chosen length] > 0)
+        return chosen;
 
-- (void)showListeningWindow
-{
-    NSWindow *win = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 300, 60)
-                                                 styleMask:NSTitledWindowMask
-                                                   backing:NSBackingStoreBuffered
-                                                     defer:NO];
-    [win setTitle:@"Whisper"];
-    [win center];
-    NSTextField *l = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 20, 260, 20)];
-    [l setStringValue:@"Listening... speak now"];
-    [l setEditable:NO]; [l setSelectable:NO];
-    [l setBordered:NO]; [l setBezeled:NO]; [l setDrawsBackground:NO];
-    [[win contentView] addSubview:l];
-    [win makeKeyAndOrderFront:self];
-    [win display];
-    objc_setAssociatedObject(self, "_listenWin", win, OBJC_ASSOCIATION_RETAIN);
-}
-
-- (void)hideListeningWindow
-{
-    NSWindow *w = objc_getAssociatedObject(self, "_listenWin");
-    [w close];
-    [w release];
-    objc_setAssociatedObject(self, "_listenWin", nil, OBJC_ASSOCIATION_RETAIN);
-}
-
-// Returns the default capture device path (ALSA "plughw:N,M" or OSS "/dev/dspN")
-// or nil if no input backend is available.
-- (NSString *)defaultCaptureDevice
-{
-    id<SoundBackend> snd = nil;
     NSString *devPath = nil;
+    BOOL found = NO;
 
 #if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
     OSSBackend *oss = [[OSSBackend alloc] init];
     if ([oss isAvailable]) {
-        snd = oss;
+        found = YES;
         AudioDevice *dev = [oss defaultInputDevice];
         if (dev)
             devPath = [NSString stringWithFormat:@"/dev/dsp%d", [dev cardIndex]];
-    } else {
-        [oss release]; oss = nil;
     }
+    [oss release];
 #endif
-    if (!snd) {
+    if (!found) {
         ALSABackend *alsa = [[ALSABackend alloc] init];
         if ([alsa isAvailable]) {
-            snd = alsa;
+            found = YES;
             AudioDevice *dev = [alsa defaultInputDevice];
             if (dev)
                 devPath = [NSString stringWithFormat:@"plughw:%d,%d",
                                     [dev cardIndex], [dev deviceIndex]];
-        } else {
-            [alsa release]; alsa = nil;
         }
+        [alsa release];
     }
-    [snd release];
+#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
+    if (!found) {
+        OSSBackend *oss = [[OSSBackend alloc] init];
+        if ([oss isAvailable]) {
+            AudioDevice *dev = [oss defaultInputDevice];
+            if (dev)
+                devPath = [NSString stringWithFormat:@"/dev/dsp%d", [dev cardIndex]];
+        }
+        [oss release];
+    }
+#endif
     return devPath;
 }
 
-// Service entry point. Called via DO from any application's Services menu.
-// Records speech until silence, transcribes it, returns text on pboard.
-- (void)dictate:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error
-{
-    NSLog(@"dictate service invoked");
-    if (!wdlopen_init()) {
-        NSLog(@"dictate: whisper library not available");
-        if (error) *error = @"whisper.cpp library not available";
-        return;
-    }
-    if (!whisperCtx) {
-        // Model loading touches the UI - must happen on the main thread
-        [self performSelectorOnMainThread:@selector(dictateLoadModel)
-                               withObject:nil
-                            waitUntilDone:YES];
-        if (!whisperCtx) {
-            NSLog(@"dictate: model load failed");
-            if (error) *error = @"No model loaded";
-            return;
-        }
-    }
-
-    // Capture on default device
-    NSString *capDev = [self defaultCaptureDevice];
-    NSLog(@"dictate: capture device %@", capDev);
-    if (!capDev) {
-        NSLog(@"dictate: no capture device found");
-        if (error) *error = @"No microphone found";
-        return;
-    }
-    void *cap = wcapture_start(16000, [capDev UTF8String]);
-    if (!cap) {
-        NSLog(@"dictate: wcapture_start failed");
-        if (error) *error = @"No microphone found";
-        return;
-    }
-
-    // Feedback window so the user knows to speak NOW.
-    // Created on the main thread (AppKit requirement); dictate blocks
-    // on this DO thread until recording completes.
-    [self performSelectorOnMainThread:@selector(showListeningWindow)
-                           withObject:nil
-                        waitUntilDone:YES];
-
-    // Record until silence-after-speech, no-speech timeout, or hard cap
-    NSDate *started = [NSDate date];
-    BOOL heardSpeech = NO;
-    int silentChecks = 0;
-    int lastN = 0;
-    static const float kSpeechThresh = 0.02f;
-
-    while (1) {
-        usleep(500000);   // check every half second
-
-        float *s = NULL;
-        int n = wcapture_snapshot(cap, &s);
-        if (n > lastN && s) {
-            float peak = 0.0f;
-            for (int i = lastN; i < n; i++) {
-                float a = s[i] < 0 ? -s[i] : s[i];
-                if (a > peak) peak = a;
-            }
-            free(s);
-            NSLog(@"dictate: check n=%d new=%d peak=%.6f", n, n - lastN, peak);
-            if (peak >= kSpeechThresh) { heardSpeech = YES; silentChecks = 0; }
-            else if (heardSpeech)      silentChecks++;
-        }
-        else {
-            NSLog(@"dictate: check no new samples (n=%d lastN=%d)", n, lastN);
-        }
-        lastN = n;
-
-        NSTimeInterval elapsed = -[started timeIntervalSinceNow];
-        if (heardSpeech && silentChecks >= 4) break;         // ~2 s of silence
-        if (!heardSpeech && elapsed > 20.0) break;           // nothing said
-        if (elapsed > 120.0) break;                          // hard cap
-    }
-
-    [self performSelectorOnMainThread:@selector(hideListeningWindow)
-                           withObject:nil
-                        waitUntilDone:YES];
-
-    WCaptureData *cd = wcapture_stop(cap);
-    if (!cd || cd->n_samples == 0 || !heardSpeech) {
-        NSLog(@"dictate: capture yielded %d samples, heardSpeech=%d",
-              cd ? cd->n_samples : 0, heardSpeech);
-        wcapture_free_data(cd);
-        if (error) *error = heardSpeech ? @"Transcription failed" : @"No speech detected";
-        return;
-    }
-
-    // Transcribe synchronously (no streaming callbacks)
-    struct whisper_full_params wparams =
-        wdlopen_full_default_params(WHISPER_SAMPLING_GREEDY);
-    wparams.n_threads = currentThreads;
-    wparams.language = "en";
-    wparams.detect_language = false;
-    wparams.no_timestamps = true;
-    wparams.print_progress = false;
-    wparams.print_realtime = false;
-    wparams.print_special = false;
-    wparams.new_segment_callback = NULL;
-    wparams.progress_callback = NULL;
-
-    if (vocabularyPrompt)
-        wparams.initial_prompt = [vocabularyPrompt UTF8String];
-
-    int ret = wdlopen_full(whisperCtx, wparams, cd->samples, cd->n_samples);
-    wcapture_free_data(cd);
-    if (ret != 0) {
-        if (error) *error = @"Transcription failed";
-        return;
-    }
-
-    NSMutableString *text = [NSMutableString string];
-    int totalSegs = wdlopen_full_n_segments(whisperCtx);
-    for (int i = 0; i < totalSegs; i++) {
-        const char *st = wdlopen_full_get_segment_text(whisperCtx, i);
-        if (st) [text appendString:[NSString stringWithUTF8String:st]];
-    }
-    text = [[text stringByTrimmingCharactersInSet:
-             [NSCharacterSet whitespaceAndNewlineCharacterSet]] mutableCopy];
-
-    if ([text length] == 0) {
-        if (error) *error = @"No speech detected";
-        return;
-    }
-
-    // Return the transcribed text to the requesting application
-    [pboard declareTypes:[NSArray arrayWithObject:NSStringPboardType] owner:nil];
-    [pboard setString:text forType:NSStringPboardType];
-}
 
 - (void)syncTypedText
 {
@@ -2655,7 +2454,7 @@ static const unsigned long long modelMinSizes[] = {
 
 - (void)typeBackspaces:(int)count
 {
-    if (count <= 0) return;
+    if (count <= 0 || targetWindowID == 0) return;
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:xdoPath];
     NSString *winArg = [NSString stringWithFormat:@"%lu", targetWindowID];
@@ -2671,7 +2470,7 @@ static const unsigned long long modelMinSizes[] = {
 
 - (void)typeTextToApp:(NSString *)text
 {
-    if ([text length] == 0) return;
+    if ([text length] == 0 || targetWindowID == 0) return;
     NSTask *task = [[NSTask alloc] init];
     [task setLaunchPath:xdoPath];
     NSString *winArg = [NSString stringWithFormat:@"%lu", targetWindowID];

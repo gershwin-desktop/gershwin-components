@@ -50,7 +50,7 @@ else
 
 APP_NAME = Whisper
 PACKAGE_NAME = Whisper
-Whisper_PRINCIPAL_CLASS = NSApplication
+Whisper_PRINCIPAL_CLASS = WApplication
 Whisper_APPLICATION_ICON = Whisper.png
 
 #
@@ -67,7 +67,11 @@ Whisper_HEADER_FILES = \
 	WhisperController.h \
 	WRecordButton.h \
 	WAudioLoader.h \
-	WCapture.h
+	WCapture.h \
+	WDictationMachine.h \
+	WDictationViewState.h \
+	WKeyRepeatFilter.h \
+	WApplication.h
 
 #
 # Source files
@@ -75,6 +79,10 @@ Whisper_HEADER_FILES = \
 Whisper_OBJC_FILES = \
 	WhisperController.m \
 	WRecordButton.m \
+	WDictationMachine.m \
+	WDictationViewState.m \
+	WKeyRepeatFilter.m \
+	WApplication.m \
 	Whisper_main.m \
 	../MediaRemote/GSMediaPlayer2.m
 
