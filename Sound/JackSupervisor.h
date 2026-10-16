@@ -7,7 +7,10 @@
  * the ~/.asoundrc block in the state the Sound settings ask for.  jackd is
  * started on the output the user selected; selecting another device later
  * bridges that one (at most one bridge per direction) instead of restarting
- * jackd, which keeps its device until it is started again.  The Sound menu extra owns the one instance of a session.
+ * jackd, which keeps its device until it is started again.  When the device
+ * jackd runs on goes away or is enumerated again (a USB device replugged),
+ * jackd is stopped and started again on it once it is back.  The Sound menu
+ * extra owns the one instance of a session.
  * Foundation only; Linux only (elsewhere -start reports "unavailable" and
  * does nothing).
  *
@@ -150,6 +153,10 @@ extern NSString * const JackStateFailed;
     NSArray *serverArguments;       // argv of the running or starting jackd
     NSString *serverClock;          // clock device of that jackd, nil if none
     NSString *drivenName;           // display name of serverClock's device
+    NSArray *clockIdentity;         // node identity of serverClock's device
+    NSString *awaitedClock;         // device jackd lost; nil when not waiting
+    NSTimeInterval awaitUntil;
+    NSUInteger rapidLosses;         // device losses soon after a start, in a row
     NSTimeInterval startedAt;
     NSUInteger failures;
     NSTimeInterval nextAttempt;

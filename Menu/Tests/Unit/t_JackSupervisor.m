@@ -1234,6 +1234,149 @@ static void testDamagedAsoundrc(void)
   [s stop];
 }
 
+/* jackd's own device goes away while jackd stays alive (a USB speaker
+   power-cycled): jackd is stopped and started again on that device once it
+   is back, never on another card while it is away. */
+static NSDictionary *usbSelected(void)
+{
+  NSMutableDictionary *d = [NSMutableDictionary dictionaryWithDictionary: on()];
+  [d setObject: @"USB" forKey: JackSettingOutputCard];
+  return d;
+}
+
+static void testClockDeviceReturns(void)
+{
+  FakeEnv *e = [[FakeEnv new] autorelease];
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  e->autoUp = YES;
+  setSettings(e, usbSelected());
+  JackSupervisor *s = [[[JackSupervisor alloc] initWithEnvironment: e] autorelease];
+  [s start];
+  tickFor(s, e, 1);
+  NSArray *firstArgs = [lastLaunch(e, @"jackd") objectForKey: @"args"];
+  PASS([stateOf(s) isEqual: JackStateRunning] && [jackdDevice(e) isEqual: @"hw:CARD=USB,DEV=0"],
+       "running on the selected USB device");
+
+  /* power-cycled: the card is gone, jackd itself keeps running */
+  FakeProcess *old = liveJackd(e);
+  [e->blockAtJackdTerm removeAllObjects];
+  writeCards(e, [NSArray arrayWithObject: PCH()]);
+  tickFor(s, e, 1);
+  PASS(old != nil && signalled(e, SIGTERM, -old->pid) && !old->alive, "device gone: jackd stopped");
+  PASS([e->blockAtJackdTerm count] == 1 && ![[e->blockAtJackdTerm lastObject] boolValue],
+       "the asoundrc block was removed before SIGTERM");
+  tickFor(s, e, 5);
+  PASS(launchesOf(e, @"jackd") == 1, "while it is away: no jackd on another card");
+  PASS([[[s statusDictionary] objectForKey: JackStatusMessage] rangeOfString: @"USB"].location != NSNotFound,
+       "status says which device it waits for");
+  PASS([s isTimerScheduled] && [s timerInterval] == 1.0, "waits on the normal tick, no spinning");
+
+  /* back (new device node): relaunched with the same arguments */
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  tickFor(s, e, 1);
+  PASS(launchesOf(e, @"jackd") == 2, "device back: jackd relaunched");
+  PASS_EQUAL([lastLaunch(e, @"jackd") objectForKey: @"args"], firstArgs, "with the same arguments");
+  tickFor(s, e, 1);
+  PASS([stateOf(s) isEqual: JackStateRunning] && [e asoundrcHasBlock], "running again, block back");
+
+  /* replugged between two polls: the node is new although the card never
+     looked absent */
+  tickFor(s, e, 60);
+  old = liveJackd(e);
+  reenumerate(e, @"pcmC1D0p");
+  tickFor(s, e, 1);
+  PASS(signalled(e, SIGTERM, -old->pid), "device enumerated again: jackd stopped");
+  tickFor(s, e, 1);
+  PASS(launchesOf(e, @"jackd") == 3 && [[lastLaunch(e, @"jackd") objectForKey: @"args"] isEqual: firstArgs],
+       "and relaunched on it");
+
+  /* back as another card number: same id, same arguments */
+  tickFor(s, e, 60);
+  old = liveJackd(e);
+  writeCards(e, [NSArray arrayWithObjects: PCH(),
+    card(3, @"USB", [NSArray arrayWithObjects: @"pcm0p", @"pcm0c", nil]), nil]);
+  tickFor(s, e, 2);
+  PASS(signalled(e, SIGTERM, -old->pid) && launchesOf(e, @"jackd") == 4
+       && [[lastLaunch(e, @"jackd") objectForKey: @"args"] isEqual: firstArgs],
+       "new card index: restarted with the same arguments");
+  [s stop];
+
+  /* jackd dies by itself when its device goes: waits for it as well */
+  e = [[FakeEnv new] autorelease];
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  e->autoUp = YES;
+  setSettings(e, usbSelected());
+  s = [[[JackSupervisor alloc] initWithEnvironment: e] autorelease];
+  [s start];
+  tickFor(s, e, 1);
+  writeCards(e, [NSArray arrayWithObject: PCH()]);
+  [e die: liveJackd(e)];
+  tickFor(s, e, 10);
+  PASS(launchesOf(e, @"jackd") == 1, "jackd exited with its device: not restarted on another card");
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  tickFor(s, e, 1);
+  PASS(launchesOf(e, @"jackd") == 2 && [jackdDevice(e) isEqual: @"hw:CARD=USB,DEV=0"],
+       "restarted once the device is back");
+  [s stop];
+
+  /* permanently gone: after a while, as if it was absent at start */
+  e = [[FakeEnv new] autorelease];
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  e->autoUp = YES;
+  setSettings(e, usbSelected());
+  s = [[[JackSupervisor alloc] initWithEnvironment: e] autorelease];
+  [s start];
+  tickFor(s, e, 1);
+  writeCards(e, [NSArray arrayWithObject: PCH()]);
+  tickFor(s, e, 20);
+  PASS(launchesOf(e, @"jackd") == 1, "20 s away: still waiting");
+  tickFor(s, e, 15);
+  PASS(launchesOf(e, @"jackd") == 2 && [jackdDevice(e) isEqual: @"hw:CARD=PCH,DEV=0"],
+       "never came back: started like at start, on the first card");
+  [s stop];
+
+  /* flapping: a bounded number of restarts, then left alone */
+  e = [[FakeEnv new] autorelease];
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  e->autoUp = YES;
+  setSettings(e, usbSelected());
+  s = [[[JackSupervisor alloc] initWithEnvironment: e] autorelease];
+  [s start];
+  tickFor(s, e, 1);
+  for (int i = 0; i < 30; i++)
+    {
+      writeCards(e, [NSArray arrayWithObject: PCH()]);
+      tickFor(s, e, 1);
+      writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+      tickFor(s, e, 3);
+    }
+  NSUInteger launched = launchesOf(e, @"jackd");
+  PASS(launched >= 2 && launched <= 6, "flapping device: at most 5 restarts");
+  PASS([stateOf(s) isEqual: JackStateFailed] && ![s isTimerScheduled] && liveJackd(e) == nil,
+       "then given up, jackd stopped, no timer");
+  setSettings(e, [NSDictionary dictionaryWithObject: [NSNumber numberWithBool: NO] forKey: JackSettingUseJack]);
+  setSettings(e, usbSelected());
+  PASS(launchesOf(e, @"jackd") == launched + 1, "a settings change tries again");
+  [s stop];
+
+  /* an adopted jackd is not ours to stop */
+  e = [[FakeEnv new] autorelease];
+  writeCards(e, [NSArray arrayWithObjects: PCH(), USB(), nil]);
+  [e->table addObject: [NSDictionary dictionaryWithObjectsAndKeys: [NSNumber numberWithInt: 777], @"pid",
+    @"jackd", @"comm", [NSArray arrayWithObjects: @"jackd", @"-n", @"gsfake", @"-d", @"alsa", @"-d",
+    @"hw:CARD=USB,DEV=0", nil], @"argv", nil]];
+  e->serverUp = YES;
+  setSettings(e, usbSelected());
+  s = [[[JackSupervisor alloc] initWithEnvironment: e] autorelease];
+  [s start];
+  tickFor(s, e, 1);
+  writeCards(e, [NSArray arrayWithObject: PCH()]);
+  tickFor(s, e, 3);
+  PASS(!signalled(e, SIGTERM, -777) && !signalled(e, SIGTERM, 777) && launchesOf(e, @"jackd") == 0,
+       "adopted jackd losing its device is left alone");
+  [s stop];
+}
+
 int main(void)
 {
   NSAutoreleasePool *arp = [NSAutoreleasePool new];
@@ -1249,6 +1392,7 @@ int main(void)
   testFallbackChain();
   testAsoundrcFollowsRouting();
   testBridgeHealth();
+  testClockDeviceReturns();
   [arp release];
   return 0;
 }

@@ -73,6 +73,12 @@ static const double kBridgeMaxCPU = 0.5;             // of one core
 static const NSUInteger kBridgeHotTicks = 3;
 static const double kBridgeMaxLogRate = 64 * 1024;   // bytes per second
 
+// A USB device that is power-cycled or replugged comes back within seconds;
+// one that stays away longer is treated as unplugged, as at start.
+static const NSTimeInterval kClockReturnWait = 30.0;
+// A device lost this soon after jackd started counts as flapping.
+static const NSTimeInterval kStableRun = 60.0;
+
 static NSString * const kSystemClient = @"system";
 
 static NSTimeInterval backoffAfter(NSUInteger failures)
@@ -521,6 +527,8 @@ static unsigned long long fileSize(NSString *path)
     [serverArguments release];
     [serverClock release];
     [drivenName release];
+    [clockIdentity release];
+    [awaitedClock release];
     [(id)server release];
     [bridges release];
     [bridgeFailures release];
@@ -925,6 +933,8 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
     nextAttempt = 0;
     [bridgeFailures removeAllObjects];
     [loggedProblems removeAllObjects];
+    DESTROY(awaitedClock);
+    rapidLosses = 0;
 
     if (![self useJack]) {
         [self shutDownJack];
@@ -1061,6 +1071,7 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
     DESTROY(serverArguments);
     DESTROY(serverClock);
     DESTROY(drivenName);
+    DESTROY(clockIdentity);
     DESTROY(routedOutputClient);
     DESTROY(routedInputClient);
     DESTROY(routedOutputCard);
@@ -1109,13 +1120,23 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
 
 // jackd runs on the selected output, so the common case needs no bridge;
 // when that is unplugged, on the first card that can play.
-- (NSString *)deviceForNewJackd
+- (NSDictionary *)deviceForNewJackd:(NSDictionary *)devices
 {
-    NSDictionary *devices = [[self class] alsaDevicesAtRoot:[env alsaProcRoot]];
     NSDictionary *device = [self selectedDevice:@"playback" inDevices:devices selection:NULL];
     NSArray *playback = [devices objectForKey:@"playback"];
     if (device == nil && [playback count] > 0) device = [playback objectAtIndex:0];
-    return [device objectForKey:JackDeviceHW];
+    return device;
+}
+
+// The playback device a jackd clock device names, nil when it is not
+// present.
+static NSDictionary *playbackDeviceForClock(NSDictionary *devices, NSString *clock)
+{
+    if (clock == nil) return nil;
+    for (NSDictionary *d in [devices objectForKey:@"playback"]) {
+        if ([JackSupport isDevice:d clockDevice:clock]) return d;
+    }
+    return nil;
 }
 
 // A jackd of this user for our server name, if one runs.
@@ -1129,7 +1150,7 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
     return nil;
 }
 
-- (void)attemptStart
+- (void)attemptStart:(NSDictionary *)devices
 {
     NSDictionary *existing = [self existingJackd];
     if (existing != nil) {
@@ -1155,7 +1176,8 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
         return;
     }
 
-    NSString *clock = [self deviceForNewJackd];
+    NSDictionary *clockDevice = [self deviceForNewJackd:devices];
+    NSString *clock = [clockDevice objectForKey:JackDeviceHW];
     if (clock == nil) {
         [self recordFailure:@"no ALSA playback device for jackd"];
         return;
@@ -1182,6 +1204,8 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
     jackd = [(id)p retain];
     ASSIGN(serverArguments, args);
     ASSIGN(serverClock, clock);
+    // Taken now: a replug before the first supervision must still count.
+    ASSIGN(clockIdentity, [self nodeIdentityOfDevice:clockDevice]);
     startedAt = [env now];
     NSLog(@"[JACK] started jackd (pid %d): jackd %@", (int)[p processIdentifier],
           [args componentsJoinedByString:@" "]);
@@ -1206,7 +1230,7 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
     return NO;
 }
 
-- (void)checkStarting
+- (void)checkStarting:(NSDictionary *)devices
 {
     if (![self serverProcessAlive]) {
         NSString *who = jackd != nil ? @"jackd exited while starting" : @"the running jackd went away";
@@ -1224,7 +1248,7 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
         NSLog(@"[JACK] server running: %lu Hz, %lu frames, clock device %@", (unsigned long)serverRate,
               (unsigned long)serverFrames, serverClock ? serverClock : @"(none)");
         [self adoptOrphanedBridges];
-        [self supervise];
+        [self supervise:devices];
         return;
     }
     if ([env now] - startedAt >= kStartTimeout) {
@@ -1253,16 +1277,19 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
         return;
     }
     [self reapDyingBridges];
+    NSDictionary *devices = [[self class] alsaDevicesAtRoot:[env alsaProcRoot]];
     BOOL haveServer = (jackd != nil || adoptedPid > 0);
     if (!haveServer) {
-        if (!gaveUp && [env now] >= nextAttempt) {
-            [self attemptStart];
+        if (!gaveUp && [env now] >= nextAttempt && [self awaitedClockAllowsStart:devices]) {
+            [self attemptStart:devices];
             haveServer = (jackd != nil || adoptedPid > 0);
         }
     }
     if (haveServer) {
-        if (server == nil && ![state isEqualToString:JackStateRunning]) {
-            [self checkStarting];
+        if ([self stopIfClockDeviceLost:devices]) {
+            // Waiting for the device now; a later tick starts jackd again.
+        } else if (server == nil && ![state isEqualToString:JackStateRunning]) {
+            [self checkStarting:devices];
         } else if (![self serverProcessAlive]) {
             NSLog(@"[JACK] jackd went away");
             BOOL own = (jackd != nil);
@@ -1270,15 +1297,86 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
             if (own) [self recordFailure:@"jackd exited"];
             else [self setState:JackStateStarting message:nil];
         } else {
-            [self supervise];
+            [self supervise:devices];
         }
     }
     [self adjustTimer];
     [self publishStatus];
 }
 
+#pragma mark Losing jackd's device
+
+// jackd keeps running on a device that went away (it has no way back to
+// the device once it is enumerated again), playing nothing; the only cure
+// is a new jackd.  YES when jackd was stopped for that.
+- (BOOL)stopIfClockDeviceLost:(NSDictionary *)devices
+{
+    if (serverClock == nil) return NO;     // not an ALSA jackd
+    NSDictionary *device = playbackDeviceForClock(devices, serverClock);
+    NSArray *identity = device ? [self nodeIdentityOfDevice:device] : nil;
+    // Without its node (udev has not made it yet) the identity is only the
+    // card index, which says nothing about a re-enumeration.
+    if ([identity count] < 3) identity = nil;
+    NSString *why = nil;
+    if (device == nil) {
+        why = @"went away";
+    } else if (clockIdentity == nil || [clockIdentity count] < 3) {
+        // Taken over or adopted: measured from now on.
+        ASSIGN(clockIdentity, identity);
+    } else if (identity != nil && ![identity isEqual:clockIdentity]) {
+        why = @"was enumerated again";
+    }
+    if (why == nil) return NO;
+    if (jackd == nil) {
+        [self logOnce:[NSString stringWithFormat:@"the device of jackd pid %d (%@) %@; it was not started "
+                       @"by Sound, so it is left to whoever started it", (int)adoptedPid, serverClock, why]];
+        return NO;
+    }
+    NSString *lost = [[serverClock retain] autorelease];
+    BOOL rapid = [env now] - startedAt < kStableRun;
+    NSLog(@"[JACK] %@, the device jackd runs on, %@: stopping jackd", lost, why);
+    [self stopServer];
+    rapidLosses = rapid ? rapidLosses + 1 : 1;
+    if (rapidLosses >= kMaxFailures) {
+        gaveUp = YES;
+        NSString *text = [NSString stringWithFormat:@"%@ went away %lu times in a row soon after jackd "
+                          @"started on it; gave up (log: %@)", lost, (unsigned long)rapidLosses,
+                          [self jackdLogPath]];
+        NSLog(@"[JACK] %@", text);
+        [self setState:JackStateFailed message:text];
+        // Nothing to do until the settings change, which the watch reports.
+        [self cancelTimer];
+        return YES;
+    }
+    // A device that flaps is given more time before each new jackd.
+    nextAttempt = rapidLosses > 1 ? [env now] + backoffAfter(rapidLosses - 1) : 0;
+    ASSIGN(awaitedClock, lost);
+    awaitUntil = [env now] + kClockReturnWait;
+    [self setState:JackStateStarting
+           message:[NSString stringWithFormat:@"waiting for %@ to come back", lost]];
+    return YES;
+}
+
+// Another card is not taken silently while the lost one may come back.
+- (BOOL)awaitedClockAllowsStart:(NSDictionary *)devices
+{
+    if (awaitedClock == nil) return YES;
+    if (playbackDeviceForClock(devices, awaitedClock) != nil) {
+        NSLog(@"[JACK] %@ is back: starting jackd", awaitedClock);
+        DESTROY(awaitedClock);
+        return YES;
+    }
+    if ([env now] < awaitUntil) return NO;
+    NSLog(@"[JACK] %@ did not come back within %.0f s: starting jackd as if it was unplugged",
+          awaitedClock, kClockReturnWait);
+    DESTROY(awaitedClock);
+    return YES;
+}
+
+#pragma mark Supervision
+
 // One pass over a running server.
-- (void)supervise
+- (void)supervise:(NSDictionary *)devices
 {
     if (server == nil) {
         server = [(id)[env openServer] retain];
@@ -1291,19 +1389,11 @@ static NSString *argumentAfter(NSArray *argv, NSString *flag)
     // The buffer size can change under us (the pane, jack_bufsize).
     serverRate = [server sampleRate];
     serverFrames = [server bufferFrames];
-    NSDictionary *devices = [[self class] alsaDevicesAtRoot:[env alsaProcRoot]];
     NSString *outSelection = nil;
     NSString *inSelection = nil;
     NSDictionary *outDevice = [self selectedDevice:@"playback" inDevices:devices selection:&outSelection];
     NSDictionary *inDevice = [self selectedDevice:@"capture" inDevices:devices selection:&inSelection];
-    NSString *driven = nil;
-    for (NSDictionary *d in [devices objectForKey:@"playback"]) {
-        if ([JackSupport isDevice:d clockDevice:serverClock]) {
-            driven = [d objectForKey:JackDeviceDisplayName];
-            break;
-        }
-    }
-    ASSIGN(drivenName, driven);
+    ASSIGN(drivenName, [playbackDeviceForClock(devices, serverClock) objectForKey:JackDeviceDisplayName]);
     // Routing first: a deselected bridge loses its applications to the new
     // device before it is stopped, not after.
     NSArray *ports = [self routeOutput:outDevice selection:outSelection input:inDevice selection:inSelection];
