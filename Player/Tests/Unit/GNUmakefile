@@ -1,33 +1,45 @@
+# __GENERATED__ makefile marker
 #
-# Headless ObjectTesting coverage for the pure-logic podcast pieces:
-# Podcast's property-list round trip and PodcastFeedParser's RSS parsing.
-# Episode playback and the UI itself are covered by the player*.uitest
-# scripts in Tests/, driven with the driveui skill - there is no window or
-# network here, just model/parser logic.
-#
-ifeq ($(GNUSTEP_MAKEFILES),)
- GNUSTEP_MAKEFILES := $(shell gnustep-config --variable=GNUSTEP_MAKEFILES 2>/dev/null)
-endif
-ifeq ($(GNUSTEP_MAKEFILES),)
- $(error You need to set GNUSTEP_MAKEFILES before compiling!)
-endif
 
 include $(GNUSTEP_MAKEFILES)/common.make
+-include ../GNUmakefile.super
 
-GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME = t_Podcast t_PodcastFeedParser
+TEST_TOOL_NAME =  t_MediaRemote t_PlayerMediaInfo t_PlayerMenu t_PlayerPlaylist t_PlayerSession t_PlayerSessionMedia t_PlayerViews t_PodcastFeedParser t_Podcast t_RadioManager t_StreamPlayer
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
-ADDITIONAL_OBJCFLAGS += -Wno-deprecated -Wall -Wextra -Werror
 
-t_Podcast_OBJC_FILES = t_Podcast.m
-t_PodcastFeedParser_OBJC_FILES = t_PodcastFeedParser.m
-t_PodcastFeedParser_OBJC_FILES += ../../PlayerAsync.m
+ifeq ($(gcov),yes)
+ADDITIONAL_OBJCFLAGS += -ftest-coverage -fprofile-arcs
+ADDITIONAL_OBJCCFLAGS += -ftest-coverage -fprofile-arcs
+ADDITIONAL_LDFLAGS += -ftest-coverage -fprofile-arcs
+ADDITIONAL_TOOL_LIBS+=-lgcov
+endif
+
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated
+ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
+
+
+t_MediaRemote_OBJC_FILES=t_MediaRemote.m
+t_PlayerMediaInfo_OBJC_FILES=t_PlayerMediaInfo.m
+t_PlayerMenu_OBJC_FILES=t_PlayerMenu.m
+t_PlayerPlaylist_OBJC_FILES=t_PlayerPlaylist.m
+t_PlayerSession_OBJC_FILES=t_PlayerSession.m
+t_PlayerSessionMedia_OBJC_FILES=t_PlayerSessionMedia.m
+t_PlayerViews_OBJC_FILES=t_PlayerViews.m
+t_PodcastFeedParser_OBJC_FILES=t_PodcastFeedParser.m
+t_Podcast_OBJC_FILES=t_Podcast.m
+t_RadioManager_OBJC_FILES=t_RadioManager.m
+t_StreamPlayer_OBJC_FILES=t_StreamPlayer.m
 
 -include GNUmakefile.preamble
+-include make-check.mak
 include $(GNUSTEP_MAKEFILES)/test-tool.make
 -include GNUmakefile.postamble
 
 after-clean::
-	rm -f core core.* *.core tests.log tests.sum oldtests.log oldtests.sum
+	rm -f core core.* *.core \
+	test_*.out test_*.err \
+	tests.log tests.sum oldtests.log oldtests.sum
+
