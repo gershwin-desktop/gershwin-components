@@ -4,8 +4,10 @@
 # Podcasts menu brings up the podcast screen from the radio, and a file
 # opened while podcasts are shown brings back the local player.
 #
-# Needs the network: the radio stations and the podcast come from the
-# Internet.
+# Needs no network: the radio directory, the podcast directory and the
+# podcast's feed are files made from Fixtures/, named to Player through its
+# PlayerRadioDirectoryURL and PlayerPodcastDirectoryURL defaults, so the
+# result depends neither on Internet services nor on how fast they answer.
 #
 # Leaves the computer as it was found: the fixture is removed and the app is
 # quit at the end.
@@ -16,7 +18,19 @@ shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
 # Player reopens in Internet radio mode, or with its last list, as it was quit
 shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
 shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
-shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Modes Tone' /tmp/player-uitest-${home}/tone.mp3"
+# A search left from an earlier run would ask the directories for it
+shell "defaults delete io.github.gershwin-desktop.Player PlayerRadioSearch >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPodcastSearch >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPodcastShow >/dev/null 2>&1; true"
+shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}/radio && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Modes Tone' /tmp/player-uitest-${home}/tone.mp3"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Modes Episode' /tmp/player-uitest-${home}/episode.mp3"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Modes Station' /tmp/player-uitest-${home}/station.mp3"
+# The fixtures name their media by absolute file:// URLs into the temp dir
+shell "sed 's|@DIR@|/tmp/player-uitest-${home}|g' ${testdir}/Fixtures/podcast-search.json > /tmp/player-uitest-${home}/search.json"
+shell "sed 's|@DIR@|/tmp/player-uitest-${home}|g' ${testdir}/Fixtures/podcast-feed.xml > /tmp/player-uitest-${home}/feed.xml"
+shell "sed 's|@DIR@|/tmp/player-uitest-${home}|g' ${testdir}/Fixtures/radio-browse.json > /tmp/player-uitest-${home}/radio/Browse.ashx"
+shell "defaults write io.github.gershwin-desktop.Player PlayerPodcastDirectoryURL file:///tmp/player-uitest-${home}/search.json"
+shell "defaults write io.github.gershwin-desktop.Player PlayerRadioDirectoryURL file:///tmp/player-uitest-${home}/radio"
 
 shell "openapp Player >/dev/null 2>&1 &"
 wait 2s
@@ -27,6 +41,7 @@ wait until window "Player" timeout 15s
 select menu "Radio/Internet Radio"
 wait until window "Player - Internet Radio" timeout 10s
 wait until textfield "Search Radio Stations" timeout 5s
+wait until text contains "2 stations loaded" timeout 10s
 # Until the stations are in the menu: a third item after Internet Radio
 shell "for i in $(seq 1 30); do /System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) menu | awk -F'\t' '$1==0 {m=$3} m ~ /^Radio$/ && $1==1 {n++} END {exit !(n>2)}' && exit 0; sleep 1; done; exit 1"
 
@@ -35,14 +50,16 @@ select menu "Podcasts/Browse Podcasts"
 wait until window "Player - Podcasts" timeout 10s
 assert not exists textfield "Search Radio Stations"
 click textfield "Search Podcasts"
-type "NPR News Now"
+type "Modes"
 press key "Return"
-wait until text contains "podcasts" timeout 30s
-wait until button "Open" timeout 5s
+# The status of this search's answer, which nothing before it shows
+wait until text contains "1 podcasts" timeout 10s
+wait until button "Open" enabled timeout 5s
 click button "Open"
 # The episodes screen, and its newest episode playing
-wait until button "< Shows" timeout 30s
-wait until button "Pause" timeout 30s
+wait until button "< Shows" timeout 10s
+wait until button "Pause" timeout 10s
+wait until text contains "Modes Episode Two" timeout 5s
 assert not exists textfield "Search Podcasts"
 
 # Podcast episodes -> a radio station chosen from the Radio menu (its
@@ -50,6 +67,7 @@ assert not exists textfield "Search Podcasts"
 shell "/System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) menu_invoke 5 2"
 wait until not exists button "< Shows" timeout 10s
 wait until textfield "Search Radio Stations" timeout 10s
+wait until text contains "Modes Station One" timeout 10s
 assert not exists textfield "Search Podcasts"
 assert not exists window "Player - Podcasts"
 
@@ -75,5 +93,7 @@ press "Alt+Q"
 wait until not exists window "Player - Modes Tone" timeout 5s
 # Sound fades out for a second before the app goes
 wait until not exists application "Player" timeout 5s
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPodcastDirectoryURL >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerRadioDirectoryURL >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home}"
 log "Player's window follows radio, podcasts and local files"

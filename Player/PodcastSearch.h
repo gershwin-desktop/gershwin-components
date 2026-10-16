@@ -14,6 +14,9 @@
  *
  * Client for Apple's iTunes Search API, restricted to podcasts:
  * https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/Searching.html
+ *
+ * The user default PlayerPodcastDirectoryURL replaces the search URL; a
+ * file:// URL names a file holding one answer (query parameters ignored).
  */
 @interface PodcastSearch : NSObject
 

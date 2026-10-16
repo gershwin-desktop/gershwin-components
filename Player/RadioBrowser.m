@@ -32,7 +32,12 @@
 {
     self = [super init];
     if (self) {
-        _baseURL = [@"https://opml.radiotime.com" retain];
+        // Any OPML directory with the same endpoints can stand in for the
+        // default one: a mirror, or a file:// directory of its answers that
+        // makes Player usable (and testable) without the Internet
+        NSString *base = [[NSUserDefaults standardUserDefaults]
+            stringForKey:@"PlayerRadioDirectoryURL"];
+        _baseURL = [([base length] > 0 ? base : @"https://opml.radiotime.com") copy];
     }
     return self;
 }

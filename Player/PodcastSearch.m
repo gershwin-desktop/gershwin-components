@@ -32,7 +32,12 @@
 {
     self = [super init];
     if (self) {
-        _baseURL = [@"https://itunes.apple.com/search" retain];
+        // Any service that answers the same search API can stand in for
+        // the default one: a mirror, or a file:// copy of its answers that
+        // makes Player usable (and testable) without the Internet
+        NSString *base = [[NSUserDefaults standardUserDefaults]
+            stringForKey:@"PlayerPodcastDirectoryURL"];
+        _baseURL = [([base length] > 0 ? base : @"https://itunes.apple.com/search") copy];
     }
     return self;
 }

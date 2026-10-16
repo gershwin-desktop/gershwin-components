@@ -82,7 +82,10 @@ to the SYSTEM domain unless noted.
   menu. Run them with `gnustep-tests --sequential .` there (the tools share
   sources); everything a tool links lives in `GNUmakefile.preamble`, since the
   runner regenerates `GNUmakefile`. `t_PlayerMenu` and `t_PlayerViews` need a
-  private `DISPLAY`. `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.
+  private `DISPLAY`. `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI; the
+  podcast and radio directories come from `Player/Tests/Fixtures` through the
+  `PlayerPodcastDirectoryURL`/`PlayerRadioDirectoryURL` defaults (file://), so
+  no script needs the Internet.
 - `Books/Tests/Selection/`: ObjectTesting tools for the reading selection
   (`t_TextSelection`, headless, every state x event pair) and the copied text
   (`t_TextExtraction`, headless; `t_CopyToPasteboard` needs `DISPLAY` set to
