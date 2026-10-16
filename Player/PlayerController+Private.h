@@ -47,6 +47,9 @@ extern NSString *const PlayerDefaultsPodcastPlaying;
 /// Only the position, while playing
 - (void)renderPosition;
 - (void)runPositionTimer:(BOOL)run;
+/// The mode a choice of the user leads to (PlayerModeAfterRequest)
+- (void)requestMode:(PlayerModeRequest)request;
+- (void)switchToMode:(PlayerMode)mode resuming:(BOOL)resume;
 - (BOOL)radioTuning;
 - (void)revalidateMenu;
 - (void)updateTrackInfo;

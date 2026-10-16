@@ -170,10 +170,9 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
         [session restoreState:[defaults dictionaryForKey:PlayerDefaultsPlaylist]];
         [self playlistDidChange];
-        if ([defaults integerForKey:PlayerDefaultsMode] == PlayerModeRadio) {
-            [self enterRadioModeResuming:YES];
-        } else if ([defaults integerForKey:PlayerDefaultsMode] == PlayerModePodcast) {
-            [self enterPodcastModeResuming:YES];
+        NSInteger mode = [defaults integerForKey:PlayerDefaultsMode];
+        if (mode == PlayerModeRadio || mode == PlayerModePodcast) {
+            [self switchToMode:(PlayerMode)mode resuming:YES];
         }
     }
     // Outlined before it shows, so it never appears as a rectangle first
@@ -470,15 +469,47 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)layoutSubviews
 {
+    [self showScreen:[self viewState]];
+}
+
+// The views of a screen, as the view state says, then their geometry.
+// Views are shown and hidden here and nowhere else.
+- (void)showScreen:(PlayerViewState)view
+{
+    PlayerViewVisibility v = view.visible;
+    [flowView setHidden:!v.carousel];
+    [videoView setHidden:!v.video];
+    [self setViews:[self trackInfoViews] hidden:!v.trackInfo];
+    [timeSlider setHidden:!v.positionSlider];
+    [podcastTimelineView setHidden:!v.timeline];
+    [self setViews:@[currentTimeLabel, totalTimeLabel] hidden:!(v.positionSlider || v.timeline)];
+    [searchField setHidden:!v.radioSearch];
+    [radioTextLabel setHidden:!v.radioText];
+    [statusLabel setHidden:!v.status];
+    [self setViews:@[podcastSearchField, subscribeButton] hidden:!v.podcastSearch];
+    [self setViews:@[backButton, episodeScrollView, showNotesScrollView] hidden:!v.episodes];
+    [topBarView setHidden:!v.topBar];
+    [self setViews:[self transportViews] hidden:!v.transport];
+    [self setViews:[self volumeViews] hidden:!v.volume];
+    [contentView setBlackBackground:isFullscreen];
+    if (!isFullscreen) {
+        [flowView setUncoveredRects:nil];
+    }
+
     if (isFullscreen) {
         [self layoutFullscreen];
-    } else if (playerMode == PlayerModeRadio) {
+    } else if (view.screen == PlayerViewScreenRadio) {
         [self layoutRadioMode];
-    } else if (playerMode == PlayerModePodcast) {
+    } else if (view.screen == PlayerViewScreenPodcastShows
+               || view.screen == PlayerViewScreenPodcastEpisodes) {
         [self layoutPodcastMode];
     } else {
         [self layoutLocalMode];
     }
+    shownScreen = view.screen;
+    shownFullscreen = isFullscreen;
+    shownVideo = v.video;
+    screenShown = YES;
     [contentView setNeedsDisplay:YES];
 }
 
@@ -564,14 +595,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
-    [self setViews:@[searchField, statusLabel, radioTextLabel, topBarView] hidden:YES];
-    [flowView setUncoveredRects:nil];
-    [contentView setBlackBackground:NO];
-    [self setViews:[self trackInfoViews] hidden:NO];
-    [self setViews:[self positionViews] hidden:NO];
-    [self setViews:[self transportViews] hidden:NO];
-    [self setViews:[self volumeViews] hidden:NO];
-
     // The transport sits at the bottom in the middle, where the curved
     // bottom edge is lowest
     CGFloat y = METRICS_CONTENT_BOTTOM_MARGIN;
@@ -625,15 +648,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (void)layoutFullscreen
 {
     NSRect bounds = [contentView bounds];
-    // Only the buttons: their bezels fill what the picture gives up for
-    // them, while a text would stand on a black patch of window instead
-    [self setViews:@[searchField, statusLabel, radioTextLabel, topBarView] hidden:YES];
-    [self setViews:[self trackInfoViews] hidden:YES];
-    [self setViews:[self volumeViews] hidden:YES];
-    [self setViews:[self positionViews] hidden:YES];
-    [self setViews:[self transportViews] hidden:NO];
-    [contentView setBlackBackground:YES];
-
+    // Only the buttons (PlayerViewState): their bezels fill what the
+    // picture gives up for them, while a text would stand on a black patch
     // The picture has the whole screen
     [self setPictureFrame:bounds];
     [self layoutTransportCenteredAt:NSMidX(bounds) y:METRICS_SPACE_16];
@@ -745,9 +761,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self showNoMediaAlert];
         return;
     }
-    if (playerMode == PlayerModeRadio) {
-        [self exitRadioMode];
-    }
+    [self requestMode:PlayerModeRequestLocalItems];
     [session addItems:files];
     [self playlistDidChange];
 }
@@ -812,9 +826,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self showNoMediaAlert];
         return NO;
     }
-    if (playerMode == PlayerModeRadio) {
-        [self exitRadioMode];
-    }
+    [self requestMode:PlayerModeRequestLocalItems];
     [session openItems:files];
     [self playlistDidChange];
     PlayerPlaybackState state = [session state];
@@ -882,9 +894,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)playStreamURL:(NSString *)url title:(NSString *)title
 {
-    if (playerMode == PlayerModeRadio) {
-        [self exitRadioMode];
-    }
+    [self requestMode:PlayerModeRequestLocalItems];
     if ([title length] > 0) {
         [streamTitles setObject:title forKey:url];
     }
@@ -1239,9 +1249,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (void)playerSession:(PlayerSession *)aSession didDiscoverVideoWithWidth:(int)width
                height:(int)height
 {
-    [flowView setHidden:YES];
-    [videoView setHidden:NO];
-    [self layoutSubviews];
+    showingVideo = YES;
     [self render];
 }
 
@@ -1255,10 +1263,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)showCoverArt
 {
-    if (![videoView isHidden]) {
-        [videoView setHidden:YES];
-        [flowView setHidden:NO];
-        [self layoutSubviews];
+    if (showingVideo) {
+        showingVideo = NO;
         [self render];
     }
 }
@@ -1273,6 +1279,46 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (NSString *)formatTime:(NSTimeInterval)seconds
 {
     return PlayerFormatTime(seconds);
+}
+
+#pragma mark - Mode
+
+- (void)requestMode:(PlayerModeRequest)request
+{
+    [self switchToMode:PlayerModeAfterRequest(playerMode, request) resuming:NO];
+}
+
+// The one place the mode changes, on every path that starts local, radio or
+// podcast playback; -render then shows the screen of the new mode.  Radio
+// and podcasts play through the one RadioManager, so leaving either stops
+// it, and the local session stops when either takes over.
+- (void)switchToMode:(PlayerMode)mode resuming:(BOOL)resume
+{
+    if (mode == playerMode) {
+        return;
+    }
+    if (playerMode == PlayerModeRadio) {
+        [self tearDownRadioMode];
+    } else if (playerMode == PlayerModePodcast) {
+        [self tearDownPodcastMode];
+    }
+    if (mode != PlayerModeLocal) {
+        [session stop];
+        showingVideo = NO;
+    }
+    playerMode = mode;
+    [[NSUserDefaults standardUserDefaults] setInteger:mode forKey:PlayerDefaultsMode];
+    if (mode == PlayerModeRadio) {
+        [self setUpRadioModeResuming:resume];
+    } else if (mode == PlayerModePodcast) {
+        [self setUpPodcastModeResuming:resume];
+    } else {
+        [self playlistDidChange];
+    }
+    [self render];
+    [mainWindow makeFirstResponder:mode == PlayerModeRadio ? (NSResponder *)searchField
+                                 : mode == PlayerModePodcast ? (NSResponder *)podcastSearchField
+                                 : (NSResponder *)contentView];
 }
 
 // What the window shows as the playback state: the local session's, or
@@ -1301,7 +1347,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (PlayerViewInputs)viewInputs
 {
     if (playerMode == PlayerModeLocal) {
-        PlayerViewInputs inputs = PlayerViewInputsMake(PlayerViewModeLocal);
+        PlayerViewInputs inputs = PlayerViewInputsMake(PlayerModeLocal);
         inputs.itemName = currentItemName;
         inputs.hasNext = [session canGoNext];
         inputs.hasPrevious = [session canGoPrevious];
@@ -1312,17 +1358,20 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         inputs.resolving = [ytdlpBackend isRunning];
         inputs.dragHover = dragHover;
         inputs.buffering = [session isBuffering];
+        inputs.fullscreen = isFullscreen;
+        inputs.showsVideo = showingVideo;
         return inputs;
     }
     RadioManager *radio = [RadioManager sharedManager];
     PlayerViewInputs inputs = PlayerViewInputsMake(playerMode == PlayerModeRadio
-        ? PlayerViewModeRadio : PlayerViewModePodcast);
+        ? PlayerModeRadio : PlayerModePodcast);
     inputs.duration = [radio duration];
     inputs.position = [radio currentTime];
     inputs.lastError = [radio lastError];
     inputs.pendingPause = [radio isPausePending];
     inputs.buffering = [radio isBuffering];
     inputs.dragHover = dragHover;
+    inputs.fullscreen = isFullscreen;
     if (playerMode == PlayerModeRadio) {
         NSUInteger count = [[radio stations] count];
         inputs.itemName = [pendingRadioStation name] ?: [radio currentStationName];
@@ -1353,6 +1402,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     PlayerViewInputs inputs = [self viewInputs];
     PlayerPlaybackState state = [self shownState];
     PlayerViewState view = PlayerViewStateMake(state, inputs);
+    if (!screenShown || view.screen != shownScreen || isFullscreen != shownFullscreen
+        || view.visible.video != shownVideo) {
+        [self showScreen:view];
+    }
     NSImage *image = view.playShowsStop ? [stopButton image]
                    : view.playShowsPause ? pauseImage : playImage;
     [playButton setImage:image];

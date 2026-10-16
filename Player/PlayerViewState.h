@@ -10,15 +10,54 @@
 #import <Foundation/Foundation.h>
 #import "PlayerPlaybackMachine.h"
 
-typedef NS_ENUM(NSInteger, PlayerViewMode) {
-    PlayerViewModeLocal,
-    PlayerViewModeRadio,
-    PlayerViewModePodcast
+/// What the window is for: local files, Internet radio or podcasts.  The
+/// raw values are kept in the defaults.
+typedef NS_ENUM(NSInteger, PlayerMode) {
+    PlayerModeLocal,
+    PlayerModeRadio,
+    PlayerModePodcast
 };
+
+/// What the user chose that decides the mode
+typedef NS_ENUM(NSInteger, PlayerModeRequest) {
+    PlayerModeRequestLocalItems,      // files opened or dropped, an address opened
+    PlayerModeRequestStation,         // a radio station chosen
+    PlayerModeRequestShow,            // a podcast show chosen
+    PlayerModeRequestToggleRadio,     // Radio > Internet Radio
+    PlayerModeRequestTogglePodcasts   // Podcasts > Browse Podcasts
+};
+
+/// The mode a request leads to, from the current one.
+PlayerMode PlayerModeAfterRequest(PlayerMode current, PlayerModeRequest request);
+
+/// The screens of the window: a mode, and for podcasts its sub-screen
+typedef NS_ENUM(NSInteger, PlayerViewScreen) {
+    PlayerViewScreenLocal,
+    PlayerViewScreenRadio,
+    PlayerViewScreenPodcastShows,
+    PlayerViewScreenPodcastEpisodes
+};
+
+/// Which groups of views a screen shows
+typedef struct {
+    BOOL carousel;        // cover art, stations or shows
+    BOOL video;
+    BOOL trackInfo;       // title, artist, album, details
+    BOOL positionSlider;  // with the time labels
+    BOOL timeline;        // podcast chapters, with the time labels
+    BOOL radioSearch;
+    BOOL radioText;
+    BOOL status;
+    BOOL podcastSearch;   // with Subscribe
+    BOOL episodes;        // Back, the episode table and the show notes
+    BOOL topBar;
+    BOOL transport;
+    BOOL volume;
+} PlayerViewVisibility;
 
 /// What the window shows besides the playback state.
 typedef struct {
-    PlayerViewMode mode;
+    PlayerMode mode;
     NSString *itemName;        // the current item as shown; nil: none
     BOOL hasNext;
     BOOL hasPrevious;
@@ -33,6 +72,8 @@ typedef struct {
     BOOL hasItems;
     // Podcasts: the shows are shown, where Play opens the chosen one
     BOOL browsingShows;
+    BOOL fullscreen;
+    BOOL showsVideo;           // the local item has a picture
 } PlayerViewInputs;
 
 /// Everything the window and the Playback menu show for a state.
@@ -53,9 +94,11 @@ typedef struct {
     NSString *windowTitle;
     BOOL spinning;
     NSString *errorText;       // why it stopped or paused; nil: no error
+    PlayerViewScreen screen;
+    PlayerViewVisibility visible;
 } PlayerViewState;
 
-PlayerViewInputs PlayerViewInputsMake(PlayerViewMode mode);
+PlayerViewInputs PlayerViewInputsMake(PlayerMode mode);
 
 /// The view of a playback state: a pure function, so every row of the
 /// table is unit tested without a window.

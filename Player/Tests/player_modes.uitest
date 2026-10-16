@@ -1,0 +1,79 @@
+#!/usr/bin/env run_uitest
+# Player's window follows what plays: a radio station chosen from the Radio
+# menu while podcast episodes are shown brings up the radio screen, the
+# Podcasts menu brings up the podcast screen from the radio, and a file
+# opened while podcasts are shown brings back the local player.
+#
+# Needs the network: the radio stations and the podcast come from the
+# Internet.
+#
+# Leaves the computer as it was found: the fixture is removed and the app is
+# quit at the end.
+#
+# Run with: run_uitest Player/Tests/player_modes.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
+# Player reopens in Internet radio mode, or with its last list, as it was quit
+shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
+shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Modes Tone' /tmp/player-uitest-${home}/tone.mp3"
+
+shell "openapp Player >/dev/null 2>&1 &"
+wait 2s
+activate application "Player"
+wait until window "Player" timeout 15s
+
+# The radio once, so the Radio menu lists its stations
+select menu "Radio/Internet Radio"
+wait until window "Player - Internet Radio" timeout 10s
+wait until textfield "Search Radio Stations" timeout 5s
+# Until the stations are in the menu: a third item after Internet Radio
+shell "for i in $(seq 1 30); do /System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) menu | awk -F'\t' '$1==0 {m=$3} m ~ /^Radio$/ && $1==1 {n++} END {exit !(n>2)}' && exit 0; sleep 1; done; exit 1"
+
+# Radio -> podcasts, from the menu
+select menu "Podcasts/Browse Podcasts"
+wait until window "Player - Podcasts" timeout 10s
+assert not exists textfield "Search Radio Stations"
+click textfield "Search Podcasts"
+type "NPR News Now"
+press key "Return"
+wait until text contains "podcasts" timeout 30s
+wait until button "Open" timeout 5s
+click button "Open"
+# The episodes screen, and its newest episode playing
+wait until button "< Shows" timeout 30s
+wait until button "Pause" timeout 30s
+assert not exists textfield "Search Podcasts"
+
+# Podcast episodes -> a radio station chosen from the Radio menu (its
+# first station, after Internet Radio and the separator)
+shell "/System/Library/Tools/drive_ui --pid $(pgrep -n -u $(id -u) -x Player) menu_invoke 5 2"
+wait until not exists button "< Shows" timeout 10s
+wait until textfield "Search Radio Stations" timeout 10s
+assert not exists textfield "Search Podcasts"
+assert not exists window "Player - Podcasts"
+
+# Radio -> podcasts -> a local file opened with Open URL
+select menu "Podcasts/Browse Podcasts"
+wait until window "Player - Podcasts" timeout 10s
+wait until textfield "Search Podcasts" timeout 5s
+assert not exists textfield "Search Radio Stations"
+select menu "File/Open URL..."
+wait until textfield "https://" timeout 5s
+click textfield "https://"
+type "/tmp/player-uitest-${home}/tone.mp3"
+press key "Return"
+wait until window "Player - Modes Tone" timeout 10s
+wait until button "Pause" timeout 5s
+assert not exists textfield "Search Podcasts"
+assert not exists button "< Shows"
+assert text contains "Modes Tone"
+
+activate application "Player"
+wait until menu bar "Player" timeout 10s
+press "Alt+Q"
+wait until not exists window "Player - Modes Tone" timeout 5s
+# Sound fades out for a second before the app goes
+wait until not exists application "Player" timeout 5s
+shell "rm -rf /tmp/player-uitest-${home}"
+log "Player's window follows radio, podcasts and local files"

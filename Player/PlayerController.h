@@ -23,12 +23,6 @@
 @class Podcast;
 @class PodcastEpisode;
 
-typedef NS_ENUM(NSInteger, PlayerMode) {
-    PlayerModeLocal,
-    PlayerModeRadio,
-    PlayerModePodcast
-};
-
 /**
  * The player window: shows what the PlayerSession (local files and stream
  * URLs) or the RadioManager (Internet radio mode) is doing and forwards the
@@ -90,6 +84,13 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     NSString *currentItemName;
     NSString *currentItemDetails;
     BOOL dragHover;
+    BOOL showingVideo;         // the local item's picture replaces the covers
+    // The screen whose views are shown now, so -render switches them only
+    // when the model says another one
+    PlayerViewScreen shownScreen;
+    BOOL shownFullscreen;
+    BOOL shownVideo;
+    BOOL screenShown;
 
     // Internet radio
     PlayerMode playerMode;
@@ -166,11 +167,10 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 @interface PlayerController (Radio)
 - (IBAction)toggleRadioMode:(id)sender;
 - (void)createRadioViews;
-- (void)enterRadioMode;
 /// Radio mode as it was left: the last search and station, playing again
 /// when `resume` and it played when the app quit.
-- (void)enterRadioModeResuming:(BOOL)resume;
-- (void)exitRadioMode;
+- (void)setUpRadioModeResuming:(BOOL)resume;
+- (void)tearDownRadioMode;
 - (void)layoutRadioMode;
 - (void)radioPlayPause;
 - (void)radioStop;
@@ -185,11 +185,10 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 @interface PlayerController (Podcast)
 - (IBAction)toggleBrowsePodcasts:(id)sender;
 - (void)createPodcastViews;
-- (void)enterPodcastMode;
 /// Podcast mode as it was left: the last search and show, resuming the
 /// episode and position saved at quit when `resume` and it was playing.
-- (void)enterPodcastModeResuming:(BOOL)resume;
-- (void)exitPodcastMode;
+- (void)setUpPodcastModeResuming:(BOOL)resume;
+- (void)tearDownPodcastMode;
 - (void)layoutPodcastMode;
 - (void)podcastPlayPause;
 - (void)podcastStop;

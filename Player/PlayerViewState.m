@@ -6,12 +6,85 @@
 
 #import "PlayerViewState.h"
 
-PlayerViewInputs PlayerViewInputsMake(PlayerViewMode mode)
+PlayerViewInputs PlayerViewInputsMake(PlayerMode mode)
 {
     PlayerViewInputs inputs;
     memset(&inputs, 0, sizeof(inputs));
     inputs.mode = mode;
     return inputs;
+}
+
+PlayerMode PlayerModeAfterRequest(PlayerMode current, PlayerModeRequest request)
+{
+    switch (request) {
+    case PlayerModeRequestLocalItems:
+        return PlayerModeLocal;
+    case PlayerModeRequestStation:
+        return PlayerModeRadio;
+    case PlayerModeRequestShow:
+        return PlayerModePodcast;
+    case PlayerModeRequestToggleRadio:
+        return current == PlayerModeRadio ? PlayerModeLocal : PlayerModeRadio;
+    case PlayerModeRequestTogglePodcasts:
+        return current == PlayerModePodcast ? PlayerModeLocal : PlayerModePodcast;
+    }
+    return current;
+}
+
+static PlayerViewScreen screenOf(PlayerViewInputs in)
+{
+    switch (in.mode) {
+    case PlayerModeRadio:
+        return PlayerViewScreenRadio;
+    case PlayerModePodcast:
+        return in.browsingShows ? PlayerViewScreenPodcastShows : PlayerViewScreenPodcastEpisodes;
+    case PlayerModeLocal:
+        break;
+    }
+    return PlayerViewScreenLocal;
+}
+
+static PlayerViewVisibility visibilityOf(PlayerViewScreen screen, PlayerViewInputs in)
+{
+    PlayerViewVisibility v;
+    memset(&v, 0, sizeof(v));
+    v.transport = YES;
+    // Only local playback has pictures of its own
+    BOOL video = screen == PlayerViewScreenLocal && in.showsVideo;
+    if (in.fullscreen) {
+        v.video = video;
+        v.carousel = !video;
+        return v;
+    }
+    v.volume = YES;
+    switch (screen) {
+    case PlayerViewScreenLocal:
+        v.video = video;
+        v.carousel = !video;
+        v.trackInfo = YES;
+        v.positionSlider = YES;
+        break;
+    case PlayerViewScreenRadio:
+        v.carousel = YES;
+        v.radioSearch = YES;
+        v.radioText = YES;
+        v.status = YES;
+        v.topBar = YES;
+        break;
+    case PlayerViewScreenPodcastShows:
+        v.carousel = YES;
+        v.podcastSearch = YES;
+        v.status = YES;
+        v.topBar = YES;
+        break;
+    case PlayerViewScreenPodcastEpisodes:
+        v.episodes = YES;
+        v.timeline = YES;
+        v.status = YES;
+        v.topBar = YES;
+        break;
+    }
+    return v;
 }
 
 NSString *PlayerFormatTime(NSTimeInterval seconds)
@@ -27,17 +100,17 @@ NSString *PlayerFormatTime(NSTimeInterval seconds)
     return [NSString stringWithFormat:@"%ld:%02ld", total / 60, total % 60];
 }
 
-static NSString *titleOfMode(PlayerViewMode mode)
+static NSString *titleOfMode(PlayerMode mode)
 {
     switch (mode) {
-    case PlayerViewModeRadio: return @"Player - Internet Radio";
-    case PlayerViewModePodcast: return @"Player - Podcasts";
-    case PlayerViewModeLocal: break;
+    case PlayerModeRadio: return @"Player - Internet Radio";
+    case PlayerModePodcast: return @"Player - Podcasts";
+    case PlayerModeLocal: break;
     }
     return @"Player";
 }
 
-static NSString *titleWithName(PlayerViewMode mode, NSString *name, NSString *suffix)
+static NSString *titleWithName(PlayerMode mode, NSString *name, NSString *suffix)
 {
     if (!name) {
         return titleOfMode(mode);
@@ -77,10 +150,10 @@ static NSString *windowTitle(PlayerPlaybackState state, PlayerViewInputs in)
 // Radio stations are live; a podcast episode is unless it has a length.
 static BOOL stopsInsteadOfPausing(PlayerPlaybackState state, PlayerViewInputs in)
 {
-    if (in.mode == PlayerViewModeRadio) {
+    if (in.mode == PlayerModeRadio) {
         return state == PlayerPlaybackOpening || state == PlayerPlaybackPlaying;
     }
-    if (in.mode == PlayerViewModePodcast) {
+    if (in.mode == PlayerModePodcast) {
         return state == PlayerPlaybackPlaying && in.duration <= 0;
     }
     return NO;
@@ -112,9 +185,9 @@ PlayerViewState PlayerViewStateMake(PlayerPlaybackState state, PlayerViewInputs 
     view.playToolTip = (state == PlayerPlaybackOpening && view.playShowsPause)
         ? @"Stop Loading" : view.playTitle;
     // Radio and podcasts always have something to choose from once loaded
-    view.playEnabled = in.mode == PlayerViewModeLocal ? !empty : (active || in.hasItems);
+    view.playEnabled = in.mode == PlayerModeLocal ? !empty : (active || in.hasItems);
     view.stopEnabled = !empty && state != PlayerPlaybackStopped;
-    BOOL choosable = in.mode == PlayerViewModeLocal ? !empty : YES;
+    BOOL choosable = in.mode == PlayerModeLocal ? !empty : YES;
     view.nextEnabled = choosable && in.hasNext;
     view.previousEnabled = choosable && in.hasPrevious;
 
@@ -141,6 +214,8 @@ PlayerViewState PlayerViewStateMake(PlayerPlaybackState state, PlayerViewInputs 
         break;
     }
 
+    view.screen = screenOf(in);
+    view.visible = visibilityOf(view.screen, in);
     view.windowTitle = windowTitle(state, in);
     // An error matters where it left the player: stopped after a failure,
     // or paused because the audio output went away

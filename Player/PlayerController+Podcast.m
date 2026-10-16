@@ -145,35 +145,13 @@
 
 - (IBAction)toggleBrowsePodcasts:(id)sender
 {
-    if (playerMode == PlayerModePodcast) {
-        [self exitPodcastMode];
-    } else {
-        [self enterPodcastMode];
-    }
+    [self requestMode:PlayerModeRequestTogglePodcasts];
 }
 
-- (void)enterPodcastMode
+// Entering podcasts, from -switchToMode:resuming: only
+- (void)setUpPodcastModeResuming:(BOOL)resume
 {
-    [self enterPodcastModeResuming:NO];
-}
-
-- (void)enterPodcastModeResuming:(BOOL)resume
-{
-    if (playerMode == PlayerModePodcast) {
-        return;
-    }
-    // Both modes play through the shared RadioManager; switching straight
-    // from one to the other has to stop the radio first, or it would keep
-    // playing underneath the podcast screen
-    if (playerMode == PlayerModeRadio) {
-        [self exitRadioMode];
-    }
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [session stop];
-    [self showCoverArt];
-    playerMode = PlayerModePodcast;
-    [defaults setInteger:PlayerModePodcast forKey:PlayerDefaultsMode];
-
     RadioManager *radio = [RadioManager sharedManager];
     [radio setDelegate:self];
     [radio setVolume:[self volume]];
@@ -206,31 +184,18 @@
         [flowView reloadData];
         [podcasts searchPodcasts:query];
     }
-
-    [self layoutSubviews];
-    [self render];
-    [mainWindow makeFirstResponder:podcastSearchField];
 }
 
-- (void)exitPodcastMode
+// Leaving podcasts, from -switchToMode:resuming: only
+- (void)tearDownPodcastMode
 {
-    if (playerMode != PlayerModePodcast) {
-        return;
-    }
     [[RadioManager sharedManager] stop];
-    [progressIndicator stopAnimation:self];
     [[PodcastManager sharedManager] clearSelectedShow];
     [currentPlayingEpisode release];
     currentPlayingEpisode = nil;
     [currentPlayingPodcast release];
     currentPlayingPodcast = nil;
     [self runPositionTimer:NO];
-    playerMode = PlayerModeLocal;
-    [[NSUserDefaults standardUserDefaults] setInteger:PlayerModeLocal forKey:PlayerDefaultsMode];
-
-    [self layoutSubviews];
-    [self playlistDidChange];
-    [mainWindow makeFirstResponder:contentView];
 }
 
 // Called from -applicationShouldTerminate: while the episode is still
@@ -264,19 +229,6 @@
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
     BOOL showingEpisodes = [[PodcastManager sharedManager] currentShow] != nil;
 
-    [flowView setUncoveredRects:nil];
-    [contentView setBlackBackground:NO];
-    [self setViews:[self trackInfoViews] hidden:YES];
-    [self setViews:[self positionViews] hidden:YES];
-    [self setViews:@[searchField, radioTextLabel] hidden:YES];
-    [self setViews:@[statusLabel] hidden:NO];
-    [self setViews:[self transportViews] hidden:NO];
-    [self setViews:[self volumeViews] hidden:NO];
-    [self setViews:@[podcastSearchField, subscribeButton] hidden:showingEpisodes];
-    [self setViews:@[backButton, episodeScrollView, showNotesScrollView] hidden:!showingEpisodes];
-    [self setViews:@[currentTimeLabel, podcastTimelineView, totalTimeLabel] hidden:!showingEpisodes];
-    [self setViews:@[topBarView] hidden:NO];
-    [flowView setHidden:showingEpisodes];
 
     CGFloat y = METRICS_CONTENT_BOTTOM_MARGIN;
     [self layoutTransportCenteredAt:NSMidX(bounds) y:y];
@@ -421,7 +373,6 @@
 {
     [[PodcastManager sharedManager] clearSelectedShow];
     [flowView reloadData];
-    [self layoutSubviews];
     [self render];
     [mainWindow makeFirstResponder:podcastSearchField];
 }
@@ -604,9 +555,7 @@
 
 - (void)podcastShowChosen:(id)sender
 {
-    if (playerMode != PlayerModePodcast) {
-        [self enterPodcastMode];
-    }
+    [self requestMode:PlayerModeRequestShow];
     [[PodcastManager sharedManager] selectShow:[sender representedObject]];
 }
 
@@ -666,11 +615,10 @@
     if (!episodes) {
         [self setRadioStatus:[NSString stringWithFormat:@"Cannot load episodes: %@", error]];
         [manager clearSelectedShow];
-        [self layoutSubviews];
         [self render];
         return;
     }
-    [self layoutSubviews];
+    [self render];
     [episodeTableView reloadData];
     [self setRadioStatus:[NSString stringWithFormat:@"%tu episodes - %@",
         [episodes count], [show name]]];

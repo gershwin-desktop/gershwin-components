@@ -35,35 +35,13 @@
 
 - (IBAction)toggleRadioMode:(id)sender
 {
-    if (playerMode == PlayerModeRadio) {
-        [self exitRadioMode];
-    } else {
-        [self enterRadioMode];
-    }
+    [self requestMode:PlayerModeRequestToggleRadio];
 }
 
-- (void)enterRadioMode
+// Entering the radio, from -switchToMode:resuming: only
+- (void)setUpRadioModeResuming:(BOOL)resume
 {
-    [self enterRadioModeResuming:NO];
-}
-
-- (void)enterRadioModeResuming:(BOOL)resume
-{
-    if (playerMode == PlayerModeRadio) {
-        return;
-    }
-    // Both modes play through the shared RadioManager; switching straight
-    // from one to the other has to stop the podcast first, or it would
-    // keep playing underneath the station carousel
-    if (playerMode == PlayerModePodcast) {
-        [self exitPodcastMode];
-    }
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [session stop];
-    [self showCoverArt];
-    playerMode = PlayerModeRadio;
-    [[NSUserDefaults standardUserDefaults] setInteger:PlayerModeRadio forKey:PlayerDefaultsMode];
-
     RadioManager *radio = [RadioManager sharedManager];
     [radio setDelegate:self];
     [radio setVolume:[self volume]];
@@ -96,30 +74,18 @@
     } else {
         [self radioManagerDidUpdateStations:radio];
     }
-    [self layoutSubviews];
-    [self render];
-    [mainWindow makeFirstResponder:searchField];
 }
 
-- (void)exitRadioMode
+// Leaving the radio, from -switchToMode:resuming: only
+- (void)tearDownRadioMode
 {
-    if (playerMode != PlayerModeRadio) {
-        return;
-    }
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(playPendingStation)
                                                object:nil];
     [pendingRadioStation release];
     pendingRadioStation = nil;
     [[RadioManager sharedManager] stop];
-    [progressIndicator stopAnimation:self];
-    playerMode = PlayerModeLocal;
-    [[NSUserDefaults standardUserDefaults] setInteger:PlayerModeLocal forKey:PlayerDefaultsMode];
     [self rememberRadioPlaying:NO];
-
-    [self layoutSubviews];
-    [self playlistDidChange];
-    [mainWindow makeFirstResponder:contentView];
 }
 
 #pragma mark - Layout
@@ -134,13 +100,6 @@
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat right = W - METRICS_CONTENT_SIDE_MARGIN;
 
-    [flowView setUncoveredRects:nil];
-    [contentView setBlackBackground:NO];
-    [self setViews:[self trackInfoViews] hidden:YES];
-    [self setViews:[self positionViews] hidden:YES];
-    [self setViews:@[searchField, statusLabel, radioTextLabel, topBarView] hidden:NO];
-    [self setViews:[self transportViews] hidden:NO];
-    [self setViews:[self volumeViews] hidden:NO];
 
     // As in the local mode: transport at the bottom in the middle, volume
     // above it
@@ -352,9 +311,7 @@
 
 - (void)radioStationChosen:(id)sender
 {
-    if (playerMode != PlayerModeRadio) {
-        [self enterRadioMode];
-    }
+    [self requestMode:PlayerModeRequestStation];
     NSUInteger index = [[[RadioManager sharedManager] stations]
         indexOfObject:[sender representedObject]];
     if (index == NSNotFound) {

@@ -14,7 +14,7 @@
 
 static PlayerViewInputs named(NSString *name)
 {
-  PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModeLocal);
+  PlayerViewInputs in = PlayerViewInputsMake(PlayerModeLocal);
   in.itemName = name;
   in.hasNext = YES;
   in.hasPrevious = YES;
@@ -27,7 +27,7 @@ int main(void)
 
   START_SET("Empty")
     PlayerViewState v = PlayerViewStateMake(PlayerPlaybackEmpty,
-                                            PlayerViewInputsMake(PlayerViewModeLocal));
+                                            PlayerViewInputsMake(PlayerModeLocal));
     PASS(!v.playShowsPause && [v.playTitle isEqual: @"Play"] && !v.playEnabled,
          "Play, disabled");
     PASS(!v.stopEnabled && !v.nextEnabled && !v.previousEnabled, "no transport");
@@ -135,7 +135,7 @@ int main(void)
   END_SET("errors are shown in the window")
 
   START_SET("Internet radio")
-    PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModeRadio);
+    PlayerViewInputs in = PlayerViewInputsMake(PlayerModeRadio);
     PlayerViewState v = PlayerViewStateMake(PlayerPlaybackEmpty, in);
     PASS([v.windowTitle isEqual: @"Player - Internet Radio"] && !v.playEnabled,
          "nothing to tune in yet");
@@ -157,7 +157,7 @@ int main(void)
   END_SET("Internet radio")
 
   START_SET("Podcasts")
-    PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModePodcast);
+    PlayerViewInputs in = PlayerViewInputsMake(PlayerModePodcast);
     in.browsingShows = YES;
     in.hasItems = YES;
     PlayerViewState v = PlayerViewStateMake(PlayerPlaybackEmpty, in);
@@ -189,8 +189,67 @@ int main(void)
     PASS([v.playTitle isEqual: @"Pause"], "on the shows screen an episode playing still pauses");
   END_SET("Podcasts")
 
+  START_SET("the mode follows what is chosen")
+    PASS(PlayerModeAfterRequest(PlayerModePodcast, PlayerModeRequestStation) == PlayerModeRadio,
+         "a station chosen while podcasts show switches to the radio");
+    PASS(PlayerModeAfterRequest(PlayerModeLocal, PlayerModeRequestStation) == PlayerModeRadio,
+         "and while local files play");
+    PASS(PlayerModeAfterRequest(PlayerModeRadio, PlayerModeRequestShow) == PlayerModePodcast
+         && PlayerModeAfterRequest(PlayerModeLocal, PlayerModeRequestShow) == PlayerModePodcast,
+         "a show chosen switches to podcasts");
+    PASS(PlayerModeAfterRequest(PlayerModePodcast, PlayerModeRequestLocalItems) == PlayerModeLocal
+         && PlayerModeAfterRequest(PlayerModeRadio, PlayerModeRequestLocalItems) == PlayerModeLocal,
+         "files opened, dropped or an address opened switch to local playback");
+    PASS(PlayerModeAfterRequest(PlayerModeRadio, PlayerModeRequestToggleRadio) == PlayerModeLocal
+         && PlayerModeAfterRequest(PlayerModePodcast, PlayerModeRequestToggleRadio) == PlayerModeRadio,
+         "the radio menu item toggles the radio, from any mode");
+    PASS(PlayerModeAfterRequest(PlayerModePodcast, PlayerModeRequestTogglePodcasts) == PlayerModeLocal
+         && PlayerModeAfterRequest(PlayerModeRadio, PlayerModeRequestTogglePodcasts) == PlayerModePodcast,
+         "and the podcasts one podcasts");
+  END_SET("the mode follows what is chosen")
+
+  START_SET("the views follow the mode")
+    PlayerViewInputs in = PlayerViewInputsMake(PlayerModeLocal);
+    PlayerViewState v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.screen == PlayerViewScreenLocal && v.visible.trackInfo && v.visible.positionSlider
+         && v.visible.carousel && !v.visible.video, "local: track info, slider and covers");
+    PASS(!v.visible.radioSearch && !v.visible.status && !v.visible.podcastSearch
+         && !v.visible.episodes && !v.visible.timeline && !v.visible.topBar,
+         "and nothing of the radio or podcasts");
+    in.showsVideo = YES;
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.visible.video && !v.visible.carousel, "a video replaces the covers");
+
+    in = PlayerViewInputsMake(PlayerModeRadio);
+    in.showsVideo = YES;
+    v = PlayerViewStateMake(PlayerPlaybackOpening, in);
+    PASS(v.screen == PlayerViewScreenRadio && v.visible.radioSearch && v.visible.status
+         && v.visible.radioText && v.visible.topBar && v.visible.carousel,
+         "radio: search, status, station covers");
+    PASS(!v.visible.trackInfo && !v.visible.positionSlider && !v.visible.episodes
+         && !v.visible.podcastSearch && !v.visible.timeline && !v.visible.video,
+         "and no episode list, track info or picture of an earlier video");
+
+    in = PlayerViewInputsMake(PlayerModePodcast);
+    in.browsingShows = YES;
+    v = PlayerViewStateMake(PlayerPlaybackPaused, in);
+    PASS(v.screen == PlayerViewScreenPodcastShows && v.visible.podcastSearch && v.visible.carousel
+         && !v.visible.episodes && !v.visible.radioSearch && !v.visible.radioText,
+         "podcast shows: search and show covers");
+    in.browsingShows = NO;
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.screen == PlayerViewScreenPodcastEpisodes && v.visible.episodes && v.visible.timeline
+         && !v.visible.carousel && !v.visible.podcastSearch && !v.visible.positionSlider,
+         "podcast episodes: the episode list and timeline instead of covers");
+
+    in.fullscreen = YES;
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.visible.carousel && !v.visible.episodes && !v.visible.status && !v.visible.volume
+         && v.visible.transport, "full screen: the picture and the transport only");
+  END_SET("the views follow the mode")
+
   START_SET("spinner and titles outside a state")
-    PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModeLocal);
+    PlayerViewInputs in = PlayerViewInputsMake(PlayerModeLocal);
     in.resolving = YES;
     PlayerViewState v = PlayerViewStateMake(PlayerPlaybackEmpty, in);
     PASS(v.spinning && [v.windowTitle isEqual: @"Player - Finding media..."],
