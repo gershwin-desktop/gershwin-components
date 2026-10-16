@@ -172,7 +172,6 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (void)enterRadioModeResuming:(BOOL)resume;
 - (void)exitRadioMode;
 - (void)layoutRadioMode;
-- (void)updateRadioControls;
 - (void)radioPlayPause;
 - (void)radioStop;
 - (void)radioNextStation;
@@ -192,7 +191,6 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (void)enterPodcastModeResuming:(BOOL)resume;
 - (void)exitPodcastMode;
 - (void)layoutPodcastMode;
-- (void)updatePodcastControls;
 - (void)podcastPlayPause;
 - (void)podcastStop;
 - (void)podcastNextEpisode;
@@ -208,7 +206,6 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
 - (void)podcastDidStartPlayingEpisode;
 - (void)podcastDidStop;
 - (void)podcastDidFailWithError:(NSString *)errorMessage;
-- (void)updatePodcastPosition;
 /// Called from -applicationShouldTerminate: before playback stops, so
 /// the next launch can resume it.
 - (void)savePodcastPlaybackStateForQuit;

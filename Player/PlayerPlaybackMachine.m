@@ -284,7 +284,7 @@ static BOOL isMediaEvent(PlayerEventType type)
     switch (event.type) {
     case PlayerEventOpen:
     case PlayerEventAdd:
-        return [self openEvent:event];
+        return [self openEvent:event crossFade:NO];
     case PlayerEventLoad:
         return [self loadEvent:event];
     default:
@@ -297,7 +297,7 @@ static BOOL isMediaEvent(PlayerEventType type)
     switch (event.type) {
     case PlayerEventOpen:
     case PlayerEventAdd:
-        return [self openEvent:event];
+        return [self openEvent:event crossFade:NO];
     case PlayerEventPlay:
     case PlayerEventToggle: {
         NSUInteger index = [_playlist currentIndex];
@@ -373,7 +373,7 @@ static BOOL isMediaEvent(PlayerEventType type)
         [self stopWith:PlayerEffectClose];
         return YES;
     case PlayerEventOpen:
-        return [self openEvent:event];
+        return [self openEvent:event crossFade:NO];
     case PlayerEventAdd:
         return [self appendItems:event.items] != NSNotFound;
     case PlayerEventSelect:
@@ -481,7 +481,7 @@ static BOOL isMediaEvent(PlayerEventType type)
 {
     switch (event.type) {
     case PlayerEventOpen:
-        return [self openEvent:event];
+        return [self openEvent:event crossFade:crossFade];
     case PlayerEventAdd:
         return [self appendItems:event.items] != NSNotFound;
     case PlayerEventSelect:
@@ -537,16 +537,17 @@ static BOOL isMediaEvent(PlayerEventType type)
 // What the user opened deserves an alert when it cannot be played - once
 // for the opening, not for every broken file of an album; anything the
 // list reaches by itself, or an item chosen in it, only shows in the window
-- (BOOL)openEvent:(PlayerEvent)event
+- (BOOL)openEvent:(PlayerEvent)event crossFade:(BOOL)crossFade
 {
-    if (![self openItems:event.items replacing:event.type == PlayerEventOpen]) {
+    if (![self openItems:event.items replacing:event.type == PlayerEventOpen
+               crossFade:crossFade]) {
         return NO;
     }
     _alertOnFailure = event.flag;
     return YES;
 }
 
-- (BOOL)openItems:(NSArray *)items replacing:(BOOL)replacing
+- (BOOL)openItems:(NSArray *)items replacing:(BOOL)replacing crossFade:(BOOL)crossFade
 {
     if (replacing) {
         if ([items count] == 0) {
@@ -556,7 +557,7 @@ static BOOL isMediaEvent(PlayerEventType type)
         [self setLastError:nil];
         [_playlist removeAllItems];
         [self appendItems:items];
-        return [self startFrom:[_playlist indexAfterCurrent] skipping:YES crossFade:NO];
+        return [self startFrom:[_playlist indexAfterCurrent] skipping:YES crossFade:crossFade];
     }
     NSUInteger firstNew = [self appendItems:items];
     if (firstNew == NSNotFound) {

@@ -191,33 +191,13 @@
                                                   floor(NSMidY(frame) - 8))];
 }
 
-- (void)updateRadioControls
-{
-    RadioManager *radio = [RadioManager sharedManager];
-    NSUInteger count = [[radio stations] count];
-    BOOL tuning = [self radioTuning];
-    // While tuning in, the button stops the attempt like pausing a stream
-    BOOL active = [radio isPlaying] || tuning;
-
-    if (tuning) {
-        [progressIndicator startAnimation:self];
-    } else {
-        [progressIndicator stopAnimation:self];
-    }
-    [playButton setImage:active ? pauseImage : playImage];
-    [playButton setTitle:active ? @"Pause" : @"Play"];
-    [playButton setToolTip:[playButton title]];
-    [playButton setEnabled:count > 0];
-    [stopButton setEnabled:active];
-    [previousButton setEnabled:count > 1];
-    [nextButton setEnabled:count > 1];
-    [self revalidateMenu];
-}
-
 - (void)radioPlayPause
 {
     RadioManager *radio = [RadioManager sharedManager];
-    if ([radio isPlaying] || [self radioTuning]) {
+    if ([radio state] == PlayerPlaybackPaused) {
+        // Paused only when the audio output went away: try again
+        [radio togglePause];
+    } else if ([radio isPlaying] || [self radioTuning]) {
         // A live stream cannot resume where it paused; pausing stops it
         [self radioStop];
     } else {
@@ -509,6 +489,14 @@
     if ([title length] > 0) {
         [radioTextLabel setStringValue:title];
     }
+}
+
+- (void)radioManagerDidChangeState:(RadioManager *)manager
+{
+    if (playerMode == PlayerModePodcast) {
+        [self runPositionTimer:[manager state] == PlayerPlaybackPlaying];
+    }
+    [self render];
 }
 
 - (void)radioManager:(RadioManager *)manager didLoadIconAtIndex:(NSUInteger)index

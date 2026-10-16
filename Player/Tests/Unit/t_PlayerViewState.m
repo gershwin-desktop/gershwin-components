@@ -134,6 +134,61 @@ int main(void)
     PASS(v.errorText == nil && [v.windowTitle isEqual: @"Player - Broken"], "without an error, none");
   END_SET("errors are shown in the window")
 
+  START_SET("Internet radio")
+    PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModeRadio);
+    PlayerViewState v = PlayerViewStateMake(PlayerPlaybackEmpty, in);
+    PASS([v.windowTitle isEqual: @"Player - Internet Radio"] && !v.playEnabled,
+         "nothing to tune in yet");
+    in.hasItems = YES;
+    in.hasNext = YES;
+    in.hasPrevious = YES;
+    v = PlayerViewStateMake(PlayerPlaybackEmpty, in);
+    PASS(v.playEnabled && [v.playTitle isEqual: @"Play"], "with stations, Play tunes one in");
+    in.itemName = @"Jazz FM";
+    v = PlayerViewStateMake(PlayerPlaybackOpening, in);
+    PASS(v.playShowsStop && !v.playShowsPause && [v.playTitle isEqual: @"Stop"],
+         "a station tuning in offers Stop: a live stream does not pause");
+    PASS([v.windowTitle isEqual: @"Player - Jazz FM - Loading..."] && v.spinning, "loading");
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.playShowsStop && [v.playTitle isEqual: @"Stop"] && [v.playToolTip isEqual: @"Stop"],
+         "a playing station offers Stop");
+    PASS([v.totalTime isEqual: @"Live"] && [v.windowTitle isEqual: @"Player - Jazz FM"], "live");
+    PASS(v.nextEnabled && v.previousEnabled, "and the other stations");
+  END_SET("Internet radio")
+
+  START_SET("Podcasts")
+    PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModePodcast);
+    in.browsingShows = YES;
+    in.hasItems = YES;
+    PlayerViewState v = PlayerViewStateMake(PlayerPlaybackEmpty, in);
+    PASS([v.playTitle isEqual: @"Open"] && v.playEnabled && !v.nextEnabled,
+         "on the shows screen Play opens the show");
+    PASS([v.windowTitle isEqual: @"Player - Podcasts"], "Player - Podcasts");
+    in.browsingShows = NO;
+    in.itemName = @"Episode 12";
+    in.hasNext = YES;
+    v = PlayerViewStateMake(PlayerPlaybackStopped, in);
+    PASS([v.playTitle isEqual: @"Play"] && v.playEnabled && v.nextEnabled, "an episode can be played");
+    v = PlayerViewStateMake(PlayerPlaybackOpening, in);
+    PASS(v.playShowsPause && [v.playTitle isEqual: @"Pause"], "an episode opening offers Pause");
+    in.duration = 1800;
+    in.position = 60;
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.playShowsPause && !v.playShowsStop && [v.playTitle isEqual: @"Pause"],
+         "a playing episode pauses");
+    PASS(v.sliderEnabled && [v.totalTime isEqual: @"30:00"], "and can be sought");
+    v = PlayerViewStateMake(PlayerPlaybackPaused, in);
+    PASS([v.playTitle isEqual: @"Play"] && [v.windowTitle isEqual: @"Player - Episode 12 - Paused"],
+         "a paused episode plays on");
+    in.duration = 0;
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.playShowsStop && [v.playTitle isEqual: @"Stop"], "a live episode stream stops instead");
+    in.browsingShows = YES;
+    in.duration = 1800;
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS([v.playTitle isEqual: @"Pause"], "on the shows screen an episode playing still pauses");
+  END_SET("Podcasts")
+
   START_SET("spinner and titles outside a state")
     PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModeLocal);
     in.resolving = YES;

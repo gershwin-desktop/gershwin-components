@@ -224,8 +224,7 @@
     currentPlayingEpisode = nil;
     [currentPlayingPodcast release];
     currentPlayingPodcast = nil;
-    [positionTimer invalidate];
-    positionTimer = nil;
+    [self runPositionTimer:NO];
     playerMode = PlayerModeLocal;
     [[NSUserDefaults standardUserDefaults] setInteger:PlayerModeLocal forKey:PlayerDefaultsMode];
 
@@ -245,8 +244,7 @@
     }
     NSString *identifier = [currentPlayingEpisode guid] ?: [currentPlayingEpisode streamURL];
     [defaults setObject:identifier ?: @"" forKey:PlayerDefaultsPodcastEpisode];
-    StreamPlayer *player = [[RadioManager sharedManager] player];
-    [defaults setDouble:(player ? [player currentTime] : 0) forKey:PlayerDefaultsPodcastPosition];
+    [defaults setDouble:[[RadioManager sharedManager] currentTime] forKey:PlayerDefaultsPodcastPosition];
     [defaults setBool:[[RadioManager sharedManager] isPlaying] forKey:PlayerDefaultsPodcastPlaying];
 }
 
@@ -446,8 +444,21 @@
     [podcastTimelineView setDuration:0];
     [podcastTimelineView setCurrentTime:0];
     [self loadChaptersForEpisode:episode];
+    // The position saved at the last quit applies once, to whichever
+    // episode is played first after launch - auto-played, or the restored
+    // row the user pressed Play on - and only if it is that episode
+    NSTimeInterval start = -1.0;
+    if (pendingResumeEpisodeIdentifier) {
+        NSString *identifier = [episode guid] ?: [episode streamURL];
+        if ([identifier isEqualToString:pendingResumeEpisodeIdentifier]) {
+            start = pendingResumePosition;
+        }
+        [pendingResumeEpisodeIdentifier release];
+        pendingResumeEpisodeIdentifier = nil;
+    }
     [[RadioManager sharedManager] setDelegate:self];
-    [[RadioManager sharedManager] playURL:[episode streamURL] displayName:[episode title]];
+    [[RadioManager sharedManager] playURL:[episode streamURL] displayName:[episode title]
+                               startingAt:start];
     [episodeTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
     [self updateShowNotesForSelection];
     [self render];
@@ -507,6 +518,20 @@
 - (void)podcastPlayPause
 {
     PodcastManager *podcasts = [PodcastManager sharedManager];
+    RadioManager *radio = [RadioManager sharedManager];
+    PlayerPlaybackState state = [radio state];
+    if (state == PlayerPlaybackPlaying && [radio duration] <= 0) {
+        // A live stream cannot resume where it paused; pausing stops it
+        [self podcastStop];
+        return;
+    }
+    if (state == PlayerPlaybackOpening || state == PlayerPlaybackPlaying
+        || state == PlayerPlaybackPaused) {
+        // An episode pauses and goes on where it was; one still opening
+        // lands paused
+        [radio togglePause];
+        return;
+    }
     if ([podcasts currentShow] == nil) {
         // Shows screen: Play is the explicit "open this show" action -
         // browsing the carousel itself never opens the episode list
@@ -515,12 +540,6 @@
         if (index < [shows count]) {
             [podcasts selectShow:[shows objectAtIndex:index]];
         }
-        return;
-    }
-    RadioManager *radio = [RadioManager sharedManager];
-    if ([radio isPlaying] || [self radioTuning]) {
-        // A stream cannot resume where it paused; pausing stops it, as Radio does
-        [self podcastStop];
         return;
     }
     NSInteger row = [episodeTableView selectedRow];
@@ -560,33 +579,6 @@
 - (void)podcastPreviousEpisode
 {
     [self podcastStepEpisodeBy:-1];
-}
-
-- (void)updatePodcastControls
-{
-    RadioManager *radio = [RadioManager sharedManager];
-    PodcastManager *podcasts = [PodcastManager sharedManager];
-    BOOL showingEpisodes = [podcasts currentShow] != nil;
-    NSUInteger episodeCount = [[podcasts episodes] count];
-    BOOL tuning = [self radioTuning];
-    BOOL active = [radio isPlaying] || tuning;
-
-    if (tuning) {
-        [progressIndicator startAnimation:self];
-    } else {
-        [progressIndicator stopAnimation:self];
-    }
-    // On the Shows screen, Play is relabeled "Open" - it opens the
-    // highlighted show's episode list rather than making any sound
-    BOOL canOpenShow = !showingEpisodes && [[self podcastShowsList] count] > 0;
-    [playButton setImage:active ? pauseImage : playImage];
-    [playButton setTitle:active ? @"Pause" : (showingEpisodes ? @"Play" : @"Open")];
-    [playButton setToolTip:[playButton title]];
-    [playButton setEnabled:(showingEpisodes && episodeCount > 0) || canOpenShow];
-    [stopButton setEnabled:active];
-    [previousButton setEnabled:showingEpisodes && episodeCount > 1];
-    [nextButton setEnabled:showingEpisodes && episodeCount > 1];
-    [self revalidateMenu];
 }
 
 #pragma mark - Podcasts menu
@@ -787,25 +779,6 @@
 - (void)podcastDidStartPlayingEpisode
 {
     [self setRadioStatus:currentPlayingEpisode ? [currentPlayingEpisode title] : @"Playing"];
-    // The chance to resume applies once, to whichever episode starts
-    // playing first after launch - whether that was auto-played or the
-    // user pressed Play on the already-selected, restored row
-    if (pendingResumeEpisodeIdentifier) {
-        NSString *identifier = [currentPlayingEpisode guid] ?: [currentPlayingEpisode streamURL];
-        if ([identifier isEqualToString:pendingResumeEpisodeIdentifier]) {
-            [[[RadioManager sharedManager] player] seekToTime:pendingResumePosition];
-        }
-        [pendingResumeEpisodeIdentifier release];
-        pendingResumeEpisodeIdentifier = nil;
-    }
-    if (!positionTimer) {
-        positionTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
-                                                           target:self
-                                                         selector:@selector(positionTimerFired:)
-                                                         userInfo:nil
-                                                          repeats:YES];
-    }
-    [self updatePodcastPosition];
     [self render];
     // The podcast started on its own: a client's pause ends here
     [mediaRemote notePlaybackChanged];
@@ -815,38 +788,18 @@
 {
     NSString *title = [currentPlayingEpisode title];
     [self setRadioStatus:title ? [NSString stringWithFormat:@"%@ - Stopped", title] : @"Stopped"];
-    [positionTimer invalidate];
-    positionTimer = nil;
     [self render];
-}
-
-// Mode dispatch target of PlayerController.m's -renderPosition (its
-// -positionTimerFired: drives both modes through the same ivar/timer)
-- (void)updatePodcastPosition
-{
-    StreamPlayer *player = [[RadioManager sharedManager] player];
-    NSTimeInterval duration = player ? [player duration] : 0;
-    NSTimeInterval position = player ? [player currentTime] : 0;
-
-    [currentTimeLabel setStringValue:[self formatTime:position]];
-    [totalTimeLabel setStringValue:duration > 0 ? [self formatTime:duration] : @""];
-    [podcastTimelineView setEnabled:duration > 0];
-    [podcastTimelineView setDuration:duration];
-    [podcastTimelineView setCurrentTime:position];
 }
 
 - (void)podcastTimelineSeek:(id)sender
 {
-    StreamPlayer *player = [[RadioManager sharedManager] player];
-    [player seekToTime:[podcastTimelineView currentTime]];
-    [self updatePodcastPosition];
+    [[RadioManager sharedManager] seekToTime:[podcastTimelineView currentTime]];
+    [self renderPosition];
 }
 
 - (void)podcastDidFailWithError:(NSString *)errorMessage
 {
     [self setRadioStatus:[NSString stringWithFormat:@"Cannot play: %@", errorMessage]];
-    [positionTimer invalidate];
-    positionTimer = nil;
     [self render];
 }
 

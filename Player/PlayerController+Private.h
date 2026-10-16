@@ -46,6 +46,7 @@ extern NSString *const PlayerDefaultsPodcastPlaying;
 - (void)render;
 /// Only the position, while playing
 - (void)renderPosition;
+- (void)runPositionTimer:(BOOL)run;
 - (BOOL)radioTuning;
 - (void)revalidateMenu;
 - (void)updateTrackInfo;

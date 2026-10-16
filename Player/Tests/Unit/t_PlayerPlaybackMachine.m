@@ -251,6 +251,11 @@ int main(void)
          "the last one breaking off stops, keeping the error");
 
     m = playing();
+    t = [m handle: PlayerEventWithItems(PlayerEventOpen, @[@"http://radio/b"])];
+    PASS([t state] == PlayerPlaybackOpening && [[t effectOfType: PlayerEffectOpen] flag],
+         "opening something else while playing cross-fades into it (a radio station switch)");
+
+    m = playing();
     t = command(m, PlayerEventNext);
     PASS([[t effectOfType: PlayerEffectOpen] flag], "next while playing cross-fades");
     media(m, PlayerEventOpened);

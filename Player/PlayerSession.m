@@ -45,6 +45,8 @@ static BOOL isStream(NSString *item)
 @synthesize delegate = _delegate;
 @synthesize fadeDuration = _fadeDuration;
 @synthesize mediaFactory = _mediaFactory;
+@synthesize fadesInEveryItem = _fadesInEveryItem;
+@synthesize media = _media;
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media
 {
@@ -69,6 +71,8 @@ static BOOL isStream(NSString *item)
         [media close];
     }
     [_fadingMedia release];
+    [_outgoing close];
+    [_outgoing release];
     [_queuedEvents release];
     [_mediaFactory release];
     [_media setDelegate:nil];
@@ -154,7 +158,12 @@ static BOOL isStream(NSString *item)
 
 - (void)skipBy:(NSTimeInterval)seconds
 {
-    [self seekToTime:[self currentTime] + seconds];
+    // Before the item is open, skips add up on the position it will start at
+    NSTimeInterval from = [self currentTime];
+    if (![self hasOpenMedia] && [_machine pendingSeek] >= 0) {
+        from = [_machine pendingSeek];
+    }
+    [self seekToTime:from + seconds];
 }
 
 #pragma mark - Remembering
@@ -334,6 +343,12 @@ static NSString *const kStateStopped = @"stopped";
     for (PlayerEffect *effect in [transition effects]) {
         [self perform:effect];
     }
+    if (_outgoing && [transition state] != PlayerPlaybackOpening) {
+        // The next item plays, failed, or was given up: the old one goes
+        [self fadeOutAndClose:_outgoing];
+        [_outgoing release];
+        _outgoing = nil;
+    }
     if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
         [_delegate playerSessionDidChangeState:self];
     }
@@ -367,7 +382,7 @@ static NSString *const kStateStopped = @"stopped";
         [_media seekToTime:[effect time]];
         break;
     case PlayerEffectFadeIn:
-        if (_fadeDuration > 0 && isStream([[self playlist] currentItem])) {
+        if ([self fadesIn:[[self playlist] currentItem]]) {
             [_media fadeToGain:1.0f duration:_fadeDuration];
         }
         break;
@@ -394,11 +409,15 @@ static NSString *const kStateStopped = @"stopped";
     _mediaGeneration = generation;
     [_media setVolume:_volume];
     [_media setMuted:_muted];
-    // A live stream is joined somewhere in the middle, so it fades in once
-    // it plays; a track starts at its beginning, at full volume
-    BOOL fadeIn = _fadeDuration > 0 && isStream(item);
-    [_media setFadeGain:fadeIn ? 0.0f : 1.0f];
+    [_media setFadeGain:[self fadesIn:item] ? 0.0f : 1.0f];
     [_media playURL:item];
+}
+
+// A live stream is joined somewhere in the middle, so it fades in once it
+// plays; a track starts at its beginning, at full volume
+- (BOOL)fadesIn:(NSString *)item
+{
+    return _fadeDuration > 0 && (_fadesInEveryItem || isStream(item));
 }
 
 // The state changes at once; the sound fades out first and the media
@@ -436,8 +455,8 @@ static NSString *const kStateStopped = @"stopped";
     }
 }
 
-// Lets the audible track fade out in a player of its own while the next
-// one plays over it
+// The next item opens in a player of its own.  The audible one plays on
+// until it does, then the two cross-fade.
 - (void)crossFadeOut
 {
     if (_fadeDuration <= 0 || !_mediaFactory) {
@@ -446,14 +465,29 @@ static NSString *const kStateStopped = @"stopped";
     id<MediaPlayback> outgoing = _media;
     // Its end must not advance the playlist a second time
     [outgoing setDelegate:nil];
-    [outgoing fadeToGain:0.0f duration:_fadeDuration];
-    [_fadingMedia addObject:outgoing];
-    [self performSelector:@selector(closeFadedOut:) withObject:outgoing
-               afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
-
+    // One that was still waiting for its successor is given up for this one
+    [self fadeOutAndClose:_outgoing];
+    [_outgoing release];
+    _outgoing = [outgoing retain];
     _media = [_mediaFactory() retain];
     [_media setDelegate:self];
     [outgoing release];
+}
+
+- (void)fadeOutAndClose:(id<MediaPlayback>)media
+{
+    if (!media) {
+        return;
+    }
+    [media setDelegate:nil];
+    if (_fadeDuration <= 0) {
+        [media close];
+        return;
+    }
+    [media fadeToGain:0.0f duration:_fadeDuration];
+    [_fadingMedia addObject:media];
+    [self performSelector:@selector(closeFadedOut:) withObject:media
+               afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
 }
 
 - (void)closeFadedOut:(id<MediaPlayback>)media
@@ -508,6 +542,23 @@ static NSString *const kStateStopped = @"stopped";
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
     [self send:PlayerEventFailure(_mediaGeneration, error)];
+}
+
+- (void)streamPlayer:(StreamPlayer *)player didUpdateMetadata:(NSDictionary *)metadata
+{
+    if ([_delegate respondsToSelector:@selector(playerSession:didUpdateMetadata:)]) {
+        [_delegate playerSession:self didUpdateMetadata:metadata];
+    }
+}
+
+- (void)streamPlayer:(StreamPlayer *)player didChangeBuffering:(BOOL)isBuffering
+{
+    [self send:PlayerEventBuffering(_mediaGeneration, isBuffering)];
+}
+
+- (void)streamPlayerDidLoseAudioDevice:(StreamPlayer *)player
+{
+    [self send:PlayerEventFromMedia(PlayerEventDeviceLost, _mediaGeneration)];
 }
 
 - (void)streamPlayer:(StreamPlayer *)player didDiscoverVideoWithWidth:(int)width

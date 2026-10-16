@@ -1073,18 +1073,11 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (NSString *)mediaRemotePlaybackStatus
 {
-    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
-        RadioManager *radio = [RadioManager sharedManager];
-        // Tuning in counts as playing: it is audible at once and a pause
-        // has to silence it all the same
-        if ([radio isPlaying] || [self radioTuning]) {
-            return GSMediaPlayer2Playing;
-        }
-        return GSMediaPlayer2Stopped;
-    }
-    switch ([session state]) {
-        // Opening counts as playing, as tuning in does above
+    switch ([self shownState]) {
+        // Opening counts as playing - it is audible at once and a pause has
+        // to silence it all the same - unless a pause is pending already
         case PlayerPlaybackOpening:
+            return [self shownPausePending] ? GSMediaPlayer2Paused : GSMediaPlayer2Playing;
         case PlayerPlaybackPlaying:
             return GSMediaPlayer2Playing;
         case PlayerPlaybackPaused:
@@ -1096,30 +1089,25 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)mediaRemotePlay
 {
-    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
-        RadioManager *radio = [RadioManager sharedManager];
-        if (![radio isPlaying] && ![self radioTuning]) {
-            [self playPause:nil];
-        }
-        return;
-    }
-    PlayerPlaybackState state = [session state];
-    if (state == PlayerPlaybackStopped || state == PlayerPlaybackPaused) {
-        [session togglePlayPause];
+    PlayerPlaybackState state = [self shownState];
+    BOOL pausedOrPending = state == PlayerPlaybackPaused
+        || (state == PlayerPlaybackOpening && [self shownPausePending]);
+    if (pausedOrPending || state == PlayerPlaybackStopped || state == PlayerPlaybackEmpty) {
+        [self playPause:nil];
     }
 }
 
 - (void)mediaRemotePause
 {
-    if (playerMode == PlayerModeRadio || playerMode == PlayerModePodcast) {
-        // A live stream cannot pause: stop it, which is silent all the same
-        [self stop:nil];
+    PlayerPlaybackState state = [self shownState];
+    BOOL active = state == PlayerPlaybackPlaying
+        || (state == PlayerPlaybackOpening && ![self shownPausePending]);
+    if (!active) {
         return;
     }
-    PlayerPlaybackState state = [session state];
-    if (state == PlayerPlaybackPlaying || state == PlayerPlaybackOpening) {
-        [session togglePlayPause];
-    }
+    // The same as the button: what can pause pauses, a live stream stops,
+    // which is silent all the same
+    [self playPause:nil];
 }
 
 - (void)mediaRemoteStop
@@ -1196,17 +1184,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     // tell whether this callback is a real transition or the same state
     // arriving twice.
     NSString *wasStatus = [mediaRemote playbackStatus];
-    if ([session state] == PlayerPlaybackPlaying) {
-        if (!positionTimer) {
-            positionTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
-                                                             target:self
-                                                           selector:@selector(positionTimerFired:)
-                                                           userInfo:nil
-                                                            repeats:YES];
-        }
-    } else {
-        [positionTimer invalidate];
-        positionTimer = nil;
+    if (playerMode == PlayerModeLocal) {
+        [self runPositionTimer:[session state] == PlayerPlaybackPlaying];
     }
     if ([session state] == PlayerPlaybackStopped || [session state] == PlayerPlaybackEmpty) {
         [self showCoverArt];
@@ -1296,43 +1275,87 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     return PlayerFormatTime(seconds);
 }
 
+// What the window shows as the playback state: the local session's, or
+// that of the radio (stations and podcast episodes)
+- (PlayerPlaybackState)shownState
+{
+    if (playerMode == PlayerModeLocal) {
+        return [session state];
+    }
+    RadioManager *radio = [RadioManager sharedManager];
+    // A station chosen but not tuned in yet, or one being looked up, is
+    // opening already for the user
+    if (playerMode == PlayerModeRadio && [self radioTuning]
+        && [radio state] != PlayerPlaybackOpening) {
+        return PlayerPlaybackOpening;
+    }
+    return [radio state];
+}
+
+- (BOOL)shownPausePending
+{
+    return playerMode == PlayerModeLocal ? [session isPausePending]
+                                         : [[RadioManager sharedManager] isPausePending];
+}
+
 - (PlayerViewInputs)viewInputs
 {
-    PlayerViewInputs inputs = PlayerViewInputsMake(PlayerViewModeLocal);
-    inputs.itemName = currentItemName;
-    inputs.hasNext = [session canGoNext];
-    inputs.hasPrevious = [session canGoPrevious];
-    inputs.duration = [session duration];
-    inputs.position = [session currentTime];
-    inputs.lastError = [session lastError];
-    inputs.pendingPause = [session isPausePending];
-    inputs.resolving = [ytdlpBackend isRunning];
+    if (playerMode == PlayerModeLocal) {
+        PlayerViewInputs inputs = PlayerViewInputsMake(PlayerViewModeLocal);
+        inputs.itemName = currentItemName;
+        inputs.hasNext = [session canGoNext];
+        inputs.hasPrevious = [session canGoPrevious];
+        inputs.duration = [session duration];
+        inputs.position = [session currentTime];
+        inputs.lastError = [session lastError];
+        inputs.pendingPause = [session isPausePending];
+        inputs.resolving = [ytdlpBackend isRunning];
+        inputs.dragHover = dragHover;
+        inputs.buffering = [session isBuffering];
+        return inputs;
+    }
+    RadioManager *radio = [RadioManager sharedManager];
+    PlayerViewInputs inputs = PlayerViewInputsMake(playerMode == PlayerModeRadio
+        ? PlayerViewModeRadio : PlayerViewModePodcast);
+    inputs.duration = [radio duration];
+    inputs.position = [radio currentTime];
+    inputs.lastError = [radio lastError];
+    inputs.pendingPause = [radio isPausePending];
+    inputs.buffering = [radio isBuffering];
     inputs.dragHover = dragHover;
-    inputs.buffering = [session isBuffering];
+    if (playerMode == PlayerModeRadio) {
+        NSUInteger count = [[radio stations] count];
+        inputs.itemName = [pendingRadioStation name] ?: [radio currentStationName];
+        inputs.hasItems = count > 0;
+        inputs.hasNext = count > 1;
+        inputs.hasPrevious = count > 1;
+    } else {
+        PodcastManager *podcasts = [PodcastManager sharedManager];
+        NSUInteger episodes = [[podcasts episodes] count];
+        inputs.browsingShows = [podcasts currentShow] == nil;
+        inputs.itemName = [currentPlayingEpisode title];
+        inputs.hasItems = inputs.browsingShows ? [[self podcastShowsList] count] > 0 : episodes > 0;
+        inputs.hasNext = !inputs.browsingShows && episodes > 1;
+        inputs.hasPrevious = inputs.hasNext;
+    }
     return inputs;
 }
 
 - (PlayerViewState)viewState
 {
-    return PlayerViewStateMake([session state], [self viewInputs]);
+    return PlayerViewStateMake([self shownState], [self viewInputs]);
 }
 
 // The window shows the model and nothing set by hand: every change of the
-// playback state, the track or the inputs ends here
+// playback state, the track or the inputs ends here, in every mode
 - (void)render
 {
-    if (playerMode == PlayerModeRadio) {
-        [self updateRadioControls];
-        [self renderModeTitle];
-        return;
-    }
-    if (playerMode == PlayerModePodcast) {
-        [self updatePodcastControls];
-        [self renderModeTitle];
-        return;
-    }
-    PlayerViewState view = [self viewState];
-    [playButton setImage:view.playShowsPause ? pauseImage : playImage];
+    PlayerViewInputs inputs = [self viewInputs];
+    PlayerPlaybackState state = [self shownState];
+    PlayerViewState view = PlayerViewStateMake(state, inputs);
+    NSImage *image = view.playShowsStop ? [stopButton image]
+                   : view.playShowsPause ? pauseImage : playImage;
+    [playButton setImage:image];
     [playButton setTitle:view.playTitle];
     [playButton setToolTip:view.playToolTip];
     [playButton setEnabled:view.playEnabled];
@@ -1344,9 +1367,18 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     } else {
         [progressIndicator stopAnimation:self];
     }
-    [self showPosition:view];
     [mainWindow setTitle:view.windowTitle];
-    [detailsLabel setStringValue:view.errorText ?: (currentItemDetails ?: @"")];
+    if (playerMode == PlayerModeLocal) {
+        [detailsLabel setStringValue:view.errorText ?: (currentItemDetails ?: @"")];
+    } else if (state == PlayerPlaybackPaused) {
+        // Why it paused, if the audio output went away; failures to play
+        // say so in the status line by themselves
+        [self setRadioStatus:view.errorText ?: [NSString stringWithFormat:@"%@ - Paused",
+                                                inputs.itemName ?: @"Episode"]];
+    } else if (state == PlayerPlaybackPlaying && inputs.itemName) {
+        [self setRadioStatus:inputs.itemName];
+    }
+    [self showPosition:view];
     [self revalidateMenu];
 }
 
@@ -1354,10 +1386,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 // the window and the menu stay as they are
 - (void)renderPosition
 {
-    if (playerMode == PlayerModePodcast) {
-        [self updatePodcastPosition];
-        return;
-    }
     [self showPosition:[self viewState]];
 }
 
@@ -1365,9 +1393,33 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 {
     [currentTimeLabel setStringValue:view.currentTime];
     [totalTimeLabel setStringValue:view.totalTime];
+    if (playerMode == PlayerModePodcast) {
+        RadioManager *radio = [RadioManager sharedManager];
+        [podcastTimelineView setEnabled:view.sliderEnabled];
+        [podcastTimelineView setDuration:[radio duration]];
+        [podcastTimelineView setCurrentTime:[radio currentTime]];
+        return;
+    }
     [timeSlider setEnabled:view.sliderEnabled];
     [timeSlider setMaxValue:view.sliderMax];
     [timeSlider setDoubleValue:view.sliderValue];
+}
+
+// The position moves only while something plays
+- (void)runPositionTimer:(BOOL)run
+{
+    if (!run) {
+        [positionTimer invalidate];
+        positionTimer = nil;
+        return;
+    }
+    if (!positionTimer) {
+        positionTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
+                                                         target:self
+                                                       selector:@selector(positionTimerFired:)
+                                                       userInfo:nil
+                                                        repeats:YES];
+    }
 }
 
 // Titles, check marks and enabled state of the menu follow the player's
@@ -1430,19 +1482,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     currentItemDetails = [[details componentsJoinedByString:@"  -  "] copy];
     [self render];
-}
-
-- (void)renderModeTitle
-{
-    if (playerMode == PlayerModeRadio) {
-        NSString *station = [[RadioManager sharedManager] currentStationName];
-        [mainWindow setTitle:station ? [NSString stringWithFormat:@"Player - %@", station]
-                                     : @"Player - Internet Radio"];
-    } else if (playerMode == PlayerModePodcast) {
-        NSString *title = [currentPlayingEpisode title];
-        [mainWindow setTitle:title ? [NSString stringWithFormat:@"Player - %@", title]
-                                   : @"Player - Podcasts"];
-    }
 }
 
 #pragma mark - Cover art
@@ -1627,8 +1666,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     SEL action = [item action];
     BOOL local = (playerMode == PlayerModeLocal);
 
-    if (local && (action == @selector(playPause:) || action == @selector(stop:)
-                  || action == @selector(nextTrack:) || action == @selector(previousTrack:))) {
+    if (action == @selector(playPause:) || action == @selector(stop:)
+        || action == @selector(nextTrack:) || action == @selector(previousTrack:)) {
         // The same view of the state the window shows, not a copy of it
         PlayerViewState view = [self viewState];
         if (action == @selector(playPause:)) {
@@ -1639,19 +1678,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
             return view.stopEnabled;
         }
         return action == @selector(nextTrack:) ? view.nextEnabled : view.previousEnabled;
-    }
-    if (action == @selector(playPause:)) {
-        [item setTitle:[playButton title]];
-        return [playButton isEnabled];
-    }
-    if (action == @selector(stop:)) {
-        return [stopButton isEnabled];
-    }
-    if (action == @selector(nextTrack:)) {
-        return [nextButton isEnabled];
-    }
-    if (action == @selector(previousTrack:)) {
-        return [previousButton isEnabled];
     }
     if (action == @selector(toggleRepeat:)) {
         [item setState:[[session playlist] repeat] ? NSOnState : NSOffState];

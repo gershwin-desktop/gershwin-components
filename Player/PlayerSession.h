@@ -32,6 +32,8 @@ typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
                height:(int)height;
 - (void)playerSession:(PlayerSession *)session didDecodeVideoFrameData:(NSData *)rgbaData
                 width:(int)width height:(int)height;
+/// ICY metadata of the stream that plays (StreamTitle and the like).
+- (void)playerSession:(PlayerSession *)session didUpdateMetadata:(NSDictionary *)metadata;
 @end
 
 /**
@@ -51,6 +53,10 @@ typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
     NSTimeInterval _fadeDuration;
     PlayerMediaFactory _mediaFactory;
     NSMutableArray *_fadingMedia; // tracks fading out under the current one
+    // Audible while the next item opens; it fades out once that one plays
+    // (or fails, or is stopped), so a slow stream does not leave a gap
+    id<MediaPlayback> _outgoing;
+    BOOL _fadesInEveryItem;
     NSTimer *_endWatch;       // hands over to the next track before the end
     NSUInteger _mediaGeneration;  // the machine's generation _media was opened with
     // Events that came in while the effects of another were carried out
@@ -75,6 +81,11 @@ typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
 /// Makes the players for cross-fades: the next track plays in a new one
 /// while the old one fades out.  Without it tracks change at once.
 @property (nonatomic, copy) PlayerMediaFactory mediaFactory;
+/// Every item is joined live, in the middle (radio): each fades in once it
+/// plays.  Otherwise only stream URLs do; a track starts at full volume.
+@property (nonatomic, assign) BOOL fadesInEveryItem;
+/// The player of the current item.
+@property (nonatomic, readonly) id<MediaPlayback> media;
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media;
 

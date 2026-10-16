@@ -29,11 +29,16 @@ typedef struct {
     BOOL resolving;            // a web page is being looked up for its media
     BOOL dragHover;            // files are dragged over the window
     BOOL buffering;
+    // Radio and podcasts: something to tune in, open or play
+    BOOL hasItems;
+    // Podcasts: the shows are shown, where Play opens the chosen one
+    BOOL browsingShows;
 } PlayerViewInputs;
 
 /// Everything the window and the Playback menu show for a state.
 typedef struct {
     BOOL playShowsPause;       // the button's image: pause rather than play
+    BOOL playShowsStop;        // ... or stop, for a live stream
     NSString *playTitle;       // also the Playback menu item's title
     NSString *playToolTip;
     BOOL playEnabled;

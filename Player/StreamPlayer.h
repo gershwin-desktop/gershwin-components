@@ -32,6 +32,12 @@
 /// A decoded video frame is ready for display. The data is RGBA (w * h * 4 bytes).
 - (void)streamPlayer:(StreamPlayer *)player didDecodeVideoFrameData:(NSData *)rgbaData
               width:(int)width height:(int)height;
+/// The stream ran dry - a read waited longer than the sound already queued
+/// lasts - (YES), or has data again (NO).
+- (void)streamPlayer:(StreamPlayer *)player didChangeBuffering:(BOOL)isBuffering;
+/// The audio output refused a write: the device went away.  The player
+/// paused itself; -play opens the output again.
+- (void)streamPlayerDidLoseAudioDevice:(StreamPlayer *)player;
 @end
 
 /**
@@ -141,6 +147,16 @@
     // Delegate (assigned - not retained to avoid cycles)
     id<StreamPlayerDelegate> _delegate;
 
+    // Audio output: the libao driver (nil: its default) and, after the
+    // device went away, whether the playback thread opens it again
+    NSString *_audioDriverName;
+    volatile BOOL _reopenDevice;
+    // Playback thread only: the media time decoded so far, and the origin
+    // of the clock the listener hears it by - their difference is the
+    // sound still queued, which a read may take before the stream runs dry
+    double _decodedUntil;
+    double _listenOrigin;
+
     // ICY metadata tracking
     NSDictionary *_lastMetadata;
 
@@ -159,6 +175,9 @@
 /// NO plays silently, paced by the wall clock.  Takes effect at the next
 /// -openURL:error:.  Default YES.
 @property (nonatomic, assign) BOOL usesAudioDevice;
+/// The libao driver to play through ("alsa", "null"...); nil: libao's
+/// default.  Takes effect at the next stream.
+@property (nonatomic, copy) NSString *audioDriverName;
 @property (nonatomic, readonly, copy) NSString *currentURL;
 /// YES if the stream contains a video track.
 @property (nonatomic, readonly) BOOL hasVideo;

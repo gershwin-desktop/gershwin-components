@@ -10,6 +10,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import "StreamPlayer.h"
+#import "PlayerSession.h"
 
 @class RadioStation;
 @class RadioManager;
@@ -32,6 +33,8 @@
 - (void)radioManager:(RadioManager *)manager didUpdateRadioText:(NSString *)radioText;
 /// Full ICY metadata dictionary (StreamTitle, icy-url, etc.) was updated
 - (void)radioManager:(RadioManager *)manager didUpdateMetadata:(NSDictionary *)metadata;
+/// The playback state changed (see -state), or a station is being looked up
+- (void)radioManagerDidChangeState:(RadioManager *)manager;
 @end
 
 /**
@@ -44,10 +47,12 @@
  *
  * Singleton - one instance serves the entire application.
  */
-@interface RadioManager : NSObject <StreamPlayerDelegate>
+@interface RadioManager : NSObject <PlayerSessionDelegate>
 {
 @private
-    StreamPlayer *_player;
+    PlayerSession *_session;
+    PlayerPlaybackState _lastState;  // to tell what a state change was
+    BOOL _resolving;                 // a tune URL is being looked up
     NSArray *_stations;               // RadioStation objects
     NSMutableDictionary *_stationImages;  // key: stationId → NSImage
     NSMutableDictionary *_placeholderImages;  // the same stand-in every time
@@ -59,19 +64,27 @@
     NSString *_iconCachePath;
     NSMutableSet *_downloadingKeys;
     NSOperationQueue *_iconQueue;
-    NSMutableSet *_fadingPlayers;    // stations fading out after a switch
-    StreamPlayer *_outgoing;         // audible old station while the new one connects
     NSTimeInterval _fadeDuration;
-    BOOL _connecting;
     NSUInteger _tuneAttempt;     // bumped by every new station and by -stop
     NSUInteger _listRequest;     // bumped by every station list asked for
     int _maxCacheEntries;
 }
 
 @property (nonatomic, assign) id<RadioManagerDelegate> delegate;
+/// The same states as local playback; Paused only for what can pause
+/// (podcast episodes), a live station stops instead.
+@property (nonatomic, readonly) PlayerPlaybackState state;
 @property (nonatomic, readonly) BOOL isPlaying;
 /// YES from choosing a station until it plays or fails
 @property (nonatomic, readonly) BOOL isConnecting;
+/// Pause was pressed while the episode opens: it lands paused.
+@property (nonatomic, readonly) BOOL isPausePending;
+@property (nonatomic, readonly) BOOL isBuffering;
+/// Why the last stream failed or the audio output went away.
+@property (nonatomic, readonly) NSError *lastError;
+@property (nonatomic, readonly) NSTimeInterval currentTime;
+/// 0 for a live stream
+@property (nonatomic, readonly) NSTimeInterval duration;
 @property (nonatomic, readonly, copy) NSString *currentStationName;
 @property (nonatomic, readonly, copy) NSString *currentStreamURL;
 @property (nonatomic, assign) float volume;
@@ -99,7 +112,14 @@
 /// Stream an arbitrary URL directly, showing displayName instead of the
 /// URL in status text (e.g. a podcast episode's title).
 - (void)playURL:(NSString *)urlString displayName:(NSString *)displayName;
+/// The same, starting at the position once open (resuming an episode).
+- (void)playURL:(NSString *)urlString displayName:(NSString *)displayName
+     startingAt:(NSTimeInterval)position;
 
+/// Pauses or resumes what can pause (an episode); while it opens, the
+/// pause is kept until it is open.
+- (void)togglePause;
+- (void)seekToTime:(NSTimeInterval)seconds;
 /// Stop streaming; the sound fades out
 - (void)stop;
 /// A new player for each station; subclasses may configure it

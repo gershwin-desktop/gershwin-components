@@ -27,10 +27,20 @@ NSString *PlayerFormatTime(NSTimeInterval seconds)
     return [NSString stringWithFormat:@"%ld:%02ld", total / 60, total % 60];
 }
 
-static NSString *titleWithName(NSString *name, NSString *suffix)
+static NSString *titleOfMode(PlayerViewMode mode)
+{
+    switch (mode) {
+    case PlayerViewModeRadio: return @"Player - Internet Radio";
+    case PlayerViewModePodcast: return @"Player - Podcasts";
+    case PlayerViewModeLocal: break;
+    }
+    return @"Player";
+}
+
+static NSString *titleWithName(PlayerViewMode mode, NSString *name, NSString *suffix)
 {
     if (!name) {
-        return @"Player";
+        return titleOfMode(mode);
     }
     return suffix ? [NSString stringWithFormat:@"Player - %@ - %@", name, suffix]
                   : [NSString stringWithFormat:@"Player - %@", name];
@@ -47,20 +57,33 @@ static NSString *windowTitle(PlayerPlaybackState state, PlayerViewInputs in)
     }
     switch (state) {
     case PlayerPlaybackEmpty:
-        return @"Player";
+        return titleOfMode(in.mode);
     case PlayerPlaybackOpening:
-        return titleWithName(in.itemName, @"Loading...");
+        return titleWithName(in.mode, in.itemName, @"Loading...");
     case PlayerPlaybackPlaying:
-        return titleWithName(in.itemName, in.buffering ? @"Buffering..." : nil);
+        return titleWithName(in.mode, in.itemName, in.buffering ? @"Buffering..." : nil);
     case PlayerPlaybackPaused:
-        return titleWithName(in.itemName, @"Paused");
+        return titleWithName(in.mode, in.itemName, @"Paused");
     case PlayerPlaybackStopped:
         break;
     }
     if (in.lastError && in.itemName) {
         return [NSString stringWithFormat:@"Player - %@ (Cannot Be Played)", in.itemName];
     }
-    return titleWithName(in.itemName, nil);
+    return titleWithName(in.mode, in.itemName, nil);
+}
+
+// A live stream cannot pause and go on where it was: the button stops it.
+// Radio stations are live; a podcast episode is unless it has a length.
+static BOOL stopsInsteadOfPausing(PlayerPlaybackState state, PlayerViewInputs in)
+{
+    if (in.mode == PlayerViewModeRadio) {
+        return state == PlayerPlaybackOpening || state == PlayerPlaybackPlaying;
+    }
+    if (in.mode == PlayerViewModePodcast) {
+        return state == PlayerPlaybackPlaying && in.duration <= 0;
+    }
+    return NO;
 }
 
 PlayerViewState PlayerViewStateMake(PlayerPlaybackState state, PlayerViewInputs in)
@@ -70,17 +93,30 @@ PlayerViewState PlayerViewStateMake(PlayerPlaybackState state, PlayerViewInputs 
     BOOL empty = state == PlayerPlaybackEmpty;
     BOOL open = state == PlayerPlaybackPlaying || state == PlayerPlaybackPaused;
 
+    BOOL active = open || state == PlayerPlaybackOpening;
+
     // The button pauses what plays and what is about to play, unless a
     // pause pressed while opening is pending already
-    view.playShowsPause = state == PlayerPlaybackPlaying
-        || (state == PlayerPlaybackOpening && !in.pendingPause);
-    view.playTitle = view.playShowsPause ? @"Pause" : @"Play";
+    view.playShowsStop = stopsInsteadOfPausing(state, in);
+    view.playShowsPause = !view.playShowsStop && (state == PlayerPlaybackPlaying
+        || (state == PlayerPlaybackOpening && !in.pendingPause));
+    if (view.playShowsStop) {
+        view.playTitle = @"Stop";
+    } else if (view.playShowsPause) {
+        view.playTitle = @"Pause";
+    } else if (in.browsingShows && !active) {
+        view.playTitle = @"Open";   // opens the chosen show; makes no sound
+    } else {
+        view.playTitle = @"Play";
+    }
     view.playToolTip = (state == PlayerPlaybackOpening && view.playShowsPause)
         ? @"Stop Loading" : view.playTitle;
-    view.playEnabled = !empty;
+    // Radio and podcasts always have something to choose from once loaded
+    view.playEnabled = in.mode == PlayerViewModeLocal ? !empty : (active || in.hasItems);
     view.stopEnabled = !empty && state != PlayerPlaybackStopped;
-    view.nextEnabled = !empty && in.hasNext;
-    view.previousEnabled = !empty && in.hasPrevious;
+    BOOL choosable = in.mode == PlayerViewModeLocal ? !empty : YES;
+    view.nextEnabled = choosable && in.hasNext;
+    view.previousEnabled = choosable && in.hasPrevious;
 
     // Only something open has a position; a live stream has no end
     NSTimeInterval position = open ? in.position : 0;

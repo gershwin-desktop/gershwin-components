@@ -384,7 +384,9 @@ int main(void)
     m->slow = YES;
     [s openItems: tracks()];
     PASS([s state] == PlayerPlaybackOpening, "a slow item is opening");
-    [s seekToTime: 30];
+    [s seekToTime: 20];
+    [s skipBy: 5];
+    [s skipBy: 5];
     PASS(m->position == 0, "a seek while opening does not reach the player yet");
     [s togglePlayPause];
     PASS([s state] == PlayerPlaybackOpening, "pause while opening keeps opening");
@@ -393,7 +395,7 @@ int main(void)
     [m finishConnecting];
     PASS([s state] == PlayerPlaybackPaused, "once open it lands paused");
     PASS(m->paused, "the player is paused");
-    PASS(m->position == 30, "at the position asked for while opening");
+    PASS(m->position == 30, "at the position asked for while opening, skips added up");
     PASS(![s isPausePending], "nothing is pending any more");
     [s togglePlayPause];
     PASS([s state] == PlayerPlaybackPlaying && !m->paused, "play resumes");
@@ -476,6 +478,27 @@ int main(void)
     PASS([s state] == PlayerPlaybackPlaying && m->openedURL != nil && m->closes == closes + 1,
          "the close after stop's fade is void once the next track plays");
   END_SET("a fade belongs to the state that started it")
+
+  START_SET("buffering and a lost audio output")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    SessionWatcher *w = [[SessionWatcher new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s setDelegate: w];
+    [s openItems: tracks()];
+    int changes = w->stateChanges;
+    [(id)s streamPlayer: (StreamPlayer *)m didChangeBuffering: YES];
+    PASS([s isBuffering] && [s state] == PlayerPlaybackPlaying && w->stateChanges > changes,
+         "a stream running dry is shown as buffering, still playing");
+    [(id)s streamPlayer: (StreamPlayer *)m didChangeBuffering: NO];
+    PASS(![s isBuffering], "until the data is back");
+    [(id)s streamPlayerDidLoseAudioDevice: (StreamPlayer *)m];
+    PASS([s state] == PlayerPlaybackPaused && m->paused, "losing the audio output pauses");
+    PASS([[[s lastError] localizedDescription] isEqual: @"Audio output is not available"],
+         "and says why");
+    [s togglePlayPause];
+    PASS([s state] == PlayerPlaybackPlaying && !m->paused && [s lastError] == nil,
+         "play tries again");
+  END_SET("buffering and a lost audio output")
 
   START_SET("streams fade in and out")
     FakeMedia *m = [[FakeMedia new] autorelease];
@@ -606,6 +629,38 @@ int main(void)
     [s next];
     PASS([made count] == count, "with fading off tracks change at once");
   END_SET("tracks cross-fade")
+
+  START_SET("a slow next item does not leave a gap")
+    NSMutableArray *made = [NSMutableArray array];
+    FakeMedia *first = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: first] autorelease];
+    [s setMediaFactory: ^id<MediaPlayback>(void) {
+      FakeMedia *m = [[FakeMedia new] autorelease];
+      m->slow = YES;
+      [made addObject: m];
+      return m;
+    }];
+    [s openItems: @[@"http://radio.example/a"]];
+    [s openItems: @[@"http://radio.example/b"]];
+    FakeMedia *second = [made lastObject];
+    PASS([s state] == PlayerPlaybackOpening && second->connecting,
+         "switching to a stream that connects slowly is opening it");
+    PASS(first->gain == 1.0f && first->openedURL != nil,
+         "while the audible one plays on at full volume");
+    [second finishConnecting];
+    PASS(first->fadeTarget == 0.0f && first->fadeDuration > 0.5,
+         "once the new one plays the old one fades out");
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(first->openedURL == nil, "and is closed");
+
+    [s openItems: @[@"http://radio.example/c"]];
+    FakeMedia *third = [made lastObject];
+    [third->unopenable addObject: @"http://radio.example/c"];
+    [(id)s streamPlayer: (StreamPlayer *)third didFailWithError:
+      [NSError errorWithDomain: @"Fake" code: 1 userInfo: nil]];
+    PASS([s state] == PlayerPlaybackStopped && second->fadeTarget == 0.0f,
+         "when the new one fails the old one fades out too, as it was switched away from");
+  END_SET("a slow next item does not leave a gap")
 
   START_SET("the list is remembered")
     FakeMedia *m = [[FakeMedia new] autorelease];

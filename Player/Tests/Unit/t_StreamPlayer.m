@@ -13,11 +13,42 @@
 #import "StreamPlayer.h"
 #import "TestMedia.h"
 #include <unistd.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /* The decode thread's error counting, called here with a generation of
  * our choosing */
 @interface StreamPlayer (DecodeErrors)
 - (void)countDecodeError:(int)code generation:(NSUInteger)generation;
+@end
+
+/* The audio output a test chooses: libao's null driver accepts every
+ * write at once, so a device exists without a sound card */
+@interface StreamPlayer (AudioOutput)
+- (void)setAudioDriverName:(NSString *)name;
+- (BOOL)writeAudio:(const char *)bytes length:(int)length;
+@end
+
+/* An audio output whose one write fails, as when the device goes away */
+@interface FlakyDevicePlayer : StreamPlayer
+{
+@public
+  int writes;
+  int failingWrite;
+}
+@end
+
+@implementation FlakyDevicePlayer
+- (BOOL)writeAudio:(const char *)bytes length:(int)length
+{
+  if (++writes == failingWrite)
+    {
+      return NO;
+    }
+  return [super writeAudio: bytes length: length];
+}
 @end
 
 @interface StopRecorder : NSObject <StreamPlayerDelegate>
@@ -28,6 +59,9 @@
   int failures;
   BOOL onMainThread;
   BOOL startOnMainThread;
+  int devicesLost;
+  BOOL deviceLostOnMainThread;
+  NSMutableArray *buffering;   /* each change, in order, with its time */
 }
 @end
 
@@ -46,7 +80,70 @@
 {
   failures++;
 }
+- (void)streamPlayerDidLoseAudioDevice:(StreamPlayer *)player
+{
+  devicesLost++;
+  deviceLostOnMainThread = [NSThread isMainThread];
+}
+- (void)streamPlayer:(StreamPlayer *)player didChangeBuffering:(BOOL)isBuffering
+{
+  if (!buffering)
+    buffering = [NSMutableArray new];
+  [buffering addObject: [NSNumber numberWithBool: isBuffering]];
+}
 @end
+
+/* One HTTP client served from a thread of its own: the first part of the
+ * body at once, the rest after a stall, as a network stream that runs dry */
+typedef struct {
+  int listener;
+  NSData *body;
+  NSUInteger firstPart;
+  double stall;
+} StallingServer;
+
+static void *serveStalling(void *arg)
+{
+  StallingServer *server = arg;
+  int client = accept(server->listener, NULL, NULL);
+  if (client >= 0)
+    {
+      char request[2048];
+      (void)recv(client, request, sizeof(request), 0);
+      /* No length, as a radio stream: FFmpeg cannot seek around in it, so
+       * it reads the one connection this server answers from front to end */
+      const char *h = "HTTP/1.0 200 OK\r\nContent-Type: audio/x-wav\r\n\r\n";
+      const char *bytes = [server->body bytes];
+      (void)send(client, h, strlen(h), 0);
+      (void)send(client, bytes, server->firstPart, 0);
+      usleep((useconds_t)(server->stall * 1e6));
+      (void)send(client, bytes + server->firstPart, [server->body length] - server->firstPart, 0);
+      close(client);
+    }
+  close(server->listener);
+  return NULL;
+}
+
+static int startStallingServer(StallingServer *server)
+{
+  struct sockaddr_in addr;
+  socklen_t len = sizeof(addr);
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  server->listener = socket(AF_INET, SOCK_STREAM, 0);
+  if (server->listener < 0
+      || bind(server->listener, (struct sockaddr *)&addr, sizeof(addr)) < 0
+      || listen(server->listener, 1) < 0
+      || getsockname(server->listener, (struct sockaddr *)&addr, &len) < 0)
+    {
+      return -1;
+    }
+  pthread_t thread;
+  pthread_create(&thread, NULL, serveStalling, server);
+  pthread_detach(thread);
+  return ntohs(addr.sin_port);
+}
 
 static void spin(NSTimeInterval seconds)
 {
@@ -234,6 +331,72 @@ int main(void)
     [sp setDelegate: nil];
     [sp close];
   END_SET("errors of an earlier stream")
+
+  START_SET("losing the audio output")
+    FlakyDevicePlayer *sp = [[[FlakyDevicePlayer alloc] init] autorelease];
+    StopRecorder *rec = [[StopRecorder new] autorelease];
+    sp->failingWrite = 5;
+    [sp setAudioDriverName: @"null"];
+    [sp setDelegate: rec];
+    [sp playURL: wav];
+    spin(0.5);
+    PASS(rec->devicesLost == 1 && rec->deviceLostOnMainThread,
+         "a write the audio output refuses is reported, on the main thread");
+    PASS(rec->stops == 0 && rec->failures == 0, "as neither the end nor a failure");
+    NSTimeInterval t = [sp currentTime];
+    spin(0.3);
+    PASS(fabs([sp currentTime] - t) < 0.02,
+         "the player holds still instead of playing on unheard (%f, %f)", t, [sp currentTime]);
+    [sp play];
+    spin(2.5);
+    PASS(rec->stops == 1 && rec->devicesLost == 1,
+         "play goes on with the audio output opened again, to the end");
+    [sp setDelegate: nil];
+    [sp close];
+  END_SET("losing the audio output")
+
+  START_SET("a network stream that runs dry")
+    /* 8 kHz mono, 16000 bytes a second.  FFmpeg reads the first five
+     * seconds before it reports the stream open, so the stall comes after
+     * six and a half */
+    NSString *longWav = TestMediaWriteSilentWAV(@"spstall", 10.0);
+    StallingServer server;
+    server.body = [NSData dataWithContentsOfFile: longWav];
+    server.firstPart = 44 + 6.5 * 16000;
+    server.stall = 8.0;
+    int port = startStallingServer(&server);
+    PASS(port > 0, "a local server serves the stream");
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    StopRecorder *rec = [[StopRecorder new] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp setDelegate: rec];
+    [sp playURL: [NSString stringWithFormat: @"http://127.0.0.1:%d/stall.wav", port]];
+    spin(4.0);
+    PASS(rec->starts == 1 && [rec->buffering count] == 0,
+         "while data comes in nothing is buffering (%d starts, %lu changes)",
+         rec->starts, (unsigned long)[rec->buffering count]);
+    spin(3.5);
+    PASS([rec->buffering count] == 1 && [[rec->buffering objectAtIndex: 0] boolValue],
+         "once the data runs out the player says it is buffering");
+    spin(2.0);
+    PASS([rec->buffering count] == 2 && ![[rec->buffering lastObject] boolValue],
+         "and that it is not once the data is back (%lu changes)",
+         (unsigned long)[rec->buffering count]);
+    [sp setDelegate: nil];
+    [sp close];
+    [[NSFileManager defaultManager] removeItemAtPath: longWav error: NULL];
+
+    StreamPlayer *local = [[[StreamPlayer alloc] init] autorelease];
+    StopRecorder *localRec = [[StopRecorder new] autorelease];
+    [local setUsesAudioDevice: NO];
+    [local setDelegate: localRec];
+    [local playURL: wav];
+    spin(2.5);
+    PASS(localRec->stops == 1 && localRec->buffering == nil,
+         "a local file plays to its end without buffering");
+    [local setDelegate: nil];
+    [local close];
+  END_SET("a network stream that runs dry")
 
   START_SET("fading")
     StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];

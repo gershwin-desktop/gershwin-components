@@ -40,19 +40,34 @@ static NSError *streamError(NSInteger code, NSString *description)
 // One opening of a stream.  It is cancelled on its own, so a playback
 // thread still stuck in a host name lookup (which FFmpeg cannot interrupt)
 // can be abandoned without the next stream waiting for it.
+//
+// It is also what FFmpeg's interrupt callback sees while a read waits for
+// the network, so the playback thread notes there when a read began and
+// how much sound was still queued then: a wait longer than that means the
+// listener hears nothing, which is reported as buffering.
 @interface StreamOpenAttempt : NSObject
 {
 @public
     volatile BOOL cancelled;
+    volatile double readStart;   // 0: not reading
+    double readLead;
+    BOOL starving;
+    StreamPlayer *player;        // not retained: the player outlives the thread
+    NSUInteger generation;
 }
 @end
 
 @implementation StreamOpenAttempt
 @end
 
+@interface StreamPlayer ()
+- (void)postToMain:(SEL)selector object:(id)object generation:(NSUInteger)generation;
+@end
+
 @implementation StreamPlayer
 
 @synthesize delegate = _delegate;
+@synthesize audioDriverName = _audioDriverName;
 @synthesize volume = _volume;
 @synthesize muted = _muted;
 @synthesize usesAudioDevice = _usesAudioDevice;
@@ -65,7 +80,17 @@ static NSError *streamError(NSInteger code, NSString *description)
 static int interruptCallback(void *opaque)
 {
     StreamOpenAttempt *attempt = (StreamOpenAttempt *)opaque;
-    return attempt->cancelled ? 1 : 0;
+    if (attempt->cancelled) {
+        return 1;
+    }
+    double start = attempt->readStart;
+    if (start > 0 && !attempt->starving && monotonicSeconds() - start > attempt->readLead) {
+        attempt->starving = YES;
+        [attempt->player postToMain:@selector(mainDidChangeBuffering:)
+                             object:[NSNumber numberWithBool:YES]
+                         generation:attempt->generation];
+    }
+    return 0;
 }
 
 + (void)initialize
@@ -98,6 +123,7 @@ static int interruptCallback(void *opaque)
 - (void)dealloc
 {
     [self close];
+    [_audioDriverName release];
     [_attempt release];
     [_pauseCondition release];
     [_seekLock release];
@@ -382,10 +408,16 @@ static int interruptCallback(void *opaque)
     _swrCtx = swr;
     _frame = av_frame_alloc();
 
-    if (!_usesAudioDevice) {
-        return;
+    if (_usesAudioDevice) {
+        [self openAudioDevice];
     }
-    int driver = ao_default_driver_id();
+}
+
+// Without a device the stream plays silently, paced by the wall clock
+- (void)openAudioDevice
+{
+    int driver = _audioDriverName ? ao_driver_id([_audioDriverName UTF8String])
+                                  : ao_default_driver_id();
     if (driver < 0) {
         NSLog(@"[StreamPlayer] no audio output driver, playing silently");
         return;
@@ -394,7 +426,7 @@ static int interruptCallback(void *opaque)
     memset(&aoFmt, 0, sizeof(aoFmt));
     aoFmt.bits = 16;
     aoFmt.channels = 2;
-    aoFmt.rate = ctx->sample_rate;
+    aoFmt.rate = _audioSampleRate;
     aoFmt.byte_format = AO_FMT_NATIVE;
     _aoDev = ao_open_live(driver, &aoFmt, NULL);
     if (!_aoDev) {
@@ -649,6 +681,7 @@ static int interruptCallback(void *opaque)
     _streamStart = 0.0;
     _seekTarget = -1.0;
     _framePending = NO;
+    _reopenDevice = NO;
     [_lastMetadata release];
     _lastMetadata = nil;
     [self setCurrentURL:nil];
@@ -661,11 +694,25 @@ static int interruptCallback(void *opaque)
     @autoreleasepool {
         NSUInteger generation = _generation;
         _threadGeneration = generation;
+        StreamOpenAttempt *attempt = _attempt;
+        attempt->player = self;
+        attempt->generation = generation;
         BOOL failed = NO;
         unsigned int packetCount = 0;
+        _decodedUntil = _position;
+        _listenOrigin = monotonicSeconds() - _position;
 
         while (!_shouldStop) {
-            [self performPendingSeek];
+            if (_reopenDevice) {
+                // Played again after the device went away: it may be back
+                _reopenDevice = NO;
+                [self openAudioDevice];
+                _clockFromWall = (_aoDev == NULL);
+            }
+            if ([self performPendingSeek]) {
+                _decodedUntil = _position;
+                _listenOrigin = monotonicSeconds() - _position;
+            }
 
             if (_paused) {
                 [_pauseCondition lock];
@@ -673,12 +720,26 @@ static int interruptCallback(void *opaque)
                     [_pauseCondition wait];
                 }
                 [_pauseCondition unlock];
+                // Nothing was queued while paused; the listener starts again
+                _listenOrigin = monotonicSeconds() - _decodedUntil;
                 continue;   // a seek may have come in while paused
             }
 
             @autoreleasepool {
                 AVPacket *pkt = (AVPacket *)_packet;
+                double now = monotonicSeconds();
+                attempt->readLead = MAX(0.0, _decodedUntil - (now - _listenOrigin));
+                attempt->readStart = now;
                 int ret = av_read_frame((AVFormatContext *)_formatCtx, pkt);
+                attempt->readStart = 0;
+                if (attempt->starving) {
+                    // Data again: what the listener missed is not made up for
+                    attempt->starving = NO;
+                    _listenOrigin = monotonicSeconds() - _decodedUntil;
+                    [self postToMain:@selector(mainDidChangeBuffering:)
+                              object:[NSNumber numberWithBool:NO]
+                          generation:generation];
+                }
                 if (ret < 0) {
                     if (_shouldStop) {
                         break;
@@ -737,21 +798,24 @@ static int interruptCallback(void *opaque)
     }
 }
 
-- (void)performPendingSeek
+// Returns YES if it sought
+- (BOOL)performPendingSeek
 {
     [_seekLock lock];
     double target = _seekTarget;
     _seekTarget = -1.0;
     [_seekLock unlock];
-    if (target >= 0.0) {
-        target = [self clampedSeekTime:target];
-        [self performSeekTo:target];
-        [_seekLock lock];
-        if (_seekTarget < 0.0) {
-            _clockOrigin = monotonicSeconds() - target;
-        }
-        [_seekLock unlock];
+    if (target < 0.0) {
+        return NO;
     }
+    target = [self clampedSeekTime:target];
+    [self performSeekTo:target];
+    [_seekLock lock];
+    if (_seekTarget < 0.0) {
+        _clockOrigin = monotonicSeconds() - target;
+    }
+    [_seekLock unlock];
+    return YES;
 }
 
 - (void)performSeekTo:(double)seconds
@@ -867,26 +931,51 @@ static int interruptCallback(void *opaque)
         }
 
         if (_aoDev) {
-            [self playSamplesOfFrame:frame];
+            if (![self playSamplesOfFrame:frame]) {
+                [self audioDeviceFailed];
+                return;
+            }
             _position = end;
         } else {
             [self waitForMediaTime:end lead:kWallClockLead];
         }
+        _decodedUntil = end;
     }
 }
 
-- (void)playSamplesOfFrame:(AVFrame *)frame
+// Playback thread, which owns the device.  Unheard, the stream must not
+// run on: it pauses itself, and tells the main thread why.
+- (void)audioDeviceFailed
+{
+    NSLog(@"[StreamPlayer] the audio output refused a write; pausing");
+    ao_close((ao_device *)_aoDev);
+    _aoDev = NULL;
+    [_pauseCondition lock];
+    _clockFromWall = YES;
+    _paused = YES;
+    _reopenDevice = YES;
+    [_pauseCondition unlock];
+    [self postToMain:@selector(mainDidLoseAudioDevice:) object:nil generation:_threadGeneration];
+}
+
+- (BOOL)writeAudio:(const char *)bytes length:(int)length
+{
+    return ao_play((ao_device *)_aoDev, (char *)bytes, (uint_32)length) != 0;
+}
+
+// Returns NO when the device refused the samples
+- (BOOL)playSamplesOfFrame:(AVFrame *)frame
 {
     int outBytes = av_samples_get_buffer_size(NULL, 2, frame->nb_samples, AV_SAMPLE_FMT_S16, 1);
     if (outBytes <= 0) {
-        return;
+        return YES;
     }
     if (_audioBufferSize < outBytes) {
         free(_audioBuffer);
         _audioBuffer = malloc(outBytes);
         _audioBufferSize = _audioBuffer ? outBytes : 0;
         if (!_audioBuffer) {
-            return;
+            return YES;
         }
     }
 
@@ -894,7 +983,7 @@ static int interruptCallback(void *opaque)
     int converted = swr_convert((SwrContext *)_swrCtx, outPtrs, frame->nb_samples,
                                 (const uint8_t **)frame->data, frame->nb_samples);
     if (converted <= 0) {
-        return;
+        return YES;
     }
 
     int16_t *samples = (int16_t *)_audioBuffer;
@@ -909,7 +998,7 @@ static int interruptCallback(void *opaque)
         float gain = gainStart + (gainEnd - gainStart) * (float)(i / 2) / (float)converted;
         samples[i] = (int16_t)(samples[i] * gain);
     }
-    ao_play((ao_device *)_aoDev, (char *)_audioBuffer, sampleCount * (int)sizeof(int16_t));
+    return [self writeAudio:(const char *)_audioBuffer length:sampleCount * (int)sizeof(int16_t)];
 }
 
 - (void)decodeVideoPacket:(AVPacket *)pkt
@@ -955,6 +1044,9 @@ static int interruptCallback(void *opaque)
         }
         if (_audioStreamIndex < 0 && pts >= 0.0 && !_clockFromWall) {
             _position = pts;
+        }
+        if (_audioStreamIndex < 0 && pts >= 0.0) {
+            _decodedUntil = pts;
         }
         [self deliverVideoFrame:frame];
     }
@@ -1051,6 +1143,22 @@ static int interruptCallback(void *opaque)
     if ([self isCurrentMessage:message]
         && [_delegate respondsToSelector:@selector(streamPlayer:didUpdateMetadata:)]) {
         [_delegate streamPlayer:self didUpdateMetadata:[message objectAtIndex:1]];
+    }
+}
+
+- (void)mainDidChangeBuffering:(NSArray *)message
+{
+    if ([self isCurrentMessage:message]
+        && [_delegate respondsToSelector:@selector(streamPlayer:didChangeBuffering:)]) {
+        [_delegate streamPlayer:self didChangeBuffering:[[message objectAtIndex:1] boolValue]];
+    }
+}
+
+- (void)mainDidLoseAudioDevice:(NSArray *)message
+{
+    if ([self isCurrentMessage:message]
+        && [_delegate respondsToSelector:@selector(streamPlayerDidLoseAudioDevice:)]) {
+        [_delegate streamPlayerDidLoseAudioDevice:self];
     }
 }
 

@@ -104,13 +104,42 @@ int main(void)
     StreamPlayer *old = [[[rm player] retain] autorelease];
     [rm playURL: b];
     spin(0.3);
-    PASS(![old isPlaying], "switching stops the old station at once");
+    /* Without a cross-fade the new station may play in the same player */
+    BOOL oldSilent = (old == [rm player]) ? [[old currentURL] isEqual: b] : ![old isPlaying];
+    PASS(oldSilent, "switching stops the old station at once");
     PASS([rm isPlaying] && [[rm player] fadeGain] == 1.0f,
          "and the new one plays at full volume");
     StreamPlayer *current = [[[rm player] retain] autorelease];
     [rm stop];
     PASS(![current isPlaying], "stop cuts it off at once");
   END_SET("fading switched off")
+
+  START_SET("an episode pauses and resumes")
+    [rm setFadeDuration: 0];
+    [rm playURL: a displayName: @"Episode" startingAt: 2.0];
+    PASS([rm state] == PlayerPlaybackOpening && [rm isConnecting], "the episode opens");
+    spin(0.4);
+    PASS([rm state] == PlayerPlaybackPlaying && [rm currentTime] > 1.9,
+         "and plays from where it was left (%f)", [rm currentTime]);
+    [rm togglePause];
+    PASS([rm state] == PlayerPlaybackPaused && ![rm isPlaying], "pause pauses it");
+    NSTimeInterval t = [rm currentTime];
+    spin(0.5);
+    PASS(fabs([rm currentTime] - t) < 0.05, "the position holds (%f, %f)", t, [rm currentTime]);
+    [rm togglePause];
+    spin(0.4);
+    PASS([rm state] == PlayerPlaybackPlaying && [rm currentTime] > t + 0.2,
+         "and it resumes where it was (%f)", [rm currentTime]);
+
+    [rm playURL: b displayName: @"Another"];
+    [rm togglePause];
+    PASS([rm isPausePending] && [rm state] == PlayerPlaybackOpening,
+         "pause while an episode opens is kept");
+    spin(0.4);
+    PASS([rm state] == PlayerPlaybackPaused, "and it lands paused once open");
+    [rm stop];
+    PASS([rm state] == PlayerPlaybackStopped && [rm player] == nil, "stop stops it");
+  END_SET("an episode pauses and resumes")
 
   [rm release];
   [[NSFileManager defaultManager] removeItemAtPath: a error: NULL];

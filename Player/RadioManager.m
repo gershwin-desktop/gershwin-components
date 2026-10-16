@@ -25,8 +25,8 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 @implementation RadioManager
 
-@synthesize fadeDuration = _fadeDuration;
 
+@synthesize fadeDuration = _fadeDuration;
 @synthesize delegate = _delegate;
 @synthesize volume = _volume;
 @synthesize muted = _muted;
@@ -49,8 +49,8 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 {
     self = [super init];
     if (self) {
-        _fadingPlayers = [[NSMutableSet alloc] init];
         _fadeDuration = kDefaultFadeDuration;
+        [self makeSession];
         _stations = [[NSArray alloc] init];
         _stationImages = [[NSMutableDictionary alloc] init];
         _placeholderImages = [[NSMutableDictionary alloc] init];
@@ -82,13 +82,8 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 - (void)dealloc
 {
-    [_player setDelegate:nil];
-    [_player close];
-    [_player release];
-    [_outgoing close];
-    [_outgoing release];
-    [_fadingPlayers makeObjectsPerformSelector:@selector(close)];
-    [_fadingPlayers release];
+    [_session setDelegate:nil];
+    [_session release];
     [_stations release];
     [_stationImages release];
     [_placeholderImages release];
@@ -104,14 +99,70 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 #pragma mark - Properties
 
+// Playback is a PlayerSession of its own, of one item at a time: the same
+// states and effects as local playback, with every item joined live.  A
+// new station opens in a player of its own while the old one plays on,
+// and the two cross-fade once it plays.
+- (void)makeSession
+{
+    _session = [[PlayerSession alloc] initWithMedia:[self makePlayer]];
+    [_session setDelegate:self];
+    [_session setFadesInEveryItem:YES];
+    [_session setFadeDuration:_fadeDuration];
+    // Not retained by the block: the session lives no longer than self
+    __block RadioManager *manager = self;
+    [_session setMediaFactory:^id<MediaPlayback>(void) {
+        return [manager makePlayer];
+    }];
+}
+
+- (PlayerPlaybackState)state
+{
+    return [_session state];
+}
+
 - (BOOL)isPlaying
 {
-    return [_player isPlaying];
+    return [_session state] == PlayerPlaybackPlaying;
+}
+
+- (BOOL)isConnecting
+{
+    return _resolving || [_session state] == PlayerPlaybackOpening;
+}
+
+- (BOOL)isPausePending
+{
+    return [_session isPausePending];
+}
+
+- (BOOL)isBuffering
+{
+    return [_session isBuffering];
+}
+
+- (NSError *)lastError
+{
+    return [_session lastError];
+}
+
+- (NSTimeInterval)currentTime
+{
+    return [_session currentTime];
+}
+
+- (NSTimeInterval)duration
+{
+    return [_session duration];
 }
 
 - (StreamPlayer *)player
 {
-    return _player;
+    PlayerPlaybackState state = [_session state];
+    if (state == PlayerPlaybackEmpty || state == PlayerPlaybackStopped) {
+        return nil;
+    }
+    return (StreamPlayer *)[_session media];
 }
 
 - (StreamPlayer *)makePlayer
@@ -119,70 +170,22 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
     return [[[StreamPlayer alloc] init] autorelease];
 }
 
-// Fades the player out and closes it afterwards, without waiting for it.
-- (void)fadeOutAndClose:(StreamPlayer *)player
+- (void)setFadeDuration:(NSTimeInterval)duration
 {
-    if (player == nil) {
-        return;
-    }
-    [player setDelegate:nil];
-    if (![player isPlaying] || _fadeDuration <= 0) {
-        [player close];
-        return;
-    }
-    [_fadingPlayers addObject:player];
-    [player fadeToGain:0.0f duration:_fadeDuration];
-    PlayerRunOnMainThreadAfter(_fadeDuration, ^{
-        [player close];
-        [self->_fadingPlayers removeObject:player];
-    });
-}
-
-// A new station was chosen.  The station that is audible goes on playing
-// until the new one plays, and the two cross-fade then; one that is still
-// connecting is simply given up.
-- (void)setAsidePlayer
-{
-    if (_player == nil) {
-        return;
-    }
-    StreamPlayer *player = [_player autorelease];
-    _player = nil;
-    [player setDelegate:nil];
-    if (![player isPlaying]) {
-        [player close];
-        return;
-    }
-    [self fadeOutOutgoing];
-    _outgoing = [player retain];
-}
-
-- (void)fadeOutOutgoing
-{
-    [self fadeOutAndClose:_outgoing];
-    [_outgoing release];
-    _outgoing = nil;
-}
-
-// Stop: whatever is audible fades out
-- (void)retirePlayer
-{
-    StreamPlayer *player = [_player autorelease];
-    _player = nil;
-    [self fadeOutAndClose:player];
-    [self fadeOutOutgoing];
+    _fadeDuration = duration;
+    [_session setFadeDuration:duration];
 }
 
 - (void)setVolume:(float)volume
 {
     _volume = volume;
-    [_player setVolume:volume];
+    [_session setVolume:volume];
 }
 
 - (void)setMuted:(BOOL)muted
 {
     _muted = muted;
-    [_player setMuted:muted];
+    [_session setMuted:muted];
 }
 
 #pragma mark - Public API
@@ -264,47 +267,39 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 - (void)playStation:(RadioStation *)station
 {
     if (!station) return;
-
     NSString *urlString = [station streamURL];
     if (!urlString) urlString = [station tuneURL];
     if (!urlString || [urlString length] == 0) return;
 
-    // The station playing fades out while the new one connects
-    [self setAsidePlayer];
-    _connecting = YES;
     NSUInteger attempt = ++_tuneAttempt;
-    [_currentStationName release];
-    _currentStationName = [[station name] copy];
-    [_currentStreamURL release];
-    _currentStreamURL = [urlString copy];
+    [self setStationName:[station name] url:urlString];
+    [self notifyStatus:[NSString stringWithFormat:@"Connecting to %@...", [station name]]];
 
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:[NSString stringWithFormat:@"Connecting to %@...", [station name]]];
-    }
-
-    // Handle tune URLs (TuneIn playlist resolution) by resolving first
+    // Tune URLs (TuneIn playlists) name the stream only once resolved; the
+    // station that plays goes on playing meanwhile
     if ([urlString rangeOfString:@"Tune.ashx" options:NSCaseInsensitiveSearch].location != NSNotFound ||
         [urlString hasSuffix:@".m3u"] || [urlString hasSuffix:@".m3u8"]) {
+        _resolving = YES;
+        [self notifyStateChange];
         [self resolveStreamURL:urlString completion:^(NSString *resolved) {
             if (attempt != self->_tuneAttempt) {
                 return;   // another station was chosen, or the radio stopped
             }
+            self->_resolving = NO;
             if (resolved) {
-                [self->_currentStreamURL release];
-                self->_currentStreamURL = [resolved copy];
+                [self setStationName:self->_currentStationName url:resolved];
                 [station setStreamURL:resolved];
-                [self openAndPlayURL:resolved];
+                [self openURL:resolved startingAt:-1.0];
             } else {
-                self->_connecting = NO;
-                [self fadeOutOutgoing];
-                if (self->_delegate != nil &&
-                    [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
+                [self notifyStateChange];
+                if ([self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
                     [self->_delegate radioManager:self didFailWithError:@"Failed to resolve stream URL"];
                 }
             }
         }];
     } else {
-        [self openAndPlayURL:urlString];
+        _resolving = NO;
+        [self openURL:urlString startingAt:-1.0];
     }
 }
 
@@ -315,38 +310,67 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 - (void)playURL:(NSString *)urlString displayName:(NSString *)displayName
 {
+    [self playURL:urlString displayName:displayName startingAt:-1.0];
+}
+
+- (void)playURL:(NSString *)urlString displayName:(NSString *)displayName
+     startingAt:(NSTimeInterval)position
+{
     if (!urlString || [urlString length] == 0) return;
-
-    [self setAsidePlayer];
-    _connecting = YES;
     _tuneAttempt++;
-    [_currentStationName release];
-    _currentStationName = [(displayName ?: [urlString lastPathComponent]) copy];
-    [_currentStreamURL release];
-    _currentStreamURL = [urlString copy];
+    _resolving = NO;
+    [self setStationName:(displayName ?: [urlString lastPathComponent]) url:urlString];
+    [self notifyStatus:[NSString stringWithFormat:@"Connecting to %@...", _currentStationName]];
+    [self openURL:urlString startingAt:position];
+}
 
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:[NSString stringWithFormat:@"Connecting to %@...", _currentStationName]];
-    }
+- (void)togglePause
+{
+    [_session togglePlayPause];
+}
 
-    [self openAndPlayURL:urlString];
+- (void)seekToTime:(NSTimeInterval)seconds
+{
+    [_session seekToTime:seconds];
 }
 
 - (void)stop
 {
-    _connecting = NO;
     _tuneAttempt++;
-    [self retirePlayer];
-    [_currentStationName release];
-    _currentStationName = nil;
-    [_currentStreamURL release];
-    _currentStreamURL = nil;
-
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
-        [_delegate radioManagerDidStop:self];
+    _resolving = NO;
+    // The name goes first: the stop is reported without it
+    [self setStationName:nil url:nil];
+    if ([_session canStop]) {
+        [_session stop];
+    } else {
+        [self notifyStateChange];
     }
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:@"Stopped"];
+    [self notifyStatus:@"Stopped"];
+}
+
+- (void)setStationName:(NSString *)name url:(NSString *)url
+{
+    if (name != _currentStationName) {
+        [_currentStationName release];
+        _currentStationName = [name copy];
+    }
+    if (url != _currentStreamURL) {
+        [_currentStreamURL release];
+        _currentStreamURL = [url copy];
+    }
+}
+
+- (void)notifyStatus:(NSString *)status
+{
+    if ([_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
+        [_delegate radioManagerDidUpdateStatus:self status:status];
+    }
+}
+
+- (void)notifyStateChange
+{
+    if ([_delegate respondsToSelector:@selector(radioManagerDidChangeState:)]) {
+        [_delegate radioManagerDidChangeState:self];
     }
 }
 
@@ -422,34 +446,36 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
 
 #pragma mark - Playback Internals
 
-- (void)openAndPlayURL:(NSString *)urlString
+- (void)openURL:(NSString *)urlString startingAt:(NSTimeInterval)position
 {
-    [self setAsidePlayer];
-    _player = [[self makePlayer] retain];
-    [_player setDelegate:self];
-    [_player setVolume:_volume];
-    [_player setMuted:_muted];
-    // Silent until it plays, then it fades in
-    [_player setFadeGain:_fadeDuration > 0 ? 0.0f : 1.0f];
-    // Connecting takes seconds; StreamPlayer does it on its own thread and
-    // reports back through the StreamPlayerDelegate methods
-    [_player playURL:urlString];
+    [_session openItems:@[urlString]];
+    if (position > 0) {
+        // Kept by the session until the stream is open
+        [_session seekToTime:position];
+    }
 }
 
-#pragma mark - StreamPlayerDelegate
+#pragma mark - PlayerSessionDelegate
 
-- (BOOL)isConnecting
+- (void)playerSessionDidChangeState:(PlayerSession *)session
 {
-    return _connecting;
+    PlayerPlaybackState was = _lastState;
+    PlayerPlaybackState now = [session state];
+    _lastState = now;
+    if (now == PlayerPlaybackPlaying && was == PlayerPlaybackOpening) {
+        [self didStartPlaying];
+    } else if (now == PlayerPlaybackStopped && was != PlayerPlaybackStopped
+               && was != PlayerPlaybackOpening) {
+        // Stopped, or the stream (an episode) ended by itself
+        if ([_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
+            [_delegate radioManagerDidStop:self];
+        }
+    }
+    [self notifyStateChange];
 }
 
-- (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
+- (void)didStartPlaying
 {
-    _connecting = NO;
-    // The cross-fade: the old station goes as the new one comes
-    [self fadeOutOutgoing];
-    [_player fadeToGain:1.0f duration:_fadeDuration];
-    // Find the station matching this stream URL
     RadioStation *currentStation = nil;
     for (RadioStation *s in _stations) {
         if (_currentStationName && [[s name] isEqualToString:_currentStationName]) {
@@ -457,56 +483,31 @@ static const NSTimeInterval kDefaultFadeDuration = 1.0;
             break;
         }
     }
-
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStartPlaying:station:)]) {
+    if ([_delegate respondsToSelector:@selector(radioManagerDidStartPlaying:station:)]) {
         [_delegate radioManagerDidStartPlaying:self station:currentStation];
     }
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:
-            _currentStationName ? [NSString stringWithFormat:@"Playing: %@", _currentStationName] : @"Playing"];
-    }
+    [self notifyStatus:_currentStationName
+        ? [NSString stringWithFormat:@"Playing: %@", _currentStationName] : @"Playing"];
 }
 
-- (void)streamPlayerDidStop:(StreamPlayer *)player
+- (void)playerSession:(PlayerSession *)session didFailToOpenItem:(NSString *)item
+                error:(NSError *)error userOpened:(BOOL)userOpened
 {
-    // Only notify delegate if we aren't already playing a new stream
-    // StreamPlayer delivers this asynchronously on the main thread, so this callback
-    // can arrive after a new stream has already started playing
-    if (![_player isPlaying]) {
-        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
-            [_delegate radioManagerDidStop:self];
-        }
-    }
-}
-
-- (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
-{
-    _connecting = NO;
-    // The station switched away from goes, even though nothing replaces it
-    [self fadeOutOutgoing];
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
+    // Radio shows every failure in its status line, never as an alert
+    if ([_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
         [_delegate radioManager:self didFailWithError:[error localizedDescription]];
     }
 }
 
-- (void)streamPlayer:(StreamPlayer *)player didUpdateStatus:(NSString *)status
-{
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:status];
-    }
-}
-
-- (void)streamPlayer:(StreamPlayer *)player didUpdateMetadata:(NSDictionary *)metadata
+- (void)playerSession:(PlayerSession *)session didUpdateMetadata:(NSDictionary *)metadata
 {
     // Forward the full metadata dictionary so the UI can display StreamTitle, icy-url, etc.
-    if (_delegate != nil &&
-        [_delegate respondsToSelector:@selector(radioManager:didUpdateMetadata:)]) {
+    if ([_delegate respondsToSelector:@selector(radioManager:didUpdateMetadata:)]) {
         [_delegate radioManager:self didUpdateMetadata:metadata];
     }
-    // Also forward just the StreamTitle for backward compatibility
     NSString *radioText = [metadata objectForKey:@"StreamTitle"];
-    if ([radioText length] > 0 && _delegate != nil &&
-        [_delegate respondsToSelector:@selector(radioManager:didUpdateRadioText:)]) {
+    if ([radioText length] > 0
+        && [_delegate respondsToSelector:@selector(radioManager:didUpdateRadioText:)]) {
         [_delegate radioManager:self didUpdateRadioText:radioText];
     }
 }
