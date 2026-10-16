@@ -1346,11 +1346,11 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     PlayerSessionState state = [session state];
     BOOL opening = state == PlayerSessionOpening;
-    BOOL playing = state == PlayerSessionPlaying || opening;
+    // A pause pressed while opening is kept: the button offers Play again
+    BOOL playing = state == PlayerSessionPlaying || (opening && ![session isPausePending]);
     [playButton setImage:playing ? pauseImage : playImage];
     [playButton setTitle:playing ? @"Pause" : @"Play"];
-    // While opening the button gives up the attempt rather than pausing
-    [playButton setToolTip:opening ? @"Stop Loading" : [playButton title]];
+    [playButton setToolTip:(opening && playing) ? @"Stop Loading" : [playButton title]];
     [playButton setEnabled:[session canPlay]];
     [stopButton setEnabled:[session canStop]];
     [previousButton setEnabled:[session canGoPrevious]];

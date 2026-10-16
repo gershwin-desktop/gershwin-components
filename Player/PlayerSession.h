@@ -54,8 +54,10 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
     NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
     NSTimeInterval _fadeDuration;
     BOOL _pausePending;       // pausing once the fade-out is done
-    NSUInteger _resumeIndex;  // a restored track continues at _resumePosition
-    NSTimeInterval _resumePosition;
+    // Asked for before the current item was open: where it starts (< 0 at
+    // its beginning) and whether it lands paused
+    NSTimeInterval _pendingSeek;
+    BOOL _pendingPause;
     PlayerMediaFactory _mediaFactory;
     NSMutableArray *_fadingMedia; // tracks fading out under the current one
     NSTimer *_endWatch;       // hands over to the next track before the end
@@ -102,6 +104,8 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 
 /// YES while the current item is being opened (a stream connecting).
 - (BOOL)isConnecting;
+/// Pause was pressed while opening: the item lands paused once open.
+- (BOOL)isPausePending;
 - (NSTimeInterval)currentTime;
 - (NSTimeInterval)duration;
 - (BOOL)hasVideo;

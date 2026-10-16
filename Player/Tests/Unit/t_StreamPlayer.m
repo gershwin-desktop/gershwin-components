@@ -14,6 +14,12 @@
 #import "TestMedia.h"
 #include <unistd.h>
 
+/* The decode thread's error counting, called here with a generation of
+ * our choosing */
+@interface StreamPlayer (DecodeErrors)
+- (void)countDecodeError:(int)code generation:(NSUInteger)generation;
+@end
+
 @interface StopRecorder : NSObject <StreamPlayerDelegate>
 {
 @public
@@ -196,6 +202,38 @@ int main(void)
     [sp setDelegate: nil];
     [sp close];
   END_SET("opening in the background")
+
+  START_SET("seeking while the stream opens")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    StopRecorder *rec = [[StopRecorder new] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp setDelegate: rec];
+    [sp playURL: wav];
+    [sp seekToTime: 1.0];
+    spin(0.4);
+    PASS(rec->starts == 1, "the stream opens");
+    NSTimeInterval t = [sp currentTime];
+    PASS(t > 0.95 && t < 1.7, "a seek asked for while opening is applied once open (%f)", t);
+    [sp setDelegate: nil];
+    [sp close];
+  END_SET("seeking while the stream opens")
+
+  START_SET("errors of an earlier stream")
+    StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];
+    StopRecorder *rec = [[StopRecorder new] autorelease];
+    [sp setUsesAudioDevice: NO];
+    [sp setDelegate: rec];
+    PASS([sp openURL: wav error: NULL], "a stream is open");
+    int i;
+    for (i = 0; i < 12; i++)
+      {
+        [sp countDecodeError: -1 generation: 0];
+      }
+    spin(0.2);
+    PASS(rec->failures == 0, "decode errors of an earlier stream do not fail this one");
+    [sp setDelegate: nil];
+    [sp close];
+  END_SET("errors of an earlier stream")
 
   START_SET("fading")
     StreamPlayer *sp = [[[StreamPlayer alloc] init] autorelease];

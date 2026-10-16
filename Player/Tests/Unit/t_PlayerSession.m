@@ -365,6 +365,65 @@ int main(void)
     PASS_EQUAL(m->openedURL, @"/music/2.mp3", "and the next track follows");
   END_SET("streams that take time to connect")
 
+  START_SET("pause and seek while opening")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s setFadeDuration: 0];
+    m->slow = YES;
+    [s openItems: tracks()];
+    PASS([s state] == PlayerSessionOpening, "a slow item is opening");
+    [s seekToTime: 30];
+    PASS(m->position == 0, "a seek while opening does not reach the player yet");
+    [s togglePlayPause];
+    PASS([s state] == PlayerSessionOpening, "pause while opening keeps opening");
+    PASS([s isPausePending], "and remembers the pause");
+    PASS(m->opens == 1 && m->connecting, "the attempt goes on");
+    [m finishConnecting];
+    PASS([s state] == PlayerSessionPaused, "once open it lands paused");
+    PASS(m->paused, "the player is paused");
+    PASS(m->position == 30, "at the position asked for while opening");
+    PASS(![s isPausePending], "nothing is pending any more");
+    [s togglePlayPause];
+    PASS([s state] == PlayerSessionPlaying && !m->paused, "play resumes");
+
+    [s next];
+    [s togglePlayPause];
+    [s togglePlayPause];
+    PASS(![s isPausePending], "pressing play again while opening forgets the pause");
+    [m finishConnecting];
+    PASS([s state] == PlayerSessionPlaying && !m->paused, "and it plays once open");
+
+    [s next];
+    [s seekToTime: 20];
+    [s togglePlayPause];
+    [s previous];
+    PASS_EQUAL(m->openedURL, @"/music/2.mp3", "previous while opening opens the item before");
+    PASS(![s isPausePending], "choosing another item drops the pending pause");
+    [m finishConnecting];
+    PASS([s state] == PlayerSessionPlaying && m->position == 0,
+         "and the pending seek, which belonged to the item given up");
+
+    [s next];
+    [s togglePlayPause];
+    [s stop];
+    PASS([s state] == PlayerSessionStopped && !m->connecting && ![s isPausePending],
+         "stop while opening gives up the attempt and what was pending");
+  END_SET("pause and seek while opening")
+
+  START_SET("seeking while stopped")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s setFadeDuration: 0];
+    [s openItems: tracks()];
+    [s stop];
+    [s seekToTime: 25];
+    PASS([s state] == PlayerSessionStopped && m->opens == 1,
+         "seeking while stopped opens nothing");
+    [s togglePlayPause];
+    PASS([s state] == PlayerSessionPlaying && m->position == 25,
+         "play starts where it was sought to");
+  END_SET("seeking while stopped")
+
   START_SET("streams fade in and out")
     FakeMedia *m = [[FakeMedia new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];

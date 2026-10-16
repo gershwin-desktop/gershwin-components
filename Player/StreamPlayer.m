@@ -108,7 +108,7 @@ static int interruptCallback(void *opaque)
 
 - (BOOL)isPlaying
 {
-    return _isPlaying;
+    return atomic_load(&_isPlaying);
 }
 
 - (void)setVolume:(float)volume
@@ -182,7 +182,7 @@ static int interruptCallback(void *opaque)
 
 - (NSTimeInterval)currentTime
 {
-    if (_clockFromWall && _isPlaying && !_paused) {
+    if (_clockFromWall && atomic_load(&_isPlaying) && !_paused) {
         return [self wallClockPosition];
     }
     return _position;
@@ -257,7 +257,7 @@ static int interruptCallback(void *opaque)
 
         _decodeErrorCount = 0;
         _clockOrigin = monotonicSeconds() - _position;
-        _isPlaying = YES;
+        atomic_store(&_isPlaying, YES);
         _connecting = NO;
         [self postToMain:@selector(mainDidStart:) object:nil generation:generation];
         [self playbackLoop];
@@ -466,15 +466,19 @@ static int interruptCallback(void *opaque)
 
 - (void)play
 {
-    if (_isPlaying && _paused) {
-        [_pauseCondition lock];
-        _clockOrigin = monotonicSeconds() - _position;
-        _paused = NO;
-        [_pauseCondition broadcast];
-        [_pauseCondition unlock];
+    if (atomic_load(&_isPlaying)) {
+        if (_paused) {
+            [_pauseCondition lock];
+            _clockOrigin = monotonicSeconds() - _position;
+            _paused = NO;
+            [_pauseCondition broadcast];
+            [_pauseCondition unlock];
+        }
         return;
     }
-    if (_isPlaying || !_formatCtx) {
+    // A thread still opening the stream, or still finishing it, owns the
+    // decoders; a second one must not start on them
+    if (!_formatCtx || (_playbackThread && ![_playbackThread isFinished])) {
         return;
     }
 
@@ -484,7 +488,7 @@ static int interruptCallback(void *opaque)
 
     _shouldStop = NO;
     _paused = NO;
-    _isPlaying = YES;
+    atomic_store(&_isPlaying, YES);
     _decodeErrorCount = 0;
     _clockOrigin = monotonicSeconds() - _position;
 
@@ -514,7 +518,7 @@ static int interruptCallback(void *opaque)
 
 - (void)pause
 {
-    if (!_isPlaying || _paused) {
+    if (!atomic_load(&_isPlaying) || _paused) {
         return;
     }
     [_pauseCondition lock];
@@ -527,28 +531,35 @@ static int interruptCallback(void *opaque)
 
 - (void)seekToTime:(NSTimeInterval)seconds
 {
-    if (!_formatCtx) {
-        return;
-    }
     if (seconds < 0.0) {
         seconds = 0.0;
     }
-    if (_totalDuration > 0.0 && seconds > _totalDuration) {
-        seconds = _totalDuration;
-    }
-
+    // While a playback thread exists it owns the decoders - also while it
+    // is still opening them, when the length is not known yet either - so
+    // it seeks, and clamps, before its next read
     [_seekLock lock];
-    _position = seconds;
-    _clockOrigin = monotonicSeconds() - seconds;
-    if (_isPlaying) {
-        // The playback thread owns the decoders; it seeks before its next read
+    BOOL threaded = (_playbackThread != nil);
+    if (threaded) {
         _seekTarget = seconds;
+        _position = seconds;
+        _clockOrigin = monotonicSeconds() - seconds;
     }
     [_seekLock unlock];
-
-    if (!_isPlaying) {
-        [self performSeekTo:seconds];
+    if (threaded || !_formatCtx) {
+        return;
     }
+    seconds = [self clampedSeekTime:seconds];
+    _position = seconds;
+    _clockOrigin = monotonicSeconds() - seconds;
+    [self performSeekTo:seconds];
+}
+
+- (double)clampedSeekTime:(double)seconds
+{
+    if (_totalDuration > 0.0 && seconds > _totalDuration) {
+        return _totalDuration;
+    }
+    return seconds;
 }
 
 - (void)stop
@@ -571,7 +582,7 @@ static int interruptCallback(void *opaque)
     }
     [_playbackThread release];
     _playbackThread = nil;
-    _isPlaying = NO;
+    atomic_store(&_isPlaying, NO);
     _connecting = NO;
 }
 
@@ -649,6 +660,7 @@ static int interruptCallback(void *opaque)
 {
     @autoreleasepool {
         NSUInteger generation = _generation;
+        _threadGeneration = generation;
         BOOL failed = NO;
         unsigned int packetCount = 0;
 
@@ -718,7 +730,7 @@ static int interruptCallback(void *opaque)
             }
         }
         BOOL ended = !_shouldStop;
-        _isPlaying = NO;
+        atomic_store(&_isPlaying, NO);
         if (ended && !failed) {
             [self postToMain:@selector(mainDidStop:) object:nil generation:generation];
         }
@@ -732,6 +744,7 @@ static int interruptCallback(void *opaque)
     _seekTarget = -1.0;
     [_seekLock unlock];
     if (target >= 0.0) {
+        target = [self clampedSeekTime:target];
         [self performSeekTo:target];
         [_seekLock lock];
         if (_seekTarget < 0.0) {
@@ -816,7 +829,7 @@ static int interruptCallback(void *opaque)
     }
     int ret = avcodec_send_packet(ctx, pkt);
     if (ret < 0) {
-        [self countDecodeError:ret];
+        [self countDecodeError:ret generation:_threadGeneration];
         return;
     }
     [self receiveAudioFrames];
@@ -835,7 +848,7 @@ static int interruptCallback(void *opaque)
             return;
         }
         if (ret < 0) {
-            [self countDecodeError:ret];
+            [self countDecodeError:ret generation:_threadGeneration];
             return;
         }
         if (frame->nb_samples <= 0 || _audioSampleRate <= 0) {
@@ -962,7 +975,8 @@ static int interruptCallback(void *opaque)
     NSData *data = [NSData dataWithBytes:_rgbBuffer length:_rgbBufferSize];
     NSArray *payload = @[data, @(_videoWidth), @(_videoHeight)];
     _framePending = YES;
-    [self postToMain:@selector(mainDidDecodeVideoFrame:) object:payload generation:_generation];
+    [self postToMain:@selector(mainDidDecodeVideoFrame:) object:payload
+          generation:_threadGeneration];
 }
 
 - (void)drainDecoders
@@ -977,7 +991,7 @@ static int interruptCallback(void *opaque)
     }
 }
 
-- (void)countDecodeError:(int)code
+- (void)countDecodeError:(int)code generation:(NSUInteger)generation
 {
     // A few broken packets are normal in network streams; many mean the
     // stream is unplayable.
@@ -985,7 +999,7 @@ static int interruptCallback(void *opaque)
         _shouldStop = YES;
         [self postToMain:@selector(mainDidFail:)
                   object:streamError(code, @"Too many decode errors")
-              generation:_generation];
+              generation:generation];
     }
 }
 

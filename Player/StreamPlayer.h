@@ -8,6 +8,7 @@
 #define StreamPlayer_h
 
 #import <Foundation/Foundation.h>
+#include <stdatomic.h>
 
 @class StreamPlayer;
 
@@ -94,7 +95,11 @@
     // Playback state
     NSThread *_playbackThread;
     volatile BOOL _shouldStop;
-    BOOL _isPlaying;
+    // Written by the playback thread as it starts and ends, read anywhere
+    atomic_bool _isPlaying;
+    // The generation of the stream the playback thread decodes: what it
+    // reports is tagged with it, not with whatever is current by then
+    NSUInteger _threadGeneration;
     int _decodeErrorCount;
     volatile BOOL _paused;
     volatile BOOL _connecting;
