@@ -77,9 +77,12 @@ to the SYSTEM domain unless noted.
   `cd PackageManager && gmake test`. It also `#include`s
   `AGAppImageAssetPickerTests.m` (deliberately not in `OBJC_FILES`: its cases
   use the `TAssert` macros, which expand to a `return NO`).
-- `Player/Tests/Unit/`: ObjectTesting tools for the playlist, playback session,
-  FFmpeg player and menu (`gmake`, then run `./obj/t_*`; `t_PlayerMenu` needs a
-  `DISPLAY`). `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.
+- `Player/Tests/Unit/`: ObjectTesting tools for the playlist, the playback
+  state machine and view state, the session, the FFmpeg player, radio and
+  menu. Run them with `gnustep-tests --sequential .` there (the tools share
+  sources); everything a tool links lives in `GNUmakefile.preamble`, since the
+  runner regenerates `GNUmakefile`. `t_PlayerMenu` and `t_PlayerViews` need a
+  private `DISPLAY`. `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.
 - For GNUstep unit/red-green tests, follow the global `gnustep-red-green-tdd`
   skill (PASS macro set + wiring).
 - To drive/inspect a running GUI, use the driveui skill / `drive_ui`.
