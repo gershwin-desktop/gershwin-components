@@ -22,8 +22,12 @@ typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
 - (void)playerSessionDidChangeState:(PlayerSession *)session;
 /// Another playlist item became the current one.
 - (void)playerSessionDidChangeTrack:(PlayerSession *)session;
+/// userOpened: the user opened it (Open, a drop) and deserves an alert;
+/// otherwise the failure is shown in the window only (lastError).  Sent
+/// once the transition is committed; an alert must still not be run from
+/// here, as it would spin the run loop inside the session's effects.
 - (void)playerSession:(PlayerSession *)session didFailToOpenItem:(NSString *)item
-                error:(NSError *)error;
+                error:(NSError *)error userOpened:(BOOL)userOpened;
 - (void)playerSession:(PlayerSession *)session didDiscoverVideoWithWidth:(int)width
                height:(int)height;
 - (void)playerSession:(PlayerSession *)session didDecodeVideoFrameData:(NSData *)rgbaData
@@ -74,9 +78,11 @@ typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
 
 - (instancetype)initWithMedia:(id<MediaPlayback>)media;
 
-/// Replaces the playlist and plays the first item that can be opened.
+/// Replaces the playlist with what the user opened and plays the first item
+/// that can be opened.
 - (void)openItems:(NSArray *)items;
-/// Appends to the playlist; starts playing them if nothing is playing.
+/// Appends what the user added (a drop) to the playlist; starts playing it
+/// if nothing is playing.
 - (void)addItems:(NSArray *)items;
 /// Plays the given playlist item unless it is already the one playing.
 /// Returns NO if there is no such item.

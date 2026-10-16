@@ -119,16 +119,19 @@
   int stateChanges;
   int trackChanges;
   NSMutableArray *failures;
+  NSMutableArray *alerts;     /* whether each failure asked for the alert */
 }
 @end
 
 @implementation SessionWatcher
-- (id)init { self = [super init]; failures = [NSMutableArray new]; return self; }
+- (id)init { self = [super init]; failures = [NSMutableArray new]; alerts = [NSMutableArray new]; return self; }
 - (void)playerSessionDidChangeState:(PlayerSession *)s { stateChanges++; }
 - (void)playerSessionDidChangeTrack:(PlayerSession *)s { trackChanges++; }
 - (void)playerSession:(PlayerSession *)s didFailToOpenItem:(NSString *)item error:(NSError *)e
+           userOpened:(BOOL)userOpened
 {
   [failures addObject: item];
+  [alerts addObject: [NSNumber numberWithBool: userOpened]];
 }
 @end
 
@@ -288,12 +291,19 @@ int main(void)
     [m finishTrack];
     PASS_EQUAL(m->openedURL, @"/music/3.mp3", "a broken file is skipped");
     PASS([w->failures count] == 1, "and reported once");
+    PASS(![[w->alerts lastObject] boolValue],
+         "reaching it in the list asks for no alert, only the window shows it");
     PASS([s state] == PlayerPlaybackPlaying, "playback goes on");
 
     [m->unopenable addObject: @"/music/bad.mp3"];
     [s openItems: @[@"/music/bad.mp3"]];
     PASS([s state] == PlayerPlaybackStopped, "a single broken file leaves the player stopped");
     PASS([w->failures count] == 2, "and is reported");
+    PASS([[w->alerts lastObject] boolValue], "with the alert, as the user opened it");
+    PASS([[[s lastError] localizedDescription] isEqual: @"broken"], "the error is kept");
+    [s playItemAtIndex: 0];
+    PASS(![[w->alerts lastObject] boolValue] && [w->failures count] == 3,
+         "choosing it again in the playlist shows the failure in the window only");
   END_SET("files that cannot be played")
 
   START_SET("seeking, volume and mute")

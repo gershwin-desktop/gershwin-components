@@ -9,6 +9,7 @@
 #import "PlayerMenu.h"
 #import "AppearanceMetrics.h"
 #import "PlayerMediaInfo.h"
+#import "PlayerAsync.h"
 #import "Podcast.h"
 
 NSString *const PlayerDefaultsVolume = @"PlayerVolume";
@@ -101,6 +102,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [coverImages release];
     [streamTitles release];
     [currentItemName release];
+    [currentItemDetails release];
     [playImage release];
     [pauseImage release];
     [pendingRadioStation release];
@@ -746,7 +748,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if (playerMode == PlayerModeRadio) {
         [self exitRadioMode];
     }
-    errorAlertShown = NO;
     [session addItems:files];
     [self playlistDidChange];
 }
@@ -814,7 +815,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if (playerMode == PlayerModeRadio) {
         [self exitRadioMode];
     }
-    errorAlertShown = NO;
     [session openItems:files];
     [self playlistDidChange];
     PlayerPlaybackState state = [session state];
@@ -888,7 +888,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if ([title length] > 0) {
         [streamTitles setObject:title forKey:url];
     }
-    errorAlertShown = NO;
     [session openItems:@[url]];
     [self playlistDidChange];
 }
@@ -1236,20 +1235,26 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 }
 
 - (void)playerSession:(PlayerSession *)aSession didFailToOpenItem:(NSString *)item
-                error:(NSError *)error
+                error:(NSError *)error userOpened:(BOOL)userOpened
 {
     NSLog(@"Player: cannot play %@: %@", item, [error localizedDescription]);
-    // One alert per open, not one for every broken file of an album
-    if (errorAlertShown) {
+    // The window shows every failure (the session's lastError); only what
+    // the user opened is worth interrupting them for
+    if (!userOpened) {
         return;
     }
-    errorAlertShown = YES;
-    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
-    [alert setAlertStyle:NSWarningAlertStyle];
-    [alert setMessageText:[NSString stringWithFormat:@"\"%@\" Cannot Be Played",
-                           [self displayNameForItem:item]]];
-    [alert setInformativeText:[error localizedDescription] ?: @""];
-    [alert runModal];
+    NSString *message = [NSString stringWithFormat:@"\"%@\" Cannot Be Played",
+                         [self displayNameForItem:item]];
+    NSString *reason = [error localizedDescription] ?: @"";
+    // Later, from the run loop: a modal alert spins it, and must not do so
+    // inside the session's handling of the failure
+    PlayerRunOnMainThread(^{
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setAlertStyle:NSWarningAlertStyle];
+        [alert setMessageText:message];
+        [alert setInformativeText:reason];
+        [alert runModal];
+    });
 }
 
 - (void)playerSession:(PlayerSession *)aSession didDiscoverVideoWithWidth:(int)width
@@ -1299,6 +1304,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     inputs.hasPrevious = [session canGoPrevious];
     inputs.duration = [session duration];
     inputs.position = [session currentTime];
+    inputs.lastError = [session lastError];
     inputs.pendingPause = [session isPausePending];
     inputs.resolving = [ytdlpBackend isRunning];
     inputs.dragHover = dragHover;
@@ -1340,6 +1346,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     [self showPosition:view];
     [mainWindow setTitle:view.windowTitle];
+    [detailsLabel setStringValue:view.errorText ?: (currentItemDetails ?: @"")];
     [self revalidateMenu];
 }
 
@@ -1390,11 +1397,12 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     NSString *item = [[session playlist] currentItem];
     [currentItemName release];
     currentItemName = nil;
+    [currentItemDetails release];
+    currentItemDetails = nil;
     if (!item) {
         [titleLabel setStringValue:@"No file loaded"];
         [artistLabel setStringValue:@"Open files, or drop them here."];
         [albumLabel setStringValue:@""];
-        [detailsLabel setStringValue:@""];
         [self render];
         return;
     }
@@ -1420,7 +1428,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if ([info composer]) {
         [details addObject:[info composer]];
     }
-    [detailsLabel setStringValue:[details componentsJoinedByString:@"  -  "]];
+    currentItemDetails = [[details componentsJoinedByString:@"  -  "] copy];
     [self render];
 }
 

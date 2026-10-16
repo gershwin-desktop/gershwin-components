@@ -106,12 +106,16 @@ static BOOL isStream(NSString *item)
 
 - (void)openItems:(NSArray *)items
 {
-    [self send:PlayerEventWithItems(PlayerEventOpen, items)];
+    PlayerEvent event = PlayerEventWithItems(PlayerEventOpen, items);
+    event.flag = YES;
+    [self send:event];
 }
 
 - (void)addItems:(NSArray *)items
 {
-    [self send:PlayerEventWithItems(PlayerEventAdd, items)];
+    PlayerEvent event = PlayerEventWithItems(PlayerEventAdd, items);
+    event.flag = YES;
+    [self send:event];
 }
 
 - (BOOL)playItemAtIndex:(NSUInteger)index
@@ -374,8 +378,9 @@ static NSString *const kStateStopped = @"stopped";
         break;
     case PlayerEffectReportFailure:
         if ([effect item]
-            && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
-            [_delegate playerSession:self didFailToOpenItem:[effect item] error:[effect error]];
+            && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:userOpened:)]) {
+            [_delegate playerSession:self didFailToOpenItem:[effect item] error:[effect error]
+                          userOpened:[effect flag]];
         }
         break;
     }

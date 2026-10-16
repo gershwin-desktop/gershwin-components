@@ -20,8 +20,10 @@ typedef NS_ENUM(NSInteger, PlayerPlaybackState) {
 
 typedef NS_ENUM(NSInteger, PlayerEventType) {
     // Commands
-    PlayerEventOpen,           // items: replace the playlist and play it
-    PlayerEventAdd,            // items: append; play them if nothing plays
+    PlayerEventOpen,           // items: replace the playlist and play it;
+                               // flag: the user opened them (Open, a drop)
+    PlayerEventAdd,            // items: append; play them if nothing plays;
+                               // flag as for Open
     PlayerEventLoad,           // items, index, time: a remembered list, chosen
                                // but not playing (time < 0: from the start)
     PlayerEventSelect,         // index
@@ -74,7 +76,8 @@ typedef NS_ENUM(NSInteger, PlayerEffectType) {
     PlayerEffectSeek,          // time
     PlayerEffectFadeIn,        // the item that just opened, if it is a stream
     PlayerEffectTrackChanged,  // another item became the current one
-    PlayerEffectReportFailure  // index, item, error
+    PlayerEffectReportFailure  // index, item, error; flag: what the user
+                               // opened failed, worth an alert
 };
 
 /// One thing the media and the window have to do for a transition.
@@ -141,6 +144,7 @@ typedef NS_ENUM(NSInteger, PlayerEffectType) {
     NSError *_lastError;
     BOOL _skipping;
     NSUInteger _attemptsLeft;
+    BOOL _alertOnFailure;      // the user opened what is being tried
     // Collected while an event is handled
     NSMutableArray *_effects;
     BOOL _committed;

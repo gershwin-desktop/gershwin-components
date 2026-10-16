@@ -85,10 +85,10 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     NSTimer *positionTimer;
     NSUInteger pendingFlowIndex;
     BOOL suppressFlowSelection;
-    BOOL errorAlertShown;
     // Inputs of the view besides the session: the current item as shown,
-    // and files being dragged over the window
+    // its details line, and files being dragged over the window
     NSString *currentItemName;
+    NSString *currentItemDetails;
     BOOL dragHover;
 
     // Internet radio

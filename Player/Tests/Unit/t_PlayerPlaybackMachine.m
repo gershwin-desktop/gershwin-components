@@ -328,6 +328,43 @@ int main(void)
          "next while paused opens the next track, with nothing to cross-fade");
   END_SET("Paused")
 
+  START_SET("which failures ask for an alert")
+    PlayerPlaybackMachine *m = [[PlayerPlaybackMachine new] autorelease];
+    PlayerEvent open = PlayerEventWithItems(PlayerEventOpen, tracks());
+    open.flag = YES;
+    [m handle: open];
+    PlayerTransition *t = [m handle: PlayerEventFailure([m generation], failure())];
+    PASS([[t effectOfType: PlayerEffectReportFailure] flag],
+         "the first failure of what the user opened asks for the alert");
+    t = [m handle: PlayerEventFailure([m generation], failure())];
+    PASS([t hasEffect: PlayerEffectReportFailure] && ![[t effectOfType: PlayerEffectReportFailure] flag],
+         "one alert per opening: the next broken item only shows in the window");
+    media(m, PlayerEventOpened);
+    t = [m handle: PlayerEventFailure([m generation], failure())];
+    PASS(![[t effectOfType: PlayerEffectReportFailure] flag], "as does one breaking off later");
+
+    m = [[PlayerPlaybackMachine new] autorelease];
+    [m handle: PlayerEventWithItems(PlayerEventOpen, tracks())];
+    t = [m handle: PlayerEventFailure([m generation], failure())];
+    PASS(![[t effectOfType: PlayerEffectReportFailure] flag],
+         "a list not opened by the user asks for no alert");
+
+    m = [[PlayerPlaybackMachine new] autorelease];
+    [m handle: open];
+    media(m, PlayerEventOpened);
+    [m handle: PlayerEventSelectIndex(2)];
+    t = [m handle: PlayerEventFailure([m generation], failure())];
+    PASS(![[t effectOfType: PlayerEffectReportFailure] flag],
+         "an item chosen in the playlist that fails is shown inline only");
+
+    m = [[PlayerPlaybackMachine new] autorelease];
+    PlayerEvent add = PlayerEventWithItems(PlayerEventAdd, tracks());
+    add.flag = YES;
+    [m handle: add];
+    t = [m handle: PlayerEventFailure([m generation], failure())];
+    PASS([[t effectOfType: PlayerEffectReportFailure] flag], "files dropped by the user do");
+  END_SET("which failures ask for an alert")
+
   START_SET("Stopped")
     PlayerPlaybackMachine *m = playing();
     command(m, PlayerEventStop);

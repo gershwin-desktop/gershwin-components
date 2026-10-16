@@ -284,7 +284,7 @@ static BOOL isMediaEvent(PlayerEventType type)
     switch (event.type) {
     case PlayerEventOpen:
     case PlayerEventAdd:
-        return [self openItems:event.items replacing:event.type == PlayerEventOpen];
+        return [self openEvent:event];
     case PlayerEventLoad:
         return [self loadEvent:event];
     default:
@@ -297,7 +297,7 @@ static BOOL isMediaEvent(PlayerEventType type)
     switch (event.type) {
     case PlayerEventOpen:
     case PlayerEventAdd:
-        return [self openItems:event.items replacing:event.type == PlayerEventOpen];
+        return [self openEvent:event];
     case PlayerEventPlay:
     case PlayerEventToggle: {
         NSUInteger index = [_playlist currentIndex];
@@ -373,7 +373,7 @@ static BOOL isMediaEvent(PlayerEventType type)
         [self stopWith:PlayerEffectClose];
         return YES;
     case PlayerEventOpen:
-        return [self openItems:event.items replacing:YES];
+        return [self openEvent:event];
     case PlayerEventAdd:
         return [self appendItems:event.items] != NSNotFound;
     case PlayerEventSelect:
@@ -481,7 +481,7 @@ static BOOL isMediaEvent(PlayerEventType type)
 {
     switch (event.type) {
     case PlayerEventOpen:
-        return [self openItems:event.items replacing:YES];
+        return [self openEvent:event];
     case PlayerEventAdd:
         return [self appendItems:event.items] != NSNotFound;
     case PlayerEventSelect:
@@ -534,6 +534,18 @@ static BOOL isMediaEvent(PlayerEventType type)
     return firstNew < [_playlist count] ? firstNew : NSNotFound;
 }
 
+// What the user opened deserves an alert when it cannot be played - once
+// for the opening, not for every broken file of an album; anything the
+// list reaches by itself, or an item chosen in it, only shows in the window
+- (BOOL)openEvent:(PlayerEvent)event
+{
+    if (![self openItems:event.items replacing:event.type == PlayerEventOpen]) {
+        return NO;
+    }
+    _alertOnFailure = event.flag;
+    return YES;
+}
+
 - (BOOL)openItems:(NSArray *)items replacing:(BOOL)replacing
 {
     if (replacing) {
@@ -579,6 +591,7 @@ static BOOL isMediaEvent(PlayerEventType type)
     }
     _skipping = skipping;
     _attemptsLeft = [_playlist count];
+    _alertOnFailure = NO;
     [self setLastError:nil];
     [self openIndex:index crossFade:crossFade];
     return YES;
@@ -670,8 +683,10 @@ static BOOL isMediaEvent(PlayerEventType type)
     [self addEffectObject:[[[PlayerEffect alloc] initWithType:PlayerEffectReportFailure
                                                         index:[_playlist currentIndex]
                                                          item:[_playlist currentItem]
-                                                   generation:_generation time:0 flag:NO
+                                                   generation:_generation time:0
+                                                         flag:_alertOnFailure
                                                         error:error] autorelease]];
+    _alertOnFailure = NO;
 }
 
 - (void)loseDevice:(PlayerEvent)event

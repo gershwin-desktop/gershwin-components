@@ -110,6 +110,30 @@ int main(void)
     PASS(!v.spinning, "no spinner");
   END_SET("Paused")
 
+  START_SET("errors are shown in the window")
+    NSError *error = [NSError errorWithDomain: @"Test" code: 1
+      userInfo: @{NSLocalizedDescriptionKey: @"Invalid data found when processing input"}];
+    PlayerViewInputs in = named(@"Broken");
+    in.lastError = error;
+    PlayerViewState v = PlayerViewStateMake(PlayerPlaybackStopped, in);
+    PASS([v.windowTitle isEqual: @"Player - Broken (Cannot Be Played)"],
+         "a stopped item that failed says so in the title");
+    PASS([v.errorText isEqual: @"Invalid data found when processing input"],
+         "and why, in the window");
+    v = PlayerViewStateMake(PlayerPlaybackPaused, in);
+    PASS([v.errorText isEqual: @"Invalid data found when processing input"],
+         "paused because the audio output went away says why");
+    PASS([v.windowTitle isEqual: @"Player - Broken - Paused"], "still paused in the title");
+    v = PlayerViewStateMake(PlayerPlaybackOpening, in);
+    PASS(v.errorText == nil && [v.windowTitle isEqual: @"Player - Broken - Loading..."],
+         "opening the next item shows no old error");
+    v = PlayerViewStateMake(PlayerPlaybackPlaying, in);
+    PASS(v.errorText == nil, "nor does playing");
+    in.lastError = nil;
+    v = PlayerViewStateMake(PlayerPlaybackStopped, in);
+    PASS(v.errorText == nil && [v.windowTitle isEqual: @"Player - Broken"], "without an error, none");
+  END_SET("errors are shown in the window")
+
   START_SET("spinner and titles outside a state")
     PlayerViewInputs in = PlayerViewInputsMake(PlayerViewModeLocal);
     in.resolving = YES;

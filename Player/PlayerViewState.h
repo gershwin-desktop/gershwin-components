@@ -24,6 +24,7 @@ typedef struct {
     BOOL hasPrevious;
     NSTimeInterval duration;   // 0: unknown, or a live stream
     NSTimeInterval position;
+    NSError *lastError;        // the playback machine's last failure
     BOOL pendingPause;         // pause was pressed while opening
     BOOL resolving;            // a web page is being looked up for its media
     BOOL dragHover;            // files are dragged over the window
@@ -46,6 +47,7 @@ typedef struct {
     NSString *totalTime;
     NSString *windowTitle;
     BOOL spinning;
+    NSString *errorText;       // why it stopped or paused; nil: no error
 } PlayerViewState;
 
 PlayerViewInputs PlayerViewInputsMake(PlayerViewMode mode);

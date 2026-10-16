@@ -57,6 +57,9 @@ static NSString *windowTitle(PlayerPlaybackState state, PlayerViewInputs in)
     case PlayerPlaybackStopped:
         break;
     }
+    if (in.lastError && in.itemName) {
+        return [NSString stringWithFormat:@"Player - %@ (Cannot Be Played)", in.itemName];
+    }
     return titleWithName(in.itemName, nil);
 }
 
@@ -103,6 +106,11 @@ PlayerViewState PlayerViewStateMake(PlayerPlaybackState state, PlayerViewInputs 
     }
 
     view.windowTitle = windowTitle(state, in);
+    // An error matters where it left the player: stopped after a failure,
+    // or paused because the audio output went away
+    if (state == PlayerPlaybackStopped || state == PlayerPlaybackPaused) {
+        view.errorText = [in.lastError localizedDescription];
+    }
     view.spinning = in.resolving || state == PlayerPlaybackOpening
         || (state == PlayerPlaybackPlaying && in.buffering);
     return view;
