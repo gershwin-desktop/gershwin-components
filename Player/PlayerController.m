@@ -819,7 +819,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     errorAlertShown = NO;
     [session openItems:files];
     [self playlistDidChange];
-    return [session state] == PlayerSessionPlaying;
+    PlayerSessionState state = [session state];
+    return state == PlayerSessionOpening || state == PlayerSessionPlaying;
 }
 
 - (IBAction)openFile:(id)sender
@@ -1089,6 +1090,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         return GSMediaPlayer2Stopped;
     }
     switch ([session state]) {
+        // Opening counts as playing, as tuning in does above
+        case PlayerSessionOpening:
         case PlayerSessionPlaying:
             return GSMediaPlayer2Playing;
         case PlayerSessionPaused:
@@ -1107,7 +1110,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         }
         return;
     }
-    if ([session state] != PlayerSessionPlaying) {
+    PlayerSessionState state = [session state];
+    if (state == PlayerSessionStopped || state == PlayerSessionPaused) {
         [session togglePlayPause];
     }
 }
@@ -1119,7 +1123,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self stop:nil];
         return;
     }
-    if ([session state] == PlayerSessionPlaying) {
+    PlayerSessionState state = [session state];
+    if (state == PlayerSessionPlaying || state == PlayerSessionOpening) {
         [session togglePlayPause];
     }
 }
@@ -1210,7 +1215,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [positionTimer invalidate];
         positionTimer = nil;
     }
-    if ([session state] == PlayerSessionStopped) {
+    if ([session state] == PlayerSessionStopped || [session state] == PlayerSessionEmpty) {
         [self showCoverArt];
     }
     [self updateControls];
@@ -1308,11 +1313,22 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     NSTimeInterval duration = [session duration];
     NSTimeInterval position = [session currentTime];
-    BOOL stopped = ([session state] == PlayerSessionStopped);
+    PlayerSessionState state = [session state];
+    NSString *total;
+    if (state == PlayerSessionEmpty) {
+        total = [self formatTime:0];
+    } else if (state == PlayerSessionStopped) {
+        total = @"--";
+    } else if (state == PlayerSessionOpening) {
+        // Whether it is a file or a live stream is known only once open
+        total = @"--:--";
+    } else {
+        // A live stream has no end to show
+        total = duration > 0 ? [self formatTime:duration] : @"Live";
+    }
 
     [currentTimeLabel setStringValue:[self formatTime:position]];
-    // A live stream has no end to show
-    [totalTimeLabel setStringValue:(duration > 0 || stopped) ? [self formatTime:duration] : @"Live"];
+    [totalTimeLabel setStringValue:total];
     [timeSlider setEnabled:[session canSeek]];
     [timeSlider setMaxValue:MAX(duration, 1.0)];
     [timeSlider setDoubleValue:MIN(position, MAX(duration, 1.0))];
@@ -1328,10 +1344,13 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self updatePodcastControls];
         return;
     }
-    BOOL playing = ([session state] == PlayerSessionPlaying);
+    PlayerSessionState state = [session state];
+    BOOL opening = state == PlayerSessionOpening;
+    BOOL playing = state == PlayerSessionPlaying || opening;
     [playButton setImage:playing ? pauseImage : playImage];
     [playButton setTitle:playing ? @"Pause" : @"Play"];
-    [playButton setToolTip:[playButton title]];
+    // While opening the button gives up the attempt rather than pausing
+    [playButton setToolTip:opening ? @"Stop Loading" : [playButton title]];
     [playButton setEnabled:[session canPlay]];
     [stopButton setEnabled:[session canStop]];
     [previousButton setEnabled:[session canGoPrevious]];

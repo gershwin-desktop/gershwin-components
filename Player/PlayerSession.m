@@ -38,7 +38,7 @@ static BOOL isStream(NSString *item)
         [_media setDelegate:self];
         _playlist = [[PlayerPlaylist alloc] init];
         _volume = 1.0f;
-        _state = PlayerSessionStopped;
+        _state = PlayerSessionEmpty;
         _fadeDuration = kDefaultStreamFadeDuration;
         _fadingMedia = [[NSMutableArray alloc] init];
         _resumeIndex = NSNotFound;
@@ -100,7 +100,8 @@ static BOOL isStream(NSString *item)
 {
     NSUInteger firstNew = [_playlist count];
     [self appendItems:items];
-    if (_state == PlayerSessionStopped && firstNew < [_playlist count]) {
+    if ((_state == PlayerSessionStopped || _state == PlayerSessionEmpty)
+        && firstNew < [_playlist count]) {
         [self playFromIndex:firstNew skippingBroken:YES];
     }
 }
@@ -132,7 +133,9 @@ static NSString *const kStateStopped = @"stopped";
 - (NSDictionary *)stateToRemember
 {
     NSUInteger index = [_playlist currentIndex];
-    NSString *state = (_state == PlayerSessionPlaying) ? kStatePlaying
+    // An item still opening was about to play
+    BOOL playing = _state == PlayerSessionPlaying || _state == PlayerSessionOpening;
+    NSString *state = playing ? kStatePlaying
                     : (_state == PlayerSessionPaused) ? kStatePaused : kStateStopped;
     return @{@"items": [[[_playlist items] copy] autorelease],
              @"currentIndex": @(index == NSNotFound ? -1 : (NSInteger)index),
@@ -159,9 +162,9 @@ static NSString *const kStateStopped = @"stopped";
     NSString *playState = [state objectForKey:@"state"];
 
     [self closeMedia];
-    [self setState:PlayerSessionStopped];
     [_playlist removeAllItems];
     [self appendItems:items];
+    [self setState:[_playlist count] > 0 ? PlayerSessionStopped : PlayerSessionEmpty];
     if (index < 0 || (NSUInteger)index >= [_playlist count]) {
         return;
     }
@@ -183,12 +186,13 @@ static NSString *const kStateStopped = @"stopped";
 - (void)togglePlayPause
 {
     switch (_state) {
+    case PlayerSessionEmpty:
+        break;
+    case PlayerSessionOpening:
+        // Nothing plays yet that could pause; give up the attempt
+        [self stop];
+        break;
     case PlayerSessionPlaying:
-        if ([self isConnecting]) {
-            // Nothing plays yet that could pause; give up the attempt
-            [self stop];
-            break;
-        }
         if (_fadeDuration > 0 && [_media isPlaying]) {
             // Paused for the user at once, audibly once faded out
             _pausePending = YES;
@@ -224,14 +228,13 @@ static NSString *const kStateStopped = @"stopped";
 
 - (void)stop
 {
-    if (_state == PlayerSessionStopped) {
+    if (_state == PlayerSessionStopped || _state == PlayerSessionEmpty) {
         return;
     }
     BOOL audible = _state == PlayerSessionPlaying || _pausePending;
     if (_fadeDuration > 0 && audible && [_media isPlaying]) {
         // Faded out, then closed; stopped as far as the user is concerned
         [self cancelPendingPause];
-        _opening = NO;
         [_media fadeToGain:0.0f duration:_fadeDuration];
         [self performSelector:@selector(closeFadedMedia) withObject:nil
                    afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
@@ -302,22 +305,28 @@ static NSString *const kStateStopped = @"stopped";
 
 - (BOOL)isConnecting
 {
-    return _state != PlayerSessionStopped && [_media isConnecting];
+    return _state == PlayerSessionOpening;
+}
+
+// Something is open: a position, a length and pictures exist only then
+- (BOOL)hasOpenMedia
+{
+    return _state == PlayerSessionPlaying || _state == PlayerSessionPaused;
 }
 
 - (NSTimeInterval)currentTime
 {
-    return (_state == PlayerSessionStopped) ? 0.0 : [_media currentTime];
+    return [self hasOpenMedia] ? [_media currentTime] : 0.0;
 }
 
 - (NSTimeInterval)duration
 {
-    return (_state == PlayerSessionStopped) ? 0.0 : [_media duration];
+    return [self hasOpenMedia] ? [_media duration] : 0.0;
 }
 
 - (BOOL)hasVideo
 {
-    return _state != PlayerSessionStopped && [_media hasVideo];
+    return [self hasOpenMedia] && [_media hasVideo];
 }
 
 - (BOOL)canPlay
@@ -327,7 +336,7 @@ static NSString *const kStateStopped = @"stopped";
 
 - (BOOL)canStop
 {
-    return _state != PlayerSessionStopped;
+    return _state != PlayerSessionStopped && _state != PlayerSessionEmpty;
 }
 
 - (BOOL)canGoNext
@@ -343,7 +352,7 @@ static NSString *const kStateStopped = @"stopped";
 - (BOOL)canSeek
 {
     // Live streams have no duration and cannot be sought
-    return _state != PlayerSessionStopped && [_media duration] > 0.0;
+    return [self hasOpenMedia] && [_media duration] > 0.0;
 }
 
 #pragma mark - Internals
@@ -384,7 +393,7 @@ static NSString *const kStateStopped = @"stopped";
 - (void)checkTrackEnd:(NSTimer *)timer
 {
     NSTimeInterval duration = [_media duration];
-    if (_fadeDuration <= 0 || !_mediaFactory || _opening || duration <= 0
+    if (_fadeDuration <= 0 || !_mediaFactory || _state != PlayerSessionPlaying || duration <= 0
         || duration - [_media currentTime] > _fadeDuration) {
         return;
     }
@@ -401,7 +410,6 @@ static NSString *const kStateStopped = @"stopped";
                                              selector:@selector(closeFadedMedia)
                                                object:nil];
     [self cancelPendingPause];
-    _opening = NO;
     [_media close];
 }
 
@@ -411,7 +419,7 @@ static NSString *const kStateStopped = @"stopped";
 - (BOOL)playFromIndex:(NSUInteger)index skippingBroken:(BOOL)skipping
 {
     if (index == NSNotFound || index >= [_playlist count]) {
-        [self setState:PlayerSessionStopped];
+        [self setState:[_playlist count] > 0 ? PlayerSessionStopped : PlayerSessionEmpty];
         return NO;
     }
     _skipping = skipping;
@@ -427,7 +435,7 @@ static NSString *const kStateStopped = @"stopped";
     // second one on top of it - Next pressed in the moment the list was
     // already moving on by itself - left neither of them playing and the
     // player stopped, so the pending one is taken down first.
-    if (_opening) {
+    if (_state == PlayerSessionOpening) {
         [self closeMedia];
     }
     _attemptsLeft--;
@@ -448,8 +456,7 @@ static NSString *const kStateStopped = @"stopped";
     BOOL fadeIn = _fadeDuration > 0 && isStream([_playlist itemAtIndex:index]);
     [_media setFadeGain:fadeIn ? 0.0f : 1.0f];
     // Before -playURL:, which may report back before it returns
-    _opening = YES;
-    [self setState:PlayerSessionPlaying];
+    [self setState:PlayerSessionOpening];
     [_media playURL:[_playlist itemAtIndex:index]];
 }
 
@@ -458,7 +465,7 @@ static NSString *const kStateStopped = @"stopped";
 - (void)crossFadeOut
 {
     if (_fadeDuration <= 0 || !_mediaFactory || _state != PlayerSessionPlaying
-        || _opening || ![_media isPlaying]) {
+        || ![_media isPlaying]) {
         return;
     }
     id<MediaPlayback> outgoing = _media;
@@ -507,7 +514,6 @@ static NSString *const kStateStopped = @"stopped";
 
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
-    _opening = NO;
     if (_resumeIndex != NSNotFound && _resumeIndex == [_playlist currentIndex]) {
         [_media seekToTime:_resumePosition];
         _resumeIndex = NSNotFound;
@@ -515,19 +521,16 @@ static NSString *const kStateStopped = @"stopped";
     if (_fadeDuration > 0 && isStream([_playlist currentItem])) {
         [_media fadeToGain:1.0f duration:_fadeDuration];
     }
-    if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
-        [_delegate playerSessionDidChangeState:self];
-    }
+    [self setState:PlayerSessionPlaying];
 }
 
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
-    if (_state == PlayerSessionStopped) {
+    if (_state == PlayerSessionStopped || _state == PlayerSessionEmpty) {
         return;   // e.g. a stream fading out after Stop
     }
     NSString *item = [_playlist currentItem];
-    BOOL wasOpening = _opening;
-    _opening = NO;
+    BOOL wasOpening = _state == PlayerSessionOpening;
     if (item && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
         [_delegate playerSession:self didFailToOpenItem:item error:error];
     }

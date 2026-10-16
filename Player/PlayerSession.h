@@ -14,7 +14,9 @@
 typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
 
 typedef NS_ENUM(NSInteger, PlayerSessionState) {
-    PlayerSessionStopped,
+    PlayerSessionEmpty,     // no playlist
+    PlayerSessionStopped,   // an item is chosen, nothing is open
+    PlayerSessionOpening,   // the current item is being opened (connecting)
     PlayerSessionPlaying,
     PlayerSessionPaused
 };
@@ -48,7 +50,6 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
     float _volume;
     BOOL _muted;
     id<PlayerSessionDelegate> _delegate;
-    BOOL _opening;            // the current item has not started yet
     BOOL _skipping;           // items that fail to open are skipped
     NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
     NSTimeInterval _fadeDuration;

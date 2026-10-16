@@ -143,12 +143,17 @@ int main(void)
     FakeMedia *m = [[FakeMedia new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
     PASS([m delegate] == (id)s, "the session listens to its media player");
-    PASS([s state] == PlayerSessionStopped, "starts stopped");
+    PASS([s state] == PlayerSessionEmpty, "starts empty");
     PASS(![s canPlay] && ![s canStop] && ![s canGoNext] && ![s canGoPrevious]
          && ![s canSeek], "no transport control makes sense");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionStopped && m->opens == 0,
+    PASS([s state] == PlayerSessionEmpty && m->opens == 0,
          "play without anything loaded does nothing");
+    [s stop];
+    [s next];
+    [s previous];
+    PASS([s state] == PlayerSessionEmpty && m->opens == 0,
+         "and so do stop, next and previous");
   END_SET("nothing loaded")
 
   START_SET("opening files")
@@ -202,6 +207,7 @@ int main(void)
 
     [s stop];
     PASS([s state] == PlayerSessionStopped && !m->playing, "stop stops");
+    PASS([[s playlist] count] == 3, "stopped, unlike empty, still has its list");
     PASS([s currentTime] == 0, "stop goes back to the start");
     PASS([[s playlist] currentIndex] == 0, "the track stays selected");
     PASS(![s canStop] && ![s canSeek], "stop and seeking are off while stopped");
@@ -329,11 +335,15 @@ int main(void)
     m->slow = YES;
     [s openItems: @[@"http://radio.example/live"]];
     PASS([s isConnecting], "the session says it is connecting");
-    PASS([s state] == PlayerSessionPlaying, "playback is under way");
+    PASS([s state] == PlayerSessionOpening,
+         "opening is a state of its own, not playing yet");
     PASS([s canStop], "the attempt can be stopped");
+    PASS([s currentTime] == 0 && [s duration] == 0 && ![s canSeek],
+         "nothing is open yet that could have a position or be sought");
     int changes = w->stateChanges;
     [m finishConnecting];
     PASS(![s isConnecting], "once the stream plays it is no longer connecting");
+    PASS([s state] == PlayerSessionPlaying, "and it plays");
     PASS(w->stateChanges > changes, "and the change is reported");
 
     [s openItems: @[@"http://radio.example/other"]];
@@ -538,7 +548,7 @@ int main(void)
     PlayerSession *s5 = [[[PlayerSession alloc] initWithMedia: m5] autorelease];
     [s5 restoreState: nil];
     [s5 restoreState: @{@"items": @"not a list"}];
-    PASS([[s5 playlist] count] == 0 && [s5 state] == PlayerSessionStopped,
+    PASS([[s5 playlist] count] == 0 && [s5 state] == PlayerSessionEmpty,
          "nothing or something unreadable leaves the list empty");
   END_SET("the list is remembered")
 
