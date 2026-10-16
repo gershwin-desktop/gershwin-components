@@ -12,6 +12,8 @@
 /// UserDefaults keys
 extern NSString *const PrefKeyYTDLPFormat;
 extern NSString *const PrefKeyYTDLPPath;
+extern NSString *const PrefKeyFadeEnabled;
+extern NSString *const PrefKeyPodcastAutoPlayOldestUnplayed;
 
 /**
  * PreferencesController
@@ -31,6 +33,8 @@ extern NSString *const PrefKeyYTDLPPath;
     NSTextField *_pathField;
     NSTextField *_statusLabel;
     NSButton *_checkButton;
+    NSButton *_fadeCheckbox;
+    NSPopUpButton *_podcastAutoPlayPopUp;
 }
 
 /// Show the preferences window (modal on the given window).
@@ -41,6 +45,15 @@ extern NSString *const PrefKeyYTDLPPath;
 
 /// @return The path to the yt-dlp binary from UserDefaults.
 + (NSString *)ytdlpPath;
+
+/// How long sound fades in and out and stations cross-fade: 0 when the user
+/// switched fading off (on by default).
++ (NSTimeInterval)fadeDuration;
+
+/// Which episode opening a podcast plays (unless one of its episodes is
+/// already playing or being resumed): NO (default) the newest episode,
+/// YES the oldest one not yet played.
++ (BOOL)podcastAutoPlayOldestUnplayed;
 
 /// Open the preferences panel programmatically (IBAction for menu item).
 - (IBAction)openPreferences:(id)sender;

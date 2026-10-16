@@ -6,6 +6,7 @@
 
 
 #import "DBusMenuParser.h"
+#import "DBusMenuLayout.h"
 #import "DBusConnection.h"
 #import "X11ShortcutManager.h"
 #import "DBusMenuShortcutParser.h"
@@ -485,17 +486,8 @@ static void cacheShortcut(NSString *service, NSNumber *itemId,
         return (NSMenuItem *)[NSMenuItem separatorItem];
     }
     
-    // Process label - remove underscores (mnemonics) entirely
-    if (!label) {
-        label = @"";
-    } else {
-        // Check if the label contains underscores and log the transformation
-        if ([label containsString:@"_"]) {
-            NSString *originalLabel = label;
-            label = [label stringByReplacingOccurrencesOfString:@"_" withString:@""];
-            NSDebugLog(@"DBusMenuParser: Transformed label '%@' -> '%@' (removed mnemonics)", originalLabel, label);
-        }
-    }
+    // The same title DBusMenuLayout looks items up by when they are clicked
+    label = [DBusMenuLayout displayLabel:label];
     
     // Process shortcut to get key equivalent
     NSString *keyEquivalent = @"";
@@ -737,49 +729,7 @@ static void cacheShortcut(NSString *service, NSNumber *itemId,
 
 + (NSDictionary *)convertPropertiesToDictionary:(id)propertiesObj
 {
-    NSDebugLog(@"DBusMenuParser: Converting properties object: %@ (class: %@)", propertiesObj, [propertiesObj class]);
-    
-    // If it's already a dictionary, return it
-    if ([propertiesObj isKindOfClass:[NSDictionary class]]) {
-        NSDebugLog(@"DBusMenuParser: Properties is already a dictionary");
-        return (NSDictionary *)propertiesObj;
-    }
-    
-    // If it's an array of dictionaries (which is what we're seeing), merge them
-    if ([propertiesObj isKindOfClass:[NSArray class]]) {
-        NSArray *propsArray = (NSArray *)propertiesObj;
-        NSMutableDictionary *mergedDict = [NSMutableDictionary dictionary];
-        
-        NSDebugLog(@"DBusMenuParser: Properties is an array with %lu elements, merging...", (unsigned long)[propsArray count]);
-        
-        for (NSUInteger i = 0; i < [propsArray count]; i++) {
-            id element = [propsArray objectAtIndex:i];
-            NSDebugLog(@"DBusMenuParser: Processing properties element[%lu]: %@ (%@)", i, element, [element class]);
-            
-            if ([element isKindOfClass:[NSDictionary class]]) {
-                NSDictionary *elementDict = (NSDictionary *)element;
-                NSDebugLog(@"DBusMenuParser: Element is dictionary with %lu keys", (unsigned long)[elementDict count]);
-                
-                // Merge this dictionary into our result
-                for (NSString *key in [elementDict allKeys]) {
-                    id value = [elementDict objectForKey:key];
-                    [mergedDict setObject:value forKey:key];
-                    NSDebugLog(@"DBusMenuParser: Added property: %@ = %@", key, value);
-                }
-            } else {
-                NSDebugLog(@"DBusMenuParser: WARNING: Properties array element is not a dictionary: %@ (%@)", 
-                      element, [element class]);
-            }
-        }
-        
-        NSDebugLog(@"DBusMenuParser: Merged properties dictionary has %lu entries", (unsigned long)[mergedDict count]);
-        return mergedDict;
-    }
-    
-    NSDebugLog(@"DBusMenuParser: WARNING: Properties is neither dictionary nor array, creating empty one");
-    NSDebugLog(@"DBusMenuParser: Properties object class: %@", [propertiesObj class]);
-    NSDebugLog(@"DBusMenuParser: Properties object: %@", propertiesObj);
-    return [NSDictionary dictionary];
+    return [DBusMenuLayout dictionaryFromProperties:propertiesObj];
 }
 
 + (void)cleanup

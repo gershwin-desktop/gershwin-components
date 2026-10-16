@@ -144,11 +144,17 @@ static NSString *SystemActionsExecutable(NSArray *paths)
         return;
     }
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        BOOL ok = [self runCommand:command];
-        if (!ok) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self reportFailure:failureText];
-            });
+        /* A block queued on a background queue runs on a thread of the
+           dispatch library's own, and such a thread has no autorelease pool:
+           without one here, everything autoreleased while doing this work is
+           held until the process ends. */
+        @autoreleasepool {
+            BOOL ok = [self runCommand:command];
+            if (!ok) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self reportFailure:failureText];
+                });
+            }
         }
     });
 }
@@ -260,44 +266,46 @@ static NSString *SystemActionsExecutable(NSArray *paths)
     NSLog(@"SystemActions: Gracefully terminating %lu application(s) before %@",
           (unsigned long)[apps count], action);
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        /* Only GNUstep applications (those with a reachable DO service) are
-           actually asked to quit and waited on; other window owners such as
-           GTK/Electron apps are left to the OS shutdown. */
-        NSMutableArray *requested = [NSMutableArray array];
-        for (NSDictionary *app in apps) {
-            if ([self requestGracefulTermination:app]) {
-                [requested addObject:app];
-            }
-        }
-        if ([requested count] == 0) {
-            [self executePowerCommandForAction:action];
-            return;
-        }
-
-        NSArray *remaining = [self waitForApplicationsToExit:requested
-                                                     timeout:POWER_APP_TERMINATE_TIMEOUT];
-        if ([remaining count] > 0) {
-            /* If the user refuses to kill the stubborn applications, abort the
-               whole power action - the shutdown/restart/logout must not happen
-               while an application is still running. */
-            __block BOOL proceed = NO;
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                proceed = [self askToKillApplications:remaining action:action];
-            });
-            if (proceed) {
-                for (NSDictionary *app in remaining) {
-                    [self killApplication:app];
+        @autoreleasepool {
+            /* Only GNUstep applications (those with a reachable DO service) are
+               actually asked to quit and waited on; other window owners such as
+               GTK/Electron apps are left to the OS shutdown. */
+            NSMutableArray *requested = [NSMutableArray array];
+            for (NSDictionary *app in apps) {
+                if ([self requestGracefulTermination:app]) {
+                    [requested addObject:app];
                 }
-                [NSThread sleepForTimeInterval:2.0];
-                [self executePowerCommandForAction:action];
-            } else {
-                NSLog(@"SystemActions: User cancelled %@ - applications still running, not executing", action);
-                /* The session is staying up, so let the supervisor restart
-                   applications again. */
-                [self enableSessionAutoRestart];
             }
-        } else {
-            [self executePowerCommandForAction:action];
+            if ([requested count] == 0) {
+                [self executePowerCommandForAction:action];
+                return;
+            }
+
+            NSArray *remaining = [self waitForApplicationsToExit:requested
+                                                         timeout:POWER_APP_TERMINATE_TIMEOUT];
+            if ([remaining count] > 0) {
+                /* If the user refuses to kill the stubborn applications, abort the
+                   whole power action - the shutdown/restart/logout must not happen
+                   while an application is still running. */
+                __block BOOL proceed = NO;
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    proceed = [self askToKillApplications:remaining action:action];
+                });
+                if (proceed) {
+                    for (NSDictionary *app in remaining) {
+                        [self killApplication:app];
+                    }
+                    [NSThread sleepForTimeInterval:2.0];
+                    [self executePowerCommandForAction:action];
+                } else {
+                    NSLog(@"SystemActions: User cancelled %@ - applications still running, not executing", action);
+                    /* The session is staying up, so let the supervisor restart
+                       applications again. */
+                    [self enableSessionAutoRestart];
+                }
+            } else {
+                [self executePowerCommandForAction:action];
+            }
         }
     });
 }

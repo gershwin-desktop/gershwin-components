@@ -132,19 +132,16 @@ static double StageFractionForLine(NSString *line, double current)
         BOOL digits = isdigit(before) && isdigit(after);
         if (digits && [lower containsString:@"inode tables"]) {
             // "Writing inode tables: 34/1280" -> fraction within the phase.
-            NSScanner *scanner = [NSScanner scannerWithString:lower];
-            [scanner setScanLocation:0];
             double written = -1.0;
-            while (!scanner.isAtEnd) {
-                NSString *word = nil;
-                [scanner scanUpToCharactersFromSet:
-                             [[NSCharacterSet whitespaceCharacterSet]
-                                 invertedSet]
-                                      intoString:&word];
-                NSScanner *wordScanner = [NSScanner scannerWithString:word ?: @""];
+            // The old scanner loop never advanced past a line's first word
+            // and spun forever, growing memory until the app was killed.
+            for (NSString *word in [lower componentsSeparatedByCharactersInSet:
+                                        [NSCharacterSet whitespaceCharacterSet]]) {
+                NSScanner *wordScanner = [NSScanner scannerWithString:word];
                 double n = 0;
                 double m = 0;
-                if ([wordScanner scanDouble:&n] && [wordScanner scanString:@"/" intoString:NULL] &&
+                if ([wordScanner scanDouble:&n] &&
+                    [wordScanner scanString:@"/" intoString:NULL] &&
                     [wordScanner scanDouble:&m] && m > 0) {
                     written = n / m;
                     break;
@@ -170,10 +167,28 @@ static double StageFractionForLine(NSString *line, double current)
     return candidate;
 }
 
+// Blocks until the streamed tool has exited. When the operation is
+// cancelled meanwhile the tool is terminated through an elevated kill (see
+// DUProcessHandle), then the exit is awaited so no orphan keeps writing to
+// the disk.
+// Returns YES when the stop came from a cancellation.
+static BOOL WaitForStream(DUStreamWait *wait, DUProcessHandle *handle)
+{
+    BOOL cancelled = NO;
+    while (!wait.isFinished) {
+        if (!cancelled && [DULinuxFilesystemTool cancelRequested]) {
+            cancelled = YES;
+            [handle cancel];
+        }
+        usleep(20000);
+    }
+    return cancelled;
+}
+
 // Runs a tool with its merged output streamed line-by-line to progressBlock
-// and blocks until exit. okExitMask is a bitmask of acceptable WEXITSTATUS
-// values; anything else maps to failCode with the output tail under
-// kDUBackendDetailKey.
+// and blocks until exit. okExitMask is a bitmask of acceptable exit codes
+// (bit n set means "code n is acceptable"); anything else maps to failCode
+// with the output tail under kDUBackendDetailKey.
 static NSError *RunStreamedTool(NSString *toolName,
                                 NSArray<NSString *> *aliasNames,
                                 NSArray<NSString *> *arguments,
@@ -208,7 +223,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     // (sudo -A askpass when not root); long-running filesystem work is
     // unbounded by design and cancellable via handle.
     // No timeout parameter exists on the streaming runner.
-    [[DUAuthorizationManager sharedManager]
+    DUProcessHandle *handle = [[DUAuthorizationManager sharedManager]
         streamPrivileged:path
                     args:arguments
            stdoutHandler:^(NSString *line) {
@@ -220,18 +235,18 @@ static NSError *RunStreamedTool(NSString *toolName,
                progress(stage, line);
            }
             finishHandler:^(DUProcessResult *processResult) {
-                int status = 0;
-                if (processResult.exitedNormally) {
-                    status = WEXITSTATUS(processResult
-                                             .terminationStatus);
-                }
+                int status = processResult.terminationStatus;
                 if (!processResult.exitedNormally ||
                     (okExitMask & (1u << status)) == 0) {
                     // Output is merged into standardOutput by the streaming
                     // runner; keep the tail as backend detail either way.
-                    NSString *detail = processResult.standardError.length > 0
-                        ? processResult.standardError
-                        : processResult.standardOutput;
+                    // The streams are merged, so the transcript has the
+                    // whole story; standardError alone is often just a
+                    // warning printed before the real failure.
+                    NSString *detail = [NSString stringWithFormat:
+                        @"%@\n(%@ status %d)", transcript,
+                        processResult.exitedNormally ? @"exit" : @"signal",
+                        status];
                     result = [NSError
                         errorWithDomain:DUStorageErrorDomain
                                    code:failCode
@@ -249,13 +264,36 @@ static NSError *RunStreamedTool(NSString *toolName,
         return streamError;
     }
 
-    while (!wait.isFinished) {
-        usleep(20000);
+    if (WaitForStream(wait, handle)) {
+        return DUErrorMake(DUErrorCancelled,
+                           NSLocalizedString(@"Cancelled.", nil));
     }
     return result;
 }
 
 @implementation DULinuxFilesystemTool
+
+static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
+
+// The backend runs one operation per worker thread, so the operation's
+// cancellation probe travels with the thread instead of through every tool
+// signature.
++ (void)setCancelCheck:(BOOL (^)(void))check
+{
+    NSMutableDictionary *dictionary = [NSThread currentThread].threadDictionary;
+    if (check != nil) {
+        dictionary[kCancelCheckKey] = [check copy];
+    } else {
+        [dictionary removeObjectForKey:kCancelCheckKey];
+    }
+}
+
++ (BOOL)cancelRequested
+{
+    BOOL (^check)(void) =
+        [NSThread currentThread].threadDictionary[kCancelCheckKey];
+    return check != nil && check();
+}
 
 + (NSArray<NSString *> *)formattableFilesystemTypes
 {
@@ -294,9 +332,31 @@ static NSError *RunStreamedTool(NSString *toolName,
            @"xfs" : @"-L",
            @"f2fs" : @"-l",
            @"swap" : @"-L" };
+    // mkfs.vfat and friends refuse an over-long label outright instead of
+    // truncating, so the default volume name of a stick would fail the erase.
+    NSDictionary<NSString *, NSNumber *> *limitTable =
+        @{ @"ext2" : @16, @"ext3" : @16, @"ext4" : @16, @"vfat" : @11,
+           @"exfat" : @11, @"ntfs" : @128, @"xfs" : @12, @"f2fs" : @512,
+           @"swap" : @15 };
+    NSString *fitted = label;
+    NSUInteger limit = limitTable[fstype].unsignedIntegerValue;
+    if ([fstype isEqualToString:@"vfat"]) {
+        fitted = [fitted uppercaseString];
+    }
+    if (limit > 0 && fitted.length > limit) {
+        fitted = [fitted substringToIndex:limit];
+    }
     NSMutableArray<NSString *> *arguments = [base mutableCopy];
-    [arguments addObjectsFromArray:@[ flagTable[fstype], label ]];
+    [arguments addObjectsFromArray:@[ flagTable[fstype], fitted ]];
     return arguments;
+}
+
++ (BOOL)canFormatFilesystemType:(NSString *)fstype
+{
+    NSArray<NSString *> *prefix =
+        [self formatArgumentsForFilesystemType:fstype label:nil];
+    return prefix != nil &&
+        [DUProcessRunner executablePathForName:prefix.firstObject] != nil;
 }
 
 + (NSString *)checkToolNameForFilesystemType:(NSString *)fstype
@@ -385,6 +445,82 @@ static NSError *RunStreamedTool(NSString *toolName,
                                              nil));
 }
 
+// Mount sources that belong to a disk: the node itself, or the node plus a
+// partition number, with a "p" separator when the disk name ends in a digit.
+static BOOL SourceBelongsToDisk(NSString *source, NSString *disk)
+{
+    if ([source isEqualToString:disk]) {
+        return YES;
+    }
+    if (![source hasPrefix:disk]) {
+        return NO;
+    }
+    NSString *rest = [source substringFromIndex:disk.length];
+    if ([rest hasPrefix:@"p"]) {
+        rest = [rest substringFromIndex:1];
+    }
+    if (rest.length == 0) {
+        return NO;
+    }
+    NSCharacterSet *nonDigits =
+        [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    return [rest rangeOfCharacterFromSet:nonDigits].location == NSNotFound;
+}
+
+// /proc/self/mounts escapes space, tab, newline and backslash as octal.
+static NSString *UnescapeMountField(NSString *field)
+{
+    NSMutableString *out = [NSMutableString stringWithCapacity:field.length];
+    for (NSUInteger i = 0; i < field.length; i++) {
+        unichar c = [field characterAtIndex:i];
+        if (c == '\\' && i + 3 < field.length) {
+            NSString *octal = [field substringWithRange:NSMakeRange(i + 1, 3)];
+            [out appendFormat:@"%c", (char)strtol(octal.UTF8String, NULL, 8)];
+            i += 3;
+        } else {
+            [out appendFormat:@"%C", c];
+        }
+    }
+    return out;
+}
+
++ (NSError *)unmountAllMountsOfDevicePath:(NSString *)devicePath
+{
+    // mkfs, wipefs and parted refuse or corrupt a disk with live mounts, and
+    // desktop automounters mount removable media as soon as it appears.
+    NSString *umount = [DUProcessRunner executablePathForName:@"umount"];
+    NSString *table = [NSString stringWithContentsOfFile:@"/proc/self/mounts"
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:NULL];
+    NSString *disk = [devicePath stringByResolvingSymlinksInPath];
+    for (NSString *line in [table componentsSeparatedByString:@"\n"]) {
+        NSArray<NSString *> *fields =
+            [line componentsSeparatedByString:@" "];
+        if (fields.count < 2 || !SourceBelongsToDisk(fields[0], disk)) {
+            continue;
+        }
+        NSString *mountPoint = UnescapeMountField(fields[1]);
+        NSError *runError = nil;
+        DUProcessResult *result = umount == nil ? nil
+            : [[DUAuthorizationManager sharedManager]
+                  runPrivileged:umount
+                           args:@[ mountPoint ]
+                        timeout:300.0
+                          error:&runError];
+        if (result == nil || ![result exitedWithStatus:0]) {
+            return [NSError errorWithDomain:DUStorageErrorDomain
+                                       code:DUErrorDeviceBusy
+                                   userInfo:@{
+                NSLocalizedDescriptionKey : [NSString stringWithFormat:
+                    NSLocalizedString(@"%@ could not be unmounted.", nil),
+                    mountPoint],
+                kDUBackendDetailKey : StderrTail(result.standardError),
+            }];
+        }
+    }
+    return nil;
+}
+
 + (NSError *)wipeSignaturesAtDevicePath:(NSString *)devicePath
 {
     NSString *wipefs = [DUProcessRunner executablePathForName:@"wipefs"];
@@ -404,7 +540,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     if (launchError != nil) {
         return launchError;
     }
-    if (!result.exitedNormally || WEXITSTATUS(result.terminationStatus) != 0) {
+    if (![result exitedWithStatus:0]) {
         return [NSError errorWithDomain:DUStorageErrorDomain
                                    code:DUErrorEraseFailed
                                userInfo:@{
@@ -441,7 +577,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     __block NSError *result = nil;
     NSError *streamError = nil;
 
-    [[DUAuthorizationManager sharedManager]
+    DUProcessHandle *handle = [[DUAuthorizationManager sharedManager]
         streamPrivileged:dd
                     args:@[ @"if=/dev/zero",
                             [@"of=" stringByAppendingString:devicePath],
@@ -465,8 +601,7 @@ static NSError *RunStreamedTool(NSString *toolName,
                             : line);
            }
             finishHandler:^(DUProcessResult *processResult) {
-                if (!processResult.exitedNormally ||
-                    WEXITSTATUS(processResult.terminationStatus) != 0) {
+                if (![processResult exitedWithStatus:0]) {
                     // Merged streaming puts the tool transcript (progress,
                     // summary, errors) in standardOutput.
                     result = [NSError errorWithDomain:DUStorageErrorDomain
@@ -487,8 +622,9 @@ static NSError *RunStreamedTool(NSString *toolName,
         return streamError;
     }
 
-    while (!wait.isFinished) {
-        usleep(20000);
+    if (WaitForStream(wait, handle)) {
+        return DUErrorMake(DUErrorCancelled,
+                           NSLocalizedString(@"Cancelled.", nil));
     }
     if (result == nil && progress != NULL) {
         progress(1.0,
@@ -512,7 +648,10 @@ static NSError *RunStreamedTool(NSString *toolName,
                                 fstype]);
     }
 
+    // prefix leads with the executable name, which is resolved to a path
+    // separately; passing it on as well made mkfs read it as the device.
     NSMutableArray<NSString *> *arguments = [prefix mutableCopy];
+    [arguments removeObjectAtIndex:0];
     [arguments addObject:devicePath];
 
     return RunStreamedTool(prefix.firstObject,
@@ -560,8 +699,7 @@ static NSError *RunStreamedTool(NSString *toolName,
     if (launchError != nil) {
         return launchError;
     }
-    if (!result.exitedNormally ||
-        WEXITSTATUS(result.terminationStatus) != 0) {
+    if (![result exitedWithStatus:0]) {
         return [NSError errorWithDomain:DUStorageErrorDomain
                                    code:DUErrorFilesystemError
                                userInfo:@{

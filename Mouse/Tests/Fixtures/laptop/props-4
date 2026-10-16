@@ -1,0 +1,4 @@
+Device 'Virtual core XTEST pointer':
+	Device Enabled (190):	1
+	Coordinate Transformation Matrix (192):	1.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 1.000000
+	XTEST Device (310):	1

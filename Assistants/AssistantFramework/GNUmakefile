@@ -14,7 +14,9 @@ GSAssistantFramework_OBJC_FILES = \
 	GSDiskUtilities.m \
 	GSSelectionStep.m \
 	GSEnhancedProgressStep.m \
-	GSStepBulletView.m
+	GSStepBulletView.m \
+	GSLocaleHelper.m \
+	KeyboardManager.m
 
 # Header files to install
 GSAssistantFramework_HEADER_FILES = \
@@ -24,30 +26,40 @@ GSAssistantFramework_HEADER_FILES = \
 	GSDiskUtilities.h \
 	GSSelectionStep.h \
 	GSEnhancedProgressStep.h \
-	GSStepBulletView.h
+	GSStepBulletView.h \
+	GSLocaleHelper.h \
+	KeyboardManager.h
 
 # Headers that should be included in the framework headers
 GSAssistantFramework_HEADER_FILES_INSTALL_DIR = GSAssistantFramework
 
-# Resource files to include in the framework
+# Resource files to include in the framework.  The localized tables have to be
+# part of the framework wrapper itself: the steps look strings up through
+# getFrameworkBundle(), which resolves to this bundle, so without them the
+# framework's own UI (Go Back, Setup Complete, ...) stays untranslated.
 GSAssistantFramework_RESOURCE_FILES = \
 	Resources/check.png \
-	Resources/cross.png
+	Resources/cross.png \
+	Resources/en.lproj \
+	Resources/de.lproj
 
 # Required frameworks and libraries
 GSAssistantFramework_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 
 # Compiler and linker flags
-GSAssistantFramework_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2
-GSAssistantFramework_LDFLAGS += -ldispatch
+GSAssistantFramework_CPPFLAGS += -Wall -Wextra -fobjc-arc -Werror -Wno-unused-parameter -O2 -I/usr/include
+GSAssistantFramework_LDFLAGS += -ldispatch -lX11 -lutil
 
 # Installation directory
 FRAMEWORK_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Frameworks
 
 include $(GNUSTEP_MAKEFILES)/framework.make
 
-# Manual copying approach for localized resources
-after-install::
+# The localized tables are copied explicitly after custom-install: the
+# default after-install hook runs *before* custom-install, and
+# custom-install does a fresh cp -R of the built wrapper, which would
+# otherwise wipe whatever after-install put there.
+copy-localized-resources::
 	@echo "Manually copying localized resources..."
 	mkdir -p $(FRAMEWORK_INSTALL_DIR)/$(FRAMEWORK_NAME).framework/Versions/1/Resources/en.lproj
 	mkdir -p $(FRAMEWORK_INSTALL_DIR)/$(FRAMEWORK_NAME).framework/Versions/1/Resources/de.lproj
@@ -62,9 +74,9 @@ after-install::
 	@echo "Localized resources copied to framework"
 
 # Custom install target that completely overrides built-in behavior
-.PHONY: custom-install custom-uninstall
+.PHONY: custom-install custom-uninstall copy-localized-resources
 
-install:: custom-install
+install:: custom-install copy-localized-resources
 
 # A framework bundle contains symlinks (Versions/Current, Resources, Headers).
 # Copying over an existing install makes cp descend into those symlinked

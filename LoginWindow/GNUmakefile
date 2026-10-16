@@ -11,13 +11,17 @@ LoginWindow_OBJC_FILES = \
     LoginWindow_main.m \
     LoginWindow.m \
     LoginWindowPAM.m \
-    KeyboardManager.m
+    KeyboardManager.m \
+    LWLanguageNames.m \
+    LWCJKFont.m \
+    LWCJKFontInstaller.m
 
 LoginWindow_RESOURCE_FILES = \
     Resources/English.lproj \
     Resources/German.lproj \
     Resources/French.lproj \
-    Resources/Spanish.lproj
+    Resources/Spanish.lproj \
+    Resources/SarasaGothic-OFL.txt
 
 LoginWindow_PRINCIPAL_CLASS = LoginWindow
 

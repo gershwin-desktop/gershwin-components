@@ -8,6 +8,7 @@
  */
 
 #import "AppMenuWidget.h"
+#import "MenuContentsMatch.h"
 #import "MenuProtocolManager.h"
 #import "WindowSwitchContext.h"
 #import "MenuUtils.h"
@@ -66,6 +67,8 @@ static BOOL x11_error_occurred = NO;
 static int x11_error_code = 0;
 static AppMenuWidget *currentWidget = nil;
 static NSMutableSet *invalidWindows = nil;
+
+NSString * const AppMenuWidgetDidRebuildMenuNotification = @"AppMenuWidgetDidRebuildMenuNotification";
 
 static int handleX11Error(Display *display, XErrorEvent *event)
 {
@@ -133,60 +136,31 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 @end
 
-/* ── NSMenuItem swizzle: preserve custom action after setSubmenu: ── */
-
-/*
- * GNUstep's -[NSMenuItem setSubmenu:] calls [self setAction:@selector(submenuAction:)]
- * (NSMenuItem.m:244), overwriting any action set before it.  submenuAction: is a
- * no-op (NSMenu.m:851), so our openFolderInWorkspace: was silently lost.
- *
- * We swizzle setSubmenu: to save the action/target before the call and restore
- * them afterwards - but only when a non-nil, non-submenuAction: action was
- * already set.  This allows items with both a submenu and a custom action to
- * work: the submenu opens on hover (handled by NSMenuView's tracking loop,
- * which checks [item submenu], not the action), and the custom action fires
- * on click.
- */
-
-#import <objc/runtime.h>
-
-@interface NSMenuItem (GWSwizzle)
-@end
-
-@implementation NSMenuItem (GWSwizzle)
-
-+ (void)load
-{
-    static BOOL swizzled = NO;
-    if (swizzled) return;
-    swizzled = YES;
-
-    Method original = class_getInstanceMethod(self, @selector(setSubmenu:));
-    Method swizzledM = class_getInstanceMethod(self, @selector(gw_setSubmenu:));
-    method_exchangeImplementations(original, swizzledM);
-}
-
-- (void)gw_setSubmenu:(NSMenu *)submenu
-{
-    SEL savedAction = [self action];
-    id savedTarget = [self target];
-
-    /* Call the original setSubmenu: (now gw_setSubmenu: after swizzle). */
-    [self gw_setSubmenu:submenu];
-
-    /* Restore action/target only if a custom action was explicitly set. */
-    if (savedAction && savedAction != @selector(submenuAction:))
-    {
-        [self setAction:savedAction];
-        [self setTarget:savedTarget];
-    }
-}
-
-@end
-
 /* ── Private interface ───────────────────────────────────────────── */
 
 @interface AppMenuWidget ()
+{
+    /* The full, unfolded top-level items of the menu currently displayed,
+       in display order - captured fresh every time setupMenuViewWithMenu:
+       builds a menu.  This is the source of truth setVisibleTopLevelItemCount:
+       folds items out of and restores them into, so the result never
+       depends on whatever fold happened to be applied before. */
+    NSArray<NSMenuItem *> *_unfoldedTopLevelItems;
+
+    /* Natural (unclipped) width of each entry in _unfoldedTopLevelItems,
+       measured once right after the menu is built. */
+    NSArray<NSNumber *> *_naturalTopLevelItemWidths;
+
+    /* The single trailing ">>" item currently standing in for whatever
+       titles are folded away, or nil when nothing is folded. */
+    NSMenuItem *_overflowTitleItem;
+
+    /* How many leading items of _unfoldedTopLevelItems are currently drawn
+       directly (the rest, if any, live inside _overflowTitleItem's
+       submenu).  Lets setVisibleTopLevelItemCount: no-op on a repeat call
+       with the same count. */
+    NSUInteger _currentVisibleTopLevelItemCount;
+}
 
 /* YES while the system (Command) menu or any of its submenus is being
    tracked/shown.  populateSystemMenu mutates self.systemMenu in place
@@ -352,12 +326,43 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     unsigned long windowId = self.pendingCoalesceWindowId;
 
     if (windowId == 0) {
+        /* The 0 can be stale: the controller hears of active window changes
+           on two paths, and the late "no active window" of a quick
+           None -> window sequence would otherwise undo the switch to the
+           window, leaving the previous application's menu up. */
+        unsigned long activeWindow = [MenuUtils getActiveWindowFresh];
+        if (activeWindow != 0) {
+            [self updateForActiveWindowId:activeWindow];
+            return;
+        }
+
         /* No active window reported.  If the WM reports a frontmost
          * application without a window (a windowless app selected via Alt-Tab
          * or whose last window just closed), show its application-level menu.
          */
         pid_t activeAppPid = [MenuUtils getActiveApplicationPID];
         if ([self displayApplicationMenuForPID:activeAppPid]) {
+            return;
+        }
+
+        /* The application menu on show is gone: its application (without a
+           window) quit.  Nothing tells the window manager of a new frontmost
+           application then, so the menu of the window that has the keyboard
+           (usually the desktop) is shown, or none. */
+        if (self.currentWindowId == 0 && self.currentWindowPID != 0
+            && ![self.protocolManager hasApplicationMenuForPID:self.currentWindowPID]) {
+            Window focus = None;
+            int revert = 0;
+            Display *display = [MenuUtils sharedDisplay];
+            if (display) {
+                XGetInputFocus(display, &focus, &revert);
+            }
+            if (focus != None && focus != PointerRoot) {
+                self.currentWindowPID = 0;
+                [self updateForActiveWindowId:(unsigned long)focus];
+            } else {
+                [self clearToSystemOnly];
+            }
             return;
         }
 
@@ -466,10 +471,10 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
     /* Windowless-app precedence.  When the WM falls back to focusing the
        desktop after the frontmost app's last window closed (or the app was
-       selected via Alt-Tab with no window), _GERSHWIN_ACTIVE_APP points at
+       selected via Alt-Tab with no window), _ACTIVE_APPLICATION points at
        that app while the focused desktop window belongs to Workspace.  Show
        the windowless app's application-level menu instead of the desktop
-       menu.  When the user clicks the desktop the WM sets _GERSHWIN_ACTIVE_APP
+       menu.  When the user clicks the desktop the WM sets _ACTIVE_APPLICATION
        to Workspace's own PID, so an explicit click always wins. */
     pid_t activeAppPid = [MenuUtils getActiveApplicationPID];
     if (ctx.isDesktop && activeAppPid != 0 && ctx.pid != 0 && ctx.pid != activeAppPid
@@ -781,6 +786,46 @@ static int handleX11Error(Display *display, XErrorEvent *event)
 
 #pragma mark - Menu loading & display
 
+- (BOOL)menuIsOpen
+{
+    for (NSWindow *win in [NSApp windows]) {
+        if ([NSStringFromClass([win class]) hasPrefix:@"NSMenu"] && [win isVisible]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (void)reloadMenuAfterAppChangeForWindow:(unsigned long)windowId
+{
+    if (windowId == 0 || windowId != self.currentWindowId) {
+        return;
+    }
+    /* Rebuilding under an open menu would close it in the user's hands */
+    if ([self menuIsOpen]) {
+        [self performSelector:@selector(retryReloadAfterAppChange:)
+                   withObject:[NSNumber numberWithUnsignedLong:windowId]
+                   afterDelay:0.5];
+        return;
+    }
+    NSMenu *fresh = [self.protocolManager getMenuForWindow:windowId];
+    if (fresh == nil || windowId != self.currentWindowId) {
+        return;
+    }
+    /* New ids alone need no rebuild: clicks look items up by title */
+    if (MenuContentsMatch(self.currentMenu, fresh)) {
+        return;
+    }
+    self.rebuildEvenIfUnchanged = YES;
+    [self loadMenu:fresh forWindow:windowId];
+    self.rebuildEvenIfUnchanged = NO;
+}
+
+- (void)retryReloadAfterAppChange:(NSNumber *)windowKey
+{
+    [self reloadMenuAfterAppChangeForWindow:[windowKey unsignedLongValue]];
+}
+
 - (void)loadMenu:(NSMenu *)menu forWindow:(unsigned long)windowId
 {
     MENU_PROFILE_BEGIN(loadMenuForWindow);
@@ -797,7 +842,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        process restarts (which change PID) can leave stale DBus service
        names embedded in menu items.  Window-ID reuse across restarts
        is rare but would also be caught by the PID change. */
-    if (newPID != 0 && self.currentWindowPID == newPID &&
+    if (!self.rebuildEvenIfUnchanged &&
+        newPID != 0 && self.currentWindowPID == newPID &&
         self.currentWindowId == windowId && self.currentMenu && self.menuView &&
         ![self.menuView isHidden] && [self.menuView menu] == self.currentMenu &&
         [self topLevelMenusMatch:self.currentMenu with:menu]) {
@@ -811,7 +857,8 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        rebuilt the whole menu view tree and drained huge autorelease pools -
        Menu.app would burn CPU and stop responding.  Rebuild is only needed
        when the structure actually changed. */
-    if (newPID == 0 && self.currentWindowId == windowId && self.currentMenu &&
+    if (!self.rebuildEvenIfUnchanged &&
+        newPID == 0 && self.currentWindowId == windowId && self.currentMenu &&
         self.menuView && ![self.menuView isHidden] &&
         [self.menuView menu] == self.currentMenu &&
         [self topLevelMenusMatch:self.currentMenu with:menu]) {
@@ -843,6 +890,12 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        correctly returns NO and we keep the shortcuts. */
     BOOL switchingApp = (previousPID != 0 && self.currentWindowPID != 0 && previousPID != self.currentWindowPID);
     if (!switchingApp && self.currentWindowPID == 0 && previousWindowId != 0 && previousWindowId != windowId) {
+        switchingApp = YES;
+    }
+    /* Leaving an application menu (shown while the app had no window): its
+       shortcuts were taken by Menu because the app had no keyboard; now one
+       of its windows has it and handles them itself. */
+    if (!switchingApp && previousWindowId == 0 && previousPID != 0) {
         switchingApp = YES;
     }
     if (switchingApp) {
@@ -1271,7 +1324,28 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             }
         }
 
+        /* Capture the freshly-built, still-unfolded top level (this window's
+           menu changed, so the widths the menu bar's layout decision was
+           based on are now stale) and measure each item's natural width
+           before anything ever folds it away. */
+        _unfoldedTopLevelItems = [items copy];
+        _overflowTitleItem = nil;
+        _currentVisibleTopLevelItemCount = [_unfoldedTopLevelItems count];
+        [view sizeToFit];
+        NSMutableArray *widths = [NSMutableArray arrayWithCapacity:[_unfoldedTopLevelItems count]];
+        for (NSUInteger i = 0; i < [_unfoldedTopLevelItems count]; i++) {
+            NSRect r = [view rectOfItemAtIndex:i];
+            [widths addObject:@(NSWidth(r))];
+        }
+        _naturalTopLevelItemWidths = [widths copy];
+
         [self setNeedsDisplay:YES];
+
+        /* Let the menu bar's layout re-decide how many titles/extras fit
+           now that the title widths may have changed (a different active
+           window can have a wildly different number/length of menus). */
+        [[NSNotificationCenter defaultCenter] postNotificationName:AppMenuWidgetDidRebuildMenuNotification
+                                                            object:self];
 
         /* Diagnostic log - gated so the string building itself (a walk of all
            top-level item titles on EVERY menu-bar rebuild) only happens when
@@ -1299,6 +1373,60 @@ static int handleX11Error(Display *display, XErrorEvent *event)
         }
         MENU_PROFILE_END(setupMenuViewWithMenu);
     }
+}
+
+#pragma mark - Menu bar layout (title overflow)
+
+- (NSArray<NSNumber *> *)topLevelItemWidths
+{
+    return _naturalTopLevelItemWidths ?: @[];
+}
+
+- (void)setVisibleTopLevelItemCount:(NSUInteger)count
+{
+    NSUInteger total = [_unfoldedTopLevelItems count];
+    if (total == 0) return;
+    if (count > total) count = total;
+    if (count == _currentVisibleTopLevelItemCount) return;
+
+    NSMenu *menu = self.currentMenu;
+    if (!menu) return;
+
+    /* Rebuild the top level from the cached, unfolded list every time
+       rather than patching whatever fold is currently applied - the result
+       then never depends on the previous state.  The moved items keep
+       their own submenu/target/action; only which slot they occupy
+       changes. */
+    if (_overflowTitleItem) {
+        [_overflowTitleItem setSubmenu:nil];
+        _overflowTitleItem = nil;
+    }
+    while ([menu numberOfItems] > 0) {
+        [menu removeItemAtIndex:0];
+    }
+
+    for (NSUInteger i = 0; i < count; i++) {
+        [menu addItem:_unfoldedTopLevelItems[i]];
+    }
+    if (count < total) {
+        /* ">>" is the conventional stand-in for menu titles that do not
+           fit, understood without reading any language - it must never be
+           what gives way, since it is what keeps the app's own titles from
+           being silently clipped when nothing else is left to collapse. */
+        NSMenu *overflowMenu = [[NSMenu alloc] initWithTitle:@">>"];
+        [overflowMenu setAutoenablesItems:NO];
+        for (NSUInteger i = count; i < total; i++) {
+            [overflowMenu addItem:_unfoldedTopLevelItems[i]];
+        }
+        NSMenuItem *overflow = [[NSMenuItem alloc] initWithTitle:@">>" action:NULL keyEquivalent:@""];
+        [overflow setSubmenu:overflowMenu];
+        [menu addItem:overflow];
+        _overflowTitleItem = overflow;
+    }
+
+    _currentVisibleTopLevelItemCount = count;
+    [self.menuView sizeToFit];
+    [self setNeedsDisplay:YES];
 }
 
 #pragma mark - Menu comparison (lightweight, top-level only)
@@ -1625,10 +1753,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     }
 
     NSDictionary *appTree;
+    BOOL treeChanged = NO;
     if (cacheValid) {
         appTree = self.cachedAppBundleTree;
     } else {
         appTree = [self scanApplicationBundleTree];
+        /* The scan goes stale on a timer, but the applications installed on
+           a machine hardly ever change. Rebuilding the menu only when they
+           actually did saves tearing down and building up hundreds of items
+           and their icons every half minute. */
+        treeChanged = ![appTree isEqualToDictionary:
+                        (NSDictionary *)self.cachedAppBundleTree];
         self.cachedAppBundleTree = appTree;
         self.cachedAppBundleTreeTime = now;
     }
@@ -1641,11 +1776,17 @@ static int handleX11Error(Display *display, XErrorEvent *event)
        tree down again via NSMenu/NSMenuItem dealloc - a multi-hundred-object
        cascade that showed up as the bulk of Menu's CPU. */
     NSMenu *appsSubmenu = self.cachedAppsSubmenu;
-    if (!appsSubmenu || !cacheValid) {
+    if (!appsSubmenu || treeChanged) {
         appsSubmenu = [[NSMenu alloc] initWithTitle:NSLocalizedString(@"Applications", nil)];
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: Scanning app tree with %ld root keys", (long)[[appTree allKeys] count]);
         [self addMenuItemsFromTree:appTree toMenu:appsSubmenu];
         self.cachedAppsSubmenu = appsSubmenu;
+        /* Decoding every application's icon is the biggest burst of
+           allocations Menu ever makes (first at launch); what it freed is
+           given back once the current autorelease pool has been drained. */
+        [MenuUtils performSelector:@selector(releaseFreedHeapMemory)
+                        withObject:nil
+                        afterDelay:0];
         NSDebugLLog(@"gwcomp", @"AppMenuWidget: (Re)built persistent apps submenu with %ld items", (long)[appsSubmenu numberOfItems]);
         if ([appsSubmenu numberOfItems] == 0) {
             NSMenuItem *none = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"No applications found", nil)
@@ -1864,6 +2005,122 @@ static int handleX11Error(Display *display, XErrorEvent *event)
     return item;
 }
 
+/* An application's icon is stored at up to 1024x1024 - four megabytes once
+   decoded - and the menu draws it at the height of a line of text. Keeping
+   the icon as it came would hold all of that for every installed
+   application, so it is scaled down once and only the small copy is kept.
+   36 pixels is enough for the largest scale factor a menu is drawn at.
+
+   The pixels are averaged by hand rather than drawn through a graphics
+   context: drawing into a bitmap context produced empty images here, and
+   -lockFocus would open a window on the display server for every icon. An
+   icon that cannot be read this way is handed back untouched, so a menu
+   never loses its picture over this. */
+static NSImage *MenuSizedIcon(NSImage *icon)
+{
+    const NSInteger side = 36;
+    NSBitmapImageRep *source = nil;
+    NSBitmapImageRep *small;
+    const unsigned char *src;
+    unsigned char *dst;
+    NSInteger sourceWidth, sourceHeight, samples, sourceRow, smallRow;
+    NSInteger x, y;
+    int wide, hasAlpha, colour;
+
+    if (icon == nil)
+        return nil;
+
+    for (NSImageRep *rep in [icon representations]) {
+        if ([rep isKindOfClass:[NSBitmapImageRep class]]) {
+            NSBitmapImageRep *bitmap = (NSBitmapImageRep *)rep;
+            /* The biggest one scales down best. */
+            if (source == nil || [bitmap pixelsWide] > [source pixelsWide])
+                source = bitmap;
+        }
+    }
+    if (source == nil || [source isPlanar]
+        || ([source bitsPerSample] != 8 && [source bitsPerSample] != 16))
+        return icon;
+
+    sourceWidth = [source pixelsWide];
+    sourceHeight = [source pixelsHigh];
+    samples = [source samplesPerPixel];
+    sourceRow = [source bytesPerRow];
+    src = [source bitmapData];
+    /* Icons come in several shapes: grey or colour, with or without a
+       transparency channel, one or two bytes per sample. */
+    wide = ([source bitsPerSample] == 16);
+    hasAlpha = [source hasAlpha] ? 1 : 0;
+    colour = (samples - hasAlpha) >= 3;
+    if (src == NULL || sourceWidth <= 0 || sourceHeight <= 0)
+        return icon;
+    if (sourceWidth <= side && sourceHeight <= side)
+        return icon;
+
+    small = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                    pixelsWide:side
+                                                    pixelsHigh:side
+                                                 bitsPerSample:8
+                                               samplesPerPixel:4
+                                                      hasAlpha:YES
+                                                      isPlanar:NO
+                                                colorSpaceName:NSDeviceRGBColorSpace
+                                                   bytesPerRow:0
+                                                  bitsPerPixel:0];
+    dst = [small bitmapData];
+    if (dst == NULL)
+        return icon;
+    smallRow = [small bytesPerRow];
+
+    for (y = 0; y < side; y++) {
+        NSInteger firstRow = y * sourceHeight / side;
+        NSInteger lastRow = MAX(firstRow + 1, (y + 1) * sourceHeight / side);
+
+        for (x = 0; x < side; x++) {
+            NSInteger firstColumn = x * sourceWidth / side;
+            NSInteger lastColumn = MAX(firstColumn + 1,
+                                       (x + 1) * sourceWidth / side);
+            unsigned long red = 0, green = 0, blue = 0, alpha = 0, taken = 0;
+            NSInteger sy, sx;
+            unsigned char *out;
+
+            for (sy = firstRow; sy < lastRow; sy++) {
+                const unsigned char *row = src + sy * sourceRow;
+                for (sx = firstColumn; sx < lastColumn; sx++) {
+                    const unsigned char *pixel =
+                        row + sx * samples * (wide ? 2 : 1);
+                    unsigned value[4];
+                    NSInteger sample;
+
+                    for (sample = 0; sample < samples && sample < 4; sample++)
+                        value[sample] = wide
+                            ? (unsigned)(((const unsigned short *)pixel)[sample] >> 8)
+                            : (unsigned)pixel[sample];
+
+                    red += value[0];
+                    green += colour ? value[1] : value[0];
+                    blue += colour ? value[2] : value[0];
+                    alpha += hasAlpha ? value[samples - 1] : 255;
+                    taken++;
+                }
+            }
+            if (taken == 0)
+                taken = 1;
+
+            out = dst + y * smallRow + x * 4;
+            out[0] = (unsigned char)(red / taken);
+            out[1] = (unsigned char)(green / taken);
+            out[2] = (unsigned char)(blue / taken);
+            out[3] = (unsigned char)(alpha / taken);
+        }
+    }
+
+    [small setSize:NSMakeSize(side, side)];
+    NSImage *scaled = [[NSImage alloc] initWithSize:NSMakeSize(side, side)];
+    [scaled addRepresentation:small];
+    return scaled;
+}
+
 - (void)addMenuItemsFromTree:(NSDictionary *)tree toMenu:(NSMenu *)menu
 {
     /* Collect both subdirectory submenus and app items, then interleave
@@ -1909,8 +2166,27 @@ static int handleX11Error(Display *display, XErrorEvent *event)
             [item setTarget:self];
             [item setRepresentedObject:entry[@"_path"]];
             /* Show the application's icon in the menu (Eau renders it at a
-               fixed size in the image column). */
-            NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:entry[@"_path"]];
+               fixed size in the image column). The icon is kept: asking the
+               workspace for it reads and decodes the bundle's PNG every
+               time, and this menu is rebuilt whenever the scan of the
+               installed applications has gone stale. */
+            NSString *bundlePath = entry[@"_path"];
+            NSImage *icon = bundlePath ? [self.appIconCache objectForKey:bundlePath] : nil;
+            if (icon == nil && bundlePath != nil) {
+                /* The full-size icon comes back autoreleased: without a
+                   pool of its own, every decoded icon of the whole menu
+                   stays alive until the menu is built (54 MB at once), and
+                   the heap keeps that high-water mark afterwards. */
+                @autoreleasepool {
+                    icon = MenuSizedIcon([[NSWorkspace sharedWorkspace]
+                                          iconForFile:bundlePath]);
+                }
+                if (icon != nil) {
+                    if (self.appIconCache == nil)
+                        self.appIconCache = [NSMutableDictionary dictionary];
+                    [self.appIconCache setObject:icon forKey:bundlePath];
+                }
+            }
             if (icon) {
                 [item setImage:icon];
             }
@@ -2128,10 +2404,15 @@ static int handleX11Error(Display *display, XErrorEvent *event)
                                         representedObject:pane[@"name"]
                                                   submenu:nil
                                                    toMenu:submenu];
-        /* Show the pane's icon (Eau renders it at a fixed size). */
+        /* Show the pane's icon (Eau renders it at a fixed size).  Some
+           panes ship 500x500 icons; like application icons they are kept
+           only at the size a menu draws them (4 MB less for all panes). */
         NSString *iconPath = pane[@"icon"];
         if (iconPath && [iconPath length] > 0) {
-            NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+            NSImage *icon = nil;
+            @autoreleasepool {
+                icon = MenuSizedIcon([[NSImage alloc] initWithContentsOfFile:iconPath]);
+            }
             if (icon) {
                 [item setImage:icon];
             }

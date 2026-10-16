@@ -39,15 +39,22 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     (void)notification;
-    if (![self verifyToolsOrProceed]) {
-        [NSApp terminate:self];
-        return;
-    }
     self.windowController =
         [[DUMainWindowController alloc]
             initWithStorageManager:self.storageManager];
     [self buildMainMenu];
     [self.windowController showWindow:nil];
+
+    /* The tool check runs AFTER the window is up, and only ever warns. A
+     * modal that appears before the main window exists leaves the app
+     * looking hung, and it used to fire for tools whose absence changes
+     * nothing: qemu-img, the cdrecord family and the geom RAID tools each
+     * gate one menu item and are already reported per feature in the
+     * capabilities report. Only a genuinely broken installation - no geom,
+     * no mount - is worth interrupting anyone for, and even that is a
+     * warning now rather than a gate, because quitting the app would hide
+     * the Diagnostics page that explains why. */
+    [self reportMissingTools];
 
     // Initial discovery must not block the UI (ARCHITECTURE.md 95); the
     // monitor publishes the result through the topology notification.
@@ -87,57 +94,77 @@
 
 #pragma mark - Tool availability
 
-// Resolves every tool the active backend expects from $PATH and warns the
-// user about any that are missing, offering to continue with reduced
-// functionality. Headless modes (--list/--mock/--test-refresh) skip the
-// interactive prompt. Returns NO when the user chooses to quit.
-- (BOOL)verifyToolsOrProceed
+// Resolves the tools the active backend cannot work without and warns about
+// them once the main window is up. Optional tools are logged, not announced:
+// their absence is already visible per feature in the Diagnostics report, and
+// a startup alert listing them as "reduced functionality" was noise the user
+// could do nothing about. Headless modes (--list/--mock/--test-refresh) skip
+// the prompt entirely.
+- (void)reportMissingTools
 {
     NSArray<NSString *> *arguments =
         [[NSProcessInfo processInfo] arguments];
     for (NSString *flag in
          @[ @"--list", @"--mock", @"--test-refresh" ]) {
         if ([arguments containsObject:flag]) {
-            return YES;
+            return;
         }
     }
 
     id<DUStorageBackend> backend = self.storageManager.backend;
     if (![backend respondsToSelector:@selector(expectedToolNames)]) {
-        return YES;
+        return;
     }
     NSArray<NSString *> *expected = [backend expectedToolNames];
     if (expected.count == 0) {
-        return YES;
+        return;
     }
 
     NSMutableArray<NSString *> *missing = [NSMutableArray array];
+    NSMutableArray<NSString *> *missingOptional = [NSMutableArray array];
+    // A backend that does not separate the two is treated as needing all of
+    // them, which is the conservative reading.
+    NSArray<NSString *> *required = [backend respondsToSelector:
+                                               @selector(requiredToolNames)]
+        ? [backend requiredToolNames] : expected;
+    NSMutableSet<NSString *> *requiredSet = [NSMutableSet set];
+    for (NSString *tool in required) {
+        [requiredSet addObject:tool];
+    }
     for (NSString *tool in expected) {
-        if ([DUProcessRunner executablePathForName:tool] == nil) {
+        if ([DUProcessRunner executablePathForName:tool] != nil) {
+            continue;
+        }
+        if ([requiredSet containsObject:tool]) {
             [missing addObject:tool];
+        } else {
+            [missingOptional addObject:tool];
         }
     }
+    if (missingOptional.count > 0) {
+        NSLog(@"DiskUtility: optional tools not installed: %@",
+              [missingOptional componentsJoinedByString:@", "]);
+    }
     if (missing.count == 0) {
-        return YES;
+        return;
     }
 
     NSAlert *alert = [[NSAlert alloc] init];
     [alert setAlertStyle:NSWarningAlertStyle];
     [alert setMessageText:
-              NSLocalizedString(@"Some helper tools are missing", nil)];
+              NSLocalizedString(@"Some required tools are missing", nil)];
     NSString *list = [missing componentsJoinedByString:@", "];
     [alert setInformativeText:
               [NSString stringWithFormat:
                   NSLocalizedString(
-                      @"The following command-line tools were not found in "
-                      @"your PATH: %@. The utility will run with reduced "
-                      @"functionality.",
+                      @"These command-line tools could not be found: %@. "
+                      @"Disk operations will be unavailable until they are "
+                      @"installed. The Diagnostics page lists what this "
+                      @"system provides.",
                       nil),
                   list]];
-    [alert addButtonWithTitle:NSLocalizedString(@"Continue", nil)];
-    [alert addButtonWithTitle:NSLocalizedString(@"Quit", nil)];
-    NSInteger result = [alert runModal];
-    return result != NSAlertSecondButtonReturn;
+    [alert addButtonWithTitle:NSLocalizedString(@"OK", nil)];
+    [alert runModal];
 }
 
 #pragma mark - Menu

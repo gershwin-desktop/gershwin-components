@@ -64,6 +64,12 @@
         entry.gitURL = gitURL;
         entry.desc = [item objectForKey:@"Description"];
         entry.makefilePath = [item objectForKey:@"MakefilePath"];
+        /* Absent or false means no submodules; the key is only set for the
+           handful of repos that vendor their dependencies as submodules. */
+        entry.submodules = [[item objectForKey:@"Submodules"] boolValue];
+        /* MakeArgs is an array of strings handed straight to gmake. */
+        NSArray *makeArgs = [item objectForKey:@"MakeArgs"];
+        entry.makeArgs = [makeArgs isKindOfClass:[NSArray class]] ? makeArgs : nil;
         [result addObject:entry];
     }
 

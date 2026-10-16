@@ -6,6 +6,8 @@
 
 #import <AppKit/AppKit.h>
 
+@class CatalogEntry;
+
 @interface BuildApplication : NSApplication <NSApplicationDelegate>
 {
     NSString *makefilePath;
@@ -21,5 +23,7 @@
 @property (retain) id currentController;
 
 - (void)startBuildWorkflow;
+/* Shallow clone args; adds --recurse-submodules when entry.submodules is set. */
+- (NSArray *)cloneArgumentsForEntry:(CatalogEntry *)entry URL:(NSString *)url dir:(NSString *)dir;
 
 @end

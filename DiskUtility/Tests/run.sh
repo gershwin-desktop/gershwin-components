@@ -35,4 +35,28 @@ for tool in $TOOLS; do
     fi
 done
 
+# Tests/Manager has its own makefile: DUStorageManager pulls in the whole
+# operation and notification graph, which does not belong in the ARC support
+# library the tools above share. It is hermetic like them, so it is part of
+# this suite rather than an on-demand extra.
+if [ -d Manager ]; then
+    (cd Manager && gmake) || status=1
+    binary="./Manager/obj/t_StorageManager"
+    if [ ! -x "$binary" ]; then
+        echo "t_StorageManager: MISSING BINARY"
+        status=1
+    else
+        output=$("$binary" 2>&1)
+        code=$?
+        summary=$(printf '%s\n' "$output" | grep '^== summary ==')
+        passed=$(printf '%s\n' "$output" | grep -c '^  ok  ')
+        failed=$(printf '%s\n' "$output" | grep -c '^  FAIL')
+        echo "t_StorageManager: $passed passed, $failed failed"
+        if [ "$failed" -ne 0 ] || [ "$code" -ne 0 ]; then
+            printf '%s\n' "$output" | grep '^  FAIL'
+            status=1
+        fi
+    fi
+fi
+
 exit $status

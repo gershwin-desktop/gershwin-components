@@ -27,7 +27,7 @@
     <key>NSMainNibFile</key>
     <string></string>
     <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
+    <string>WApplication</string>
     <key>ApplicationName</key>
     <string>Whisper</string>
     <key>ApplicationDescription</key>

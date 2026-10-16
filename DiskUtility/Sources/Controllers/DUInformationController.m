@@ -11,6 +11,7 @@
 #import "DUIcons.h"
 #import "DUOpticalMedia.h"
 #import "DUPartition.h"
+#import "DUPartitionTableParser.h"
 #import "DUParsing.h"
 #import "DUStorageDevice.h"
 #import "DUStorageObject.h"
@@ -56,7 +57,10 @@ static NSString * const kUnknownValue = @"-";
         return nil;
     }
     _fieldViews = [NSMutableArray array];
-    _view = [[DUInfoAreaView alloc] initWithFrame:NSMakeRect(0, 0, 700, 120)];
+    // Height matches kInfoPanelHeight in DUMainWindowController: tall enough
+    // for the widest row set (5 rows of 18pt in two columns) plus the type
+    // icon band and the margins. The window controller owns the real frame.
+    _view = [[DUInfoAreaView alloc] initWithFrame:NSMakeRect(0, 0, 700, 140)];
     _view.autoresizingMask =
         NSViewWidthSizable | NSViewHeightSizable;
     return self;
@@ -110,7 +114,12 @@ static NSString * const kUnknownValue = @"-";
                 ]];
                 [rows addObject:@[
                     NSLocalizedString(@"Partition Scheme:", nil),
-                    device.partitionScheme ?: kUnknownValue
+                    // The display name, not the internal token: the panel
+                    // read "gpt" while the Partition tab next to it spelled
+                    // out "GUID Partition Table" for the same scheme.
+                    [DUPartitionTableParser
+                        displayNameForScheme:device.partitionScheme]
+                        ?: kUnknownValue
                 ]];
                 [rows addObject:@[
                     NSLocalizedString(@"Read Status:", nil),
@@ -327,6 +336,18 @@ static NSString * const kUnknownValue = @"-";
                           rowHeight));
     if (heightCapacity < 1) {
         heightCapacity = 1;
+    }
+    /* More rows than one column can hold MUST flow into a second column
+     * rather than growing downwards. The old code squeezed rowsPerColumn up
+     * until they fitted, which put the last row at a negative y and cut it
+     * off against the bottom of the window: a disk's "Partition Scheme" row
+     * was permanently half invisible, and the rows a user most wants (the
+     * capacity, the scheme, the health) are the ones at the end. */
+    if (columnCount == 1 && totalRows > heightCapacity) {
+        columnCount = 2;
+        gap = METRICS_SPACE_24;
+        columnWidth =
+            (width - 2 * side - gap) / (CGFloat)columnCount;
     }
     // Two columns balance rows evenly; a single column simply fills down.
     NSInteger rowsPerColumn = (columnCount == 2)

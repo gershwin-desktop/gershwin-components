@@ -1,0 +1,11 @@
+"X11 Forwarding Error" = "Fehler bei der X11-Weiterleitung";
+"The sshd configuration could not be changed. It may use a layout this pane does not handle, or sshd rejected the change. Check the system log for details." = "Die sshd-Konfiguration konnte nicht geaendert werden. Sie hat moeglicherweise einen Aufbau, den dieses Fenster nicht unterstuetzt, oder sshd hat die Aenderung abgelehnt. Details stehen im Systemprotokoll.";
+"OK" = "OK";
+"N/A" = "n. v.";
+"Unknown" = "Unbekannt";
+"On" = "An";
+"Off" = "Aus";
+"Install the OpenSSH server and xauth to allow X11 forwarding." = "Installiere den OpenSSH-Server und xauth, um die X11-Weiterleitung zu erlauben.";
+"The sshd configuration could not be read or is not understood; edit it by hand." = "Die sshd-Konfiguration konnte nicht gelesen werden oder wird nicht verstanden; bearbeite sie von Hand.";
+"To use it: ssh -X user@host" = "Verwendung: ssh -X Benutzer@Rechner";
+"X11 Forwarding over SSH" = "X11-Weiterleitung ueber SSH";

@@ -29,7 +29,7 @@ typedef struct {
     int         capacity;
     int         n_samples;
     int         sample_rate;
-    int         running;
+    int         active;     // reader still receiving; guarded by mutex
     pthread_t   thread;
     pthread_mutex_t mutex;
 } WCapture;
@@ -41,7 +41,10 @@ static void *reader_thread(void *arg)
     WCapture *cap = (WCapture *)arg;
     float fbuf[READ_BUF_SIZE];
 
-    while (cap->running) {
+    /* Read until ffmpeg closes the pipe: on a stop that is after it has
+       flushed the last of the audio; on its own it means the input went
+       away, which wcapture_is_active() reports. */
+    for (;;) {
         ssize_t n = read(cap->fd, fbuf, sizeof(fbuf));
         if (n <= 0) {
             if (n == 0) break;
@@ -76,6 +79,9 @@ static void *reader_thread(void *arg)
                     n_frames, peak, cap->n_samples);
         }
     }
+    pthread_mutex_lock(&cap->mutex);
+    cap->active = 0;
+    pthread_mutex_unlock(&cap->mutex);
     return NULL;
 }
 
@@ -89,7 +95,7 @@ void *wcapture_start(int sample_rate, const char *device)
     if (!cap->buffer) { free(cap); return NULL; }
     cap->capacity = INITIAL_CAPACITY;
     cap->n_samples = 0;
-    cap->running = 1;
+    cap->active = 1;
     pthread_mutex_init(&cap->mutex, NULL);
 
     // Use ffmpeg to capture audio (cross-platform: ALSA, OSS, Pulse, etc.)
@@ -149,11 +155,17 @@ void *wcapture_start(int sample_rate, const char *device)
     return cap;
 }
 
-static void kill_capture(WCapture *cap)
+/* Ends ffmpeg and waits for the reader to drain the pipe.  ffmpeg goes
+   first: the reader may be blocked in read() on an input that delivers
+   nothing, and joining it first would hang the caller. */
+static void end_capture(WCapture *cap)
 {
-    if (cap->pid > 0) {
+    if (cap->pid > 0)
         kill(cap->pid, SIGTERM);
-        waitpid(cap->pid, NULL, WNOHANG);
+    pthread_join(cap->thread, NULL);
+    if (cap->pid > 0) {
+        while (waitpid(cap->pid, NULL, 0) == -1 && errno == EINTR)
+            ;
         cap->pid = 0;
     }
 }
@@ -163,9 +175,7 @@ WCaptureData *wcapture_stop(void *capture)
     if (!capture) return NULL;
     WCapture *cap = (WCapture *)capture;
 
-    cap->running = 0;
-    pthread_join(cap->thread, NULL);
-    kill_capture(cap);
+    end_capture(cap);
     if (cap->fd >= 0) close(cap->fd);
 
     pthread_mutex_lock(&cap->mutex);
@@ -202,9 +212,7 @@ void wcapture_cancel(void *capture)
 {
     if (!capture) return;
     WCapture *cap = (WCapture *)capture;
-    cap->running = 0;
-    pthread_join(cap->thread, NULL);
-    kill_capture(cap);
+    end_capture(cap);
     if (cap->fd >= 0) close(cap->fd);
     pthread_mutex_destroy(&cap->mutex);
     free(cap->buffer);
@@ -233,4 +241,14 @@ int wcapture_snapshot(void *capture, float **out_samples)
     pthread_mutex_unlock(&cap->mutex);
     *out_samples = copy;
     return n;
+}
+
+bool wcapture_is_active(void *capture)
+{
+    if (!capture) return false;
+    WCapture *cap = (WCapture *)capture;
+    pthread_mutex_lock(&cap->mutex);
+    int a = cap->active;
+    pthread_mutex_unlock(&cap->mutex);
+    return a != 0;
 }

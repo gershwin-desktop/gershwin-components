@@ -10,6 +10,7 @@
 #import "NMBackend.h"
 #import "BSDBackend.h"
 #import "CaptivePortalDetector.h"
+#import "AppearanceMetrics.h"
 #include <sys/utsname.h>
 #if defined(__FreeBSD__) || defined(__DragonFly__)
 #include <sys/sysctl.h>
@@ -22,14 +23,14 @@ static const CGFloat kWindowHeight = 440;
 static const CGFloat kServiceListWidth = 180;
 
 // HIG-compliant margins
-static const CGFloat kContentSideMargin = 24.0;
-static const CGFloat kContentBottomMargin = 20.0;
-static const CGFloat kSpace8 = 8.0;
-static const CGFloat kSpace12 = 12.0;
+static const CGFloat kContentSideMargin = METRICS_CONTENT_SIDE_MARGIN;
+static const CGFloat kContentBottomMargin = METRICS_CONTENT_BOTTOM_MARGIN;
+static const CGFloat kSpace8 = METRICS_SPACE_8;
+static const CGFloat kSpace12 = METRICS_SPACE_12;
 
 // HIG-compliant control sizes
-static const CGFloat kButtonHeight = 20.0;
-static const CGFloat kFieldHeight = 22.0;
+static const CGFloat kButtonHeight = METRICS_BUTTON_HEIGHT;
+static const CGFloat kFieldHeight = METRICS_TEXT_INPUT_FIELD_HEIGHT;
 static const CGFloat kLabelWidth = 110;
 static const CGFloat kStatusAreaHeight = 60;
 
@@ -73,6 +74,104 @@ static const CGFloat kStatusAreaHeight = 60;
 - (void)updateClonedMacPopup;
 - (void)setWLANTabShown:(BOOL)shown;
 @end
+
+#pragma mark - Dialog building blocks
+
+/* Sheets and panels are laid out from these helpers so that every dialog of
+   the pane gets the same control heights, spacings and button row. */
+
+static const CGFloat kDialogTitleHeight = 17.0;    // one line of 13 pt
+static const CGFloat kDialogInfoHeight = 14.0;     // one line of 11 pt
+// The label of a 13 pt line is 17 px high; centred on a 22 px field.
+static const CGFloat kDialogLabelInset = 3.0;
+
+static NSTextField *DialogLabel(NSString *text, NSFont *font, NSTextAlignment alignment,
+                                NSRect frame)
+{
+    NSTextField *label = [[[NSTextField alloc] initWithFrame:frame] autorelease];
+    [label setStringValue:text];
+    [label setFont:font];
+    [label setAlignment:alignment];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    return label;
+}
+
+/* A one-line label that must not wrap into a second, clipped line: the
+   network name in it is not under our control. */
+static NSTextField *DialogSingleLineLabel(NSString *text, NSFont *font, NSRect frame)
+{
+    NSTextField *label = DialogLabel(text, font, NSLeftTextAlignment, frame);
+    [[label cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
+    [label setToolTip:text];
+    return label;
+}
+
+static CGFloat DialogTextWidth(NSString *text, NSFont *font)
+{
+    return ceil([text sizeWithAttributes:
+                 [NSDictionary dictionaryWithObject:font forKey:NSFontAttributeName]].width);
+}
+
+static NSButton *DialogButton(NSString *title, id target, SEL action, NSString *keyEquivalent)
+{
+    NSButton *button = [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease];
+    [button setBezelStyle:NSRoundedBezelStyle];
+    [button setTitle:title];
+    [button setTarget:target];
+    [button setAction:action];
+    [button setKeyEquivalent:keyEquivalent];
+    [button sizeToFit];
+    /* sizeToFit also changes the height; the metrics fix it at 20. */
+    NSRect frame = [button frame];
+    frame.size.width = MAX(NSWidth(frame), METRICS_BUTTON_MIN_WIDTH);
+    frame.size.height = METRICS_BUTTON_HEIGHT;
+    [button setFrame:frame];
+    return button;
+}
+
+/* Lays the buttons out along the bottom right edge in the given order
+   (alternate, Cancel, default: the last one is the default button) and makes
+   the last one the window's default button. */
+static void DialogPlaceButtons(NSWindow *window, NSArray *buttons)
+{
+    NSView *content = [window contentView];
+    CGFloat right = NSWidth([content frame]) - METRICS_CONTENT_SIDE_MARGIN;
+    for (NSButton *button in [buttons reverseObjectEnumerator]) {
+        NSRect frame = [button frame];
+        frame.origin.x = right - NSWidth(frame);
+        frame.origin.y = METRICS_CONTENT_BOTTOM_MARGIN;
+        [button setFrame:frame];
+        [button setAutoresizingMask:NSViewMinXMargin | NSViewMaxYMargin];
+        [content addSubview:button];
+        right = NSMinX(frame) - METRICS_BUTTON_HORIZ_INTERSPACE;
+    }
+    [window setDefaultButtonCell:[[buttons lastObject] cell]];
+}
+
+/* Width the buttons take, so that a dialog is never narrower than its own
+   button row. */
+static CGFloat DialogButtonsWidth(NSArray *buttons)
+{
+    CGFloat width = 0;
+    for (NSButton *button in buttons) {
+        width += NSWidth([button frame]);
+    }
+    return width + METRICS_BUTTON_HORIZ_INTERSPACE * ([buttons count] - 1);
+}
+
+static NSPanel *DialogPanel(NSString *title, NSSize contentSize)
+{
+    NSPanel *panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, contentSize.width, contentSize.height)
+                                                styleMask:NSTitledWindowMask
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:YES];
+    [panel setTitle:title];
+    return panel;
+}
+
 
 @implementation NetworkController
 
@@ -151,9 +250,14 @@ static const CGFloat kStatusAreaHeight = 60;
     [interfaces release];
     [wlanNetworks release];
     [mainView release];
+    /* The pulse of a default button must not outlive the button. */
+    [advancedPanel setDefaultButtonCell:nil];
+    [passwordPanel setDefaultButtonCell:nil];
+    [joinNetworkPanel setDefaultButtonCell:nil];
     [advancedPanel release];
     [passwordPanel release];
     [joinNetworkPanel release];
+    [joinNetworkJoinButton release];
     [pendingNetwork release];
     [serviceContextMenu release];
     [super dealloc];
@@ -816,158 +920,158 @@ static const CGFloat kStatusAreaHeight = 60;
 
 - (void)createPasswordPanel
 {
-    passwordPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 400, 180)
-                                               styleMask:NSTitledWindowMask
-                                                 backing:NSBackingStoreBuffered
-                                                   defer:YES];
-    [passwordPanel setTitle:@"Enter Password"];
-    
+    // 24 px for the window edges and the icon, the text column starts at 104.
+    const CGFloat width = 480;
+    const CGFloat textLeft = METRICS_TEXT_LEFT;
+    const CGFloat right = width - METRICS_CONTENT_SIDE_MARGIN;
+    const CGFloat labelWidth = DialogTextWidth(@"Password:", [NSFont systemFontOfSize:13]);
+    const CGFloat fieldLeft = textLeft + labelWidth + METRICS_SPACE_8;
+
+    // Height from the top down: icon margin, title, info, field row, checkbox
+    // row, gap between groups, button, bottom margin.
+    const CGFloat height = METRICS_ICON_TOP + kDialogTitleHeight + METRICS_TITLE_MESSAGE_GAP
+        + kDialogInfoHeight + METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT
+        + METRICS_SPACE_16 + METRICS_RADIO_BUTTON_SIZE + METRICS_SPACE_20
+        + METRICS_BUTTON_HEIGHT + METRICS_CONTENT_BOTTOM_MARGIN;
+
+    passwordPanel = DialogPanel(@"Enter Password", NSMakeSize(width, height));
     NSView *content = [passwordPanel contentView];
-    
-    // Icon
-    NSImageView *lockIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(20, 100, 64, 64)];
-    [lockIcon setImage:[NSImage imageNamed:@"NSLockLockedTemplate"]];
-    [lockIcon setImageScaling:NSImageScaleProportionallyUpOrDown];
-    [content addSubview:lockIcon];
-    [lockIcon release];
-    
-    // SSID label
-    passwordSSIDLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(95, 140, 285, 22)];
-    [passwordSSIDLabel setBezeled:NO];
-    [passwordSSIDLabel setDrawsBackground:NO];
-    [passwordSSIDLabel setEditable:NO];
-    [passwordSSIDLabel setFont:[NSFont boldSystemFontOfSize:13]];
+
+    CGFloat y = height - METRICS_ICON_TOP;
+
+    // The pane's own icon: the lock image this used to ask for is not shipped.
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:
+        NSMakeRect(METRICS_ICON_LEFT, y - METRICS_ICON_SIDE, METRICS_ICON_SIDE, METRICS_ICON_SIDE)];
+    NSString *iconPath = [[NSBundle bundleForClass:[NetworkController class]]
+                          pathForImageResource:@"Network"];
+    NSImage *iconImage = [[NSImage alloc] initWithContentsOfFile:iconPath];
+    [icon setImage:iconImage];
+    [iconImage release];
+    [icon setImageScaling:NSImageScaleProportionallyUpOrDown];
+    [content addSubview:icon];
+    [icon release];
+
+    y -= kDialogTitleHeight;
+    passwordSSIDLabel = [DialogSingleLineLabel(@"", [NSFont boldSystemFontOfSize:13],
+        NSMakeRect(textLeft, y, right - textLeft, kDialogTitleHeight)) retain];
     [content addSubview:passwordSSIDLabel];
-    
-    // Description
-    NSTextField *descLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(95, 110, 285, 30)];
-    [descLabel setStringValue:@"Enter the password for this WLAN network."];
-    [descLabel setBezeled:NO];
-    [descLabel setDrawsBackground:NO];
-    [descLabel setEditable:NO];
-    [descLabel setFont:[NSFont systemFontOfSize:11]];
-    [content addSubview:descLabel];
-    [descLabel release];
-    
-    // Password label
-    NSTextField *pwLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(95, 75, 70, 20)];
-    [pwLabel setStringValue:@"Password:"];
-    [pwLabel setBezeled:NO];
-    [pwLabel setDrawsBackground:NO];
-    [pwLabel setEditable:NO];
-    [pwLabel setAlignment:NSRightTextAlignment];
-    [content addSubview:pwLabel];
-    [pwLabel release];
-    
-    // Password field
-    passwordField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(170, 73, 210, 24)];
+
+    y -= METRICS_TITLE_MESSAGE_GAP + kDialogInfoHeight;
+    [content addSubview:DialogSingleLineLabel(@"This WLAN network requires a password.",
+        [NSFont systemFontOfSize:11],
+        NSMakeRect(textLeft, y, right - textLeft, kDialogInfoHeight))];
+
+    y -= METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    [content addSubview:DialogLabel(@"Password:", [NSFont systemFontOfSize:13], NSRightTextAlignment,
+        NSMakeRect(textLeft, y + kDialogLabelInset, labelWidth, kDialogTitleHeight))];
+
+    passwordField = [[NSSecureTextField alloc] initWithFrame:
+        NSMakeRect(fieldLeft, y, right - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+    // The Join button follows what has been typed.
+    [passwordField setDelegate:self];
     [content addSubview:passwordField];
-    
-    // Remember checkbox
-    rememberPasswordCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(170, 45, 200, 20)];
+
+    y -= METRICS_SPACE_16 + METRICS_RADIO_BUTTON_SIZE;
+    rememberPasswordCheckbox = [[NSButton alloc] initWithFrame:
+        NSMakeRect(fieldLeft, y, right - fieldLeft, METRICS_RADIO_BUTTON_SIZE)];
     [rememberPasswordCheckbox setButtonType:NSSwitchButton];
     [rememberPasswordCheckbox setTitle:@"Remember this network"];
     [rememberPasswordCheckbox setState:NSOnState];
     [content addSubview:rememberPasswordCheckbox];
-    
-    // Buttons
-    passwordCancelButton = [[NSButton alloc] initWithFrame:NSMakeRect(220, 10, 80, 28)];
-    [passwordCancelButton setBezelStyle:NSRoundedBezelStyle];
-    [passwordCancelButton setTitle:@"Cancel"];
-    [passwordCancelButton setTarget:self];
-    [passwordCancelButton setAction:@selector(passwordCancel:)];
-    [passwordCancelButton setKeyEquivalent:@"\033"]; // Escape
-    [content addSubview:passwordCancelButton];
-    
-    passwordConnectButton = [[NSButton alloc] initWithFrame:NSMakeRect(305, 10, 80, 28)];
-    [passwordConnectButton setBezelStyle:NSRoundedBezelStyle];
-    [passwordConnectButton setTitle:@"Join"];
-    [passwordConnectButton setTarget:self];
-    [passwordConnectButton setAction:@selector(passwordConnect:)];
-    [passwordConnectButton setKeyEquivalent:@"\r"]; // Return
-    [content addSubview:passwordConnectButton];
+
+    passwordCancelButton = [DialogButton(@"Cancel", self, @selector(passwordCancel:), @"\033") retain];
+    passwordConnectButton = [DialogButton(@"Join", self, @selector(passwordConnect:), @"\r") retain];
+    [passwordConnectButton setEnabled:NO];
+    DialogPlaceButtons(passwordPanel,
+        [NSArray arrayWithObjects:passwordCancelButton, passwordConnectButton, nil]);
+
+    // Typing goes first; Tab then reaches the option and the buttons.
+    [passwordPanel setInitialFirstResponder:passwordField];
+    [passwordField setNextKeyView:rememberPasswordCheckbox];
+    [rememberPasswordCheckbox setNextKeyView:passwordCancelButton];
+    [passwordCancelButton setNextKeyView:passwordConnectButton];
+    [passwordConnectButton setNextKeyView:passwordField];
 }
 
 #pragma mark - Join Other Network Panel
 
 - (void)createJoinNetworkPanel
 {
-    joinNetworkPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 350, 140)
-                                                  styleMask:NSTitledWindowMask
-                                                    backing:NSBackingStoreBuffered
-                                                      defer:YES];
-    [joinNetworkPanel setTitle:@"Join Other Network"];
-    
+    NSFont *font = [NSFont systemFontOfSize:13];
+    const CGFloat labelWidth = MAX(DialogTextWidth(@"Network name:", font),
+                                   DialogTextWidth(@"Security:", font));
+    const CGFloat fieldLeft = METRICS_CONTENT_SIDE_MARGIN + labelWidth + METRICS_SPACE_8;
+
+    NSButton *cancelButton = DialogButton(@"Cancel", self, @selector(joinOtherNetworkCancel:), @"\033");
+    joinNetworkJoinButton = [DialogButton(@"Join", self, @selector(joinOtherNetworkConfirm:), @"\r") retain];
+    NSArray *buttons = [NSArray arrayWithObjects:cancelButton, joinNetworkJoinButton, nil];
+
+    // Wide enough for the button row, and for a network name of a usual length.
+    const CGFloat width = MAX(DialogButtonsWidth(buttons) + 2 * METRICS_CONTENT_SIDE_MARGIN, 420);
+    const CGFloat right = width - METRICS_CONTENT_SIDE_MARGIN;
+
+    // The first row is a field, the second a pop-up: 20 px below the top
+    // edge, 16 px between rows, 20 px above the buttons.
+    const CGFloat height = METRICS_SPACE_20 + METRICS_TEXT_INPUT_FIELD_HEIGHT
+        + METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT + METRICS_SPACE_20
+        + METRICS_BUTTON_HEIGHT + METRICS_CONTENT_BOTTOM_MARGIN;
+
+    joinNetworkPanel = DialogPanel(@"Join Other Network", NSMakeSize(width, height));
     NSView *content = [joinNetworkPanel contentView];
-    
-    // Network name label
-    NSTextField *nameLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 100, 100, 20)];
-    [nameLabel setStringValue:@"Network Name:"];
-    [nameLabel setBezeled:NO];
-    [nameLabel setDrawsBackground:NO];
-    [nameLabel setEditable:NO];
-    [nameLabel setAlignment:NSRightTextAlignment];
-    [content addSubview:nameLabel];
-    [nameLabel release];
-    
-    // Network name field
-    joinNetworkSSIDField = [[NSTextField alloc] initWithFrame:NSMakeRect(125, 98, 205, 24)];
-    [joinNetworkSSIDField setPlaceholderString:@"SSID"];
+
+    CGFloat y = height - METRICS_SPACE_20 - METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    [content addSubview:DialogLabel(@"Network name:", font, NSRightTextAlignment,
+        NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, y + kDialogLabelInset, labelWidth, kDialogTitleHeight))];
+    joinNetworkSSIDField = [[NSTextField alloc] initWithFrame:
+        NSMakeRect(fieldLeft, y, right - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT)];
+    // The Join button follows what has been typed.
+    [joinNetworkSSIDField setDelegate:self];
     [content addSubview:joinNetworkSSIDField];
-    
-    // Security label
-    NSTextField *secLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 65, 100, 20)];
-    [secLabel setStringValue:@"Security:"];
-    [secLabel setBezeled:NO];
-    [secLabel setDrawsBackground:NO];
-    [secLabel setEditable:NO];
-    [secLabel setAlignment:NSRightTextAlignment];
-    [content addSubview:secLabel];
-    [secLabel release];
-    
-    // Security popup
-    joinNetworkSecurityPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(125, 62, 205, 26)];
+
+    y -= METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT;
+    [content addSubview:DialogLabel(@"Security:", font, NSRightTextAlignment,
+        NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, y + kDialogLabelInset, labelWidth, kDialogTitleHeight))];
+    joinNetworkSecurityPopup = [[NSPopUpButton alloc] initWithFrame:
+        NSMakeRect(fieldLeft, y, right - fieldLeft, METRICS_TEXT_INPUT_FIELD_HEIGHT) pullsDown:NO];
     [joinNetworkSecurityPopup addItemWithTitle:@"None"];
     [joinNetworkSecurityPopup addItemWithTitle:@"WPA/WPA2 Personal"];
     [joinNetworkSecurityPopup addItemWithTitle:@"WPA2/WPA3 Personal"];
     [joinNetworkSecurityPopup addItemWithTitle:@"WPA Enterprise"];
     [content addSubview:joinNetworkSecurityPopup];
-    
-    // Cancel button
-    NSButton *cancelBtn = [[NSButton alloc] initWithFrame:NSMakeRect(170, 15, 80, 28)];
-    [cancelBtn setBezelStyle:NSRoundedBezelStyle];
-    [cancelBtn setTitle:@"Cancel"];
-    [cancelBtn setTarget:self];
-    [cancelBtn setAction:@selector(joinOtherNetworkCancel:)];
-    [cancelBtn setKeyEquivalent:@"\033"]; // Escape
-    [content addSubview:cancelBtn];
-    [cancelBtn release];
-    
-    // Join button
-    NSButton *joinBtn = [[NSButton alloc] initWithFrame:NSMakeRect(255, 15, 80, 28)];
-    [joinBtn setBezelStyle:NSRoundedBezelStyle];
-    [joinBtn setTitle:@"Join"];
-    [joinBtn setTarget:self];
-    [joinBtn setAction:@selector(joinOtherNetworkConfirm:)];
-    [joinBtn setKeyEquivalent:@"\r"]; // Return
-    [content addSubview:joinBtn];
-    [joinBtn release];
+
+    [joinNetworkJoinButton setEnabled:NO];
+    DialogPlaceButtons(joinNetworkPanel, buttons);
+
+    [joinNetworkPanel setInitialFirstResponder:joinNetworkSSIDField];
+    [joinNetworkSSIDField setNextKeyView:joinNetworkSecurityPopup];
+    [joinNetworkSecurityPopup setNextKeyView:cancelButton];
+    [cancelButton setNextKeyView:joinNetworkJoinButton];
+    [joinNetworkJoinButton setNextKeyView:joinNetworkSSIDField];
 }
 
 #pragma mark - Advanced Panel
 
 - (void)createAdvancedPanel
 {
-    advancedPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 550, 400)
-                                               styleMask:NSTitledWindowMask
-                                                 backing:NSBackingStoreBuffered
-                                                   defer:YES];
-    [advancedPanel setTitle:@"Advanced"];
-    
+    NSButton *cancelButton = DialogButton(@"Cancel", self, @selector(closeAdvanced:), @"\033");
+    NSButton *doneButton = DialogButton(@"Done", self, @selector(closeAdvanced:), @"\r");
+    NSArray *buttons = [NSArray arrayWithObjects:cancelButton, doneButton, nil];
+
+    const CGFloat width = 550;
+    const CGFloat height = 400;
+    advancedPanel = DialogPanel(@"Advanced", NSMakeSize(width, height));
     NSView *content = [advancedPanel contentView];
-    
-    advancedTabView = [[NSTabView alloc] initWithFrame:NSMakeRect(10, 50, 530, 340)];
-    
+    DialogPlaceButtons(advancedPanel, buttons);
+
+    // The tab view takes the whole area above the button row: 16 px below
+    // the top edge, 24 px from the sides, 20 px above the buttons.
+    const CGFloat tabBottom = METRICS_CONTENT_BOTTOM_MARGIN + METRICS_BUTTON_HEIGHT + METRICS_SPACE_20;
+    advancedTabView = [[NSTabView alloc] initWithFrame:
+        NSMakeRect(METRICS_CONTENT_SIDE_MARGIN, tabBottom,
+                   width - 2 * METRICS_CONTENT_SIDE_MARGIN,
+                   height - METRICS_SPACE_16 - tabBottom)];
+    [advancedTabView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
     // TCP/IP tab
     NSTabViewItem *tcpipTab = [[NSTabViewItem alloc] initWithIdentifier:@"tcpip"];
     [tcpipTab setLabel:@"TCP/IP"];
@@ -993,26 +1097,6 @@ static const CGFloat kStatusAreaHeight = 60;
     [dot1xTab release];
     
     [content addSubview:advancedTabView];
-    
-    // OK button
-    NSButton *okButton = [[NSButton alloc] initWithFrame:NSMakeRect(455, 10, 80, 28)];
-    [okButton setBezelStyle:NSRoundedBezelStyle];
-    [okButton setTitle:@"OK"];
-    [okButton setTarget:self];
-    [okButton setAction:@selector(closeAdvanced:)];
-    [okButton setKeyEquivalent:@"\r"];
-    [content addSubview:okButton];
-    [okButton release];
-    
-    // Cancel button  
-    NSButton *cancelButton = [[NSButton alloc] initWithFrame:NSMakeRect(365, 10, 80, 28)];
-    [cancelButton setBezelStyle:NSRoundedBezelStyle];
-    [cancelButton setTitle:@"Cancel"];
-    [cancelButton setTarget:self];
-    [cancelButton setAction:@selector(closeAdvanced:)];
-    [cancelButton setKeyEquivalent:@"\033"];
-    [content addSubview:cancelButton];
-    [cancelButton release];
 }
 
 #pragma mark - Refresh and Data
@@ -1471,7 +1555,7 @@ static const CGFloat kStatusAreaHeight = 60;
     @try {
         if (![self validateSelectedInterface]) {
             [self showWarningAlert:@"No Service Selected" 
-                   informativeText:@"Please select a network interface to enable."];
+                   informativeText:@"Select a network service to enable."];
             return;
         }
         
@@ -1500,14 +1584,13 @@ static const CGFloat kStatusAreaHeight = 60;
         } else {
             [self showErrorAlert:@"Enable Failed" 
                  informativeText:[NSString stringWithFormat:
-                     @"Failed to enable interface '%@'. Please check the logs for details.",
+                     @"\"%@\" could not be enabled. Check the system log for details.",
                      displayName]];
         }
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in enableInterface: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Enabling Interface" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Enable Interface" forException:exception];
     }
 }
 
@@ -1516,7 +1599,7 @@ static const CGFloat kStatusAreaHeight = 60;
     @try {
         if (![self validateSelectedInterface]) {
             [self showWarningAlert:@"No Service Selected" 
-                   informativeText:@"Please select a network interface to disable."];
+                   informativeText:@"Select a network service to disable."];
             return;
         }
         
@@ -1532,19 +1615,18 @@ static const CGFloat kStatusAreaHeight = 60;
         }
         
         NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:@"Disable Network Interface?"];
-        [alert setInformativeText:[NSString stringWithFormat:
-                                   @"Are you sure you want to disable '%@'?\n\n"
-                                   @"This will disconnect any active connections.",
-                                   displayName]];
-        [alert addButtonWithTitle:@"Disable"];
+        [alert setMessageText:[NSString stringWithFormat:@"Disable \"%@\"?", displayName]];
+        [alert setInformativeText:@"Active connections through it will be disconnected."];
+        /* Cancel is added first so that it is the default button: Return must
+           not cut a connection by accident. */
         [alert addButtonWithTitle:@"Cancel"];
+        [alert addButtonWithTitle:@"Disable"];
         [alert setAlertStyle:NSWarningAlertStyle];
         
         NSModalResponse response = [alert runModal];
         [alert release];
         
-        if (response == NSAlertFirstButtonReturn) {
+        if (response == NSAlertSecondButtonReturn) {
             NSDebugLLog(@"gwcomp", @"[Network] Disabling interface: %@", displayName);
             
             BOOL success = [backend disableInterface:selectedInterface];
@@ -1559,15 +1641,14 @@ static const CGFloat kStatusAreaHeight = 60;
             } else {
                 [self showErrorAlert:@"Disable Failed" 
                      informativeText:[NSString stringWithFormat:
-                         @"Failed to disable interface '%@'. Please check the logs for details.",
+                         @"\"%@\" could not be disabled. Check the system log for details.",
                          displayName]];
             }
         }
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in disableInterface: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Disabling Interface" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Disable Interface" forException:exception];
     }
 }
 
@@ -1624,7 +1705,7 @@ static const CGFloat kStatusAreaHeight = 60;
     @try {
         if (![self validateSelectedInterface]) {
             [self showWarningAlert:@"No Service Selected" 
-                   informativeText:@"Please select a network service to renew the DHCP lease."];
+                   informativeText:@"Select a network service to renew its DHCP lease."];
             return;
         }
         
@@ -1645,8 +1726,8 @@ static const CGFloat kStatusAreaHeight = 60;
             
             if (success) {
                 NSDebugLLog(@"gwcomp", @"[Network] DHCP renewal initiated successfully");
-                [self showInfoAlert:@"DHCP Lease Renewal" 
-                    informativeText:@"DHCP lease renewal has been initiated. This may take a few moments."];
+                [self showInfoAlert:@"Renewing DHCP Lease" 
+                    informativeText:@"The network address is being renewed. This may take a few moments."];
                 
                 // Schedule a refresh after a short delay
                 [NSTimer scheduledTimerWithTimeInterval:3.0
@@ -1673,8 +1754,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in renewDHCPLease: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Renewing DHCP Lease" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Renew DHCP Lease" forException:exception];
     }
 }
 
@@ -1716,8 +1796,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in toggleWLANPower: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Toggling WLAN" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Switch WLAN On or Off" forException:exception];
     }
 }
 
@@ -1737,15 +1816,14 @@ static const CGFloat kStatusAreaHeight = 60;
         
         WLAN *network = [wlanNetworks objectAtIndex:row];
         if (!network) {
-            [self showErrorAlert:@"Error" informativeText:@"Could not get selected network."];
+            [self showErrorAlert:@"Cannot Join Network" informativeText:@"No network is selected."];
             return;
         }
         [self connectToNetwork:network];
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in joinNetwork: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Joining Network" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Join Network" forException:exception];
     }
 }
 
@@ -1778,7 +1856,7 @@ static const CGFloat kStatusAreaHeight = 60;
     @try {
         if (!network) {
             NSDebugLLog(@"gwcomp", @"[Network] connectToNetwork: network is nil");
-            [self showErrorAlert:@"Error" informativeText:@"No network specified."];
+            [self showErrorAlert:@"Cannot Connect to Network" informativeText:@"No network is selected."];
             return;
         }
         
@@ -1787,14 +1865,14 @@ static const CGFloat kStatusAreaHeight = 60;
         
         if (!backend) {
             NSDebugLLog(@"gwcomp", @"[Network] connectToNetwork: backend is nil");
-            [self showErrorAlert:@"Cannot Connect" 
+            [self showErrorAlert:@"Cannot Connect to Network" 
                  informativeText:@"The network management service is not available."];
             return;
         }
         
         if (![backend isAvailable]) {
             NSDebugLLog(@"gwcomp", @"[Network] connectToNetwork: backend not available");
-            [self showErrorAlert:@"Cannot Connect" 
+            [self showErrorAlert:@"Cannot Connect to Network" 
                  informativeText:@"The network management service is not available."];
             return;
         }
@@ -1819,8 +1897,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] connectToNetwork: EXCEPTION: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Connecting to Network" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Connect to Network" forException:exception];
     }
 }
 
@@ -1834,6 +1911,7 @@ static const CGFloat kStatusAreaHeight = 60;
         // Reset fields
         [joinNetworkSSIDField setStringValue:@""];
         [joinNetworkSecurityPopup selectItemAtIndex:0];
+        [joinNetworkJoinButton setEnabled:NO];
         
         // Show panel as sheet
         [NSApp beginSheet:joinNetworkPanel
@@ -1847,7 +1925,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in joinOtherNetwork: %@", [exception reason]);
-        [self showErrorAlert:@"Error" informativeText:[exception reason]];
+        [self showErrorAlert:@"Cannot Join Network" forException:exception];
     }
 }
 
@@ -1858,7 +1936,7 @@ static const CGFloat kStatusAreaHeight = 60;
         
         if ([ssid length] == 0) {
             [self showWarningAlert:@"Network Name Required" 
-                   informativeText:@"Please enter the network name (SSID)."];
+                   informativeText:@"Enter the name of the network to join."];
             return;
         }
         
@@ -1883,7 +1961,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] Exception in joinOtherNetworkConfirm: %@", [exception reason]);
-        [self showErrorAlert:@"Error" informativeText:[exception reason]];
+        [self showErrorAlert:@"Cannot Join Network" forException:exception];
     }
 }
 
@@ -1900,13 +1978,13 @@ static const CGFloat kStatusAreaHeight = 60;
         
         if (!backend) {
             NSDebugLLog(@"gwcomp", @"[Network] disconnectWLAN: backend is nil");
-            [self showErrorAlert:@"Cannot Disconnect" informativeText:@"Network backend not available."];
+            [self showErrorAlert:@"Cannot Disconnect" informativeText:@"The network management service is not available."];
             return;
         }
         
         if (![backend isAvailable]) {
             NSDebugLLog(@"gwcomp", @"[Network] disconnectWLAN: backend not available");
-            [self showErrorAlert:@"Cannot Disconnect" informativeText:@"Network service not available."];
+            [self showErrorAlert:@"Cannot Disconnect" informativeText:@"The network management service is not available."];
             return;
         }
         
@@ -1922,8 +2000,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] disconnectWLAN: EXCEPTION: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Disconnecting"
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Disconnect" forException:exception];
     }
 }
 
@@ -2017,7 +2094,7 @@ static const CGFloat kStatusAreaHeight = 60;
     @try {
         if (!network) {
             NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: network is nil");
-            [self showErrorAlert:@"Error" informativeText:@"No network specified."];
+            [self showErrorAlert:@"Cannot Connect to Network" informativeText:@"No network is selected."];
             return;
         }
         
@@ -2043,7 +2120,7 @@ static const CGFloat kStatusAreaHeight = 60;
             NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: ERROR - passwordSSIDLabel is nil!");
         } else {
             NSString *labelText = [NSString stringWithFormat:
-                                   @"The network \"%@\" requires a password.", 
+                                   @"Join \"%@\"",
                                    [network ssid] ?: @"(unknown)"];
             [passwordSSIDLabel setStringValue:labelText];
             NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: set label to '%@'", labelText);
@@ -2053,6 +2130,7 @@ static const CGFloat kStatusAreaHeight = 60;
             NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: ERROR - passwordField is nil!");
         } else {
             [passwordField setStringValue:@""];
+            [passwordConnectButton setEnabled:NO];
         }
         
         NSWindow *parentWindow = [mainView window];
@@ -2064,6 +2142,7 @@ static const CGFloat kStatusAreaHeight = 60;
                 modalDelegate:nil
                didEndSelector:nil
                   contextInfo:nil];
+            [passwordPanel makeFirstResponder:passwordField];
             NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: sheet displayed");
         } else {
             NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: no parent window, showing as regular window");
@@ -2073,9 +2152,7 @@ static const CGFloat kStatusAreaHeight = 60;
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] showPasswordPanelForNetwork: EXCEPTION: %@ - %@", 
               [exception name], [exception reason]);
-        [self showErrorAlert:@"Error" 
-             informativeText:[NSString stringWithFormat:@"Could not show password dialog: %@", 
-                             [exception reason]]];
+        [self showErrorAlert:@"Cannot Connect to Network" forException:exception];
     }
 }
 
@@ -2092,7 +2169,7 @@ static const CGFloat kStatusAreaHeight = 60;
         
         if (!pendingNetwork) {
             NSDebugLLog(@"gwcomp", @"[Network] passwordConnect: ERROR - pendingNetwork is nil!");
-            [self showErrorAlert:@"Error" informativeText:@"No network selected."];
+            [self showErrorAlert:@"Cannot Connect to Network" informativeText:@"No network is selected."];
             return;
         }
         
@@ -2102,7 +2179,7 @@ static const CGFloat kStatusAreaHeight = 60;
             NSDebugLLog(@"gwcomp", @"[Network] passwordConnect: ERROR - passwordField is nil!");
             [pendingNetwork release];
             pendingNetwork = nil;
-            [self showErrorAlert:@"Error" informativeText:@"Password field not available."];
+            [self showErrorAlert:@"Cannot Connect to Network" informativeText:@"The password could not be read."];
             return;
         }
         
@@ -2113,7 +2190,7 @@ static const CGFloat kStatusAreaHeight = 60;
             NSDebugLLog(@"gwcomp", @"[Network] passwordConnect: ERROR - backend is nil!");
             [pendingNetwork release];
             pendingNetwork = nil;
-            [self showErrorAlert:@"Error" informativeText:@"Network backend not available."];
+            [self showErrorAlert:@"Cannot Connect to Network" informativeText:@"The network management service is not available."];
             return;
         }
         
@@ -2121,7 +2198,7 @@ static const CGFloat kStatusAreaHeight = 60;
             NSDebugLLog(@"gwcomp", @"[Network] passwordConnect: ERROR - backend not available!");
             [pendingNetwork release];
             pendingNetwork = nil;
-            [self showErrorAlert:@"Error" informativeText:@"Network service not available."];
+            [self showErrorAlert:@"Cannot Connect to Network" informativeText:@"The network management service is not available."];
             return;
         }
         
@@ -2156,9 +2233,7 @@ static const CGFloat kStatusAreaHeight = 60;
             [pendingNetwork release];
             pendingNetwork = nil;
         }
-        [self showErrorAlert:@"Error Connecting" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", 
-                             [exception reason]]];
+        [self showErrorAlert:@"Cannot Connect to Network" forException:exception];
     }
 }
 
@@ -2171,7 +2246,7 @@ static const CGFloat kStatusAreaHeight = 60;
             return;
         }
         
-        // Refresh WiFi networks first
+        // Refresh WLAN networks first
         [self refreshWLANNetworks];
         
         // Then refresh interfaces
@@ -2260,8 +2335,7 @@ static const CGFloat kStatusAreaHeight = 60;
     }
     @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"[Network] toggleServiceActive: EXCEPTION: %@ - %@", [exception name], [exception reason]);
-        [self showErrorAlert:@"Error Toggling Interface" 
-             informativeText:[NSString stringWithFormat:@"An unexpected error occurred: %@", [exception reason]]];
+        [self showErrorAlert:@"Cannot Switch Interface On or Off" forException:exception];
     }
 }
 
@@ -2635,6 +2709,19 @@ static const CGFloat kStatusAreaHeight = 60;
     }
 }
 
+#pragma mark - Dialog input
+
+/* A sheet's primary button is only offered once there is something to act on. */
+- (void)controlTextDidChange:(NSNotification *)notification
+{
+    id field = [notification object];
+    if (field == joinNetworkSSIDField) {
+        [joinNetworkJoinButton setEnabled:[[joinNetworkSSIDField stringValue] length] > 0];
+    } else if (field == passwordField) {
+        [passwordConnectButton setEnabled:[[passwordField stringValue] length] > 0];
+    }
+}
+
 #pragma mark - Error Handling Helpers
 
 - (void)showErrorAlert:(NSString *)message informativeText:(NSString *)info
@@ -2642,10 +2729,21 @@ static const CGFloat kStatusAreaHeight = 60;
     NSAlert *alert = [[NSAlert alloc] init];
     [alert setMessageText:message ? message : @"Error"];
     [alert setInformativeText:info ? info : @"An unknown error occurred."];
-    [alert setAlertStyle:NSCriticalAlertStyle];
+    /* Critical is for what endangers data; a failed connection attempt is
+       an ordinary warning. */
+    [alert setAlertStyle:NSWarningAlertStyle];
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
     [alert release];
+}
+
+/* The exception's reason comes from the backend or the frameworks; it is the
+   detail under a title that says what could not be done. */
+- (void)showErrorAlert:(NSString *)message forException:(NSException *)exception
+{
+    [self showErrorAlert:message
+         informativeText:[NSString stringWithFormat:
+                          @"The operation could not be completed: %@", [exception reason]]];
 }
 
 - (void)showWarningAlert:(NSString *)message informativeText:(NSString *)info
@@ -2696,10 +2794,9 @@ static const CGFloat kStatusAreaHeight = 60;
     NSDebugLLog(@"gwcomp", @"[Network] Captive portal detected, redirect to: %@", redirectURL);
 
     NSAlert *alert = [[NSAlert alloc] init];
-    [alert setMessageText:@"Captive Portal Detected"];
-    [alert setInformativeText:[NSString stringWithFormat:
-        @"The WLAN network requires you to sign in before accessing the internet.\n\n"
-        @"Would you like to open the login page in your browser?"]];
+    [alert setMessageText:@"Sign In to the WLAN Network"];
+    [alert setInformativeText:@"The network requires you to sign in before you can use the internet. "
+        @"Open the sign-in page in your browser?"];
     [alert setAlertStyle:NSInformationalAlertStyle];
     [alert addButtonWithTitle:@"Open in Browser"];
     [alert addButtonWithTitle:@"Cancel"];
@@ -2709,7 +2806,9 @@ static const CGFloat kStatusAreaHeight = 60;
 
     if (result == NSAlertFirstButtonReturn) {
         NSURL *url = [NSURL URLWithString:redirectURL];
-        if (url) {
+        /* The URL comes from the network; only web pages may be opened. */
+        NSString *scheme = [[url scheme] lowercaseString];
+        if ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) {
             /* NSWorkspace openURL: connects to the target app (the browser)
                via DO and calls it synchronously; on the main thread that
                would freeze the UI while the browser is busy.  Defer. */

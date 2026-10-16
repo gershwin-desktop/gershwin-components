@@ -112,7 +112,7 @@ static NSBundle *getFrameworkBundle() {
     NSDebugLLog(@"gwcomp", @"[GSIntroductionStep] Created container view with frame: %@", NSStringFromRect(containerView.frame));
     
     // Welcome message with explicit frame positioning - moved much lower
-    NSTextField *messageLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 180, 360, 40)];
+    NSTextField *messageLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 180, 338, 40)];
     messageLabel.editable = NO;
     messageLabel.selectable = NO;
     messageLabel.bordered = NO;
@@ -128,7 +128,7 @@ static NSBundle *getFrameworkBundle() {
     
     // Feature list
     if (features && features.count > 0) {
-        NSTextField *featuresLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, currentY, 360, 20)];
+        NSTextField *featuresLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, currentY, 338, 20)];
         featuresLabel.editable = NO;
         featuresLabel.selectable = NO;
         featuresLabel.bordered = NO;
@@ -189,6 +189,41 @@ static NSBundle *getFrameworkBundle() {
 
 @end
 
+/* Home for the progress step's two controls.  Their frames are derived from
+ * this view's own bounds, because the assistant window only assigns a frame to
+ * the step view - nothing asks for a constraint pass - and a constraint-built
+ * view is left at 0x0 and renders as an empty card. */
+@interface GSProgressContentView : NSView
+@property (nonatomic, strong) NSTextField *taskLabel;
+@property (nonatomic, strong) NSProgressIndicator *progressIndicator;
+@end
+
+@implementation GSProgressContentView
+
+- (void)setFrameSize:(NSSize)size {
+    [super setFrameSize:size];
+    [self layoutProgressContent];
+}
+
+- (void)setFrame:(NSRect)frame {
+    [super setFrame:frame];
+    [self layoutProgressContent];
+}
+
+- (void)layoutProgressContent {
+    NSRect bounds = [self bounds];
+    if (bounds.size.width < 80.0 || bounds.size.height < 60.0) {
+        return;
+    }
+    // Task label centred a little above the middle, bar 20pt below it -
+    // the spacing the original constraint pair produced.
+    CGFloat midY = bounds.size.height / 2.0;
+    [_taskLabel setFrame:NSMakeRect(20.0, midY - 40.0, bounds.size.width - 40.0, 20.0)];
+    [_progressIndicator setFrame:NSMakeRect(60.0, midY - 80.0, bounds.size.width - 120.0, 20.0)];
+}
+
+@end
+
 @implementation GSProgressStep
 
 - (instancetype)initWithTitle:(NSString *)title 
@@ -208,12 +243,10 @@ static NSBundle *getFrameworkBundle() {
 }
 
 - (NSView *)createProgressView {
-    NSView *containerView = [[NSView alloc] init];
-    containerView.translatesAutoresizingMaskIntoConstraints = NO;
-    
+    GSProgressContentView *containerView = [[GSProgressContentView alloc] initWithFrame:NSZeroRect];
+
     // Current task label
-    NSTextField *taskLabel = [[NSTextField alloc] init];
-    taskLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    NSTextField *taskLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
     taskLabel.editable = NO;
     taskLabel.selectable = NO;
     taskLabel.bordered = NO;
@@ -223,11 +256,11 @@ static NSBundle *getFrameworkBundle() {
     taskLabel.font = [NSFont systemFontOfSize:14.0];
     taskLabel.stringValue = _currentTask ?: GSLocalizedString(@"Processing...", @"Default progress task message");
     taskLabel.alignment = NSCenterTextAlignment;
+    containerView.taskLabel = taskLabel;
     [containerView addSubview:taskLabel];
-    
+
     // Progress indicator
-    NSProgressIndicator *progressIndicator = [[NSProgressIndicator alloc] init];
-    progressIndicator.translatesAutoresizingMaskIntoConstraints = NO;
+    NSProgressIndicator *progressIndicator = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     progressIndicator.style = NSProgressIndicatorBarStyle;
     progressIndicator.indeterminate = _isIndeterminate;
     if (_isIndeterminate) {
@@ -237,49 +270,9 @@ static NSBundle *getFrameworkBundle() {
         progressIndicator.maxValue = 1.0;
         progressIndicator.doubleValue = self.progress;
     }
+    containerView.progressIndicator = progressIndicator;
     [containerView addSubview:progressIndicator];
-    
-    // Constraints
-    [containerView addConstraint:[NSLayoutConstraint constraintWithItem:taskLabel
-                                                             attribute:NSLayoutAttributeCenterX
-                                                             relatedBy:NSLayoutRelationEqual
-                                                                toItem:containerView
-                                                             attribute:NSLayoutAttributeCenterX
-                                                            multiplier:1.0
-                                                              constant:0.0]];
-    
-    [containerView addConstraint:[NSLayoutConstraint constraintWithItem:taskLabel
-                                                             attribute:NSLayoutAttributeCenterY
-                                                             relatedBy:NSLayoutRelationEqual
-                                                                toItem:containerView
-                                                             attribute:NSLayoutAttributeCenterY
-                                                            multiplier:1.0
-                                                              constant:-30.0]];
-    
-    [containerView addConstraint:[NSLayoutConstraint constraintWithItem:progressIndicator
-                                                             attribute:NSLayoutAttributeLeading
-                                                             relatedBy:NSLayoutRelationEqual
-                                                                toItem:containerView
-                                                             attribute:NSLayoutAttributeLeading
-                                                            multiplier:1.0
-                                                              constant:60.0]];
-    
-    [containerView addConstraint:[NSLayoutConstraint constraintWithItem:progressIndicator
-                                                             attribute:NSLayoutAttributeTrailing
-                                                             relatedBy:NSLayoutRelationEqual
-                                                                toItem:containerView
-                                                             attribute:NSLayoutAttributeTrailing
-                                                            multiplier:1.0
-                                                              constant:-60.0]];
-    
-    [containerView addConstraint:[NSLayoutConstraint constraintWithItem:progressIndicator
-                                                             attribute:NSLayoutAttributeTop
-                                                             relatedBy:NSLayoutRelationEqual
-                                                                toItem:taskLabel
-                                                             attribute:NSLayoutAttributeBottom
-                                                            multiplier:1.0
-                                                              constant:20.0]];
-    
+
     return containerView;
 }
 

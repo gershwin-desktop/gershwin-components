@@ -621,6 +621,7 @@ NSArray *parseKeyComboInPrefPane(NSString *keyCombo) {
         
         if ([cleanPart isEqualToString:@"ctrl"] || [cleanPart isEqualToString:@"control"] ||
             [cleanPart isEqualToString:@"shift"] || [cleanPart isEqualToString:@"alt"] ||
+            [cleanPart isEqualToString:@"cmd"] ||
             [cleanPart isEqualToString:@"mod1"] || [cleanPart isEqualToString:@"mod2"] ||
             [cleanPart isEqualToString:@"mod3"] || [cleanPart isEqualToString:@"mod4"] ||
             [cleanPart isEqualToString:@"mod5"]) {
@@ -1059,7 +1060,7 @@ NSArray *parseKeyComboInPrefPane(NSString *keyCombo) {
                                          defaultButton:@"OK"
                                        alternateButton:nil
                                            otherButton:nil
-                             informativeTextWithFormat:@"Key combination format is invalid. Use format: modifier+modifier+key (e.g., ctrl+shift+t).\n\nSupported modifiers: ctrl, shift, alt, mod1-mod5\nSupported keys: a-z, 0-9, f1-f24, special keys, multimedia keys"];
+                             informativeTextWithFormat:@"Key combination format is invalid. Use format: modifier+modifier+key (e.g., ctrl+shift+t).\n\nSupported modifiers: ctrl, shift, alt, cmd, mod1-mod5\nSupported keys: a-z, 0-9, f1-f24, special keys, multimedia keys"];
         [alert runModal];
         return;
     }

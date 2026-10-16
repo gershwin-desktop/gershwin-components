@@ -125,6 +125,42 @@ static NSCharacterSet *_whitespaceSet(void)
   _unameOverride = [unameString copy];
 }
 
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+/* NextBSD is built from FreeBSD and can report itself as FreeBSD, while its
+ * package set is its own, so the kernel name decides. */
+static NSString *_refineFreeBSD(NSString *osID)
+{
+  if (![osID isEqualToString:@"freebsd"])
+    return osID;
+
+  NSTask *task = [[NSTask alloc] init];
+  [task setLaunchPath:@"/sbin/sysctl"];
+  [task setArguments:@[@"-n", @"kern.ostype"]];
+  NSPipe *pipe = [NSPipe pipe];
+  [task setStandardOutput:pipe];
+  [task setStandardError:[NSPipe pipe]];
+  @try
+    {
+      [task launch];
+      [task waitUntilExit];
+      NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+      NSString *ostype = [[[NSString alloc] initWithData:data
+                                               encoding:NSUTF8StringEncoding]
+        stringByTrimmingCharactersInSet:
+          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+      if ([[ostype lowercaseString] isEqualToString:@"nextbsd"])
+        return @"nextbsd";
+    }
+  @catch (NSException *e)
+    {
+      NSLog(@"GWOSDetector: failed to read kern.ostype: %@", e);
+    }
+  return osID;
+}
+#else
+static NSString *_refineFreeBSD(NSString *osID) { return osID; }
+#endif
+
 + (NSString *)currentOSIdentifier
 {
   NSString *osReleasePath = _osReleasePath();
@@ -137,7 +173,7 @@ static NSCharacterSet *_whitespaceSet(void)
       NSLog(@"GWOSDetector -> parsed os-release ID = %@, ID_LIKE = %@", osID, osRelease[@"ID_LIKE"]);
       if (osID && [osID length] > 0)
         {
-          NSString *lower = [osID lowercaseString];
+          NSString *lower = _refineFreeBSD([osID lowercaseString]);
           NSLog(@"GWOSDetector <- '%@'", lower);
           return lower;
         }
@@ -148,14 +184,14 @@ static NSCharacterSet *_whitespaceSet(void)
   NSString *unameStr = _getUname();
   NSLog(@"GWOSDetector -> uname -s = '%@'", unameStr);
   if ([unameStr isEqualToString:@"FreeBSD"])
-    return @"freebsd";
+    return _refineFreeBSD(@"freebsd");
   if ([unameStr isEqualToString:@"OpenBSD"])
     return @"openbsd";
   if ([unameStr isEqualToString:@"Linux"])
     return @"linux";
 
   // Last resort
-  NSString *result = [unameStr lowercaseString];
+  NSString *result = _refineFreeBSD([unameStr lowercaseString]);
   NSLog(@"GWOSDetector <- '%@' (uname fallback)", result);
   return result;
 }
@@ -198,6 +234,38 @@ static NSCharacterSet *_whitespaceSet(void)
   NSArray *fallback = @[[self currentOSIdentifier]];
   NSLog(@"GWOSDetector <- osSearchOrder (fallback) = %@", fallback);
   return fallback;
+}
+
++ (NSArray *)dependencySearchOrder
+{
+  NSMutableArray *order = [NSMutableArray array];
+  for (NSString *osID in [self osSearchOrder])
+    {
+      if (![order containsObject:osID])
+        [order addObject:osID];
+    }
+
+  NSString *family = [self packageManagerFamily];
+  if (family && ![order containsObject:family])
+    [order addObject:family];
+
+  // The kernel is known at build time and is the last resort, so a plist
+  // entry that holds for every Linux distribution or every BSD still counts.
+  NSString *kernel = nil;
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+  kernel = @"freebsd";
+#elif defined(__OpenBSD__)
+  kernel = @"openbsd";
+#elif defined(__NetBSD__)
+  kernel = @"netbsd";
+#elif defined(__linux__)
+  kernel = @"linux";
+#endif
+  if (kernel && ![order containsObject:kernel])
+    [order addObject:kernel];
+
+  NSLog(@"GWOSDetector <- dependencySearchOrder = %@", order);
+  return order;
 }
 
 + (NSString *)packageManagerFamily

@@ -8,7 +8,10 @@
 #import <AppKit/NSOpenGL.h>
 #import <AppKit/NSScrollView.h>
 #import <AppKit/NSClipView.h>
+#import <GNUstepGUI/GSDisplayServer.h>
 #import <GL/gl.h>
+#import <X11/Xlib.h>
+#import <X11/extensions/shape.h>
 #import <math.h>
 
 // Configuration Constants
@@ -22,7 +25,6 @@
 
 // Track indices we've logged with missing textures to avoid spamming logs
 static NSMutableIndexSet *gItemFlowMissingLogged = nil;
-static dispatch_once_t onceTokenMissingLogged;
 
 @interface ItemFlowView () {
     NSMutableArray *_textures; 
@@ -35,6 +37,21 @@ static dispatch_once_t onceTokenMissingLogged;
 }
 - (void)updateScrollFrame;
 @end
+
+static NSSet *ItemFlowChildWindows(Display *display, Window parent)
+{
+    Window root, parentOfParent, *children = NULL;
+    unsigned int count = 0;
+    NSMutableSet *result = [NSMutableSet set];
+
+    if (XQueryTree(display, parent, &root, &parentOfParent, &children, &count)) {
+        for (unsigned int i = 0; i < count; i++) {
+            [result addObject:@(children[i])];
+        }
+        XFree(children);
+    }
+    return result;
+}
 
 @implementation ItemFlowView
 
@@ -55,16 +72,80 @@ static dispatch_once_t onceTokenMissingLogged;
     self = [super initWithFrame:frame pixelFormat:pf];
     if (self) {
         _textures = [NSMutableArray array];
+        _textureImages = [NSMutableArray array];
         _currentPosition = 0.0f;
         _targetPosition = 0.0f;
         _isSyncingScroll = NO;
-        dispatch_once(&onceTokenMissingLogged, ^{
+        if (gItemFlowMissingLogged == nil) {
             gItemFlowMissingLogged = [[NSMutableIndexSet alloc] init];
-        });
+        }
     }
     return self;
 
 // In drawItemAtIndex we'll detect missing textures and log them once per index.
+}
+
+// The backend draws the view in an X subwindow that it creates with a black
+// background, so the X server paints it black on every resize before we can
+// draw again, and a live window resize flickers black. The backend gives no
+// handle to that subwindow, so attach the context here, where the subwindow
+// is the one child window that appears meanwhile.
+- (NSOpenGLContext *)openGLContext {
+    NSWindow *window = [self window];
+    if (window == nil || (glcontext != nil && [glcontext view] == self)) {
+        return [super openGLContext];
+    }
+
+    Display *display = (Display *)[GSServerForWindow(window) serverDevice];
+    Window parent = (Window)(uintptr_t)[window windowRef];
+    NSSet *before = ItemFlowChildWindows(display, parent);
+
+    NSOpenGLContext *context = [super openGLContext];
+    if ([context view] != self) {
+        [context setView:self];
+    }
+
+    NSMutableSet *added = [ItemFlowChildWindows(display, parent) mutableCopy];
+    [added minusSet:before];
+    NSAssert1([added count] == 1, @"Expected one new GL subwindow, found %lu",
+              (unsigned long)[added count]);
+    _pictureWindow = [[added anyObject] unsignedLongValue];
+    XSetWindowBackgroundPixmap(display, (Window)_pictureWindow, None);
+    [self applyUncoveredRects];
+    return context;
+}
+
+- (void)setUncoveredRects:(NSArray *)rects {
+    if (rects == _uncoveredRects || [rects isEqualToArray:_uncoveredRects]) {
+        return;
+    }
+    _uncoveredRects = [rects copy];
+    [self applyUncoveredRects];
+}
+
+// The picture's window is cut away where the view is to show through; its
+// shape is in the pixels of that window, with y growing downwards.
+- (void)applyUncoveredRects {
+    NSWindow *window = [self window];
+    if (_pictureWindow == 0 || window == nil) {
+        return;
+    }
+    Display *display = (Display *)[GSServerForWindow(window) serverDevice];
+    NSRect pixels = [self convertRect:[self bounds] toView:nil];
+    XRectangle whole = { 0, 0, (unsigned short)NSWidth(pixels), (unsigned short)NSHeight(pixels) };
+    XShapeCombineRectangles(display, (Window)_pictureWindow, ShapeBounding, 0, 0,
+                            &whole, 1, ShapeSet, Unsorted);
+
+    for (NSValue *value in _uncoveredRects) {
+        NSRect rect = [self convertRect:[value rectValue] toView:nil];
+        XRectangle hole = { (short)floor(NSMinX(rect) - NSMinX(pixels)),
+                            (short)floor(NSHeight(pixels) - (NSMaxY(rect) - NSMinY(pixels))),
+                            (unsigned short)ceil(NSWidth(rect)),
+                            (unsigned short)ceil(NSHeight(rect)) };
+        XShapeCombineRectangles(display, (Window)_pictureWindow, ShapeBounding, 0, 0,
+                                &hole, 1, ShapeSubtract, Unsorted);
+    }
+    XFlush(display);
 }
 
 - (void)viewDidMoveToSuperview {
@@ -77,6 +158,30 @@ static dispatch_once_t onceTokenMissingLogged;
                                                      name:NSViewBoundsDidChangeNotification
                                                    object:clipView];
     }
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center removeObserver:self name:NSWindowDidDeminiaturizeNotification object:nil];
+    [center removeObserver:self name:NSApplicationDidUnhideNotification object:nil];
+    if ([self window]) {
+        [center addObserver:self
+                   selector:@selector(windowShownAgain:)
+                       name:NSWindowDidDeminiaturizeNotification
+                     object:[self window]];
+        [center addObserver:self
+                   selector:@selector(windowShownAgain:)
+                       name:NSApplicationDidUnhideNotification
+                     object:NSApp];
+    }
+}
+
+// The picture lives in an X subwindow of its own, which the window's backing
+// store does not hold: a window shown again after being minimized or hidden
+// gets its own content back, the carousel has to draw itself anew.
+- (void)windowShownAgain:(NSNotification *)notification {
+    [self setNeedsDisplay:YES];
 }
 
 - (void)boundDidChange:(NSNotification *)notification {
@@ -222,6 +327,7 @@ static dispatch_once_t onceTokenMissingLogged;
 }
 
 - (void)reshape {
+    [self applyUncoveredRects];
     [super reshape];
     NSRect bounds = [self bounds];
     // If we are in a scroll view, use the visible bounds for perspective aspect ratio
@@ -230,7 +336,11 @@ static dispatch_once_t onceTokenMissingLogged;
     }
     GLsizei w = (GLsizei)bounds.size.width;
     GLsizei h = (GLsizei)bounds.size.height;
-    glViewport(0, 0, (GLsizei)[self bounds].size.width, (GLsizei)[self bounds].size.height);
+    // The GL surface is in device pixels, which differ from points when
+    // the window is scaled (GSScaleFactor); window base coordinates are
+    // device pixels.
+    NSSize pixels = [self convertRect:[self bounds] toView:nil].size;
+    glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
     
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -475,12 +585,14 @@ static dispatch_once_t onceTokenMissingLogged;
         if (t != 0) glDeleteTextures(1, &t);
     }
     [_textures removeAllObjects];
+    [_textureImages removeAllObjects];
     
     if (dataSource) {
         NSUInteger count = [dataSource numberOfItemsInItemFlowView:self];
         NSDebugLLog(@"gwcomp", @"[ItemFlow] reloadData: count=%tu (fast path)", count);
         for (NSUInteger i = 0; i < count; i++) {
             [_textures addObject:@(0)];
+            [_textureImages addObject:[NSNull null]];
         }
     }
     
@@ -506,7 +618,10 @@ static dispatch_once_t onceTokenMissingLogged;
     NSUInteger itemCount = _textures.count;
     if (itemCount == 0 && dataSource) {
         itemCount = [dataSource numberOfItemsInItemFlowView:self];
-        while (_textures.count < itemCount) [_textures addObject:@(0)];
+        while (_textures.count < itemCount) {
+            [_textures addObject:@(0)];
+            [_textureImages addObject:[NSNull null]];
+        }
     }
 
     __block int uploadsThisTick = 0;
@@ -528,11 +643,10 @@ static dispatch_once_t onceTokenMissingLogged;
             return;
         }
 
-        // Check if we already have a texture here that is NOT the placeholder
-        GLuint currentTex = [_textures[idx] unsignedIntValue];
-        if (currentTex != 0) {
-            // We already have a real texture (presumably). 
-            // In a more complex app we'd check if it changed, but for now skip.
+        // The picture an item shows can change: a cover or a station's icon
+        // arrives after the item was first drawn with a stand-in.  Only the
+        // same picture again is skipped.
+        if (_textureImages[idx] == (id)img) {
             return;
         }
 
@@ -543,16 +657,21 @@ static dispatch_once_t onceTokenMissingLogged;
 
         GLuint t = [self createTextureFromImage:img];
         if (t != 0) {
+            GLuint old = [_textures[idx] unsignedIntValue];
+            if (old != 0) {
+                glDeleteTextures(1, &old);
+            }
             _textures[idx] = @(t);
+            _textureImages[idx] = img;
             uploadsThisTick++;
             NSDebugLLog(@"gwcomp", @"[ItemFlow] updateTexturesForIndices: assigned texture=%u for index=%tu", (unsigned)t, idx);
         }
     }];
 
     if (pendingIndices.count > 0) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(100 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-            [self updateTexturesForIndices:pendingIndices];
-        });
+        [self performSelector:@selector(updateTexturesForIndices:)
+                   withObject:pendingIndices
+                   afterDelay:0.1];
     }
 
     [self setNeedsDisplay:YES];
@@ -620,6 +739,7 @@ static dispatch_once_t onceTokenMissingLogged;
         // Append placeholder entries - existing textures are untouched
         for (NSUInteger i = oldCount; i < count; i++) {
             [_textures addObject:@(0)];
+            [_textureImages addObject:[NSNull null]];
         }
     } else {
         // Remove trailing entries, freeing their GL textures
@@ -628,6 +748,7 @@ static dispatch_once_t onceTokenMissingLogged;
             if (t != 0) glDeleteTextures(1, &t);
         }
         [_textures removeObjectsInRange:NSMakeRange(count, oldCount - count)];
+        [_textureImages removeObjectsInRange:NSMakeRange(count, oldCount - count)];
     }
 
     [self updateScrollFrame];

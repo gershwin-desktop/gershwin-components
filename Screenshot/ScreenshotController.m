@@ -22,12 +22,51 @@ static const int kMaximumDelay = 60;
  * covered; capturing earlier would include our own window. */
 static const NSTimeInterval kWindowHideSettleDelay = 0.3;
 
+/* Where the frame for a screen recording first appears, until the user
+ * has placed one; pixels. */
+static const CGFloat kDefaultRecordingWidth = 640.0;
+static const CGFloat kDefaultRecordingHeight = 400.0;
+static NSString * const kRecordingAreaKey = @"ScreenRecordingArea";
+static const int kFramesPerSecondChoices[] = { 10, 15, 24, 30, 60 };
+static const int kFramesPerSecondChoiceCount = 5;
+
+/* GNUstep's NSWindow does not turn Escape into cancelOperation:, and the
+ * delay field's editor would swallow the key anyway, so the window looks
+ * at it before anything else does. */
+@interface ScreenshotMainWindow : NSWindow
+@end
+
+@implementation ScreenshotMainWindow
+
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSKeyDown
+        && [[event charactersIgnoringModifiers] isEqualToString:@"\033"]) {
+        [self performClose:self];
+        return;
+    }
+    [super sendEvent:event];
+}
+
+@end
+
 @implementation ScreenshotController
 
 - (void)dealloc
 {
     [countdownTimer invalidate];
     [countdownTimer release];
+    [recordingTimer invalidate];
+    [recordingTimer release];
+    [recorder cancel];
+    [recorder release];
+    [recordingFrame close];
+    [recordingFrame release];
+    [recordButton release];
+    [framesPerSecondPopUp release];
+    [sizePopUp release];
+    [pointerCheckbox release];
+    [soundCheckbox release];
     [windowsHiddenForCapture release];
     [capturedImage release];
     [capturedPNG release];
@@ -145,15 +184,17 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
     CGFloat height = METRICS_CONTENT_TOP_MARGIN + kLabelHeight
                    + METRICS_SPACE_16 + kLabelHeight
                    + METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT
+                   + METRICS_SPACE_16 + kLabelHeight
+                   + METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT
                    + METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT
                    + METRICS_CONTENT_BOTTOM_MARGIN;
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat contentWidth = width - 2 * METRICS_CONTENT_SIDE_MARGIN;
 
-    mainWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
-                                             styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
-                                               backing:NSBackingStoreBuffered
-                                                 defer:NO];
+    mainWindow = [[ScreenshotMainWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
+                                                         styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
+                                                           backing:NSBackingStoreBuffered
+                                                             defer:NO];
     [mainWindow setTitle:@"Screenshot"];
     [mainWindow setDelegate:self];
     [mainWindow setReleasedWhenClosed:NO];
@@ -189,6 +230,16 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
     [content addSubview:windowButton];
     [content addSubview:areaButton];
     [content addSubview:screenButton];
+
+    y -= METRICS_SPACE_16 + kLabelHeight;
+    [content addSubview:[self labelWithString:NSLocalizedString(@"Record a video:", @"")
+                                        frame:NSMakeRect(left, y, contentWidth, kLabelHeight)]];
+
+    y -= METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT;
+    recordButton = [[self buttonWithTitle:NSLocalizedString(@"Record Area...", @"")
+                                  action:@selector(recordArea:)
+                                   frame:NSMakeRect(left, y, buttonWidth, METRICS_BUTTON_HEIGHT)] retain];
+    [content addSubview:recordButton];
 
     y -= METRICS_SPACE_16 + METRICS_TEXT_INPUT_FIELD_HEIGHT;
     // Vertically centers the label text on the field text
@@ -228,6 +279,9 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
     CGFloat width = kPreferencesWidth;
     CGFloat height = METRICS_CONTENT_TOP_MARGIN + kLabelHeight + METRICS_SPACE_8
                    + 2 * METRICS_RADIO_BUTTON_LINE_SPACING
+                   + METRICS_SPACE_20 + kLabelHeight
+                   + 2 * (METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT)
+                   + METRICS_SPACE_8 + 2 * METRICS_RADIO_BUTTON_LINE_SPACING
                    + METRICS_CONTENT_BOTTOM_MARGIN;
     CGFloat left = METRICS_CONTENT_SIDE_MARGIN;
     CGFloat contentWidth = width - 2 * METRICS_CONTENT_SIDE_MARGIN;
@@ -261,7 +315,81 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
                                        frame:NSMakeRect(left, y, contentWidth, METRICS_RADIO_BUTTON_SIZE)] retain];
     [content addSubview:shadowCheckbox];
 
+    [self addRecordingPreferencesTo:content below:y left:left width:contentWidth];
+
     [preferencesWindow center];
+}
+
+- (NSPopUpButton *)popUpWithTitles:(NSArray *)titles selected:(NSInteger)index frame:(NSRect)frame
+{
+    NSPopUpButton *popUp = [[NSPopUpButton alloc] initWithFrame:frame pullsDown:NO];
+    [popUp addItemsWithTitles:titles];
+    [popUp selectItemAtIndex:index];
+    [popUp setTarget:self];
+    [popUp setAction:@selector(recordingOptionChanged:)];
+    return [popUp autorelease];
+}
+
+- (void)addRecordingPreferencesTo:(NSView *)content below:(CGFloat)top
+                             left:(CGFloat)left width:(CGFloat)contentWidth
+{
+    ScreenRecordingOptions *options = [ScreenRecordingOptions optionsFromDefaults];
+
+    CGFloat y = top - METRICS_SPACE_20 - kLabelHeight;
+    NSTextField *hint = [self labelWithString:NSLocalizedString(@"These options apply to screen recordings.", @"")
+                                        frame:NSMakeRect(left, y, contentWidth, kLabelHeight)];
+    [hint setFont:METRICS_FONT_SYSTEM_REGULAR_11];
+    [content addSubview:hint];
+
+    NSTextField *rateLabel = [self labelWithString:NSLocalizedString(@"Frames per second:", @"")
+                                             frame:NSZeroRect];
+    NSTextField *sizeLabel = [self labelWithString:NSLocalizedString(@"Size:", @"") frame:NSZeroRect];
+    [rateLabel sizeToFit];
+    [sizeLabel sizeToFit];
+    [rateLabel setAlignment:NSRightTextAlignment];
+    [sizeLabel setAlignment:NSRightTextAlignment];
+    // Both pop-ups start where the longer label ends
+    CGFloat labelWidth = ceil(MAX(NSWidth([rateLabel frame]), NSWidth([sizeLabel frame])));
+    CGFloat popUpX = left + labelWidth + METRICS_SPACE_8;
+    CGFloat popUpWidth = left + contentWidth - popUpX;
+    CGFloat labelOffset = floor((METRICS_BUTTON_HEIGHT - kLabelHeight) / 2);
+
+    NSMutableArray *rates = [NSMutableArray array];
+    NSInteger rateIndex = 0;
+    for (int i = 0; i < kFramesPerSecondChoiceCount; i++) {
+        [rates addObject:[NSString stringWithFormat:@"%d", kFramesPerSecondChoices[i]]];
+        if (kFramesPerSecondChoices[i] == [options framesPerSecond])
+            rateIndex = i;
+    }
+    y -= METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT;
+    [rateLabel setFrame:NSMakeRect(left, y + labelOffset, labelWidth, kLabelHeight)];
+    [content addSubview:rateLabel];
+    framesPerSecondPopUp = [[self popUpWithTitles:rates selected:rateIndex
+                                            frame:NSMakeRect(popUpX, y, popUpWidth, METRICS_BUTTON_HEIGHT)] retain];
+    [content addSubview:framesPerSecondPopUp];
+
+    y -= METRICS_SPACE_8 + METRICS_BUTTON_HEIGHT;
+    [sizeLabel setFrame:NSMakeRect(left, y + labelOffset, labelWidth, kLabelHeight)];
+    [content addSubview:sizeLabel];
+    NSArray *sizes = [NSArray arrayWithObjects:NSLocalizedString(@"Full Size", @""),
+                      NSLocalizedString(@"Half Size", @""), NSLocalizedString(@"One Third", @""), nil];
+    sizePopUp = [[self popUpWithTitles:sizes selected:MAX(0, MIN(2, [options downscale] - 1))
+                                 frame:NSMakeRect(popUpX, y, popUpWidth, METRICS_BUTTON_HEIGHT)] retain];
+    [content addSubview:sizePopUp];
+
+    y -= METRICS_SPACE_8 + METRICS_RADIO_BUTTON_LINE_SPACING;
+    pointerCheckbox = [[self checkboxWithTitle:NSLocalizedString(@"Show the pointer", @"")
+                                        state:[options showsPointer]
+                                       action:@selector(recordingOptionChanged:)
+                                        frame:NSMakeRect(left, y, contentWidth, METRICS_RADIO_BUTTON_SIZE)] retain];
+    [content addSubview:pointerCheckbox];
+
+    y -= METRICS_RADIO_BUTTON_LINE_SPACING;
+    soundCheckbox = [[self checkboxWithTitle:NSLocalizedString(@"Record sound (WebM and MP4)", @"")
+                                      state:[options recordsSound]
+                                     action:@selector(recordingOptionChanged:)
+                                      frame:NSMakeRect(left, y, contentWidth, METRICS_RADIO_BUTTON_SIZE)] retain];
+    [content addSubview:soundCheckbox];
 }
 
 - (void)setStatus:(NSString *)status
@@ -274,6 +402,7 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
     [windowButton setEnabled:!busy];
     [areaButton setEnabled:!busy];
     [screenButton setEnabled:!busy];
+    [recordButton setEnabled:!busy];
     [delayField setEnabled:!busy];
     if (busy)
         [progressIndicator startAnimation:self];
@@ -308,6 +437,7 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
 {
     if ([ocrTask isRunning])
         [ocrTask terminate];
+    [recorder cancel];
     if (ocrInputPath)
         [[NSFileManager defaultManager] removeItemAtPath:ocrInputPath error:NULL];
     x11_cleanup();
@@ -350,6 +480,18 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
 - (IBAction)toggleIncludeShadow:(id)sender
 {
     [ScreenshotPreferences setIncludeWindowShadow:[sender state] == NSOnState];
+}
+
+- (IBAction)recordingOptionChanged:(id)sender
+{
+    ScreenRecordingOptions *options = [ScreenRecordingOptions optionsFromDefaults];
+    NSInteger rate = [framesPerSecondPopUp indexOfSelectedItem];
+    if (rate >= 0 && rate < kFramesPerSecondChoiceCount)
+        [options setFramesPerSecond:kFramesPerSecondChoices[rate]];
+    [options setDownscale:(int)[sizePopUp indexOfSelectedItem] + 1];
+    [options setShowsPointer:[pointerCheckbox state] == NSOnState];
+    [options setRecordsSound:[soundCheckbox state] == NSOnState];
+    [options saveToDefaults];
 }
 
 #pragma mark - Capture flow
@@ -645,6 +787,194 @@ static const NSTimeInterval kWindowHideSettleDelay = 0.3;
     [self setStatus:[NSString stringWithFormat:
         NSLocalizedString(@"Recognized text copied to clipboard (%lu characters)", @""),
         (unsigned long)[text length]]];
+}
+
+#pragma mark - Screen recording
+
+- (NSRect)initialRecordingArea
+{
+    NSRect screen = [[[NSScreen screens] objectAtIndex:0] frame];
+    NSString *saved = [[NSUserDefaults standardUserDefaults] stringForKey:kRecordingAreaKey];
+    NSRect area = saved ? NSRectFromString(saved) : NSZeroRect;
+    if (NSIsEmptyRect(area) || !NSContainsRect(screen, area))
+        area = NSMakeRect(floor(NSMidX(screen) - kDefaultRecordingWidth / 2),
+                          floor(NSMidY(screen) - kDefaultRecordingHeight / 2),
+                          kDefaultRecordingWidth, kDefaultRecordingHeight);
+    return area;
+}
+
+- (IBAction)recordArea:(id)sender
+{
+    if (![ScreenRecorder ffmpegPath]) {
+        [self runAlertWithTitle:NSLocalizedString(@"ffmpeg Not Found", @"")
+                        message:NSLocalizedString(@"Screen recording needs ffmpeg. Install it with your package manager:\n\n"
+                                                  @"Debian/Ubuntu: sudo apt install ffmpeg\n"
+                                                  @"Arch: sudo pacman -S ffmpeg\n"
+                                                  @"FreeBSD: sudo pkg install ffmpeg\n"
+                                                  @"OpenBSD: doas pkg_add ffmpeg", @"")];
+        return;
+    }
+    [self setBusy:YES];
+    [mainWindow orderOut:nil];
+    [preferencesWindow orderOut:nil];
+    recordingFrame = [[RecordingFrame alloc] initWithArea:[self initialRecordingArea]
+                                                   format:[[ScreenRecordingOptions optionsFromDefaults] format]
+                                                 delegate:self];
+    [recordingFrame show];
+}
+
+- (void)stopRecordingTimer
+{
+    [recordingTimer invalidate];
+    [recordingTimer release];
+    recordingTimer = nil;
+}
+
+- (void)startRecordingTimerWithSelector:(SEL)selector interval:(NSTimeInterval)interval
+{
+    [self stopRecordingTimer];
+    recordingTimer = [[NSTimer timerWithTimeInterval:interval target:self selector:selector
+                                            userInfo:nil repeats:YES] retain];
+    // Keeps ticking while the format pop-up or a menu is tracked
+    [[NSRunLoop currentRunLoop] addTimer:recordingTimer forMode:NSDefaultRunLoopMode];
+    [[NSRunLoop currentRunLoop] addTimer:recordingTimer forMode:NSEventTrackingRunLoopMode];
+}
+
+- (void)finishRecordingSession
+{
+    [self stopRecordingTimer];
+    [[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect([recordingFrame area])
+                                              forKey:kRecordingAreaKey];
+    [recordingFrame close];
+    [recordingFrame autorelease];
+    recordingFrame = nil;
+    [recorder autorelease];
+    recorder = nil;
+    [self setBusy:NO];
+    [NSApp activateIgnoringOtherApps:YES];
+    [mainWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)recordingFrameRecord:(RecordingFrame *)frame
+{
+    recordingCountdown = [self delaySeconds];
+    if (recordingCountdown == 0) {
+        [self startRecording];
+        return;
+    }
+    [recordingFrame setRecordingState:RecordingFrameCountingDown];
+    [recordingFrame showCountdown:recordingCountdown];
+    [self startRecordingTimerWithSelector:@selector(recordingCountdownTick:) interval:1.0];
+}
+
+- (void)recordingCountdownTick:(NSTimer *)timer
+{
+    recordingCountdown--;
+    if (recordingCountdown > 0) {
+        [recordingFrame showCountdown:recordingCountdown];
+        return;
+    }
+    [self stopRecordingTimer];
+    [self startRecording];
+}
+
+- (void)startRecording
+{
+    NSString *message = nil;
+    [recorder release];
+    recorder = [[ScreenRecorder alloc] initWithOptions:[ScreenRecordingOptions optionsFromDefaults]
+                                                  area:[recordingFrame rootArea]
+                                              delegate:self];
+    if (![recorder startReturningError:&message]) {
+        [recorder release];
+        recorder = nil;
+        [recordingFrame setRecordingState:RecordingFrameIdle];
+        [self runAlertWithTitle:NSLocalizedString(@"Recording Failed", @"") message:message];
+        return;
+    }
+    [recordingFrame setRecordingState:RecordingFrameRecording];
+    [recordingFrame showElapsedTime:0];
+    [self startRecordingTimerWithSelector:@selector(recordingTick:) interval:0.5];
+}
+
+- (void)recordingTick:(NSTimer *)timer
+{
+    [recordingFrame showElapsedTime:[recorder elapsedTime]];
+}
+
+- (void)recordingFrameStop:(RecordingFrame *)frame
+{
+    [self stopRecordingTimer];
+    if (!recorder) {
+        // Stopped during the countdown: nothing was recorded yet
+        [recordingFrame setRecordingState:RecordingFrameIdle];
+        return;
+    }
+    [recordingFrame setRecordingState:RecordingFrameSaving];
+    [recorder stop];
+}
+
+- (void)recordingFrameCancel:(RecordingFrame *)frame
+{
+    [recorder cancel];
+    [self finishRecordingSession];
+    [self setStatus:NSLocalizedString(@"Recording cancelled", @"")];
+}
+
+- (void)recordingFrame:(RecordingFrame *)frame didChooseFormat:(ScreenRecordingFormat)format
+{
+    ScreenRecordingOptions *options = [ScreenRecordingOptions optionsFromDefaults];
+    [options setFormat:format];
+    [options saveToDefaults];
+}
+
+- (void)screenRecorderIsConverting:(ScreenRecorder *)aRecorder
+{
+    [recordingFrame setRecordingState:RecordingFrameSaving];
+}
+
+- (void)screenRecorder:(ScreenRecorder *)aRecorder didFailWithMessage:(NSString *)message
+{
+    [self stopRecordingTimer];
+    [recorder autorelease];
+    recorder = nil;
+    [recordingFrame setRecordingState:RecordingFrameIdle];
+    [self runAlertWithTitle:NSLocalizedString(@"Recording Failed", @"") message:message];
+}
+
+- (void)screenRecorder:(ScreenRecorder *)aRecorder didFinishWithFile:(NSString *)path
+{
+    NSString *extension = [path pathExtension];
+    NSString *name = [ScreenRecordingOptions defaultFileNameForDate:[NSDate date] extension:extension];
+    NSString *directory = [[ScreenshotCapture defaultFilePath] stringByDeletingLastPathComponent];
+
+    [recorder retain];
+    [self finishRecordingSession];
+
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    [panel setAllowedFileTypes:[NSArray arrayWithObject:extension]];
+    [panel setCanCreateDirectories:YES];
+    if ([panel runModalForDirectory:directory file:name] != NSOKButton) {
+        [aRecorder discardFile];
+        [aRecorder release];
+        [self setStatus:NSLocalizedString(@"Recording discarded", @"")];
+        return;
+    }
+
+    NSString *target = [panel filename];
+    NSFileManager *manager = [NSFileManager defaultManager];
+    NSError *error = nil;
+    [manager removeItemAtPath:target error:NULL];
+    BOOL moved = [manager moveItemAtPath:path toPath:target error:&error];
+    [aRecorder discardFile];
+    [aRecorder release];
+    if (!moved) {
+        [self runAlertWithTitle:NSLocalizedString(@"Save Failed", @"")
+                        message:[error localizedDescription]];
+        return;
+    }
+    [self setStatus:[NSString stringWithFormat:NSLocalizedString(@"Saved to %@", @""),
+                     [target lastPathComponent]]];
 }
 
 @end

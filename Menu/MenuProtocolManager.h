@@ -26,6 +26,9 @@
 - (NSString *)getMenuObjectPathForWindow:(unsigned long)windowId;
 
 @optional
+// YES when the client says its menu for the window is the complete one, which then
+// wins over the other protocols.  Implemented by the GNUstep importer.
+- (BOOL)menuIsAuthoritativeForWindow:(unsigned long)windowId;
 - (void)setAppMenuWidget:(AppMenuWidget *)widget;
 - (void)cleanup;
 - (void)processDBusMessages;

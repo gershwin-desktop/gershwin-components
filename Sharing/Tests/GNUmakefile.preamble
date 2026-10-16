@@ -1,0 +1,8 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+# The unit under test is plain C shared with the privileged helper.
+t_SshdX11_C_FILES = ../sshd-x11.c
+ADDITIONAL_INCLUDE_DIRS += -I..
+ADDITIONAL_CFLAGS += -Wall -Wextra -Werror
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
+ADDITIONAL_OBJCFLAGS += -Wno-deprecated

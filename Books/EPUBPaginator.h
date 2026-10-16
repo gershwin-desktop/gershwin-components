@@ -5,10 +5,8 @@
  */
 
 #import <AppKit/AppKit.h>
-
-// Marks the first character of a chapter; the paginator forces a page break
-// before any line carrying this attribute so chapters start on a fresh page.
-extern NSString *EPUBPageBreakAttributeName;
+// EPUBPageBreakAttributeName, which forces a page break before a chapter.
+#import "EPUBPageRenderer.h"
 
 @interface EPUBPaginator : NSObject
 

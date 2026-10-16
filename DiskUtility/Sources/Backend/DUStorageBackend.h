@@ -197,10 +197,20 @@ extern NSString *const kDUDiscBlankAllKey;    // e.g. "all" (full blank)
                   completion:(void (^)(NSError *error,
                                        NSString *mountPoint))completion;
 
-// The command-line tools this backend relies on, used by the startup
-// availability check (DUApplicationDelegate) to warn the user about missing
-// helpers before the app runs with reduced functionality. Absent method =>
-// no tool check for this backend.
+// The command-line tools this backend relies on, used by the diagnostics
+// report to show what the host provides. Absent method => no tool list.
 - (NSArray<NSString *> *)expectedToolNames;
+
+/* The subset of -expectedToolNames without which the app cannot do its
+ * actual job: discovery, verify, format, mount, image. The startup check
+ * (DUApplicationDelegate) blocks on these and only warns about the rest.
+ *
+ * The distinction matters: qemu-img, the cdrecord family and the geom RAID
+ * tools are genuinely optional - a system without them still does everything
+ * a disk utility is for - so a modal alert at launch telling the user that
+ * "functionality will be reduced" was a false alarm about tools whose
+ * absence changes nothing, shown before the main window even existed.
+ * Absent method => treat every expected tool as required. */
+- (NSArray<NSString *> *)requiredToolNames;
 
 @end
