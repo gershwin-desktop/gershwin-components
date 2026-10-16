@@ -13,6 +13,7 @@
 #import "YTDLPBackend.h"
 #import "PreferencesController.h"
 #import "PlayerSession.h"
+#import "PlayerViewState.h"
 #import "PlayerViews.h"
 #import "PlayerMediaRemote.h"
 
@@ -85,6 +86,10 @@ typedef NS_ENUM(NSInteger, PlayerMode) {
     NSUInteger pendingFlowIndex;
     BOOL suppressFlowSelection;
     BOOL errorAlertShown;
+    // Inputs of the view besides the session: the current item as shown,
+    // and files being dragged over the window
+    NSString *currentItemName;
+    BOOL dragHover;
 
     // Internet radio
     PlayerMode playerMode;

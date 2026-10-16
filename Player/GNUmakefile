@@ -38,6 +38,7 @@ Player_HEADER_FILES = \
 	PlayerMediaRemote.h \
 	PlayerSession.h \
 	PlayerPlaybackMachine.h \
+	PlayerViewState.h \
 	PlayerPlaylist.h \
 	PlayerMenu.h \
 	PlayerViews.h \
@@ -63,6 +64,7 @@ Player_OBJC_FILES = \
 	../MediaRemote/GSMediaPlayer2.m \
 	PlayerSession.m \
 	PlayerPlaybackMachine.m \
+	PlayerViewState.m \
 	PlayerPlaylist.m \
 	PlayerMenu.m \
 	PlayerViews.m \

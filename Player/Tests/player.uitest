@@ -14,7 +14,11 @@ shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2
 shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
 shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home} && ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Url Tone' /tmp/player-uitest-${home}/tone.mp3"
 
-launch application "Player"
+# openapp, as the other Player scripts do: it finds a build in the user's
+# Applications before the installed copy
+shell "openapp Player >/dev/null 2>&1 &"
+wait 2s
+activate application "Player"
 wait until window "Player" timeout 15s
 wait until menu bar "Player" timeout 10s
 assert text contains "No file loaded"

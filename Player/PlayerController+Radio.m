@@ -97,8 +97,7 @@
         [self radioManagerDidUpdateStations:radio];
     }
     [self layoutSubviews];
-    [self updateControls];
-    [self updateWindowTitle];
+    [self render];
     [mainWindow makeFirstResponder:searchField];
 }
 
@@ -237,7 +236,7 @@
     // Stopped by the user; quitting stops the sound too, but the radio is
     // to play again at the next start then
     [self rememberRadioPlaying:NO];
-    [self updateControls];
+    [self render];
 }
 
 - (void)rememberRadioPlaying:(BOOL)playing
@@ -311,7 +310,7 @@
         [pendingRadioStation release];
         pendingRadioStation = nil;
         [self setRadioStatus:[NSString stringWithFormat:@"Playing: %@", [station name]]];
-        [self updateControls];
+        [self render];
         return;
     }
     [pendingRadioStation release];
@@ -322,7 +321,7 @@
                                              selector:@selector(playPendingStation)
                                                object:nil];
     [self performSelector:@selector(playPendingStation) withObject:nil afterDelay:0.3];
-    [self updateControls];
+    [self render];
 }
 
 - (void)playPendingStation
@@ -332,7 +331,7 @@
     if (station && playerMode == PlayerModeRadio) {
         [[RadioManager sharedManager] playStation:station];
     }
-    [self updateControls];
+    [self render];
 }
 
 - (void)radioSearch:(id)sender
@@ -441,7 +440,7 @@
             : @"No stations found"];
     }
     [self rebuildRadioStationMenu];
-    [self updateControls];
+    [self render];
 }
 
 - (void)radioManagerDidStartPlaying:(RadioManager *)manager station:(RadioStation *)station
@@ -463,8 +462,7 @@
         [flowView setSelectedIndex:index];
         suppressFlowSelection = NO;
     }
-    [self updateControls];
-    [self updateWindowTitle];
+    [self render];
     // The radio started on its own: a client's pause ends here
     [mediaRemote notePlaybackChanged];
 }
@@ -479,7 +477,7 @@
     NSString *name = [manager currentStationName];
     [self setRadioStatus:name ? [NSString stringWithFormat:@"%@ - Stopped", name]
                                      : @"Stopped"];
-    [self updateControls];
+    [self render];
 }
 
 - (void)radioManager:(RadioManager *)manager didFailWithError:(NSString *)errorMessage
@@ -489,7 +487,7 @@
         return;
     }
     [self setRadioStatus:[NSString stringWithFormat:@"Cannot play: %@", errorMessage]];
-    [self updateControls];
+    [self render];
 }
 
 - (void)radioManagerDidUpdateStatus:(RadioManager *)manager status:(NSString *)status
@@ -497,7 +495,7 @@
     if ([status length] > 0) {
         [self setRadioStatus:status];
     }
-    [self updateControls];
+    [self render];
 }
 
 - (void)radioManager:(RadioManager *)manager didUpdateRadioText:(NSString *)radioText

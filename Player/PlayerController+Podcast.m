@@ -208,8 +208,7 @@
     }
 
     [self layoutSubviews];
-    [self updateControls];
-    [self updateWindowTitle];
+    [self render];
     [mainWindow makeFirstResponder:podcastSearchField];
 }
 
@@ -425,7 +424,7 @@
     [[PodcastManager sharedManager] clearSelectedShow];
     [flowView reloadData];
     [self layoutSubviews];
-    [self updateControls];
+    [self render];
     [mainWindow makeFirstResponder:podcastSearchField];
 }
 
@@ -451,7 +450,7 @@
     [[RadioManager sharedManager] playURL:[episode streamURL] displayName:[episode title]];
     [episodeTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
     [self updateShowNotesForSelection];
-    [self updateControls];
+    [self render];
 }
 
 - (void)applyChapters:(NSArray *)chapters toTimeline:(PlayerTimelineView *)timeline
@@ -536,7 +535,7 @@
 - (void)podcastStop
 {
     [[RadioManager sharedManager] stop];
-    [self updateControls];
+    [self render];
 }
 
 - (void)podcastStepEpisodeBy:(NSInteger)delta
@@ -651,7 +650,7 @@
         [self prefetchPodcastArtworkAround:0];
     }
     [self updatePodcastSubscribeButton];
-    [self updateControls];
+    [self render];
 }
 
 - (void)podcastManagerDidUpdateSubscriptions:(PodcastManager *)manager
@@ -676,7 +675,7 @@
         [self setRadioStatus:[NSString stringWithFormat:@"Cannot load episodes: %@", error]];
         [manager clearSelectedShow];
         [self layoutSubviews];
-        [self updateControls];
+        [self render];
         return;
     }
     [self layoutSubviews];
@@ -729,7 +728,7 @@
         }
     }
     [self updateShowNotesForSelection];
-    [self updateControls];
+    [self render];
     [mainWindow makeFirstResponder:episodeTableView];
 }
 
@@ -807,8 +806,7 @@
                                                           repeats:YES];
     }
     [self updatePodcastPosition];
-    [self updateControls];
-    [self updateWindowTitle];
+    [self render];
     // The podcast started on its own: a client's pause ends here
     [mediaRemote notePlaybackChanged];
 }
@@ -819,10 +817,10 @@
     [self setRadioStatus:title ? [NSString stringWithFormat:@"%@ - Stopped", title] : @"Stopped"];
     [positionTimer invalidate];
     positionTimer = nil;
-    [self updateControls];
+    [self render];
 }
 
-// Mode dispatch target of PlayerController.m's -updatePosition (its
+// Mode dispatch target of PlayerController.m's -renderPosition (its
 // -positionTimerFired: drives both modes through the same ivar/timer)
 - (void)updatePodcastPosition
 {
@@ -849,7 +847,7 @@
     [self setRadioStatus:[NSString stringWithFormat:@"Cannot play: %@", errorMessage]];
     [positionTimer invalidate];
     positionTimer = nil;
-    [self updateControls];
+    [self render];
 }
 
 #pragma mark - Episode table (NSTableViewDataSource/Delegate)

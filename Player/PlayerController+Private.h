@@ -42,11 +42,13 @@ extern NSString *const PlayerDefaultsPodcastPlaying;
 - (void)exitFullscreen;
 - (void)showCoverArt;
 - (void)playlistDidChange;
-- (void)updateControls;
+/// Shows the model: buttons, times, title and menu
+- (void)render;
+/// Only the position, while playing
+- (void)renderPosition;
 - (BOOL)radioTuning;
 - (void)revalidateMenu;
 - (void)updateTrackInfo;
-- (void)updateWindowTitle;
 - (float)volume;
 @end
 

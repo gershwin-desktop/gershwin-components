@@ -100,6 +100,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [session release];
     [coverImages release];
     [streamTitles release];
+    [currentItemName release];
     [playImage release];
     [pauseImage release];
     [pendingRadioStation release];
@@ -131,7 +132,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
     [NSApp setMainMenu:[PlayerMenu mainMenuWithTarget:self]];
     [self createWindow];
-    [self updateControls];
+    [self render];
     [self updateTrackInfo];
 }
 
@@ -712,11 +713,11 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         return NO;
     case NSLeftArrowFunctionKey:
         [session skipBy:-kSkipSeconds];
-        [self updatePosition];
+        [self renderPosition];
         return YES;
     case NSRightArrowFunctionKey:
         [session skipBy:kSkipSeconds];
-        [self updatePosition];
+        [self renderPosition];
         return YES;
     case NSUpArrowFunctionKey:
         [self increaseVolume:nil];
@@ -731,11 +732,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)contentViewDragEntered:(BOOL)entered
 {
-    if (entered) {
-        [mainWindow setTitle:@"Player - Add to Playlist"];
-    } else {
-        [self updateWindowTitle];
-    }
+    dragHover = entered;
+    [self render];
 }
 
 - (void)handleDroppedFiles:(NSArray *)paths
@@ -878,9 +876,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         return;
     }
     [ytdlpBackend setFormatSpec:[PreferencesController selectedFormat]];
-    [progressIndicator startAnimation:self];
-    [mainWindow setTitle:@"Player - Finding media..."];
     [ytdlpBackend resolveURL:url];
+    [self render];
 }
 
 - (void)playStreamURL:(NSString *)url title:(NSString *)title
@@ -983,14 +980,12 @@ static const NSTimeInterval kBrowseDelay = 0.5;
                title:(NSString *)title thumbnail:(NSString *)thumbnailURL
             duration:(NSTimeInterval)duration
 {
-    [progressIndicator stopAnimation:self];
     [self playStreamURL:streamURL title:title];
 }
 
 - (void)ytdlpBackend:(YTDLPBackend *)backend didFailWithError:(NSString *)error
 {
-    [progressIndicator stopAnimation:self];
-    [self updateWindowTitle];
+    [self render];
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     [alert setAlertStyle:NSWarningAlertStyle];
     [alert setMessageText:@"No Media Found at This Address"];
@@ -1000,8 +995,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)ytdlpBackendDidCancel:(YTDLPBackend *)backend
 {
-    [progressIndicator stopAnimation:self];
-    [self updateWindowTitle];
+    [self render];
 }
 
 #pragma mark - Playback commands
@@ -1053,7 +1047,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (IBAction)seekToTime:(id)sender
 {
     [session seekToTime:[timeSlider doubleValue]];
-    [self updatePosition];
+    [self renderPosition];
 }
 
 - (IBAction)toggleRepeat:(id)sender
@@ -1061,7 +1055,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     PlayerPlaylist *playlist = [session playlist];
     [playlist setRepeat:![playlist repeat]];
     [[NSUserDefaults standardUserDefaults] setBool:[playlist repeat] forKey:PlayerDefaultsRepeat];
-    [self updateControls];
+    [self render];
 }
 
 - (IBAction)toggleShuffle:(id)sender
@@ -1069,7 +1063,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     PlayerPlaylist *playlist = [session playlist];
     [playlist setShuffle:![playlist shuffle]];
     [[NSUserDefaults standardUserDefaults] setBool:[playlist shuffle] forKey:PlayerDefaultsShuffle];
-    [self updateControls];
+    [self render];
 }
 
 #pragma mark - PlayerMediaRemoteTarget
@@ -1218,7 +1212,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     if ([session state] == PlayerPlaybackStopped || [session state] == PlayerPlaybackEmpty) {
         [self showCoverArt];
     }
-    [self updateControls];
+    [self render];
     // Playback moved for a reason of its own: a client's pause ends here
     [mediaRemote notePlaybackChanged];
     // ... and a subscriber that is showing this state is told, which is the
@@ -1231,7 +1225,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [videoRenderView clear];
     [self showCoverArt];
     [self updateTrackInfo];
-    [self updateControls];
+    [self render];
 
     NSUInteger index = [[session playlist] currentIndex];
     if (index != NSNotFound && index != [flowView selectedIndex]) {
@@ -1264,7 +1258,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [flowView setHidden:YES];
     [videoView setHidden:NO];
     [self layoutSubviews];
-    [self updateControls];
+    [self render];
 }
 
 - (void)playerSession:(PlayerSession *)aSession didDecodeVideoFrameData:(NSData *)data
@@ -1281,7 +1275,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [videoView setHidden:YES];
         [flowView setHidden:NO];
         [self layoutSubviews];
-        [self updateControls];
+        [self render];
     }
 }
 
@@ -1289,80 +1283,84 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 
 - (void)positionTimerFired:(NSTimer *)timer
 {
-    [self updatePosition];
+    [self renderPosition];
 }
 
 - (NSString *)formatTime:(NSTimeInterval)seconds
 {
-    if (seconds < 0 || isnan(seconds) || isinf(seconds)) {
-        seconds = 0;
-    }
-    long total = lround(seconds);
-    if (total >= 3600) {
-        return [NSString stringWithFormat:@"%ld:%02ld:%02ld",
-                total / 3600, (total % 3600) / 60, total % 60];
-    }
-    return [NSString stringWithFormat:@"%ld:%02ld", total / 60, total % 60];
+    return PlayerFormatTime(seconds);
 }
 
-- (void)updatePosition
+- (PlayerViewInputs)viewInputs
+{
+    PlayerViewInputs inputs = PlayerViewInputsMake(PlayerViewModeLocal);
+    inputs.itemName = currentItemName;
+    inputs.hasNext = [session canGoNext];
+    inputs.hasPrevious = [session canGoPrevious];
+    inputs.duration = [session duration];
+    inputs.position = [session currentTime];
+    inputs.pendingPause = [session isPausePending];
+    inputs.resolving = [ytdlpBackend isRunning];
+    inputs.dragHover = dragHover;
+    inputs.buffering = [session isBuffering];
+    return inputs;
+}
+
+- (PlayerViewState)viewState
+{
+    return PlayerViewStateMake([session state], [self viewInputs]);
+}
+
+// The window shows the model and nothing set by hand: every change of the
+// playback state, the track or the inputs ends here
+- (void)render
+{
+    if (playerMode == PlayerModeRadio) {
+        [self updateRadioControls];
+        [self renderModeTitle];
+        return;
+    }
+    if (playerMode == PlayerModePodcast) {
+        [self updatePodcastControls];
+        [self renderModeTitle];
+        return;
+    }
+    PlayerViewState view = [self viewState];
+    [playButton setImage:view.playShowsPause ? pauseImage : playImage];
+    [playButton setTitle:view.playTitle];
+    [playButton setToolTip:view.playToolTip];
+    [playButton setEnabled:view.playEnabled];
+    [stopButton setEnabled:view.stopEnabled];
+    [previousButton setEnabled:view.previousEnabled];
+    [nextButton setEnabled:view.nextEnabled];
+    if (view.spinning) {
+        [progressIndicator startAnimation:self];
+    } else {
+        [progressIndicator stopAnimation:self];
+    }
+    [self showPosition:view];
+    [mainWindow setTitle:view.windowTitle];
+    [self revalidateMenu];
+}
+
+// Only the position, several times a second while playing; the rest of
+// the window and the menu stay as they are
+- (void)renderPosition
 {
     if (playerMode == PlayerModePodcast) {
         [self updatePodcastPosition];
         return;
     }
-    NSTimeInterval duration = [session duration];
-    NSTimeInterval position = [session currentTime];
-    PlayerPlaybackState state = [session state];
-    NSString *total;
-    if (state == PlayerPlaybackEmpty) {
-        total = [self formatTime:0];
-    } else if (state == PlayerPlaybackStopped) {
-        total = @"--";
-    } else if (state == PlayerPlaybackOpening) {
-        // Whether it is a file or a live stream is known only once open
-        total = @"--:--";
-    } else {
-        // A live stream has no end to show
-        total = duration > 0 ? [self formatTime:duration] : @"Live";
-    }
-
-    [currentTimeLabel setStringValue:[self formatTime:position]];
-    [totalTimeLabel setStringValue:total];
-    [timeSlider setEnabled:[session canSeek]];
-    [timeSlider setMaxValue:MAX(duration, 1.0)];
-    [timeSlider setDoubleValue:MIN(position, MAX(duration, 1.0))];
+    [self showPosition:[self viewState]];
 }
 
-- (void)updateControls
+- (void)showPosition:(PlayerViewState)view
 {
-    if (playerMode == PlayerModeRadio) {
-        [self updateRadioControls];
-        return;
-    }
-    if (playerMode == PlayerModePodcast) {
-        [self updatePodcastControls];
-        return;
-    }
-    PlayerPlaybackState state = [session state];
-    BOOL opening = state == PlayerPlaybackOpening;
-    // A pause pressed while opening is kept: the button offers Play again
-    BOOL playing = state == PlayerPlaybackPlaying || (opening && ![session isPausePending]);
-    [playButton setImage:playing ? pauseImage : playImage];
-    [playButton setTitle:playing ? @"Pause" : @"Play"];
-    [playButton setToolTip:(opening && playing) ? @"Stop Loading" : [playButton title]];
-    [playButton setEnabled:[session canPlay]];
-    [stopButton setEnabled:[session canStop]];
-    [previousButton setEnabled:[session canGoPrevious]];
-    [nextButton setEnabled:[session canGoNext]];
-    // Streams take a moment to connect, and web pages to be looked up
-    if ([session isConnecting] || [ytdlpBackend isRunning]) {
-        [progressIndicator startAnimation:self];
-    } else {
-        [progressIndicator stopAnimation:self];
-    }
-    [self updatePosition];
-    [self revalidateMenu];
+    [currentTimeLabel setStringValue:view.currentTime];
+    [totalTimeLabel setStringValue:view.totalTime];
+    [timeSlider setEnabled:view.sliderEnabled];
+    [timeSlider setMaxValue:view.sliderMax];
+    [timeSlider setDoubleValue:view.sliderValue];
 }
 
 // Titles, check marks and enabled state of the menu follow the player's
@@ -1390,17 +1388,20 @@ static const NSTimeInterval kBrowseDelay = 0.5;
 - (void)updateTrackInfo
 {
     NSString *item = [[session playlist] currentItem];
+    [currentItemName release];
+    currentItemName = nil;
     if (!item) {
         [titleLabel setStringValue:@"No file loaded"];
         [artistLabel setStringValue:@"Open files, or drop them here."];
         [albumLabel setStringValue:@""];
         [detailsLabel setStringValue:@""];
-        [self updateWindowTitle];
+        [self render];
         return;
     }
 
     PlayerMediaInfo *info = [PlayerMediaInfo infoForItem:item];
-    [titleLabel setStringValue:[info title] ?: [self displayNameForItem:item]];
+    currentItemName = [([info title] ?: [self displayNameForItem:item]) copy];
+    [titleLabel setStringValue:currentItemName];
     [artistLabel setStringValue:[info artist] ?: @""];
     [albumLabel setStringValue:[info album] ?: @""];
 
@@ -1420,12 +1421,11 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [details addObject:[info composer]];
     }
     [detailsLabel setStringValue:[details componentsJoinedByString:@"  -  "]];
-    [self updateWindowTitle];
+    [self render];
 }
 
-- (void)updateWindowTitle
+- (void)renderModeTitle
 {
-    NSString *item = [[session playlist] currentItem];
     if (playerMode == PlayerModeRadio) {
         NSString *station = [[RadioManager sharedManager] currentStationName];
         [mainWindow setTitle:station ? [NSString stringWithFormat:@"Player - %@", station]
@@ -1434,10 +1434,6 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         NSString *title = [currentPlayingEpisode title];
         [mainWindow setTitle:title ? [NSString stringWithFormat:@"Player - %@", title]
                                    : @"Player - Podcasts"];
-    } else if (item) {
-        [mainWindow setTitle:[NSString stringWithFormat:@"Player - %@", [titleLabel stringValue]]];
-    } else {
-        [mainWindow setTitle:@"Player"];
     }
 }
 
@@ -1454,7 +1450,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     [self loadCoverArt];
     [self updateTrackInfo];
-    [self updateControls];
+    [self render];
 }
 
 // Covers are read on a thread of their own, a slow disk must not freeze
@@ -1623,6 +1619,19 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     SEL action = [item action];
     BOOL local = (playerMode == PlayerModeLocal);
 
+    if (local && (action == @selector(playPause:) || action == @selector(stop:)
+                  || action == @selector(nextTrack:) || action == @selector(previousTrack:))) {
+        // The same view of the state the window shows, not a copy of it
+        PlayerViewState view = [self viewState];
+        if (action == @selector(playPause:)) {
+            [item setTitle:view.playTitle];
+            return view.playEnabled;
+        }
+        if (action == @selector(stop:)) {
+            return view.stopEnabled;
+        }
+        return action == @selector(nextTrack:) ? view.nextEnabled : view.previousEnabled;
+    }
     if (action == @selector(playPause:)) {
         [item setTitle:[playButton title]];
         return [playButton isEnabled];
