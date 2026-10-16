@@ -92,7 +92,9 @@
 - (void)close { [self stop]; connecting = NO; DESTROY(openedURL); position = 0; closes++; }
 - (float)fadeGain { return gain; }
 - (void)setFadeGain:(float)g { gain = g; fadeTarget = g; fadeDuration = 0; }
-- (void)fadeToGain:(float)g duration:(NSTimeInterval)d { fadeTarget = g; fadeDuration = d; if (d == 0) gain = g; }
+/* A ramp is taken as already on its way: the gain counts as its target,
+ * so a fade towards silence is not audible any more for what follows */
+- (void)fadeToGain:(float)g duration:(NSTimeInterval)d { fadeTarget = g; fadeDuration = d; gain = g; }
 - (void)seekToTime:(NSTimeInterval)t { position = t; }
 - (NSTimeInterval)currentTime { return position; }
 - (NSTimeInterval)duration { return openedURL ? length : 0; }
@@ -143,16 +145,16 @@ int main(void)
     FakeMedia *m = [[FakeMedia new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
     PASS([m delegate] == (id)s, "the session listens to its media player");
-    PASS([s state] == PlayerSessionEmpty, "starts empty");
+    PASS([s state] == PlayerPlaybackEmpty, "starts empty");
     PASS(![s canPlay] && ![s canStop] && ![s canGoNext] && ![s canGoPrevious]
          && ![s canSeek], "no transport control makes sense");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionEmpty && m->opens == 0,
+    PASS([s state] == PlayerPlaybackEmpty && m->opens == 0,
          "play without anything loaded does nothing");
     [s stop];
     [s next];
     [s previous];
-    PASS([s state] == PlayerSessionEmpty && m->opens == 0,
+    PASS([s state] == PlayerPlaybackEmpty && m->opens == 0,
          "and so do stop, next and previous");
   END_SET("nothing loaded")
 
@@ -163,7 +165,7 @@ int main(void)
     [s setDelegate: w];
     [s openItems: tracks()];
     PASS([[s playlist] count] == 3, "all files are in the playlist");
-    PASS([s state] == PlayerSessionPlaying, "the first file plays");
+    PASS([s state] == PlayerPlaybackPlaying, "the first file plays");
     PASS_EQUAL(m->openedURL, @"/music/1.mp3", "the first file is the one opened");
     PASS(m->opens == 1, "opened exactly once");
     PASS(w->trackChanges == 1, "one track change is reported");
@@ -185,7 +187,7 @@ int main(void)
     FakeMedia *m = [[FakeMedia new] autorelease];
     PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
     [s addItems: tracks()];
-    PASS([s state] == PlayerSessionPlaying, "dropping files on an idle player plays them");
+    PASS([s state] == PlayerPlaybackPlaying, "dropping files on an idle player plays them");
     PASS_EQUAL(m->openedURL, @"/music/1.mp3", "starting with the first");
   END_SET("adding while stopped starts playback")
 
@@ -199,21 +201,21 @@ int main(void)
     int changes = w->stateChanges;
     m->position = 42;
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPaused && m->paused, "play/pause pauses");
+    PASS([s state] == PlayerPlaybackPaused && m->paused, "play/pause pauses");
     PASS(w->stateChanges == changes + 1, "the pause is reported");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPlaying && !m->paused, "and resumes");
+    PASS([s state] == PlayerPlaybackPlaying && !m->paused, "and resumes");
     PASS(m->position == 42 && m->opens == 1, "resuming keeps the position");
 
     [s stop];
-    PASS([s state] == PlayerSessionStopped && !m->playing, "stop stops");
+    PASS([s state] == PlayerPlaybackStopped && !m->playing, "stop stops");
     PASS([[s playlist] count] == 3, "stopped, unlike empty, still has its list");
     PASS([s currentTime] == 0, "stop goes back to the start");
     PASS([[s playlist] currentIndex] == 0, "the track stays selected");
     PASS(![s canStop] && ![s canSeek], "stop and seeking are off while stopped");
     PASS([s canPlay], "play is available");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPlaying, "play after stop plays again");
+    PASS([s state] == PlayerPlaybackPlaying, "play after stop plays again");
     PASS_EQUAL(m->openedURL, @"/music/1.mp3", "the same track");
   END_SET("play, pause, stop")
 
@@ -226,7 +228,7 @@ int main(void)
     [s togglePlayPause];
     [s next];
     PASS_EQUAL(m->openedURL, @"/music/3.mp3", "next from pause goes on too");
-    PASS([s state] == PlayerSessionPlaying, "and plays it");
+    PASS([s state] == PlayerPlaybackPlaying, "and plays it");
     PASS(![s canGoNext], "no next after the last track");
     [s next];
     PASS_EQUAL(m->openedURL, @"/music/3.mp3", "next at the end changes nothing");
@@ -259,10 +261,10 @@ int main(void)
     [s openItems: tracks()];
     [m finishTrack];
     PASS_EQUAL(m->openedURL, @"/music/2.mp3", "the next track follows");
-    PASS([s state] == PlayerSessionPlaying, "and plays");
+    PASS([s state] == PlayerPlaybackPlaying, "and plays");
     [m finishTrack];
     [m finishTrack];
-    PASS([s state] == PlayerSessionStopped, "after the last track playback stops");
+    PASS([s state] == PlayerPlaybackStopped, "after the last track playback stops");
     PASS([[s playlist] currentIndex] == 0,
          "and the first track is ready to play the list again");
     PASS([s currentTime] == 0, "from its start");
@@ -273,7 +275,7 @@ int main(void)
     [s next];
     [m finishTrack];
     PASS_EQUAL(m->openedURL, @"/music/1.mp3", "with repeat the list starts over");
-    PASS([s state] == PlayerSessionPlaying, "and keeps playing");
+    PASS([s state] == PlayerPlaybackPlaying, "and keeps playing");
   END_SET("end of a track")
 
   START_SET("files that cannot be played")
@@ -286,11 +288,11 @@ int main(void)
     [m finishTrack];
     PASS_EQUAL(m->openedURL, @"/music/3.mp3", "a broken file is skipped");
     PASS([w->failures count] == 1, "and reported once");
-    PASS([s state] == PlayerSessionPlaying, "playback goes on");
+    PASS([s state] == PlayerPlaybackPlaying, "playback goes on");
 
     [m->unopenable addObject: @"/music/bad.mp3"];
     [s openItems: @[@"/music/bad.mp3"]];
-    PASS([s state] == PlayerSessionStopped, "a single broken file leaves the player stopped");
+    PASS([s state] == PlayerPlaybackStopped, "a single broken file leaves the player stopped");
     PASS([w->failures count] == 2, "and is reported");
   END_SET("files that cannot be played")
 
@@ -335,7 +337,7 @@ int main(void)
     m->slow = YES;
     [s openItems: @[@"http://radio.example/live"]];
     PASS([s isConnecting], "the session says it is connecting");
-    PASS([s state] == PlayerSessionOpening,
+    PASS([s state] == PlayerPlaybackOpening,
          "opening is a state of its own, not playing yet");
     PASS([s canStop], "the attempt can be stopped");
     PASS([s currentTime] == 0 && [s duration] == 0 && ![s canSeek],
@@ -343,20 +345,20 @@ int main(void)
     int changes = w->stateChanges;
     [m finishConnecting];
     PASS(![s isConnecting], "once the stream plays it is no longer connecting");
-    PASS([s state] == PlayerSessionPlaying, "and it plays");
+    PASS([s state] == PlayerPlaybackPlaying, "and it plays");
     PASS(w->stateChanges > changes, "and the change is reported");
 
     [s openItems: @[@"http://radio.example/other"]];
     PASS([s isConnecting], "connecting again for the next stream");
     [s stop];
-    PASS(![s isConnecting] && !m->connecting && [s state] == PlayerSessionStopped,
+    PASS(![s isConnecting] && !m->connecting && [s state] == PlayerPlaybackStopped,
          "stop gives up the attempt");
 
     m->slow = NO;
     [s openItems: @[@"http://radio.example/live"]];
     [m failWhilePlaying];
     PASS([w->failures count] == 1, "a stream that breaks off is reported");
-    PASS([s state] == PlayerSessionStopped, "and playback stops when nothing follows");
+    PASS([s state] == PlayerPlaybackStopped, "and playback stops when nothing follows");
 
     [w->failures removeAllObjects];
     [s openItems: tracks()];
@@ -371,27 +373,27 @@ int main(void)
     [s setFadeDuration: 0];
     m->slow = YES;
     [s openItems: tracks()];
-    PASS([s state] == PlayerSessionOpening, "a slow item is opening");
+    PASS([s state] == PlayerPlaybackOpening, "a slow item is opening");
     [s seekToTime: 30];
     PASS(m->position == 0, "a seek while opening does not reach the player yet");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionOpening, "pause while opening keeps opening");
+    PASS([s state] == PlayerPlaybackOpening, "pause while opening keeps opening");
     PASS([s isPausePending], "and remembers the pause");
     PASS(m->opens == 1 && m->connecting, "the attempt goes on");
     [m finishConnecting];
-    PASS([s state] == PlayerSessionPaused, "once open it lands paused");
+    PASS([s state] == PlayerPlaybackPaused, "once open it lands paused");
     PASS(m->paused, "the player is paused");
     PASS(m->position == 30, "at the position asked for while opening");
     PASS(![s isPausePending], "nothing is pending any more");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPlaying && !m->paused, "play resumes");
+    PASS([s state] == PlayerPlaybackPlaying && !m->paused, "play resumes");
 
     [s next];
     [s togglePlayPause];
     [s togglePlayPause];
     PASS(![s isPausePending], "pressing play again while opening forgets the pause");
     [m finishConnecting];
-    PASS([s state] == PlayerSessionPlaying && !m->paused, "and it plays once open");
+    PASS([s state] == PlayerPlaybackPlaying && !m->paused, "and it plays once open");
 
     [s next];
     [s seekToTime: 20];
@@ -400,13 +402,13 @@ int main(void)
     PASS_EQUAL(m->openedURL, @"/music/2.mp3", "previous while opening opens the item before");
     PASS(![s isPausePending], "choosing another item drops the pending pause");
     [m finishConnecting];
-    PASS([s state] == PlayerSessionPlaying && m->position == 0,
+    PASS([s state] == PlayerPlaybackPlaying && m->position == 0,
          "and the pending seek, which belonged to the item given up");
 
     [s next];
     [s togglePlayPause];
     [s stop];
-    PASS([s state] == PlayerSessionStopped && !m->connecting && ![s isPausePending],
+    PASS([s state] == PlayerPlaybackStopped && !m->connecting && ![s isPausePending],
          "stop while opening gives up the attempt and what was pending");
   END_SET("pause and seek while opening")
 
@@ -417,12 +419,53 @@ int main(void)
     [s openItems: tracks()];
     [s stop];
     [s seekToTime: 25];
-    PASS([s state] == PlayerSessionStopped && m->opens == 1,
+    PASS([s state] == PlayerPlaybackStopped && m->opens == 1,
          "seeking while stopped opens nothing");
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPlaying && m->position == 25,
+    PASS([s state] == PlayerPlaybackPlaying && m->position == 25,
          "play starts where it was sought to");
   END_SET("seeking while stopped")
+
+  START_SET("the end of a track racing a pause")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s openItems: tracks()];
+    /* The playback thread reached the end and no longer plays, but its
+     * message saying so is still on its way to the main thread */
+    m->playing = NO;
+    [s togglePlayPause];
+    PASS([s state] == PlayerPlaybackPaused, "a pause in that moment is taken");
+    int opens = m->opens;
+    [m finishTrack];
+    PASS([s state] == PlayerPlaybackStopped,
+         "the late end leaves the player stopped, not paused at the end");
+    PASS([[s playlist] currentIndex] == 1, "on the next track");
+    PASS(m->opens == opens, "without playing it behind the user's back");
+  END_SET("the end of a track racing a pause")
+
+  START_SET("a fade belongs to the state that started it")
+    FakeMedia *m = [[FakeMedia new] autorelease];
+    PlayerSession *s = [[[PlayerSession alloc] initWithMedia: m] autorelease];
+    [s openItems: tracks()];
+    m->position = 42;
+    [s togglePlayPause];
+    [s seekToTime: 10];
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS(m->paused && m->position == 10,
+         "a seek while the pause fades out moves the position and keeps the pause");
+    [s togglePlayPause];
+    [s togglePlayPause];
+    [s togglePlayPause];
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS([s state] == PlayerPlaybackPlaying && !m->paused,
+         "no pause of an earlier state comes in after playing again");
+    int closes = m->closes;
+    [s stop];
+    [s next];
+    [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
+    PASS([s state] == PlayerPlaybackPlaying && m->openedURL != nil && m->closes == closes + 1,
+         "the close after stop's fade is void once the next track plays");
+  END_SET("a fade belongs to the state that started it")
 
   START_SET("streams fade in and out")
     FakeMedia *m = [[FakeMedia new] autorelease];
@@ -436,7 +479,7 @@ int main(void)
 
     int closes = m->closes;
     [s stop];
-    PASS([s state] == PlayerSessionStopped, "stop takes effect at once");
+    PASS([s state] == PlayerPlaybackStopped, "stop takes effect at once");
     PASS(m->fadeTarget == 0.0f && m->fadeDuration > 0.5, "the stream fades out");
     PASS(m->closes == closes, "and is not cut off");
     [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
@@ -448,7 +491,7 @@ int main(void)
     [s openItems: @[@"http://radio.example/other"]];
     [m finishConnecting];
     [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
-    PASS([s state] == PlayerSessionPlaying && m->openedURL != nil,
+    PASS([s state] == PlayerPlaybackPlaying && m->openedURL != nil,
          "playing again during the fade is not cut off by the pending close");
 
     m->slow = NO;
@@ -463,14 +506,14 @@ int main(void)
     [s openItems: tracks()];
     m->position = 42;
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPaused, "pause takes effect at once");
+    PASS([s state] == PlayerPlaybackPaused, "pause takes effect at once");
     PASS(m->fadeTarget == 0.0f && m->fadeDuration > 0.5, "the track fades out");
     PASS(!m->paused, "and is not cut off");
     [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
     PASS(m->paused, "it pauses once faded out");
 
     [s togglePlayPause];
-    PASS([s state] == PlayerSessionPlaying && !m->paused, "play resumes");
+    PASS([s state] == PlayerPlaybackPlaying && !m->paused, "play resumes");
     PASS(m->fadeTarget == 1.0f && m->fadeDuration > 0.5, "fading in");
 
     [s togglePlayPause];
@@ -481,7 +524,7 @@ int main(void)
 
     int closes = m->closes;
     [s stop];
-    PASS([s state] == PlayerSessionStopped, "stop takes effect at once");
+    PASS([s state] == PlayerPlaybackStopped, "stop takes effect at once");
     PASS(m->fadeTarget == 0.0f && m->fadeDuration > 0.5, "the track fades out");
     PASS(m->closes == closes, "and is not cut off");
     [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 1.3]];
@@ -574,7 +617,7 @@ int main(void)
     [s2 restoreState: playing];
     PASS([[[s2 playlist] items] isEqual: tracks()], "the list comes back");
     PASS([[s2 playlist] currentIndex] == 1, "with the same track current");
-    PASS([s2 state] == PlayerSessionPlaying && [m2->openedURL isEqual: @"/music/2.mp3"],
+    PASS([s2 state] == PlayerPlaybackPlaying && [m2->openedURL isEqual: @"/music/2.mp3"],
          "playing again, as it played when it was kept");
     PASS(m2->position == 42, "from where it was");
 
@@ -584,7 +627,7 @@ int main(void)
     PlayerSession *s3 = [[[PlayerSession alloc] initWithMedia: m3] autorelease];
     [s3 setFadeDuration: 0];
     [s3 restoreState: paused];
-    PASS([s3 state] == PlayerSessionStopped && m3->opens == 0,
+    PASS([s3 state] == PlayerPlaybackStopped && m3->opens == 0,
          "a paused track comes back without playing");
     PASS([[s3 playlist] currentIndex] == 1, "but chosen");
     [s3 togglePlayPause];
@@ -607,7 +650,7 @@ int main(void)
     PlayerSession *s5 = [[[PlayerSession alloc] initWithMedia: m5] autorelease];
     [s5 restoreState: nil];
     [s5 restoreState: @{@"items": @"not a list"}];
-    PASS([[s5 playlist] count] == 0 && [s5 state] == PlayerSessionEmpty,
+    PASS([[s5 playlist] count] == 0 && [s5 state] == PlayerPlaybackEmpty,
          "nothing or something unreadable leaves the list empty");
   END_SET("the list is remembered")
 

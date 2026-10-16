@@ -7,8 +7,6 @@
 #import "PlayerSession.h"
 #import "PlayerAsync.h"
 
-// Previous restarts the track after this many seconds, like CD players do
-static const NSTimeInterval kRestartThreshold = 3.0;
 static const NSTimeInterval kDefaultStreamFadeDuration = 1.0;
 // Resuming this close to the start of a track counts as starting it, which
 // must not soften the attack of its first notes
@@ -22,11 +20,29 @@ static BOOL isStream(NSString *item)
     return [item rangeOfString:@"://"].location != NSNotFound && ![item hasPrefix:@"file://"];
 }
 
+/// The pause or close that waits for a fade-out.  It belongs to the state
+/// that asked for it and is void once the machine committed another
+/// transition (its effect generation moved on).
+@interface PlayerDelayedEffect : NSObject
+{
+@public
+    PlayerEffectType type;
+    NSUInteger effectGeneration;
+    id<MediaPlayback> media;
+}
+@end
+
+@implementation PlayerDelayedEffect
+- (void)dealloc
+{
+    [media release];
+    [super dealloc];
+}
+@end
+
 @implementation PlayerSession
 
 @synthesize delegate = _delegate;
-@synthesize playlist = _playlist;
-@synthesize state = _state;
 @synthesize fadeDuration = _fadeDuration;
 @synthesize mediaFactory = _mediaFactory;
 
@@ -36,12 +52,11 @@ static BOOL isStream(NSString *item)
     if (self) {
         _media = [media retain];
         [_media setDelegate:self];
-        _playlist = [[PlayerPlaylist alloc] init];
+        _machine = [[PlayerPlaybackMachine alloc] init];
         _volume = 1.0f;
-        _state = PlayerSessionEmpty;
         _fadeDuration = kDefaultStreamFadeDuration;
         _fadingMedia = [[NSMutableArray alloc] init];
-        _pendingSeek = -1.0;
+        _queuedEvents = [[NSMutableArray alloc] init];
     }
     return self;
 }
@@ -54,11 +69,12 @@ static BOOL isStream(NSString *item)
         [media close];
     }
     [_fadingMedia release];
+    [_queuedEvents release];
     [_mediaFactory release];
     [_media setDelegate:nil];
     [_media close];
     [_media release];
-    [_playlist release];
+    [_machine release];
     [super dealloc];
 }
 
@@ -86,43 +102,55 @@ static BOOL isStream(NSString *item)
     [_media setMuted:muted];
 }
 
-#pragma mark - Playlist
+#pragma mark - Commands
 
 - (void)openItems:(NSArray *)items
 {
-    [self closeMedia];
-    [self dropPending];
-    [_playlist removeAllItems];
-    [self appendItems:items];
-    [self playFromIndex:[_playlist indexAfterCurrent] skippingBroken:YES];
+    [self send:PlayerEventWithItems(PlayerEventOpen, items)];
 }
 
 - (void)addItems:(NSArray *)items
 {
-    NSUInteger firstNew = [_playlist count];
-    [self appendItems:items];
-    if ((_state == PlayerSessionStopped || _state == PlayerSessionEmpty)
-        && firstNew < [_playlist count]) {
-        [self playFromIndex:firstNew skippingBroken:YES];
-    }
-}
-
-- (void)appendItems:(NSArray *)items
-{
-    for (NSString *item in items) {
-        [_playlist addItem:item];
-    }
+    [self send:PlayerEventWithItems(PlayerEventAdd, items)];
 }
 
 - (BOOL)playItemAtIndex:(NSUInteger)index
 {
-    if (index >= [_playlist count]) {
+    if (index >= [[self playlist] count]) {
         return NO;
     }
-    if (index == [_playlist currentIndex] && _state != PlayerSessionStopped) {
-        return YES;
-    }
-    return [self playFromIndex:index skippingBroken:NO];
+    [self send:PlayerEventSelectIndex(index)];
+    return YES;
+}
+
+- (void)togglePlayPause
+{
+    [self send:PlayerEventMake(PlayerEventToggle)];
+}
+
+- (void)stop
+{
+    [self send:PlayerEventMake(PlayerEventStop)];
+}
+
+- (void)next
+{
+    [self send:PlayerEventMake(PlayerEventNext)];
+}
+
+- (void)previous
+{
+    [self send:PlayerEventPreviousAt([self currentTime])];
+}
+
+- (void)seekToTime:(NSTimeInterval)seconds
+{
+    [self send:PlayerEventSeekTo(seconds, [self duration])];
+}
+
+- (void)skipBy:(NSTimeInterval)seconds
+{
+    [self seekToTime:[self currentTime] + seconds];
 }
 
 #pragma mark - Remembering
@@ -133,17 +161,20 @@ static NSString *const kStateStopped = @"stopped";
 
 - (NSDictionary *)stateToRemember
 {
-    NSUInteger index = [_playlist currentIndex];
+    PlayerPlaylist *playlist = [self playlist];
+    NSUInteger index = [playlist currentIndex];
+    PlayerPlaybackState state = [_machine state];
     // An item still opening was about to play, or to be paused
-    BOOL opening = _state == PlayerSessionOpening;
-    BOOL playing = _state == PlayerSessionPlaying || (opening && !_pendingPause);
-    BOOL paused = _state == PlayerSessionPaused || (opening && _pendingPause);
-    NSString *state = playing ? kStatePlaying : paused ? kStatePaused : kStateStopped;
-    NSTimeInterval position = _pendingSeek >= 0 ? _pendingSeek : [self currentTime];
-    return @{@"items": [[[_playlist items] copy] autorelease],
+    BOOL opening = state == PlayerPlaybackOpening;
+    BOOL playing = state == PlayerPlaybackPlaying || (opening && ![_machine pendingPause]);
+    BOOL paused = state == PlayerPlaybackPaused || (opening && [_machine pendingPause]);
+    NSString *name = playing ? kStatePlaying : paused ? kStatePaused : kStateStopped;
+    NSTimeInterval position = [_machine pendingSeek] >= 0 ? [_machine pendingSeek]
+                                                          : [self currentTime];
+    return @{@"items": [[[playlist items] copy] autorelease],
              @"currentIndex": @(index == NSNotFound ? -1 : (NSInteger)index),
              @"position": @(position),
-             @"state": state};
+             @"state": name};
 }
 
 - (void)restoreState:(NSDictionary *)state
@@ -163,174 +194,56 @@ static NSString *const kStateStopped = @"stopped";
     NSTimeInterval position = [positionValue respondsToSelector:@selector(doubleValue)]
         ? [positionValue doubleValue] : 0.0;
     NSString *playState = [state objectForKey:@"state"];
-
-    [self closeMedia];
-    [self dropPending];
-    [_playlist removeAllItems];
-    [self appendItems:items];
-    [self setState:[_playlist count] > 0 ? PlayerSessionStopped : PlayerSessionEmpty];
-    if (index < 0 || (NSUInteger)index >= [_playlist count]) {
-        return;
-    }
-    [_playlist setCurrentIndex:(NSUInteger)index];
-    [self notifyTrackChange];
-
     BOOL playing = [kStatePlaying isEqual:playState];
-    if ((playing || [kStatePaused isEqual:playState]) && position > 0) {
-        _pendingSeek = position;
-    }
-    if (playing) {
-        [self playFromIndex:(NSUInteger)index skippingBroken:YES];
-    }
-}
+    // Only a track that played or was paused continues where it was
+    BOOL resumes = playing || [kStatePaused isEqual:playState];
 
-#pragma mark - Transport
-
-- (void)togglePlayPause
-{
-    switch (_state) {
-    case PlayerSessionEmpty:
-        break;
-    case PlayerSessionOpening:
-        // Nothing plays yet that could pause: the item lands paused once
-        // open, and a second press takes that back
-        _pendingPause = !_pendingPause;
-        [self notifyStateChange];
-        break;
-    case PlayerSessionPlaying:
-        if (_fadeDuration > 0 && [_media isPlaying]) {
-            // Paused for the user at once, audibly once faded out
-            _pausePending = YES;
-            [_media fadeToGain:0.0f duration:_fadeDuration];
-            [self performSelector:@selector(pauseFadedMedia) withObject:nil
-                       afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
-        } else {
-            [_media pause];
-        }
-        [self setState:PlayerSessionPaused];
-        break;
-    case PlayerSessionPaused:
-        [self cancelPendingPause];
-        [_media play];
-        if (_fadeDuration > 0 && [_media currentTime] > kTrackStartTolerance) {
-            [_media fadeToGain:1.0f duration:_fadeDuration];
-        } else {
-            [_media setFadeGain:1.0f];
-        }
-        [self setState:PlayerSessionPlaying];
-        break;
-    case PlayerSessionStopped:
-        if ([_playlist count] > 0) {
-            NSUInteger index = [_playlist currentIndex];
-            if (index == NSNotFound) {
-                index = [_playlist indexAfterCurrent];
-            }
-            [self playFromIndex:index skippingBroken:YES];
-        }
-        break;
+    [self send:PlayerEventMake(PlayerEventStop)];
+    [self send:PlayerEventMake(PlayerEventClear)];
+    [self send:PlayerEventLoadItems(items, index < 0 ? NSNotFound : (NSUInteger)index,
+                                    resumes ? position : -1.0)];
+    if (playing && index >= 0) {
+        [self send:PlayerEventMake(PlayerEventPlay)];
     }
-}
-
-- (void)stop
-{
-    if (_state == PlayerSessionStopped || _state == PlayerSessionEmpty) {
-        return;
-    }
-    // Stopped means back at the beginning
-    [self dropPending];
-    BOOL audible = _state == PlayerSessionPlaying || _pausePending;
-    if (_fadeDuration > 0 && audible && [_media isPlaying]) {
-        // Faded out, then closed; stopped as far as the user is concerned
-        [self cancelPendingPause];
-        [_media fadeToGain:0.0f duration:_fadeDuration];
-        [self performSelector:@selector(closeFadedMedia) withObject:nil
-                   afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
-    } else {
-        [self closeMedia];
-    }
-    [self setState:PlayerSessionStopped];
-}
-
-- (void)closeFadedMedia
-{
-    [_media close];
-}
-
-- (void)pauseFadedMedia
-{
-    _pausePending = NO;
-    [_media pause];
-}
-
-- (void)cancelPendingPause
-{
-    [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                             selector:@selector(pauseFadedMedia)
-                                               object:nil];
-    _pausePending = NO;
-}
-
-- (void)next
-{
-    [self dropPending];
-    NSUInteger index = [_playlist indexAfterCurrent];
-    if (index != NSNotFound) {
-        [self playFromIndex:index skippingBroken:YES];
-    }
-}
-
-- (void)previous
-{
-    if ([_playlist currentIndex] == NSNotFound) {
-        return;
-    }
-    [self dropPending];
-    NSUInteger index = [_playlist indexBeforeCurrent];
-    if ([self currentTime] > kRestartThreshold || index == NSNotFound) {
-        if (_state == PlayerSessionStopped) {
-            [self togglePlayPause];
-        } else {
-            [_media seekToTime:0.0];
-        }
-        return;
-    }
-    [self playFromIndex:index skippingBroken:YES];
-}
-
-- (void)seekToTime:(NSTimeInterval)seconds
-{
-    if (_state == PlayerSessionStopped || _state == PlayerSessionOpening) {
-        // Nothing open to move yet: it starts there once opened
-        _pendingSeek = MAX(0.0, seconds);
-        return;
-    }
-    if (![self canSeek]) {
-        return;
-    }
-    [_media seekToTime:MAX(0.0, MIN([self duration], seconds))];
-}
-
-- (void)skipBy:(NSTimeInterval)seconds
-{
-    [self seekToTime:[self currentTime] + seconds];
 }
 
 #pragma mark - State
 
+- (PlayerPlaylist *)playlist
+{
+    return [_machine playlist];
+}
+
+- (PlayerPlaybackState)state
+{
+    return [_machine state];
+}
+
+- (NSError *)lastError
+{
+    return [_machine lastError];
+}
+
+- (BOOL)isBuffering
+{
+    return [_machine buffering];
+}
+
 - (BOOL)isConnecting
 {
-    return _state == PlayerSessionOpening;
+    return [_machine state] == PlayerPlaybackOpening;
+}
+
+- (BOOL)isPausePending
+{
+    return [_machine state] == PlayerPlaybackOpening && [_machine pendingPause];
 }
 
 // Something is open: a position, a length and pictures exist only then
 - (BOOL)hasOpenMedia
 {
-    return _state == PlayerSessionPlaying || _state == PlayerSessionPaused;
-}
-
-- (BOOL)isPausePending
-{
-    return _state == PlayerSessionOpening && _pendingPause;
+    PlayerPlaybackState state = [_machine state];
+    return state == PlayerPlaybackPlaying || state == PlayerPlaybackPaused;
 }
 
 - (NSTimeInterval)currentTime
@@ -350,22 +263,24 @@ static NSString *const kStateStopped = @"stopped";
 
 - (BOOL)canPlay
 {
-    return [_playlist count] > 0;
+    return [[self playlist] count] > 0;
 }
 
 - (BOOL)canStop
 {
-    return _state != PlayerSessionStopped && _state != PlayerSessionEmpty;
+    PlayerPlaybackState state = [_machine state];
+    return state != PlayerPlaybackStopped && state != PlayerPlaybackEmpty;
 }
 
 - (BOOL)canGoNext
 {
-    return [_playlist indexAfterCurrent] != NSNotFound && [_playlist currentIndex] != NSNotFound;
+    PlayerPlaylist *playlist = [self playlist];
+    return [playlist indexAfterCurrent] != NSNotFound && [playlist currentIndex] != NSNotFound;
 }
 
 - (BOOL)canGoPrevious
 {
-    return [_playlist currentIndex] != NSNotFound;
+    return [[self playlist] currentIndex] != NSNotFound;
 }
 
 - (BOOL)canSeek
@@ -374,30 +289,172 @@ static NSString *const kStateStopped = @"stopped";
     return [self hasOpenMedia] && [_media duration] > 0.0;
 }
 
-#pragma mark - Internals
+#pragma mark - Events and effects
 
-- (void)setState:(PlayerSessionState)state
+// Only the main thread transitions.  The machine commits a transition
+// before any of its effects run; an effect that calls back into the
+// session (a media player reporting before -playURL: returns) queues its
+// event until the effects of this one are done, so no transition starts in
+// the middle of another.
+- (void)send:(PlayerEvent)event
 {
-    if (state == _state) {
+    if (_handling) {
+        // The value holds the pointers; the objects are kept until handled
+        [event.items retain];
+        [event.error retain];
+        [_queuedEvents addObject:[NSValue valueWithBytes:&event objCType:@encode(PlayerEvent)]];
         return;
     }
-    _state = state;
-    [self watchTrackEnd:state == PlayerSessionPlaying];
-    [self notifyStateChange];
+    _handling = YES;
+    [self handle:event];
+    while ([_queuedEvents count] > 0) {
+        PlayerEvent queued;
+        [[_queuedEvents objectAtIndex:0] getValue:&queued];
+        [_queuedEvents removeObjectAtIndex:0];
+        [self handle:queued];
+        [queued.items release];
+        [queued.error release];
+    }
+    _handling = NO;
 }
 
-- (void)notifyStateChange
+- (void)handle:(PlayerEvent)event
 {
+    PlayerTransition *transition = [_machine handle:event];
+    if (![transition handled]) {
+        return;
+    }
+    if ([transition committed]) {
+        [self watchTrackEnd:[transition state] == PlayerPlaybackPlaying];
+    }
+    for (PlayerEffect *effect in [transition effects]) {
+        [self perform:effect];
+    }
     if ([_delegate respondsToSelector:@selector(playerSessionDidChangeState:)]) {
         [_delegate playerSessionDidChangeState:self];
     }
 }
 
-// What was asked for before the item opened belongs to that item
-- (void)dropPending
+- (void)perform:(PlayerEffect *)effect
 {
-    _pendingSeek = -1.0;
-    _pendingPause = NO;
+    switch ([effect type]) {
+    case PlayerEffectOpen:
+        [self openItem:[effect item] generation:[effect generation] crossFade:[effect flag]];
+        break;
+    case PlayerEffectClose:
+        [_media close];
+        break;
+    case PlayerEffectFadeOutClose:
+    case PlayerEffectFadeOutPause:
+        [self fadeOutThen:[effect type]];
+        break;
+    case PlayerEffectPause:
+        [_media pause];
+        break;
+    case PlayerEffectResume:
+        [_media play];
+        if (_fadeDuration > 0 && [_media currentTime] > kTrackStartTolerance) {
+            [_media fadeToGain:1.0f duration:_fadeDuration];
+        } else {
+            [_media setFadeGain:1.0f];
+        }
+        break;
+    case PlayerEffectSeek:
+        [_media seekToTime:[effect time]];
+        break;
+    case PlayerEffectFadeIn:
+        if (_fadeDuration > 0 && isStream([[self playlist] currentItem])) {
+            [_media fadeToGain:1.0f duration:_fadeDuration];
+        }
+        break;
+    case PlayerEffectTrackChanged:
+        if ([_delegate respondsToSelector:@selector(playerSessionDidChangeTrack:)]) {
+            [_delegate playerSessionDidChangeTrack:self];
+        }
+        break;
+    case PlayerEffectReportFailure:
+        if ([effect item]
+            && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
+            [_delegate playerSession:self didFailToOpenItem:[effect item] error:[effect error]];
+        }
+        break;
+    }
+}
+
+- (void)openItem:(NSString *)item generation:(NSUInteger)generation crossFade:(BOOL)crossFade
+{
+    if (crossFade) {
+        [self crossFadeOut];
+    }
+    _mediaGeneration = generation;
+    [_media setVolume:_volume];
+    [_media setMuted:_muted];
+    // A live stream is joined somewhere in the middle, so it fades in once
+    // it plays; a track starts at its beginning, at full volume
+    BOOL fadeIn = _fadeDuration > 0 && isStream(item);
+    [_media setFadeGain:fadeIn ? 0.0f : 1.0f];
+    [_media playURL:item];
+}
+
+// The state changes at once; the sound fades out first and the media
+// pauses or closes afterwards, unless another transition came in between
+- (void)fadeOutThen:(PlayerEffectType)type
+{
+    BOOL audible = [_media fadeGain] > 0.0f;
+    if (_fadeDuration <= 0 || !audible) {
+        [self finishFadeOut:type];
+        return;
+    }
+    [_media fadeToGain:0.0f duration:_fadeDuration];
+    PlayerDelayedEffect *delayed = [[[PlayerDelayedEffect alloc] init] autorelease];
+    delayed->type = type;
+    delayed->effectGeneration = [_machine effectGeneration];
+    delayed->media = [_media retain];
+    [self performSelector:@selector(performDelayedEffect:) withObject:delayed
+               afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
+}
+
+- (void)performDelayedEffect:(PlayerDelayedEffect *)delayed
+{
+    if (delayed->effectGeneration != [_machine effectGeneration] || delayed->media != _media) {
+        return;
+    }
+    [self finishFadeOut:delayed->type];
+}
+
+- (void)finishFadeOut:(PlayerEffectType)type
+{
+    if (type == PlayerEffectFadeOutPause) {
+        [_media pause];
+    } else {
+        [_media close];
+    }
+}
+
+// Lets the audible track fade out in a player of its own while the next
+// one plays over it
+- (void)crossFadeOut
+{
+    if (_fadeDuration <= 0 || !_mediaFactory) {
+        return;
+    }
+    id<MediaPlayback> outgoing = _media;
+    // Its end must not advance the playlist a second time
+    [outgoing setDelegate:nil];
+    [outgoing fadeToGain:0.0f duration:_fadeDuration];
+    [_fadingMedia addObject:outgoing];
+    [self performSelector:@selector(closeFadedOut:) withObject:outgoing
+               afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
+
+    _media = [_mediaFactory() retain];
+    [_media setDelegate:self];
+    [outgoing release];
+}
+
+- (void)closeFadedOut:(id<MediaPlayback>)media
+{
+    [media close];
+    [_fadingMedia removeObjectIdenticalTo:media];
 }
 
 // The timer retains the session, so it runs only while something plays
@@ -424,167 +481,28 @@ static NSString *const kStateStopped = @"stopped";
 - (void)checkTrackEnd:(NSTimer *)timer
 {
     NSTimeInterval duration = [_media duration];
-    if (_fadeDuration <= 0 || !_mediaFactory || _state != PlayerSessionPlaying || duration <= 0
+    if (_fadeDuration <= 0 || !_mediaFactory || duration <= 0
         || duration - [_media currentTime] > _fadeDuration) {
         return;
     }
-    NSUInteger index = [_playlist indexAfterCurrent];
-    if (index != NSNotFound && [_media isPlaying]) {
-        [self playFromIndex:index skippingBroken:YES];
-    }
-}
-
-- (void)closeMedia
-{
-    // Whatever plays next must not be closed by a fade-out still pending
-    [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                             selector:@selector(closeFadedMedia)
-                                               object:nil];
-    [self cancelPendingPause];
-    _pendingPause = NO;
-    [_media close];
-}
-
-// Plays the item at index.  Opening happens in the background; with
-// skippingBroken, items that cannot be opened are reported and the
-// following ones tried, as when an album plays through.
-- (BOOL)playFromIndex:(NSUInteger)index skippingBroken:(BOOL)skipping
-{
-    if (index == NSNotFound || index >= [_playlist count]) {
-        [self setState:[_playlist count] > 0 ? PlayerSessionStopped : PlayerSessionEmpty];
-        return NO;
-    }
-    _skipping = skipping;
-    _attemptsLeft = [_playlist count];
-    [self crossFadeOut];
-    [self startItemAtIndex:index];
-    return YES;
-}
-
-- (void)startItemAtIndex:(NSUInteger)index
-{
-    // A start that has not finished yet owns the media object.  Starting a
-    // second one on top of it - Next pressed in the moment the list was
-    // already moving on by itself - left neither of them playing and the
-    // player stopped, so the pending one is taken down first.
-    if (_state == PlayerSessionOpening) {
-        [self closeMedia];
-    }
-    _attemptsLeft--;
-    if (index != [_playlist currentIndex]) {
-        // A position asked for belongs to the item it was asked for on
-        [self dropPending];
-    }
-    [_playlist setCurrentIndex:index];
-    [self notifyTrackChange];
-    [_media setVolume:_volume];
-    [_media setMuted:_muted];
-    [NSObject cancelPreviousPerformRequestsWithTarget:self
-                                             selector:@selector(closeFadedMedia)
-                                               object:nil];
-    [self cancelPendingPause];
-    // A live stream is joined somewhere in the middle, so it fades in once
-    // it plays; a track starts at its beginning, at full volume
-    BOOL fadeIn = _fadeDuration > 0 && isStream([_playlist itemAtIndex:index]);
-    [_media setFadeGain:fadeIn ? 0.0f : 1.0f];
-    // Before -playURL:, which may report back before it returns
-    [self setState:PlayerSessionOpening];
-    [_media playURL:[_playlist itemAtIndex:index]];
-}
-
-// Lets the audible track fade out in a player of its own while the next
-// one plays over it
-- (void)crossFadeOut
-{
-    if (_fadeDuration <= 0 || !_mediaFactory || _state != PlayerSessionPlaying
-        || ![_media isPlaying]) {
-        return;
-    }
-    id<MediaPlayback> outgoing = _media;
-    // Its end must not advance the playlist a second time
-    [outgoing setDelegate:nil];
-    [outgoing fadeToGain:0.0f duration:_fadeDuration];
-    [_fadingMedia addObject:outgoing];
-    [self performSelector:@selector(closeFadedOut:) withObject:outgoing
-               afterDelay:_fadeDuration inModes:PlayerRunLoopModes()];
-
-    _media = [_mediaFactory() retain];
-    [_media setDelegate:self];
-    [outgoing release];
-}
-
-- (void)closeFadedOut:(id<MediaPlayback>)media
-{
-    [media close];
-    [_fadingMedia removeObjectIdenticalTo:media];
-}
-
-- (void)notifyTrackChange
-{
-    if ([_delegate respondsToSelector:@selector(playerSessionDidChangeTrack:)]) {
-        [_delegate playerSessionDidChangeTrack:self];
-    }
+    [self send:PlayerEventFromMedia(PlayerEventNearEnd, _mediaGeneration)];
 }
 
 #pragma mark - StreamPlayerDelegate
 
 - (void)streamPlayerDidStop:(StreamPlayer *)player
 {
-    if (_state != PlayerSessionPlaying) {
-        return;
-    }
-    NSUInteger index = [_playlist indexAfterCurrent];
-    if (index != NSNotFound && [self playFromIndex:index skippingBroken:YES]) {
-        return;
-    }
-    // The list has played through: ready to play it again from the top
-    [self closeMedia];
-    [_playlist setCurrentIndex:[_playlist count] > 0 ? 0 : NSNotFound];
-    [self notifyTrackChange];
-    [self setState:PlayerSessionStopped];
+    [self send:PlayerEventFromMedia(PlayerEventEnded, _mediaGeneration)];
 }
 
 - (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
 {
-    if (_pendingSeek >= 0) {
-        [_media seekToTime:_pendingSeek];
-        _pendingSeek = -1.0;
-    }
-    if (_pendingPause) {
-        // Paused where it opened; resuming fades in from silence
-        _pendingPause = NO;
-        [_media pause];
-        [self setState:PlayerSessionPaused];
-        return;
-    }
-    if (_fadeDuration > 0 && isStream([_playlist currentItem])) {
-        [_media fadeToGain:1.0f duration:_fadeDuration];
-    }
-    [self setState:PlayerSessionPlaying];
+    [self send:PlayerEventFromMedia(PlayerEventOpened, _mediaGeneration)];
 }
 
 - (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
 {
-    if (_state == PlayerSessionStopped || _state == PlayerSessionEmpty) {
-        return;   // e.g. a stream fading out after Stop
-    }
-    NSString *item = [_playlist currentItem];
-    BOOL wasOpening = _state == PlayerSessionOpening;
-    if (item && [_delegate respondsToSelector:@selector(playerSession:didFailToOpenItem:error:)]) {
-        [_delegate playerSession:self didFailToOpenItem:item error:error];
-    }
-    if (!wasOpening) {
-        // It broke off while playing: go on as if it had ended
-        _skipping = YES;
-        _attemptsLeft = [_playlist count];
-    }
-    NSUInteger next = _skipping ? [_playlist indexAfterCurrent] : NSNotFound;
-    if (next != NSNotFound && _attemptsLeft > 0) {
-        [self startItemAtIndex:next];
-        return;
-    }
-    [self closeMedia];
-    [self setState:PlayerSessionStopped];
+    [self send:PlayerEventFailure(_mediaGeneration, error)];
 }
 
 - (void)streamPlayer:(StreamPlayer *)player didDiscoverVideoWithWidth:(int)width

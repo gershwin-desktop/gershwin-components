@@ -10,16 +10,9 @@
 #import <Foundation/Foundation.h>
 #import "StreamPlayer.h"
 #import "PlayerPlaylist.h"
+#import "PlayerPlaybackMachine.h"
 
 typedef id<MediaPlayback> (^PlayerMediaFactory)(void);
-
-typedef NS_ENUM(NSInteger, PlayerSessionState) {
-    PlayerSessionEmpty,     // no playlist
-    PlayerSessionStopped,   // an item is chosen, nothing is open
-    PlayerSessionOpening,   // the current item is being opened (connecting)
-    PlayerSessionPlaying,
-    PlayerSessionPaused
-};
 
 @class PlayerSession;
 
@@ -38,34 +31,37 @@ typedef NS_ENUM(NSInteger, PlayerSessionState) {
 @end
 
 /**
- * Playback of a playlist of local files and stream URLs: what Play/Pause,
- * Stop, Next, Previous and the end of a track do.  The window only shows
- * this state and forwards the user's commands.
+ * Playback of a playlist of local files and stream URLs.  What Play/Pause,
+ * Stop, Next, Previous and the end of a track do is decided by its
+ * PlayerPlaybackMachine; the session turns the user's commands and the
+ * media player's messages into its events and carries out the effects it
+ * answers with.  The window only shows this state and forwards commands.
  */
 @interface PlayerSession : NSObject <StreamPlayerDelegate>
 {
     id<MediaPlayback> _media;
-    PlayerPlaylist *_playlist;
-    PlayerSessionState _state;
+    PlayerPlaybackMachine *_machine;
     float _volume;
     BOOL _muted;
     id<PlayerSessionDelegate> _delegate;
-    BOOL _skipping;           // items that fail to open are skipped
-    NSUInteger _attemptsLeft; // bounds skipping to one pass over the list
     NSTimeInterval _fadeDuration;
-    BOOL _pausePending;       // pausing once the fade-out is done
-    // Asked for before the current item was open: where it starts (< 0 at
-    // its beginning) and whether it lands paused
-    NSTimeInterval _pendingSeek;
-    BOOL _pendingPause;
     PlayerMediaFactory _mediaFactory;
     NSMutableArray *_fadingMedia; // tracks fading out under the current one
     NSTimer *_endWatch;       // hands over to the next track before the end
+    NSUInteger _mediaGeneration;  // the machine's generation _media was opened with
+    // Events that came in while the effects of another were carried out
+    // (a media player reporting before -playURL: returns): handled after
+    NSMutableArray *_queuedEvents;
+    BOOL _handling;
 }
 
 @property (nonatomic, assign) id<PlayerSessionDelegate> delegate;
 @property (nonatomic, readonly) PlayerPlaylist *playlist;
-@property (nonatomic, readonly) PlayerSessionState state;
+@property (nonatomic, readonly) PlayerPlaybackState state;
+/// The last failure, of an item or of the audio output (model data).
+@property (nonatomic, readonly) NSError *lastError;
+/// The playing stream ran dry and waits for data.
+@property (nonatomic, readonly) BOOL isBuffering;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
 /// How long pause, stop and resume fade, streams fade in and tracks

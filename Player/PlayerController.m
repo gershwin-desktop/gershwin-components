@@ -209,7 +209,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     [defaults synchronize];
 
     BOOL radioPlaying = [[RadioManager sharedManager] isPlaying];
-    if (([session state] != PlayerSessionPlaying && !radioPlaying)
+    if (([session state] != PlayerPlaybackPlaying && !radioPlaying)
         || [PreferencesController fadeDuration] <= 0) {
         return NSTerminateNow;
     }
@@ -819,8 +819,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     errorAlertShown = NO;
     [session openItems:files];
     [self playlistDidChange];
-    PlayerSessionState state = [session state];
-    return state == PlayerSessionOpening || state == PlayerSessionPlaying;
+    PlayerPlaybackState state = [session state];
+    return state == PlayerPlaybackOpening || state == PlayerPlaybackPlaying;
 }
 
 - (IBAction)openFile:(id)sender
@@ -1091,10 +1091,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     switch ([session state]) {
         // Opening counts as playing, as tuning in does above
-        case PlayerSessionOpening:
-        case PlayerSessionPlaying:
+        case PlayerPlaybackOpening:
+        case PlayerPlaybackPlaying:
             return GSMediaPlayer2Playing;
-        case PlayerSessionPaused:
+        case PlayerPlaybackPaused:
             return GSMediaPlayer2Paused;
         default:
             return GSMediaPlayer2Stopped;
@@ -1110,8 +1110,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         }
         return;
     }
-    PlayerSessionState state = [session state];
-    if (state == PlayerSessionStopped || state == PlayerSessionPaused) {
+    PlayerPlaybackState state = [session state];
+    if (state == PlayerPlaybackStopped || state == PlayerPlaybackPaused) {
         [session togglePlayPause];
     }
 }
@@ -1123,8 +1123,8 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self stop:nil];
         return;
     }
-    PlayerSessionState state = [session state];
-    if (state == PlayerSessionPlaying || state == PlayerSessionOpening) {
+    PlayerPlaybackState state = [session state];
+    if (state == PlayerPlaybackPlaying || state == PlayerPlaybackOpening) {
         [session togglePlayPause];
     }
 }
@@ -1203,7 +1203,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     // tell whether this callback is a real transition or the same state
     // arriving twice.
     NSString *wasStatus = [mediaRemote playbackStatus];
-    if ([session state] == PlayerSessionPlaying) {
+    if ([session state] == PlayerPlaybackPlaying) {
         if (!positionTimer) {
             positionTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
                                                              target:self
@@ -1215,7 +1215,7 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [positionTimer invalidate];
         positionTimer = nil;
     }
-    if ([session state] == PlayerSessionStopped || [session state] == PlayerSessionEmpty) {
+    if ([session state] == PlayerPlaybackStopped || [session state] == PlayerPlaybackEmpty) {
         [self showCoverArt];
     }
     [self updateControls];
@@ -1313,13 +1313,13 @@ static const NSTimeInterval kBrowseDelay = 0.5;
     }
     NSTimeInterval duration = [session duration];
     NSTimeInterval position = [session currentTime];
-    PlayerSessionState state = [session state];
+    PlayerPlaybackState state = [session state];
     NSString *total;
-    if (state == PlayerSessionEmpty) {
+    if (state == PlayerPlaybackEmpty) {
         total = [self formatTime:0];
-    } else if (state == PlayerSessionStopped) {
+    } else if (state == PlayerPlaybackStopped) {
         total = @"--";
-    } else if (state == PlayerSessionOpening) {
+    } else if (state == PlayerPlaybackOpening) {
         // Whether it is a file or a live stream is known only once open
         total = @"--:--";
     } else {
@@ -1344,10 +1344,10 @@ static const NSTimeInterval kBrowseDelay = 0.5;
         [self updatePodcastControls];
         return;
     }
-    PlayerSessionState state = [session state];
-    BOOL opening = state == PlayerSessionOpening;
+    PlayerPlaybackState state = [session state];
+    BOOL opening = state == PlayerPlaybackOpening;
     // A pause pressed while opening is kept: the button offers Play again
-    BOOL playing = state == PlayerSessionPlaying || (opening && ![session isPausePending]);
+    BOOL playing = state == PlayerPlaybackPlaying || (opening && ![session isPausePending]);
     [playButton setImage:playing ? pauseImage : playImage];
     [playButton setTitle:playing ? @"Pause" : @"Play"];
     [playButton setToolTip:(opening && playing) ? @"Stop Loading" : [playButton title]];

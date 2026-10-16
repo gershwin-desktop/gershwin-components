@@ -16,8 +16,11 @@ FFMPEG_PKGS = libavformat libavcodec libavutil libswresample libswscale
 ADDITIONAL_INCLUDE_DIRS += $(shell pkg-config --cflags $(FFMPEG_PKGS))
 FFMPEG_LIBS = $(shell pkg-config --libs $(FFMPEG_PKGS) ao)
 
-t_PlayerSession_OBJC_FILES += ../../PlayerPlaylist.m ../../PlayerAsync.m
+t_PlayerPlaybackMachine_OBJC_FILES += ../../PlayerPlaylist.m
+t_PlayerSession_OBJC_FILES += ../../PlayerPlaylist.m ../../PlayerAsync.m \
+	../../PlayerPlaybackMachine.m
 t_PlayerSessionMedia_OBJC_FILES += Support/TestMedia.m ../../PlayerSession.m \
+	../../PlayerPlaybackMachine.m \
 	../../PlayerPlaylist.m ../../StreamPlayer.m ../../PlayerAsync.m
 t_PlayerSessionMedia_TOOL_LIBS += $(FFMPEG_LIBS)
 t_PlayerMenu_OBJC_FILES += ../../PlayerMenu.m

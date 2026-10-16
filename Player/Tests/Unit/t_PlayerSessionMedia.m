@@ -33,14 +33,14 @@ int main(void)
     [s setFadeDuration: 0];
     [s openItems: files];
     spin(0.3);
-    PASS([s state] == PlayerSessionPlaying, "the first file plays");
+    PASS([s state] == PlayerPlaybackPlaying, "the first file plays");
     PASS([[s playlist] currentIndex] == 0, "it is the first");
     PASS(fabs([s duration] - 0.6) < 0.05, "its duration is shown (%f)", [s duration]);
     spin(0.6);
     PASS([[s playlist] currentIndex] == 1, "the second follows by itself");
-    PASS([s state] == PlayerSessionPlaying, "and plays");
+    PASS([s state] == PlayerPlaybackPlaying, "and plays");
     spin(0.8);
-    PASS([s state] == PlayerSessionStopped, "after the last file playback stops");
+    PASS([s state] == PlayerPlaybackStopped, "after the last file playback stops");
     PASS([[s playlist] currentIndex] == 0, "ready to start over");
 
     [s togglePlayPause];
@@ -48,7 +48,7 @@ int main(void)
     [s togglePlayPause];
     NSTimeInterval t = [s currentTime];
     spin(0.3);
-    PASS([s state] == PlayerSessionPaused && fabs([s currentTime] - t) < 0.02,
+    PASS([s state] == PlayerPlaybackPaused && fabs([s currentTime] - t) < 0.02,
          "pause holds the position");
     [s stop];
     PASS([s currentTime] == 0.0, "stop returns to the start");

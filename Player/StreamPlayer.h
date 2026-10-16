@@ -57,6 +57,7 @@
 - (void)setVolume:(float)volume;
 - (BOOL)muted;
 - (void)setMuted:(BOOL)muted;
+- (float)fadeGain;
 - (void)setFadeGain:(float)gain;
 - (void)fadeToGain:(float)gain duration:(NSTimeInterval)duration;
 @end

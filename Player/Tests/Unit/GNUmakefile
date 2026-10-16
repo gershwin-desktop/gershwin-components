@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_MediaRemote t_PlayerMediaInfo t_PlayerMenu t_PlayerPlaylist t_PlayerSession t_PlayerSessionMedia t_PlayerViews t_PodcastFeedParser t_Podcast t_RadioManager t_StreamPlayer
+TEST_TOOL_NAME =  t_MediaRemote t_PlayerMediaInfo t_PlayerMenu t_PlayerPlaybackMachine t_PlayerPlaylist t_PlayerSession t_PlayerSessionMedia t_PlayerViews t_PodcastFeedParser t_Podcast t_RadioManager t_StreamPlayer
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -24,6 +24,7 @@ ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 t_MediaRemote_OBJC_FILES=t_MediaRemote.m
 t_PlayerMediaInfo_OBJC_FILES=t_PlayerMediaInfo.m
 t_PlayerMenu_OBJC_FILES=t_PlayerMenu.m
+t_PlayerPlaybackMachine_OBJC_FILES=t_PlayerPlaybackMachine.m
 t_PlayerPlaylist_OBJC_FILES=t_PlayerPlaylist.m
 t_PlayerSession_OBJC_FILES=t_PlayerSession.m
 t_PlayerSessionMedia_OBJC_FILES=t_PlayerSessionMedia.m
