@@ -13,6 +13,8 @@ Books_OBJC_FILES = \
 	BookReaderController.m \
 	BookPageView.m \
 	BookPageTextView.m \
+	BookTextSelection.m \
+	BookTextExtraction.m \
 	GLPageTurnView.m \
 	TOCPanelController.m \
 	EPUBBook.m \
@@ -36,6 +38,8 @@ Books_HEADER_FILES = \
 	BookReaderController.h \
 	BookPageView.h \
 	BookPageTextView.h \
+	BookTextSelection.h \
+	BookTextExtraction.h \
 	GLPageTurnView.h \
 	TOCPanelController.h \
 	EPUBBook.h \

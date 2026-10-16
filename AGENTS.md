@@ -83,6 +83,13 @@ to the SYSTEM domain unless noted.
   sources); everything a tool links lives in `GNUmakefile.preamble`, since the
   runner regenerates `GNUmakefile`. `t_PlayerMenu` and `t_PlayerViews` need a
   private `DISPLAY`. `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI.
+- `Books/Tests/Selection/`: ObjectTesting tools for the reading selection
+  (`t_TextSelection`, headless, every state x event pair) and the copied text
+  (`t_TextExtraction`, headless; `t_CopyToPasteboard` needs `DISPLAY` set to
+  a private Xvfb because the RTF writer resolves fonts, and writes only to a
+  uniquely named pasteboard). `Books/Tests/Live/copy_check.sh <N>` drags
+  across two paragraphs in a claimed uitest slot, presses Command-C and checks
+  the slot user's pasteboard.
 - For GNUstep unit/red-green tests, follow the global `gnustep-red-green-tdd`
   skill (PASS macro set + wiring).
 - To drive/inspect a running GUI, use the driveui skill / `drive_ui`.
