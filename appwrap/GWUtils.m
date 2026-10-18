@@ -190,7 +190,10 @@
     }
 
   // If we get here, fallback to command-line tools found on PATH
-  NSArray *tools = @[@"rsvg-convert", @"convert", @"magick"]; // try rsvg-convert, then ImageMagick
+  // rsvg-convert only: ImageMagick is not installed on Gershwin systems any
+  // more (its dependencies cost the live images hundreds of MB), and for SVG
+  // it delegated to librsvg anyway, so it never rendered anything differently.
+  NSArray *tools = @[@"rsvg-convert"];
   for (NSString *t in tools)
     {
       NSString *exe = [self findExecutableInPath:t];
@@ -202,13 +205,10 @@
       if ([t isEqualToString:@"rsvg-convert"]) 
         {
           [task setLaunchPath:exe];
-          // Request transparent background explicitly
-          [task setArguments:@[@"-w", [NSString stringWithFormat:@"%d", size], @"-h", [NSString stringWithFormat:@"%d", size], @"-b", @"transparent", @"-o", pngPath, svgPath]];
-        }
-      else if ([t isEqualToString:@"magick"] || [t isEqualToString:@"convert"]) 
-        {
-          [task setLaunchPath:exe];
-          [task setArguments:@[svgPath, @"-background", @"none", @"-resize", [NSString stringWithFormat:@"%dx%d", size, size], pngPath]];
+          // Request transparent background explicitly. -a, because with both
+          // -w and -h rsvg-convert otherwise stretches a non-square icon to
+          // fill the square instead of fitting it in.
+          [task setArguments:@[@"-a", @"-w", [NSString stringWithFormat:@"%d", size], @"-h", [NSString stringWithFormat:@"%d", size], @"-b", @"transparent", @"-o", pngPath, svgPath]];
         }
 
       @try

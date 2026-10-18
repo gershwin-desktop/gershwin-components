@@ -6,6 +6,7 @@
 
 #import "AppImagePackager.h"
 #import "BundleBuilder.h"
+#import "IconConverter.h"
 
 @interface AppImagePackager ()
 {
@@ -98,14 +99,8 @@
         NSError *err = nil;
         converted = [fm copyItemAtPath:srcPath toPath:dstPath error:&err];
     } else {
-        NSString *convertTool = [self.class _findTool:@"convert"];
-        if (convertTool) {
-            // Take the largest frame of a multi-frame source and normalize to
-            // an RGBA PNG; appimagetool requires a raster icon in the AppDir.
-            converted = [self _runTool:convertTool withArgs:@[
-                [srcPath stringByAppendingString:@"[0]"],
-                dstPath]] != nil;
-        }
+        // appimagetool requires a raster PNG icon in the AppDir.
+        converted = [IconConverter writePNGOfFirstImageInFile:srcPath toPath:dstPath];
     }
     if (converted) {
         NSLog(@"make_appimage: installed icon %@", dstPath);
