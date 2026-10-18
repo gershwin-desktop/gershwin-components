@@ -192,6 +192,81 @@ int main(void)
     [checked release];
   }
 
+  /* --- shallow clones, as the live images check them out ---
+   * Every repository is cloned with --depth 1 (file:// so git really does
+   * that), so only the branch it was cloned from is there. The pin libobjc2
+   * advances to is on no branch the clone fetches, as an upstream commit
+   * behind its branch tip is not; allowReachableSHA1InWant stands in for
+   * GitHub, which lets a client fetch such a commit by its id. */
+  {
+    NSString *sBase = [base stringByAppendingPathComponent:@"shallow"];
+    NSString *sOrigin = [sBase stringByAppendingPathComponent:@"origin"];
+    NSString *sSources = [sBase stringByAppendingPathComponent:@"Sources"];
+    runShell([NSString stringWithFormat:@"mkdir -p %@ %@", sOrigin, sSources]);
+
+    NSString *oLib = [sOrigin stringByAppendingPathComponent:@"libobjc2"];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
+       "git config user.name T && git config uploadpack.allowReachableSHA1InWant true && "
+       "echo a > f.txt && git add f.txt && git commit -q -m A && "
+       "git clone -q --depth 1 file://%@ %@/libobjc2 && "
+       "git checkout -q -b side && echo b >> f.txt && git commit -q -am B && "
+       "git checkout -q main && echo c >> f.txt && git commit -q -am C",
+      oLib, oLib, oLib, sSources]);
+    NSString *sidePin = shellOutput([NSString stringWithFormat:@"git -C %@ rev-parse side", oLib]);
+
+    NSString *oWs = [sOrigin stringByAppendingPathComponent:@"gershwin-workspace"];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
+       "git config user.name T && echo a > f.txt && git add f.txt && git commit -q -m first && "
+       "git branch dev && git clone -q --depth 1 -b dev file://%@ %@/gershwin-workspace && "
+       "echo b >> f.txt && git commit -q -am second",
+      oWs, oWs, oWs, sSources]);
+
+    NSString *oDev = [sOrigin stringByAppendingPathComponent:@"gershwin-developer"];
+    NSString *sCsv = [NSString stringWithFormat:
+      @"Name,URL,Pin,RestartRequired\n"
+       "gershwin-workspace,u,,\n"
+       "libobjc2,u,%@,\n", sidePin];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
+       "git config user.name T && mkdir -p Library && printf '%@' > Library/Repositories.csv && "
+       "git add Library/Repositories.csv && git commit -q -m csv && "
+       "git clone -q --depth 1 file://%@ %@/gershwin-developer",
+      oDev, oDev, sCsv, oDev, sSources]);
+
+    SWRepository *sLib = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"libobjc2", @"URL": @"u", @"Pin": @"stale"}];
+    SWRepository *sWs = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"gershwin-workspace", @"URL": @"u"}];
+    NSArray *sEntries = @[
+      [[[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-developer", @"URL": @"u"}] autorelease],
+      sLib, sWs];
+    SWUpdateChecker *sChecker = [[SWUpdateChecker alloc] initWithSourcesDirectory:sSources
+                                                                     useDevBranch:NO
+                                                                   gitToolFactory:nil
+                                                                buildStatusClient:buildStatus
+                                                                       logHandler:nil];
+    [sChecker checkRepositories:sEntries stopRequested:nil progress:nil
+                     completion:^(NSArray *withUpdates, BOOL anyReachable) { (void)withUpdates; (void)anyReachable; }];
+
+    PASS([sLib isReachable], "a pin a shallow clone does not have is fetched rather than given up on");
+    PASS([sLib pinAdvanced], "and the advanced pin is reported");
+    PASS_EQUAL([sLib pin], sidePin, "as the commit the incoming Repositories.csv names");
+
+    PASS([sWs isReachable], "a clone of dev alone is checked");
+    PASS_EQUAL([sWs targetBranch], @"main",
+               "against origin's default branch, which that clone never fetched");
+    PASS([sWs hasUpdate], "and the default branch's tip is offered");
+    PASS([sWs hasDevBranch], "the dev branch is still known");
+
+    [sChecker recomputeTargetBranchForRepositories:sEntries useDevBranch:YES];
+    PASS_EQUAL([sWs targetBranch], @"dev", "switching the channel to dev targets dev again");
+    [sChecker release];
+    [sLib release];
+    [sWs release];
+  }
+
   [result release];
   runShell([NSString stringWithFormat:@"rm -rf %@", base]);
   [arp release];

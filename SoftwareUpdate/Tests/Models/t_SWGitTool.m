@@ -400,6 +400,81 @@ int main(void)
                "and the copy that could not go back is still intact");
   }
 
+  /* --- shallow clones, as the live images check them out --- */
+  // The images clone with --depth 1, which implies --single-branch: only the
+  // branch they were cloned from is fetched, and the branch tip is the only
+  // commit there is. file:// so that git really makes the clone shallow (it
+  // ignores --depth for a plain local path), and allowReachableSHA1InWant
+  // because GitHub, the real origin, lets a client fetch any commit by id.
+  {
+    NSString *sOrigin = [gBaseDir stringByAppendingPathComponent:@"sorigin"];
+    NSString *sMain = [gBaseDir stringByAppendingPathComponent:@"smain"];
+    NSString *sDev = [gBaseDir stringByAppendingPathComponent:@"sdev"];
+    runShell([NSString stringWithFormat:
+      @"git init -q -b main %@ && cd %@ && "
+       "git config user.email t@example.invalid && git config user.name Test && "
+       "git config uploadpack.allowReachableSHA1InWant true && "
+       "echo one > f && git add f && git commit -q -m one && "
+       "echo two >> f && git commit -q -am two && "
+       "git branch dev && "
+       "git clone -q --depth 1 file://%@ %@ && "
+       "git clone -q --depth 1 -b dev file://%@ %@ && "
+       "echo three >> f && git commit -q -am three && "
+       "echo four >> f && git commit -q -am four",
+       sOrigin, sOrigin, sOrigin, sMain, sOrigin, sDev]);
+    NSString *(^shell)(NSString *) = ^NSString *(NSString *cmd) {
+      FILE *fp = popen([cmd UTF8String], "r");
+      char buf[256] = {0};
+      if (fp == NULL) return nil;
+      if (fgets(buf, sizeof buf, fp) == NULL) buf[0] = 0;
+      pclose(fp);
+      return [[NSString stringWithUTF8String:buf] stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    };
+    NSString *firstSha = shell([NSString stringWithFormat:
+      @"git -C %@ rev-list --max-parents=0 HEAD", sOrigin]);
+
+    SWGitTool *sg = [[SWGitTool alloc] initWithRepositoryPath:sMain];
+    PASS([sg isShallow], "a --depth 1 clone reports itself as shallow");
+    PASS(![git isShallow], "a full clone does not");
+
+    PASS([sg fetchPruneOrigin:NULL], "fetch works on a shallow clone");
+    PASS([sg commitCountBehindTarget:@"main"] == 2,
+         "a shallow clone counts the commits it is behind");
+    PASS([[sg commitsBehindTarget:@"main"] count] == 2,
+         "and lists them");
+    PASS([sg switchAndFastForwardTo:@"main"],
+         "a shallow clone fast-forwards to the branch tip");
+    PASS([sg commitCountBehindTarget:@"main"] == 0, "and is then up to date");
+    PASS([sg isShallow], "fetching and fast-forwarding keeps the clone shallow");
+
+    PASS([sg ensureRemoteTrackingBranch:@"dev"],
+         "a branch the single-branch clone does not track can be fetched");
+    PASS([sg fullShaForRef:@"origin/dev"] != nil, "origin/dev exists afterwards");
+    PASS([sg switchAndFastForwardTo:@"dev"], "and the clone can switch to it");
+    PASS([sg isShallow], "fetching another branch keeps the clone shallow");
+    PASS([sg ensureRemoteTrackingBranch:@"dev"],
+         "asking again for a branch that is already there succeeds");
+
+    SWGitTool *dg = [[SWGitTool alloc] initWithRepositoryPath:sDev];
+    PASS_EQUAL([dg defaultBranch], @"main",
+               "a clone of dev alone still finds origin's default branch");
+    PASS([dg fullShaForRef:@"origin/main"] != nil,
+         "and fetches it, so HEAD..origin/main can be asked");
+    [dg release];
+
+    PASS([sg fullShaForRef:firstSha] == nil,
+         "an older commit is not in a shallow clone");
+    PASS(![sg ensureCommit:[firstSha substringToIndex:7]],
+         "a missing commit cannot be fetched by an abbreviated id");
+    PASS([sg ensureCommit:firstSha],
+         "a missing commit is fetched by its full id");
+    PASS([sg checkoutRef:firstSha], "and can then be checked out as a pin");
+    PASS([sg isShallow], "fetching a pinned commit keeps the clone shallow");
+    PASS([sg ensureCommit:firstSha], "a commit that is present needs no fetch");
+    [sg release];
+  }
+
   runShell([NSString stringWithFormat:@"rm -rf %@", gBaseDir]);
   [arp release];
   return 0;

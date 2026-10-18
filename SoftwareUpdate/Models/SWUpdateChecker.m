@@ -191,6 +191,16 @@
   [repo setCurrentBranch:[git currentBranch]];
   [repo setHasDevBranch:[git remoteHasBranch:@"dev"]];
 
+  // A live image clones each repository with --depth 1, so only the branch it
+  // was built from is there. Without origin/dev, switching the channel to dev
+  // would count HEAD..origin/dev as nothing and call the repository up to
+  // date; it is fetched here, in the background check, rather than when the
+  // user flips the switch.
+  if ([repo hasDevBranch] && ![git ensureRemoteTrackingBranch:@"dev"]) {
+    [repo setUnreachableReason:@"Couldn't fetch the dev branch"];
+    return;
+  }
+
   if ([repo isPinned]) {
     [self checkPinnedRepository:repo git:git];
   } else {
@@ -287,6 +297,16 @@
 
   NSString *incomingPin = [self incomingPinForRepositoryNamed:[repo name]];
   if (!incomingPin) return;
+
+  // In a shallow clone a new pin is normally not there yet: the pinned
+  // libraries are not on any branch the clone fetches. Saying nothing would
+  // hide the advanced pin for good, so a pin that cannot be fetched is
+  // reported as such.
+  if (![git ensureCommit:incomingPin]) {
+    [repo setUnreachableReason:[NSString stringWithFormat:
+      @"Couldn't fetch the pinned commit %@", incomingPin]];
+    return;
+  }
 
   NSString *fullHead = [git fullShaForRef:@"HEAD"];
   NSString *fullIncomingPin = [git fullShaForRef:incomingPin];

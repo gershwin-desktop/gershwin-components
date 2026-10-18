@@ -418,6 +418,58 @@ static NSString *SWFirstErrorLine(NSString *output)
   return [self runGit:@[@"ls-remote", @"--exit-code", @"--heads", @"origin", branch] output:NULL] == 0;
 }
 
+- (BOOL)isShallow
+{
+  NSString *output = nil;
+  if ([self runGit:@[@"rev-parse", @"--is-shallow-repository"] output:&output] != 0) return NO;
+  return [[output stringByTrimmingCharactersInSet:
+    [NSCharacterSet whitespaceAndNewlineCharacterSet]] isEqualToString:@"true"];
+}
+
+- (BOOL)hasRemoteTrackingBranch:(NSString *)branch
+{
+  NSString *ref = [@"refs/remotes/origin/" stringByAppendingString:branch];
+  return [self runGit:@[@"rev-parse", @"-q", @"--verify", ref] output:NULL] == 0;
+}
+
+- (BOOL)ensureRemoteTrackingBranch:(NSString *)branch
+{
+  if ([self hasRemoteTrackingBranch:branch]) return YES;
+  if ([self runGit:@[@"remote", @"set-branches", @"--add", @"origin", branch] output:NULL] != 0) {
+    return NO;
+  }
+  // Without --depth the first fetch of a branch the clone has never seen
+  // would bring in that branch's entire history.
+  NSArray *args = [self isShallow] ? @[@"fetch", @"--depth", @"1", @"origin", branch]
+                                   : @[@"fetch", @"origin", branch];
+  if ([self runGit:args output:NULL] != 0) return NO;
+  return [self hasRemoteTrackingBranch:branch];
+}
+
+static BOOL SWIsFullSha(NSString *sha)
+{
+  if ([sha length] != 40) return NO;
+  NSCharacterSet *nonHex = [[NSCharacterSet characterSetWithCharactersInString:
+    @"0123456789abcdef"] invertedSet];
+  return [sha rangeOfCharacterFromSet:nonHex].location == NSNotFound;
+}
+
+- (BOOL)hasCommit:(NSString *)sha
+{
+  NSString *spec = [sha stringByAppendingString:@"^{commit}"];
+  return [self runGit:@[@"cat-file", @"-e", spec] output:NULL] == 0;
+}
+
+- (BOOL)ensureCommit:(NSString *)sha
+{
+  if ([self hasCommit:sha]) return YES;
+  if (!SWIsFullSha(sha)) return NO;
+  NSArray *args = [self isShallow] ? @[@"fetch", @"--depth", @"1", @"origin", sha]
+                                   : @[@"fetch", @"origin", sha];
+  if ([self runGit:args output:NULL] != 0) return NO;
+  return [self hasCommit:sha];
+}
+
 - (NSUInteger)commitCountBehindTarget:(NSString *)target
 {
   NSString *output = nil;
@@ -720,7 +772,11 @@ static NSString *SWFirstErrorLine(NSString *output)
   int status = [self runGit:@[@"symbolic-ref", @"--short", @"refs/remotes/origin/HEAD"] output:&output];
   if (status != 0) {
     // Not recorded yet (e.g. an older clone) - ask origin once and retry.
-    [self runGit:@[@"remote", @"set-head", @"origin", @"-a"] output:NULL];
+    // set-head -a refuses when the default branch was never fetched, which
+    // is the case in a clone of dev alone, so that branch is fetched first.
+    NSString *name = [self remoteDefaultBranchName];
+    if (!name || ![self ensureRemoteTrackingBranch:name]) return nil;
+    if ([self runGit:@[@"remote", @"set-head", @"origin", name] output:NULL] != 0) return nil;
     status = [self runGit:@[@"symbolic-ref", @"--short", @"refs/remotes/origin/HEAD"] output:&output];
     if (status != 0) return nil;
   }
@@ -728,6 +784,22 @@ static NSString *SWFirstErrorLine(NSString *output)
     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
   NSString *prefix = @"origin/";
   return [ref hasPrefix:prefix] ? [ref substringFromIndex:[prefix length]] : ref;
+}
+
+// The branch origin's HEAD points at, asked of the server: the line
+// "ref: refs/heads/main<TAB>HEAD" of `git ls-remote --symref origin HEAD`.
+- (NSString *)remoteDefaultBranchName
+{
+  NSString *output = nil;
+  if ([self runGit:@[@"ls-remote", @"--symref", @"origin", @"HEAD"] output:&output] != 0) return nil;
+  NSString *prefix = @"ref: refs/heads/";
+  for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
+    if (![line hasPrefix:prefix]) continue;
+    NSString *rest = [line substringFromIndex:[prefix length]];
+    NSRange tab = [rest rangeOfString:@"\t"];
+    return tab.location == NSNotFound ? nil : [rest substringToIndex:tab.location];
+  }
+  return nil;
 }
 
 - (NSData *)showFileAtRef:(NSString *)ref path:(NSString *)path
