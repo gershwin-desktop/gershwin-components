@@ -39,6 +39,13 @@ to the SYSTEM domain unless noted.
 - `make_appimage/` is a GNUstep tool (`make_appimage`, `make_standalone`) that
   packs built `.app`/`.bundle` dirs into self-contained AppImages; uses
   `appimagetool` + `patchelf`.
+- `svgconvert/` is a C++17 command line tool (lunasvg and plutovg vendored
+  in `ThirdParty/`, MIT) that renders SVG to PNG and takes ImageMagick
+  convert's SVG options (`-background -density -size -resize -gravity
+  -extent`). appwrap and the `gmake icons` targets use it, so no system needs
+  ImageMagick or librsvg. Built with `ctool.make` (no Foundation), installed
+  to `/System/Library/Tools`; never install it as `convert`. Keep the
+  vendored files unchanged; `svgconvert/README.md` says how to update them.
 - `UIBridge/` is a DO-based UI-driving server (separate from the DriveUI
   uitest tooling, which moved to gershwin-developer). Do not conflate them.
 
@@ -50,10 +57,11 @@ to the SYSTEM domain unless noted.
 - Cross-platform blocks fall back on `UNAME_S` (Linux/FreeBSD/NextBSD/OpenBSD).
   Keep every platform's branch working; CI builds FreeBSD, Arch, Debian, OpenBSD.
 - Menu and AppGarden glyphs: edit the `.svg` sources, then run `gmake icons`
-  in that component to regenerate the committed `.tiff` files (inkscape plus
-  ImageMagick, on a developer machine only). The build itself renders no SVG,
-  and the live images do not ship ImageMagick, so nothing at build or run time
-  may call `convert`/`magick`. A regenerated TIFF is byte-different even when
+  in that component to regenerate the committed `.tiff` files (svgconvert
+  renders the pages, ImageMagick assembles the TIFF, on a developer machine
+  only). The build itself renders no SVG, and the live images do not ship
+  ImageMagick, so nothing at build or run time may call `convert`/`magick`;
+  use `svgconvert` for SVG. A regenerated TIFF is byte-different even when
   visually identical, so don't commit icon churn unless intended.
 
 ## Testing
@@ -62,6 +70,11 @@ to the SYSTEM domain unless noted.
   `TEST_TOOL_NAME` + `test-tool.make`; `ICNSImageRep/test/` has `test_icns.m`;
   `Menu/` has `test.sh` / `test-menu-integration.sh`; `Assistants/BackupAssistant/`
   has shell+ObjC test tools. Inspect the component's `GNUmakefile` for the exact tool.
+- `svgconvert/`: `gmake check` builds a C++ unit test tool (argument
+  parsing, output sizes as ImageMagick 7 computes them) and a PNG reader,
+  then `Tests/check.sh` renders `Tests/Fixtures` and checks sizes and pixels.
+  `Tests/regression.sh LIST REFDIR` compares rendered icons with reference
+  PNGs (not in the repo) and fails below 30 dB except known filter/text icons.
 - `Profiler/Tests/Unit/`: ObjectTesting tools for the profile model (symbol
   demangling, the perf/folded/DTrace stack parsers, call trees and the flat
   cost lists): `gmake`, then run `./obj/t_*`. `Profiler/Tests/*.uitest` drives

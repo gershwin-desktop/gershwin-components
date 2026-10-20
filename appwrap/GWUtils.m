@@ -190,10 +190,10 @@
     }
 
   // If we get here, fallback to command-line tools found on PATH
-  // rsvg-convert only: ImageMagick is not installed on Gershwin systems any
-  // more (its dependencies cost the live images hundreds of MB), and for SVG
-  // it delegated to librsvg anyway, so it never rendered anything differently.
-  NSArray *tools = @[@"rsvg-convert"];
+  // svgconvert only: it is built with gershwin-components, so every Gershwin
+  // system has it, whereas ImageMagick and librsvg cost the live images
+  // hundreds of MB of dependencies just to rasterize icons.
+  NSArray *tools = @[@"svgconvert"];
   for (NSString *t in tools)
     {
       NSString *exe = [self findExecutableInPath:t];
@@ -202,13 +202,13 @@
       NSDebugLog(@"Using external tool '%@' at %@ to rasterize", t, exe);
       NSTask *task = [[NSTask alloc] init];
 
-      if ([t isEqualToString:@"rsvg-convert"]) 
+      if ([t isEqualToString:@"svgconvert"]) 
         {
           [task setLaunchPath:exe];
-          // Request transparent background explicitly. -a, because with both
-          // -w and -h rsvg-convert otherwise stretches a non-square icon to
-          // fill the square instead of fitting it in.
-          [task setArguments:@[@"-a", @"-w", [NSString stringWithFormat:@"%d", size], @"-h", [NSString stringWithFormat:@"%d", size], @"-b", @"transparent", @"-o", pngPath, svgPath]];
+          // Transparent background explicitly, as svgconvert defaults to
+          // white like convert; -resize WxH fits a non-square icon into the
+          // square keeping its aspect ratio instead of stretching it.
+          [task setArguments:@[svgPath, @"-background", @"none", @"-resize", [NSString stringWithFormat:@"%dx%d", size, size], pngPath]];
         }
 
       @try
