@@ -9,6 +9,8 @@
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
+#include <string.h>
+#include <unistd.h>
 #import "MIDINetworkState.h"
 #import "MIDINetworkBackend.h"
 
@@ -35,6 +37,27 @@ int main(void)
     PASS([st addSession:a error:&error], "a valid session is added");
     PASS([st unusedPort] == 5006, "the next free port skips the data port of the first session");
     PASS_EQUAL([st unusedSessionNameWithBase:@"Session"], @"Session 2", "a free name is numbered");
+
+    {
+        /* Peers see this computer by its name, not by the desktop's. */
+        char host[256] = "";
+        gethostname(host, sizeof host);
+        char *dot = strchr(host, '.');
+        if (dot) *dot = 0;
+        NSString *machine = [NSString stringWithUTF8String:host];
+        PASS_EQUAL(MIDINetworkMachineName(), machine, "the machine name is the host name without its domain");
+        MIDINetworkState *fresh = [[MIDINetworkState new] autorelease];
+        MIDINetworkSession *p1 = [fresh proposedSession];
+        PASS_EQUAL(p1.name, machine, "a new session is named after the machine");
+        PASS_EQUAL(p1.advertisedName, machine, "and announced under that name");
+        PASS(p1.port == 5004 && !p1.enabled, "on the first free port, switched off");
+        [fresh addSession:p1 error:NULL];
+        MIDINetworkSession *p2 = [fresh proposedSession];
+        NSString *second = [machine stringByAppendingString:@" 2"];
+        PASS_EQUAL(p2.name, second, "a second one gets a number");
+        PASS_EQUAL(p2.advertisedName, second, "in its announced name too");
+        PASS(p2.port == 5006, "and the next free port");
+    }
 
     MIDINetworkSession *b = [MIDINetworkSession sessionWithName:@"Other" port:5005];
     error = nil;

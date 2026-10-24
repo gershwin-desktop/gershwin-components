@@ -209,6 +209,12 @@ static NSArray *CopiedModels(NSArray *models)
     return candidate;
 }
 
+- (MIDINetworkSession *)proposedSession
+{
+    return [MIDINetworkSession sessionWithName:[self unusedSessionNameWithBase:MIDINetworkMachineName()]
+                                          port:[self unusedPort]];
+}
+
 #pragma mark - Validation
 
 - (MIDINetworkSession *)sessionNamed:(NSString *)name except:(NSString *)identifier

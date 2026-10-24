@@ -62,6 +62,12 @@ BOOL MIDINetworkConnectionPolicyFromName(NSString *name, MIDINetworkConnectionPo
 /* An identifier unique enough for objects created on this computer. */
 NSString *MIDINetworkMakeIdentifier(void);
 
+/* The name other computers know this one by: the host name without its
+   domain, which is also what the Sharing pane sets as the computer name.
+   New sessions are named after it, so peers see the machine, not the
+   desktop. */
+NSString *MIDINetworkMachineName(void);
+
 @interface MIDINetworkSession : NSObject <NSCopying>
 @property (nonatomic, copy) NSString *identifier;
 @property (nonatomic, copy) NSString *name;            /* local MIDI port name */

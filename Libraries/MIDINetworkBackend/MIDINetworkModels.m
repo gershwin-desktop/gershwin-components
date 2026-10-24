@@ -5,6 +5,7 @@
  */
 
 #import "MIDINetworkModels.h"
+#include <sys/utsname.h>
 
 NSString * const MIDINetworkKeyIdentifier = @"identifier";
 NSString * const MIDINetworkKeyName = @"name";
@@ -73,6 +74,19 @@ BOOL MIDINetworkConnectionPolicyFromName(NSString *name, MIDINetworkConnectionPo
     }
     *policy = (MIDINetworkConnectionPolicy)index;
     return YES;
+}
+
+NSString *MIDINetworkMachineName(void)
+{
+    struct utsname u;
+    NSString *name;
+    NSRange dot;
+    if (uname(&u) != 0 || u.nodename[0] == 0) {
+        [NSException raise:NSInternalInconsistencyException format:@"this computer has no host name"];
+    }
+    name = [NSString stringWithUTF8String:u.nodename];
+    dot = [name rangeOfString:@"."];
+    return dot.location == NSNotFound ? name : [name substringToIndex:dot.location];
 }
 
 NSString *MIDINetworkMakeIdentifier(void)

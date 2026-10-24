@@ -54,6 +54,9 @@ extern NSString * const MIDINetworkStateKeyLocalPorts;
 - (NSUInteger)unusedPort;
 /* "Session", "Session 2", ... not yet taken by a session. */
 - (NSString *)unusedSessionNameWithBase:(NSString *)base;
+/* A new, disabled session named after this machine ("host", "host 2", ...)
+   on the first free port, for the pane's "+" and the command line. */
+- (MIDINetworkSession *)proposedSession;
 
 /* Mutators: NO plus an error in MIDINetworkErrorDomain when refused, and
    then nothing has changed. */
