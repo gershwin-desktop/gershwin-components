@@ -13,7 +13,7 @@ to the SYSTEM domain unless noted.
 - Build one component: `cd <dir> && gmake`
 - Install all: `sudo gmake install` — installs `Libraries` and the
   `PackageManager` framework first, then builds the **library consumers**
-  (`AppGarden Build Menu Network Sound Whisper`) and `PackageManager/OnDemand`, which
+  (`AppGarden Build Menu MIDI Network Sound Whisper`) and `PackageManager/OnDemand`, which
   `gmake` alone skips because they link the shared libs. So a changed
   component only compiles during `install` if it links a backend from
   `Libraries/` or the `PackageManager` framework.
@@ -30,6 +30,16 @@ to the SYSTEM domain unless noted.
 - Flat: each top-level dir is a component (app, pref pane, bundle, or tool).
 - `Libraries/` holds shared backends (`SoundBackend`, `NetworkBackend`) that
   `Menu`, `Network`, `Sound`, `Whisper` link against.
+- `Libraries/MIDINetworkBackend/` keeps its sources in its own directory
+  (shared by the `MIDI` pane and the `gwmidid` daemon): models,
+  `MIDINetworkState` (the consistency rules every backend and the daemon
+  use), the `MIDINetworkBackend` protocol, the gwmidid client (Distributed
+  Objects, contract in `CONTROL-INTERFACE.md` and `MIDINetworkControl.h`)
+  and a simulation backend. `defaults write
+  io.github.gershwin-desktop.MIDINetwork Backend simulation` makes the pane
+  use the simulation. Type names say network MIDI, never the wire protocol.
+- `MIDI/` is the MIDI pane (Network category), built in code; everything it
+  shows comes from `MIDIPaneViewState` (Foundation only) and one `-render`.
 - `PackageManager/` builds the `PackageManager.framework` (cross-distro package
   install/uninstall, AppImage download into the user's home, + the bundled
   header database in `Resources/headers.db`).
@@ -77,6 +87,11 @@ to the SYSTEM domain unless noted.
   `cd PackageManager && gmake test`. It also `#include`s
   `AGAppImageAssetPickerTests.m` (deliberately not in `OBJC_FILES`: its cases
   use the `TAssert` macros, which expand to a `return NO`).
+- `Libraries/MIDINetworkBackend/Tests/` (models, state rules, simulation,
+  factory, gwmidid client against an in-process daemon) and
+  `MIDI/Tests/` (view state): `gnustep-tests --sequential Tests`, headless;
+  both link the library built in the tree. `MIDI/Tests/live-pane.sh` drives
+  the pane with DriveUI in an isolated slot (instructions in the script).
 - `Player/Tests/Unit/`: ObjectTesting tools for the playlist, the playback
   state machine and view state, the session, the FFmpeg player, radio and
   menu. Run them with `gnustep-tests --sequential .` there (the tools share
