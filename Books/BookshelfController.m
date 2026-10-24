@@ -65,6 +65,9 @@
   [_shelf setAutoresizingMask:NSViewWidthSizable];
   [  _shelf setDelegate:self];
   [_scroll setDocumentView:_shelf];
+  // WHY: the document must be exactly as wide as the clip view, or the
+  // columns are laid out for a width partly hidden behind the scroller.
+  [_shelf setFrameSize:NSMakeSize([_scroll contentSize].width, [_shelf frame].size.height)];
   [content addSubview:_scroll];
 
   _openReaders = [NSMutableArray array];
