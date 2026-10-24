@@ -2984,7 +2984,9 @@ static bool isDetachedDaemon(const char *comm)
     
     // Find X server executable
     NSString *xserverPath = nil;
-    NSArray *possiblePaths = @[@"/usr/local/bin/X", @"/usr/local/bin/Xorg", @"/usr/bin/Xorg"];
+    // /usr/X11/bin/X first: NextBSD ships X in base there; elsewhere it is absent
+    // and the package locations are used as before.
+    NSArray *possiblePaths = @[@"/usr/X11/bin/X", @"/usr/local/bin/X", @"/usr/local/bin/Xorg", @"/usr/bin/Xorg"];
     
     for (NSString *path in possiblePaths) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {

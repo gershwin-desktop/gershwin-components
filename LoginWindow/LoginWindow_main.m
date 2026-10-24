@@ -367,7 +367,9 @@ BOOL startXServer(void)
     
     // Find X server executable
     NSString *xserverPath = nil;
-    NSArray *possiblePaths = @[@"/usr/local/bin/X", @"/usr/local/bin/Xorg", @"/usr/bin/Xorg"];
+    // /usr/X11/bin/X first: NextBSD ships X in base there; elsewhere it is absent
+    // and the package locations are used as before.
+    NSArray *possiblePaths = @[@"/usr/X11/bin/X", @"/usr/local/bin/X", @"/usr/local/bin/Xorg", @"/usr/bin/Xorg"];
     
     for (NSString *path in possiblePaths) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
@@ -543,9 +545,11 @@ BOOL startXorgLikeShellScript(void)
         }
 
         if (vtArg) {
+            execl("/usr/X11/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", vtArg, (char *)NULL);
             execl("/usr/local/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", vtArg, (char *)NULL);
             execl("/usr/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", vtArg, (char *)NULL);
         } else {
+            execl("/usr/X11/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", (char *)NULL);
             execl("/usr/local/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", (char *)NULL);
             execl("/usr/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", (char *)NULL);
         }

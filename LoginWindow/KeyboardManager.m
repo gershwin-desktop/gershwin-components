@@ -450,6 +450,7 @@ static void writeKeyboardConfigFile(const char *layout,
 static const char *findSetxkbmap(void)
 {
     static const char *paths[] = {
+        "/usr/X11/bin/setxkbmap",
         "/usr/local/bin/setxkbmap",
         "/usr/bin/setxkbmap",
         "/bin/setxkbmap",
@@ -466,6 +467,7 @@ static const char *findSetxkbmap(void)
 static const char *findXkbcomp(void)
 {
     static const char *paths[] = {
+        "/usr/X11/bin/xkbcomp",
         "/usr/local/bin/xkbcomp",
         "/usr/bin/xkbcomp",
         "/bin/xkbcomp",
