@@ -67,6 +67,22 @@ typedef void (^SWGitLogLine)(NSString *line);
 // rather than as "no updates".
 - (BOOL)fetchPruneOrigin:(NSString **)outError;
 
+// Whether the repository is a shallow clone (`git rev-parse
+// --is-shallow-repository`). The live images clone with --depth 1, which
+// also means only the branch they were cloned from is fetched.
+- (BOOL)isShallow;
+
+// Makes refs/remotes/origin/<branch> exist. A single-branch clone - every
+// shallow clone - does not fetch any other branch, so the branch is added to
+// origin's fetch refspec and fetched, with --depth 1 when the clone is
+// shallow so that it stays shallow. YES if the ref exists afterwards.
+- (BOOL)ensureRemoteTrackingBranch:(NSString *)branch;
+
+// Makes commit <sha> present. A shallow clone has only the branch tip, and a
+// pinned commit is usually older; git can fetch one commit only by its full
+// id, so a missing commit named by an abbreviated sha returns NO.
+- (BOOL)ensureCommit:(NSString *)sha;
+
 // `git -C <path> rev-parse --abbrev-ref HEAD`, or nil if detached/unknown.
 - (NSString *)currentBranch;
 
@@ -178,8 +194,10 @@ typedef void (^SWGitLogLine)(NSString *line);
 
 // origin's default branch (e.g. "main"), from `git -C <path> symbolic-ref
 // --short refs/remotes/origin/HEAD`, refreshing it once via `git remote
-// set-head origin -a` if it was never recorded locally. Nil if it cannot be
-// determined at all.
+// set-head origin -a` if it was never recorded locally. A clone of a single
+// other branch (a dev image) has no local ref for the default branch at all,
+// so then origin is asked for its HEAD and that branch is fetched first. Nil
+// if it cannot be determined at all.
 - (NSString *)defaultBranch;
 
 // `git -C <path> show <ref>:<file>` - used to read a file's content as it
