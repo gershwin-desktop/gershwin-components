@@ -195,8 +195,9 @@ static NSInteger PopUpIndex(NSArray *identifiers, NSString *portIdentifier)
     for (MIDINetworkSession *s in [backend sessions]) {
         [scratch addSession:s error:NULL];
     }
-    return [MIDINetworkSession sessionWithName:[scratch unusedSessionNameWithBase:MIDIPaneLocalized(@"Session")]
-                                          port:[scratch unusedPort]];
+    /* Named after the machine, so peers joining it see which computer
+       it is. */
+    return [scratch proposedSession];
 }
 
 @end

@@ -47,9 +47,10 @@ int main(void)
     [b addSession:second error:NULL];
 
     START_SET("sessions")
-    PASS_EQUAL(first.name, @"Session", "the first proposed session is called Session");
+    PASS_EQUAL(first.name, MIDINetworkMachineName(), "the first proposed session is named after the machine");
+    PASS_EQUAL(first.advertisedName, MIDINetworkMachineName(), "and peers see the machine's name");
     PASS(first.port == 5004 && second.port == 5006, "proposed sessions get free port pairs");
-    PASS_EQUAL(second.name, @"Session 2", "the second one is numbered");
+    PASS_EQUAL(second.name, [MIDINetworkMachineName() stringByAppendingString:@" 2"], "the second one is numbered");
 
     MIDIPaneViewState *v = View(b, nil, nil);
     PASS(v.selectedSessionRow == 0 && [v.selection.sessionIdentifier isEqual:first.identifier],
@@ -63,7 +64,7 @@ int main(void)
     sel.sessionIdentifier = second.identifier;
     v = View(b, sel, nil);
     PASS(v.selectedSessionRow == 1, "a selected session is found by identifier");
-    PASS_EQUAL(v.localName, @"Session 2", "its local name is shown");
+    PASS_EQUAL(v.localName, second.name, "its local name is shown");
     PASS_EQUAL(v.portText, @"5006", "its port is shown");
     PASS(v.policyIndex == MIDINetworkConnectionPolicyAnyone && [v.policyTitles count] == 3,
          "the policy pop-up has three choices, Anyone selected");
