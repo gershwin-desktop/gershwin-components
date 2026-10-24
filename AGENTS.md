@@ -70,6 +70,17 @@ to the SYSTEM domain unless noted.
   `TEST_TOOL_NAME` + `test-tool.make`; `ICNSImageRep/test/` has `test_icns.m`;
   `Menu/` has `test.sh` / `test-menu-integration.sh`; `Assistants/BackupAssistant/`
   has shell+ObjC test tools. Inspect the component's `GNUmakefile` for the exact tool.
+- `gwmidid/` is the per-user network MIDI (RTP-MIDI) daemon, Foundation
+  only, BSD-2 OR GPL-3 (never copy rtpmidid code, it is GPL). The protocol
+  core in `Sources/Protocol` is pure (no sockets, no clock) and covered by
+  `gwmidid/Tests/Unit` (`gmake -j1`, then `./obj/t_*`). It links
+  `Libraries/MIDINetworkBackend` (models, `MIDINetworkState`, the control
+  interface in `CONTROL-INTERFACE.md`), preferring the library built in
+  this tree. `Tests/Live/run-live-control.sh` runs the pane's client
+  against a real gwmidid; `Tests/Interop/rtpmidid-interop.sh` (needs an
+  rtpmidid binary in `RTPMIDID`) tests against rtpmidid on loopback. Both
+  use a private GNUstep defaults directory and the user's control name, so
+  no gwmidid of the user may run meanwhile.
 - `Profiler/Tests/Unit/`: ObjectTesting tools for the profile model (symbol
   demangling, the perf/folded/DTrace stack parsers, call trees and the flat
   cost lists): `gmake`, then run `./obj/t_*`. `Profiler/Tests/*.uitest` drives
