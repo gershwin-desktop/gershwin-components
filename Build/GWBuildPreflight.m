@@ -67,6 +67,7 @@ static BOOL GWShouldSkipDirectory(NSString *name)
     NSMutableArray<NSString *> *_unresolvedHeaders;
     NSMutableArray<NSString *> *_blockedHeaders;
     NSSet *_localFilenames;
+    NSDictionary *_makefileMacros;
     NSSet *_blacklist;
     GWPreflightProgressBlock _progress;
     GWPreflightOutputBlock _output;
@@ -151,8 +152,90 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
     }
 }
 
+// The source files the makefiles actually compile, taken from the gnustep-make
+// variables that list them (xxx_OBJC_FILES and friends) and followed through
+// SUBPROJECTS.  A repository often carries sources for other platforms next to
+// the ones built here - a project with an iOS and a macOS target, say - and
+// scanning those demands headers that this build never needs.
+- (NSArray<NSString *> *)sourceFilesFromMakefile:(NSString *)makefilePath
+                                           seen:(NSMutableSet *)seenMakefiles
+{
+    NSString *standardized = [makefilePath stringByStandardizingPath];
+    if (!standardized || [seenMakefiles containsObject:standardized]) return @[];
+    [seenMakefiles addObject:standardized];
+
+    NSString *text = [NSString stringWithContentsOfFile:standardized
+                                               encoding:NSUTF8StringEncoding error:NULL];
+    if (!text) return @[];
+
+    NSString *dir = [standardized stringByDeletingLastPathComponent];
+    NSMutableArray *files = [NSMutableArray array];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // Join continuation lines so a list spanning several lines is one line.
+    NSMutableArray *lines = [NSMutableArray array];
+    NSString *pending = nil;
+    for (NSString *raw in [text componentsSeparatedByString:@"\n"]) {
+        NSString *line = raw;
+        BOOL continues = [line hasSuffix:@"\\"];
+        if (continues) line = [line substringToIndex:[line length] - 1];
+        pending = (pending ? [pending stringByAppendingString:line] : line);
+        if (!continues) { [lines addObject:pending]; pending = nil; }
+    }
+    if (pending) [lines addObject:pending];
+
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed hasPrefix:@"#"]) continue;
+
+        NSRange assign = [trimmed rangeOfString:@"="];
+        if (assign.location == NSNotFound) continue;
+        NSString *name = [[trimmed substringToIndex:assign.location]
+            stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" \t+:"]];
+        NSString *value = [trimmed substringFromIndex:NSMaxRange(assign)];
+
+        BOOL listsSources = ([name hasSuffix:@"_OBJC_FILES"] || [name hasSuffix:@"_C_FILES"]
+            || [name hasSuffix:@"_OBJCC_FILES"] || [name hasSuffix:@"_CC_FILES"]
+            || [name hasSuffix:@"_CPP_FILES"] || [name hasSuffix:@"_HEADER_FILES"]);
+        BOOL listsSubprojects = [name hasSuffix:@"SUBPROJECTS"];
+        if (!listsSources && !listsSubprojects) continue;
+
+        for (NSString *token in [value componentsSeparatedByCharactersInSet:
+                 [NSCharacterSet whitespaceCharacterSet]]) {
+            if ([token length] == 0) continue;
+            // A list built from a variable or a wildcard cannot be resolved
+            // here; the caller falls back to scanning the whole tree.
+            if ([token rangeOfString:@"$("].location != NSNotFound) return nil;
+
+            NSString *path = [dir stringByAppendingPathComponent:token];
+            if (listsSubprojects) {
+                NSArray *nested = [self sourceFilesFromMakefile:
+                    [path stringByAppendingPathComponent:@"GNUmakefile"] seen:seenMakefiles];
+                if (!nested) return nil;
+                [files addObjectsFromArray:nested];
+                continue;
+            }
+            if ([fm fileExistsAtPath:path]) [files addObject:[path stringByStandardizingPath]];
+        }
+    }
+
+    return files;
+}
+
 - (NSArray<NSString *> *)collectSourceFiles
 {
+    if ([_makefilePath length] > 0) {
+        NSArray *listed = [self sourceFilesFromMakefile:_makefilePath
+                                                   seen:[NSMutableSet set]];
+        if ([listed count] > 0) {
+            [self outputLine:[NSString stringWithFormat:
+                @"Preflight: %lu source file(s) listed by the makefiles.",
+                (unsigned long)[listed count]]];
+            return listed;
+        }
+    }
+
     NSMutableArray *files = [NSMutableArray array];
     [self collectFilesInDirectory:_sourceRoot withSuffix:@"" results:files];
     return files;
@@ -160,6 +243,20 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
 
 // Every basename present in the project tree; a #include of one of these is
 // a project-local header and must never be treated as a system header.
+// Every header in the project tree by basename, so an import of one can be
+// followed to the file it names.
+- (NSDictionary *)collectLocalHeaderPaths
+{
+    NSMutableArray *files = [NSMutableArray array];
+    [self collectFilesInDirectory:_sourceRoot withSuffix:@".h" results:files];
+    NSMutableDictionary *paths = [NSMutableDictionary dictionaryWithCapacity:[files count]];
+    for (NSString *path in files) {
+        NSString *name = [path lastPathComponent];
+        if (!paths[name]) paths[name] = path;
+    }
+    return paths;
+}
+
 - (NSSet *)collectLocalFilenames
 {
     NSMutableArray *files = [NSMutableArray array];
@@ -277,10 +374,19 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
     distro:(NSString *)distro
 {
     NSSet *localFilenames = [self collectLocalFilenames];
+    NSDictionary *localHeaderPaths = [self collectLocalHeaderPaths];
     NSMutableSet *seen = [NSMutableSet set];
     NSMutableDictionary *packageByHeader = [NSMutableDictionary dictionary];
 
-    for (NSString *path in files) {
+    // The project's own headers are scanned because a compiled source imports
+    // them, directly or through another header.  Scanning every header that
+    // merely sits in the same directory would demand the libraries of code
+    // that is not part of this build at all.
+    NSMutableArray *worklist = [NSMutableArray arrayWithArray:files];
+    NSMutableSet *scanned = [NSMutableSet setWithArray:files];
+
+    for (NSUInteger index = 0; index < [worklist count]; index++) {
+        NSString *path = worklist[index];
         NSString *content = [NSString stringWithContentsOfFile:path
                                                       encoding:NSUTF8StringEncoding
                                                          error:NULL];
@@ -293,11 +399,11 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
 
         // Preprocessor / comment state for this file, so dead-code imports
         // (commented out or behind a disabled #if) are not treated as missing.
-        NSSet *undefined = [self _undefinedPlatformMacros];
+        NSMutableDictionary *macros = [self _macroEnvironment];
         NSMutableArray *actives = [NSMutableArray array];
         NSMutableArray *inBlocks = [NSMutableArray array];
         NSMutableArray *lineRanges = [NSMutableArray array];
-        [self _scanContent:content undefined:undefined
+        [self _scanContent:content macros:macros
                 lineActives:actives inBlockStarts:inBlocks ranges:lineRanges];
 
         for (NSTextCheckingResult *match in matches) {
@@ -321,18 +427,27 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
             if ([header length] == 0) continue;
 
             NSString *basename = [header lastPathComponent];
+            BOOL dead = [self _shouldSkipHeaderAtMatch:match inContent:content
+                                               actives:actives inBlocks:inBlocks
+                                                ranges:lineRanges];
+
             // Layer 1: the header belongs to the project's own tree (git
-            // repo / source checkout); never treat it as a system header.
-            if ([localFilenames containsObject:basename]) continue;
+            // repo / source checkout); never treat it as a system header, but
+            // follow it, because what it imports is compiled too.
+            if ([localFilenames containsObject:basename]) {
+                NSString *local = localHeaderPaths[basename];
+                if (!dead && local && ![scanned containsObject:local]) {
+                    [scanned addObject:local];
+                    [worklist addObject:local];
+                }
+                continue;
+            }
             if ([seen containsObject:header]) continue;
             [seen addObject:header];
 
             // A commented-out or platform-disabled import is never compiled;
             // do not let it block the build.
-            if ([self _shouldSkipHeaderAtMatch:match inContent:content
-                                      actives:actives inBlocks:inBlocks ranges:lineRanges]) {
-                continue;
-            }
+            if (dead) continue;
 
             // Layer 2: GNUstep / system-installed headers need no package.
             if (![self headerIsSystem:header database:db distro:distro]) continue;
@@ -454,30 +569,123 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
 
 #pragma mark - Preprocessor / comment awareness
 
-// Macros that are known to be UNDEFINED on the Gershwin host (GNUstep on
-// Linux/BSD).  A header guarded by such a macro (e.g. `#ifdef __MINGW32__`)
-// is never compiled here, so it must not be treated as a missing dependency.
-// Any macro NOT in this set is assumed defined, so we never accidentally skip
-// a header that genuinely is included on this platform.
-- (NSSet *)_undefinedPlatformMacros
+// What the preflight knows about preprocessor macros.  A name maps either to
+// its value or to NSNull, which means "definitely not defined here"; a name
+// with no entry at all is assumed defined, so we never accidentally skip a
+// header that genuinely is included on this platform.
+//
+// The seed is the set of macros that are known to be UNDEFINED on the Gershwin
+// host (GNUstep on Linux/BSD), so a header guarded by one of them (e.g.
+// windows.h under `#ifdef __MINGW32__`, or a UIKit header under
+// `#if TARGET_OS_IPHONE`) is not treated as a missing dependency.
+- (NSMutableDictionary *)_macroEnvironment
 {
-    static NSSet *set = nil;
+    static NSArray *undefinedNames = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        set = [NSSet setWithArray:@[
+        undefinedNames = [@[
             @"__MINGW32__", @"__MINGW64__", @"_M_IX86", @"_M_X64",
             @"_WIN32", @"_WIN64", @"WIN32", @"_WIN32_WINNT", @"__WIN32__",
             @"_MSC_VER", @"__MSC_VER", @"__CYGWIN__", @"__CYGWIN32__",
             @"TARGET_OS_WIN32", @"TARGET_OS_MAC", @"__APPLE__", @"__APPLE_CC__",
-            @"TARGET_IPHONE_SIMULATOR",
-        ]];
+            @"__MACH__",
+            @"TARGET_OS_IPHONE", @"TARGET_OS_IOS", @"TARGET_OS_TV",
+            @"TARGET_OS_WATCH", @"TARGET_OS_VISION", @"TARGET_OS_EMBEDDED",
+            @"TARGET_OS_SIMULATOR", @"TARGET_IPHONE_SIMULATOR",
+        ] retain]; // app-lifetime singleton
     });
-    return set;
+
+    if (!_makefileMacros && [_makefilePath length] > 0) {
+        _makefileMacros = [[self macrosFromMakefile:_makefilePath
+                                               seen:[NSMutableSet set]] copy];
+    }
+
+    NSMutableDictionary *macros = [NSMutableDictionary dictionary];
+    for (NSString *name in undefinedNames) macros[name] = [NSNull null];
+    [macros addEntriesFromDictionary:_makefileMacros ?: @{}];
+    return macros;
+}
+
+// The -D and -U flags the makefiles pass to the compiler.  A project switches
+// whole features off that way (-DENABLE_SILC=0), and the sources then guard
+// the feature's imports with that macro, so without these flags the preflight
+// demands the libraries of every feature the build does not even compile.
+- (NSDictionary *)macrosFromMakefile:(NSString *)makefilePath
+                                seen:(NSMutableSet *)seenMakefiles
+{
+    NSString *standardized = [makefilePath stringByStandardizingPath];
+    if (!standardized || [seenMakefiles containsObject:standardized]) return @{};
+    [seenMakefiles addObject:standardized];
+
+    NSString *text = [NSString stringWithContentsOfFile:standardized
+                                               encoding:NSUTF8StringEncoding error:NULL];
+    if (!text) return @{};
+
+    NSMutableDictionary *macros = [NSMutableDictionary dictionary];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    for (NSString *token in [text componentsSeparatedByCharactersInSet:ws]) {
+        NSString *flag = [token stringByTrimmingCharactersInSet:
+            [NSCharacterSet characterSetWithCharactersInString:@"\\\"'"]];
+        if ([flag hasPrefix:@"-U"] && [flag length] > 2) {
+            macros[[flag substringFromIndex:2]] = [NSNull null];
+            continue;
+        }
+        if (![flag hasPrefix:@"-D"] || [flag length] <= 2) continue;
+        NSString *body = [flag substringFromIndex:2];
+        NSRange eq = [body rangeOfString:@"="];
+        if (eq.location == NSNotFound) {
+            macros[body] = @"1";
+        } else {
+            macros[[body substringToIndex:eq.location]] =
+                [body substringFromIndex:NSMaxRange(eq)];
+        }
+    }
+
+    // A subproject compiles with its own flags, and its sources are scanned
+    // together with the top level's, so both sets apply.
+    NSString *dir = [standardized stringByDeletingLastPathComponent];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        NSRange assign = [line rangeOfString:@"="];
+        if (assign.location == NSNotFound) continue;
+        NSString *name = [[line substringToIndex:assign.location]
+            stringByTrimmingCharactersInSet:
+                [NSCharacterSet characterSetWithCharactersInString:@" \t+:"]];
+        if (![name hasSuffix:@"SUBPROJECTS"]) continue;
+        for (NSString *token in [[line substringFromIndex:NSMaxRange(assign)]
+                 componentsSeparatedByCharactersInSet:ws]) {
+            if ([token length] == 0 || [token isEqualToString:@"\\"]) continue;
+            NSString *nested = [[dir stringByAppendingPathComponent:token]
+                stringByAppendingPathComponent:@"GNUmakefile"];
+            if (![fm fileExistsAtPath:nested]) continue;
+            [macros addEntriesFromDictionary:
+                [self macrosFromMakefile:nested seen:seenMakefiles]];
+        }
+    }
+
+    return macros;
+}
+
+// Is this macro known to be undefined, i.e. would `defined(name)` be false?
+static BOOL GWMacroIsUndefined(NSDictionary *macros, NSString *name)
+{
+    id value = macros[name];
+    return (value == [NSNull null]);
+}
+
+// Would the macro evaluate to zero in an `#if`?  An unknown macro counts as
+// non-zero so a header that is really compiled is never skipped.
+static BOOL GWMacroIsZero(NSDictionary *macros, NSString *name)
+{
+    id value = macros[name];
+    if (value == nil) return NO;
+    if (value == [NSNull null]) return YES;
+    return ([value integerValue] == 0);
 }
 
 // Evaluate a `#if`/`#elif` expression.  Unsupported constructs fall back to
 // "true" so we never skip a header that might actually be required.
-- (BOOL)_evaluateIfExpression:(NSString *)expr undefined:(NSSet *)undefined
+- (BOOL)_evaluateIfExpression:(NSString *)expr macros:(NSDictionary *)macros
 {
     if ([expr length] == 0) return YES;
 
@@ -537,11 +745,25 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
             NSString *m = (pos < (NSInteger)[tokens count]) ? tokens[pos] : @"";
             pos++;
             if (hasParen && pos < (NSInteger)[tokens count] && [tokens[pos] isEqualToString:@")"]) pos++;
-            return ![undefined containsObject:m];
+            return !GWMacroIsUndefined(macros, m);
         }
         pos++;
         if ([tok isEqualToString:@"0"]) return NO;
         if ([tok isEqualToString:@"1"]) return YES;
+        // A one-argument macro call whose expansion the environment knows by
+        // the joined name, e.g. ENABLE(SILC) against -DENABLE_SILC=0.  These
+        // feature gates expand to `defined(ENABLE_SILC) && ENABLE_SILC`, so
+        // the joined macro decides the whole expression.
+        if (pos + 2 < (NSInteger)[tokens count] && [tokens[pos] isEqualToString:@"("]
+            && [tokens[pos + 2] isEqualToString:@")"]) {
+            NSString *joined = [NSString stringWithFormat:@"%@_%@", tok, tokens[pos + 1]];
+            if (macros[joined] != nil) {
+                pos += 3;
+                return !GWMacroIsUndefined(macros, joined)
+                    && !GWMacroIsZero(macros, joined);
+            }
+        }
+        if (GWMacroIsZero(macros, tok)) return NO;
         // Unknown identifier (a build-time macro): assume defined.
         return YES;
     };
@@ -575,7 +797,7 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
 // '#' already stripped).  Stack entries are @[taken, active].
 - (void)_applyDirective:(NSString *)directive
                 toStack:(NSMutableArray *)stack
-              undefined:(NSSet *)undefined
+                 macros:(NSMutableDictionary *)macros
 {
     NSString *body = [[directive substringFromIndex:1]
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
@@ -588,6 +810,11 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
     NSString *rest = [[body substringFromIndex:wordEnd]
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 
+    // A source file may switch a feature off for itself before testing it.
+    if ([word isEqualToString:@"undef"]) {
+        if ([rest length] > 0) macros[rest] = [NSNull null];
+        return;
+    }
     if ([word isEqualToString:@"endif"]) {
         if ([stack count] > 0) [stack removeLastObject];
         return;
@@ -606,10 +833,10 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
         NSString *m = [rest stringByReplacingOccurrencesOfString:@"(" withString:@""];
         m = [m stringByReplacingOccurrencesOfString:@")" withString:@""];
         m = [m stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        cond = [word isEqualToString:@"ifdef"] ? ![undefined containsObject:m]
-                                              : [undefined containsObject:m];
+        BOOL defined = !GWMacroIsUndefined(macros, m);
+        cond = [word isEqualToString:@"ifdef"] ? defined : !defined;
     } else if ([word isEqualToString:@"if"] || [word isEqualToString:@"elif"]) {
-        cond = [self _evaluateIfExpression:rest undefined:undefined];
+        cond = [self _evaluateIfExpression:rest macros:macros];
     } else {
         return; // not a conditional directive
     }
@@ -632,7 +859,7 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
 // Precompute, per source line, whether it is compiled (all enclosing
 // conditionals active) and whether it begins inside a block comment.
 - (void)_scanContent:(NSString *)content
-           undefined:(NSSet *)undefined
+              macros:(NSMutableDictionary *)macros
         lineActives:(NSMutableArray *)actives
       inBlockStarts:(NSMutableArray *)inBlocks
              ranges:(NSMutableArray *)ranges
@@ -671,7 +898,7 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
         NSString *trimmed = [clean stringByTrimmingCharactersInSet:
             [NSCharacterSet whitespaceCharacterSet]];
         if ([trimmed length] > 0 && [trimmed characterAtIndex:0] == '#') {
-            [self _applyDirective:trimmed toStack:stack undefined:undefined];
+            [self _applyDirective:trimmed toStack:stack macros:macros];
         }
 
         BOOL active = YES;

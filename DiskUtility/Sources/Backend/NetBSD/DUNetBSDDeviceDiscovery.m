@@ -56,6 +56,16 @@
     return [self pathForTool:toolName] != nil;
 }
 
++ (BOOL)haveAnyTool:(NSArray<NSString *> *)toolNames
+{
+    for (NSString *toolName in toolNames) {
+        if ([self pathForTool:toolName] != nil) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 @end
 
 #pragma mark - Discovery

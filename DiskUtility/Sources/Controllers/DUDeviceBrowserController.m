@@ -32,7 +32,12 @@ static NSString * const kColumnIdentifier = @"devices";
 @property (nonatomic, copy) NSArray<NSNumber *> *rowDepths;
 @end
 
-@implementation DUDeviceBrowserController
+@implementation DUDeviceBrowserController {
+    // reloadData drops the selection for a moment; that transient "nothing
+    // selected" must not reach the panes, or each one throws away its
+    // pending edits on every device refresh.
+    BOOL _reloading;
+}
 
 - (instancetype)initWithStorageManager:(DUStorageManager *)manager
 {
@@ -92,6 +97,7 @@ static NSString * const kColumnIdentifier = @"devices";
     }
     NSString *selectedIdentifier = self.selectedObject.identifier;
 
+    _reloading = YES;
     [self rebuildVisibleRows];
 
     [self.outlineView reloadData];
@@ -100,6 +106,7 @@ static NSString * const kColumnIdentifier = @"devices";
             [self.outlineView expandItem:root];
         }
     }
+    _reloading = NO;
 
     NSString *target = preferredIdentifier ?: selectedIdentifier;
     DUStorageObject *resolved = nil;
@@ -390,6 +397,9 @@ static NSString * const kColumnIdentifier = @"devices";
 - (void)outlineViewSelectionDidChange:(NSNotification *)notification
 {
     (void)notification;
+    if (_reloading) {
+        return;
+    }
     [self notifySelection:self.selectedObject];
 }
 

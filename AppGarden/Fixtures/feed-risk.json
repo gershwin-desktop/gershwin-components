@@ -1,0 +1,40 @@
+{
+ "version": "2.0",
+ "home_page_url": "https://appimage.github.io/",
+ "feed_url": "https://appimage.github.io/feed.json",
+ "description": "Three invented items for the risk panel: one in a category, one that matches nothing, and one that matches several. Not catalog data.",
+ "expired": null,
+ "items": [
+  {
+   "name": "AiyoPerps",
+   "description": "Desktop client for an AI agent that runs through an MCP server.",
+   "categories": ["Utility"],
+   "authors": [{"name": "example", "url": "https://github.com/example"}],
+   "license": "MIT",
+   "links": [
+    {"type": "GitHub", "url": "example/AiyoPerps"},
+    {"type": "Download", "url": "https://github.com/example/AiyoPerps/releases"}
+   ]
+  },
+  {
+   "name": "AnchorWallet",
+   "description": "A desktop wallet for holding coins.",
+   "categories": ["Finance"],
+   "license": "MIT",
+   "links": [
+    {"type": "GitHub", "url": "example/AnchorWallet"},
+    {"type": "Download", "url": "https://github.com/example/AnchorWallet/releases"}
+   ]
+  },
+  {
+   "name": "QuietNotes",
+   "description": "A plain text editor for your notes.",
+   "categories": ["Productivity"],
+   "license": "GPL-3.0",
+   "links": [
+    {"type": "GitHub", "url": "example/QuietNotes"},
+    {"type": "Download", "url": "https://github.com/example/QuietNotes/releases"}
+   ]
+  }
+ ]
+}

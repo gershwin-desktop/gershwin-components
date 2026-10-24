@@ -90,7 +90,38 @@ static const int DUSudoCredentialFailure = 1;
     if (argumentsOut != nil) {
         *argumentsOut = arguments;
     }
+    if (error != nil) {
+        *error = nil;
+    }
+    /* -A without SUDO_ASKPASS is a dead end: sudo(1) exits with "a terminal is
+     * required" and no tool ever runs, which the caller would then read as a
+     * filesystem failure. Point sudo at the installed askpass helper unless
+     * the environment already names one. */
+    if (getenv("SUDO_ASKPASS") == NULL) {
+        NSString *helper = [self askpassHelperPath];
+        if (helper != nil) {
+            setenv("SUDO_ASKPASS", helper.UTF8String, 1);
+        }
+    }
     return YES;
+}
+
+// The session's password-prompt helper. Without it sudo cannot ask for a
+// credential from a GUI application, which has no terminal to prompt on.
+- (NSString *)askpassHelperPath
+{
+    NSFileManager *files = [NSFileManager defaultManager];
+    for (NSString *candidate in @[
+             @"/System/Library/Tools/SudoAskPass",
+             @"/System/Library/Tools/sudo-askpass",
+             @"/usr/libexec/sudo-askpass",
+             @"/usr/lib/sudo/sudo-askpass",
+         ]) {
+        if ([files isExecutableFileAtPath:candidate]) {
+            return candidate;
+        }
+    }
+    return nil;
 }
 
 - (DUProcessResult *)runPrivileged:(NSString *)path
@@ -149,11 +180,56 @@ static const int DUSudoCredentialFailure = 1;
                           error:error]) {
         return nil;
     }
-    return [DUProcessRunner streamExecutableMergingErrorOutput:launchPath
-                                                    arguments:arguments
-                                                  environment:nil
-                                                stdoutHandler:stdoutHandler
-                                                 finishHandler:finishHandler];
+    /* A refused escalation is a permission problem, not damaged data. The
+     * streams are merged here, so the verdict has to be attached to the very
+     * result the caller receives - leaving it to runPrivileged: meant every
+     * streamed verb reported "the filesystem was found to be damaged" while
+     * no filesystem tool had ever run. */
+    DUProcessHandle *handle = [DUProcessRunner
+        streamExecutableMergingErrorOutput:launchPath
+                                arguments:arguments
+                              environment:nil
+                             stdoutHandler:stdoutHandler
+                            finishHandler:^(DUProcessResult *raw) {
+        if (raw != nil && [self looksLikeAuthenticationFailure:raw]) {
+            finishHandler([self authenticationFailureResult]);
+            return;
+        }
+        finishHandler(raw);
+    }];
+    if (![path isEqualToString:launchPath]) {
+        // sudo does not pass SIGTERM on to the command it runs, so the tool
+        // itself - sudo's child - is the one to signal.
+        NSString *pkill = [DUProcessRunner executablePathForName:@"pkill"];
+        handle.elevatedTerminate = ^(int processIdentifier) {
+            if (pkill == nil) {
+                return;
+            }
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:pkill
+                         args:@[ @"-TERM", @"-P",
+                                 [NSString stringWithFormat:@"%d",
+                                                            processIdentifier] ]
+                      timeout:15.0
+                        error:NULL];
+        };
+    }
+    return handle;
+}
+
+// Carries the permission-denied verdict through to the callers that only see
+// a DUProcessResult, so a refusal is never reported as filesystem damage.
+- (DUProcessResult *)authenticationFailureResult
+{
+    return [DUProcessResult
+        resultWithStandardOutput:@""
+                  standardError:NSLocalizedString(
+                                      @"Administrator authorization was "
+                                      @"refused", nil)
+                terminationStatus:DUSudoCredentialFailure
+                  exitedNormally:YES
+                       timedOut:NO
+                  wasCancelled:NO];
 }
 
 @end

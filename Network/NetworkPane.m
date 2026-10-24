@@ -29,7 +29,7 @@
 }
 
 + (NSString *)compatibilityReason {
-  return @"Neither nmcli nor ifconfig found on PATH — Network configuration requires one of these";
+  return @"Neither nmcli nor ifconfig found on PATH - Network configuration requires one of these";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

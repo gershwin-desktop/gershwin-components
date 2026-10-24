@@ -30,6 +30,10 @@ Screenshot_HEADER_FILES = \
 	ScreenshotActionPanel.h \
 	ScreenshotCommandLine.h \
 	ScreenshotCapture.h \
+	ScreenRecordingOptions.h \
+	ScreenRecorder.h \
+	RecordingFrame.h \
+	RecordingFrameGeometry.h \
 	x11_capture.h \
 	shadow_mask.h
 
@@ -37,7 +41,10 @@ Screenshot_OBJC_FILES = \
 	ScreenshotController.m \
 	ScreenshotActionPanel.m \
 	ScreenshotCommandLine.m \
-	ScreenshotCapture.m
+	ScreenshotCapture.m \
+	ScreenRecordingOptions.m \
+	ScreenRecorder.m \
+	RecordingFrame.m
 
 Screenshot_C_FILES = \
 	x11_capture.c \

@@ -13,7 +13,7 @@ to the SYSTEM domain unless noted.
 - Build one component: `cd <dir> && gmake`
 - Install all: `sudo gmake install` — installs `Libraries` and the
   `PackageManager` framework first, then builds the **library consumers**
-  (`Build Menu Network Sound Whisper`) and `PackageManager/OnDemand`, which
+  (`AppGarden Build Menu MIDI Network Sound Whisper`) and `PackageManager/OnDemand`, which
   `gmake` alone skips because they link the shared libs. So a changed
   component only compiles during `install` if it links a backend from
   `Libraries/` or the `PackageManager` framework.
@@ -30,9 +30,20 @@ to the SYSTEM domain unless noted.
 - Flat: each top-level dir is a component (app, pref pane, bundle, or tool).
 - `Libraries/` holds shared backends (`SoundBackend`, `NetworkBackend`) that
   `Menu`, `Network`, `Sound`, `Whisper` link against.
+- `Libraries/MIDINetworkBackend/` keeps its sources in its own directory
+  (shared by the `MIDI` pane and the `networkmidid` daemon): models,
+  `MIDINetworkState` (the consistency rules every backend and the daemon
+  use), the `MIDINetworkBackend` protocol, the networkmidid client (Distributed
+  Objects, contract in `CONTROL-INTERFACE.md` and `MIDINetworkControl.h`)
+  and a simulation backend. `defaults write
+  io.github.gershwin-desktop.MIDINetwork Backend simulation` makes the pane
+  use the simulation. Type names say network MIDI, never the wire protocol.
+- `MIDI/` is the MIDI pane (Network category), built in code; everything it
+  shows comes from `MIDIPaneViewState` (Foundation only) and one `-render`.
 - `PackageManager/` builds the `PackageManager.framework` (cross-distro package
-  install/uninstall + the bundled header database in `Resources/headers.db`).
-  It installs to `/System/Library/Frameworks`; `Build` and
+  install/uninstall, AppImage download into the user's home, + the bundled
+  header database in `Resources/headers.db`).
+  It installs to `/System/Library/Frameworks`; `AppGarden`, `Build` and
   `PackageManager/OnDemand` link it system-wide (no embedding). `OnDemand` and
   `Placeholders` are built and installed only during `install`.
 - `make_appimage/` is a GNUstep tool (`make_appimage`, `make_standalone`) that
@@ -59,6 +70,55 @@ to the SYSTEM domain unless noted.
   `TEST_TOOL_NAME` + `test-tool.make`; `ICNSImageRep/test/` has `test_icns.m`;
   `Menu/` has `test.sh` / `test-menu-integration.sh`; `Assistants/BackupAssistant/`
   has shell+ObjC test tools. Inspect the component's `GNUmakefile` for the exact tool.
+- `networkmidid/` is the per-user network MIDI (RTP-MIDI) daemon, Foundation
+  only, BSD-2 OR GPL-3 (never copy rtpmidid code, it is GPL). The protocol
+  core in `Sources/Protocol` is pure (no sockets, no clock) and covered by
+  `networkmidid/Tests/Unit` (`gmake -j1`, then `./obj/t_*`). It links
+  `Libraries/MIDINetworkBackend` (models, `MIDINetworkState`, the control
+  interface in `CONTROL-INTERFACE.md`), preferring the library built in
+  this tree. `Tests/Live/run-live-control.sh` runs the pane's client
+  against a real networkmidid; `Tests/Interop/rtpmidid-interop.sh` (needs an
+  rtpmidid binary in `RTPMIDID`) tests against rtpmidid on loopback. Both
+  use a private GNUstep defaults directory and the user's control name, so
+  no networkmidid of the user may run meanwhile.
+- `Profiler/Tests/Unit/`: ObjectTesting tools for the profile model (symbol
+  demangling, the perf/folded/DTrace stack parsers, call trees and the flat
+  cost lists): `gmake`, then run `./obj/t_*`. `Profiler/Tests/*.uitest` drives
+  the app itself from a file of folded stacks, so it needs neither perf nor
+  root. `Profiler/Tests/cli_smoke.sh` checks the `profiler` command line tool
+  (`sh Tests/cli_smoke.sh` after `gmake`); it needs no display either.
+- `Profiler` builds two things from one engine: the app, and `profiler`, a
+  tool that answers the same questions in a terminal (`profiler memory <pid>`,
+  `profiler objects <program>`, `profiler report <file.folded>`, each with
+  `--json`). Anything the tool needs must stay free of AppKit - `PRFormat`
+  holds the number formatting for that reason, and only `PRAppearance` (the
+  colours and icons) may use AppKit.
+- `PackageManager/Tests/`: one tool, `PackageManagerTest`, which links the
+  freshly built framework rather than the installed copy;
+  `cd PackageManager && gmake test`. It also `#include`s
+  `AGAppImageAssetPickerTests.m` (deliberately not in `OBJC_FILES`: its cases
+  use the `TAssert` macros, which expand to a `return NO`).
+- `Libraries/MIDINetworkBackend/Tests/` (models, state rules, simulation,
+  factory, networkmidid client against an in-process daemon) and
+  `MIDI/Tests/` (view state): `gnustep-tests --sequential Tests`, headless;
+  both link the library built in the tree. `MIDI/Tests/live-pane.sh` drives
+  the pane with DriveUI in an isolated slot (instructions in the script).
+- `Player/Tests/Unit/`: ObjectTesting tools for the playlist, the playback
+  state machine and view state, the session, the FFmpeg player, radio and
+  menu. Run them with `gnustep-tests --sequential .` there (the tools share
+  sources); everything a tool links lives in `GNUmakefile.preamble`, since the
+  runner regenerates `GNUmakefile`. `t_PlayerMenu` and `t_PlayerViews` need a
+  private `DISPLAY`. `Player/Tests/*.uitest` make their media with the `ffmpeg` CLI; the
+  podcast and radio directories come from `Player/Tests/Fixtures` through the
+  `PlayerPodcastDirectoryURL`/`PlayerRadioDirectoryURL` defaults (file://), so
+  no script needs the Internet.
+- `Books/Tests/Selection/`: ObjectTesting tools for the reading selection
+  (`t_TextSelection`, headless, every state x event pair) and the copied text
+  (`t_TextExtraction`, headless; `t_CopyToPasteboard` needs `DISPLAY` set to
+  a private Xvfb because the RTF writer resolves fonts, and writes only to a
+  uniquely named pasteboard). `Books/Tests/Live/copy_check.sh <N>` drags
+  across two paragraphs in a claimed uitest slot, presses Command-C and checks
+  the slot user's pasteboard.
 - For GNUstep unit/red-green tests, follow the global `gnustep-red-green-tdd`
   skill (PASS macro set + wiring).
 - To drive/inspect a running GUI, use the driveui skill / `drive_ui`.

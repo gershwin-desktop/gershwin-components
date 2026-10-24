@@ -197,6 +197,10 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
     device.readOnly = NO;
     device.smartStatus =
         [DUStorageDevice querySmartStatusForPath:device.backendPath];
+    // "Health Status:" used to be filled only by the mock backend, so every
+    // real disk showed "-" while the SMART row below it was populated.
+    device.healthStatus =
+        [DUStorageDevice healthStatusForSmartStatus:device.smartStatus];
     device.capabilities = [DUStorageCapabilities capabilitiesWithAll:NO];
     device.capabilities.canRepairPermissions = YES;
     return device;
@@ -210,8 +214,19 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
     if (diskName.length == 0) {
         return;
     }
+    NSError *listError = nil;
     NSArray<NSDictionary<NSString *, id> *> *providers =
-        [DUFreeBSDGEOMAdapter listClass:@"part" name:diskName error:NULL];
+        [DUFreeBSDGEOMAdapter listClass:@"part" name:diskName
+                                  error:&listError];
+    /* nil means geom could not answer at all - a busy or wedged geomd, a
+     * jail without access - which is NOT the same as a disk with no table.
+     * Treating the two alike showed a fully partitioned disk as empty with
+     * "Partition Scheme: -" while still offering Erase and Partition, so the
+     * destructive verbs must not be reachable from a state we do not know. */
+    if (providers == nil) {
+        device.partitionTableUnreadable = YES;
+        return;
+    }
     if (providers.count == 0) {
         // Blank or unlabeled disk; the scheme stays unknown rather than
         // being invented.
@@ -230,7 +245,41 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
         }
     }
 
-    [self attachProviders:providers toParent:device parentName:diskName];
+    [self attachProviders:[self providersInTableOrder:providers]
+                 toParent:device
+               parentName:diskName];
+}
+
+/* Geom lists providers in its own order, which is not the order of the
+ * partition table: on da1 it produced da1p2 before da1p1. The sidebar shows
+ * discovery order unrotated ("The tree is always presented in discovery
+ * order"), so a user could not assume row order meant anything - which
+ * matters precisely in an app where they choose what to destroy. Both parsed
+ * values are already available; sorting by offset puts the rows in the same
+ * order gpart and the physical disk do. */
+- (NSArray<NSDictionary<NSString *, id> *> *)providersInTableOrder:
+    (NSArray<NSDictionary<NSString *, id> *> *)providers
+{
+    return [providers sortedArrayUsingComparator:^NSComparisonResult(
+                        NSDictionary *a, NSDictionary *b) {
+        unsigned long long left =
+            [DUFreeBSDGEOMAdapter bytesFromGeomSizeToken:
+                                      [DUParsing trimmedString:a[@"offset"]]];
+        unsigned long long right =
+            [DUFreeBSDGEOMAdapter bytesFromGeomSizeToken:
+                                      [DUParsing trimmedString:b[@"offset"]]];
+        if (left != right) {
+            return left < right ? NSOrderedAscending : NSOrderedDescending;
+        }
+        NSInteger leftIndex = (NSInteger)[DUParsing
+            unsignedLongLongFromString:[DUParsing trimmedString:a[@"index"]]];
+        NSInteger rightIndex = (NSInteger)[DUParsing
+            unsignedLongLongFromString:[DUParsing trimmedString:b[@"index"]]];
+        if (leftIndex == rightIndex) {
+            return NSOrderedSame;
+        }
+        return leftIndex < rightIndex ? NSOrderedAscending : NSOrderedDescending;
+    }];
 }
 
 // Attaches one level of partition children, then descends into MBR slices
@@ -313,10 +362,13 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
              label,
              [DUParsing humanReadableSizeFromBytes:sizeBytes]];
 
-    // Swap has no user-visible filesystem; everything else mountable gets
-    // a volume child carrying the live mount state.
+    /* Swap and EFI system partitions get no volume child: swap has no
+     * user-visible filesystem, and an ESP is never mounted nor erased as a
+     * data volume. Previously "efi" mapped to "msdosfs", which gave every
+     * system partition a volume offering Mount and Erase. */
     NSString *fstype = partition.filesystemType;
-    if (fstype.length > 0 && ![fstype isEqualToString:@"swap"]) {
+    if (fstype.length > 0 && ![fstype isEqualToString:@"swap"] &&
+        ![fstype isEqualToString:@"efi"]) {
         DUStorageVolume *volume = [[DUStorageVolume alloc]
             initWithIdentifier:[@"freebsd-vol-" stringByAppendingString:partName]];
         volume.filesystemType = fstype;
@@ -362,6 +414,14 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
         volume.capabilities.canUnmount =
             volume.mounted && [DUFreeBSDToolCache haveTool:@"umount"];
         volume.capabilities.canErase = [self canFormatFilesystem:fstype];
+        /* A volume is a legitimate restore DESTINATION: the Restore tab's
+         * picker offers volumes and partitions, and its button is gated on
+         * the source alone. Without this flag the backend refused every
+         * partition-to-partition restore with "\"restore\" cannot be
+         * performed on <volume>". canRestore on the SOURCE still gates the
+         * button, so nothing is advertised that cannot be carried out. */
+        volume.capabilities.canRestore =
+            [DUFreeBSDToolCache haveTool:@"dd"] && !volume.mounted;
         // Image creation ends in a mandatory SHA-256 comparison of source
         // and written bytes; without a hasher that ending is guaranteed,
         // so the flag stays off instead of promising a doomed copy.
@@ -559,8 +619,12 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
         if (device.optical) {
             continue;
         }
-        device.capabilities.canPartition = canPartition;
-        device.capabilities.canErase = canEraseWholeDisk;
+        /* A disk whose partition table could not be read must not offer the
+         * destructive verbs: the user would be looking at an empty disk that
+         * is not actually empty, and "Erase" would destroy it. */
+        BOOL unknownLayout = ((DUStorageDevice *)root).partitionTableUnreadable;
+        device.capabilities.canPartition = canPartition && !unknownLayout;
+        device.capabilities.canErase = canEraseWholeDisk && !unknownLayout;
         device.capabilities.canRestore = canRestore;
         device.capabilities.canVerify = canVerifyAny;
         device.capabilities.canCreateImage = canCreateImage;

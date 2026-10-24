@@ -8,10 +8,11 @@
 
 @class DUStorageManager;
 
-// Periodic topology poller (ARCHITECTURE.md section 64). Native event
-// mechanisms differ per kernel and none is exposed uniformly to us yet, so
-// the conservative fallback is a configurable, low-frequency refresh; each
-// tick does its work on a background thread so the run loop never blocks.
+// Keeps the topology current: a kernel event source (see
+// DUDeviceEventSource) refreshes within a fraction of a second of a plug or
+// pull, and a timer polls as a safety net, or as the only mechanism where no
+// unprivileged event channel exists. Each refresh runs on a background
+// thread so the run loop never blocks.
 @interface DUDeviceMonitor : NSObject
 
 @property (nonatomic, strong, readonly) DUStorageManager *storageManager;

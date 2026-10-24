@@ -7,13 +7,14 @@
 #import "BrightnessExtra.h"
 #import "GSMenuExtraContext.h"
 
-#import "SysfsBacklightBackend.h"
+#import "BacklightBackend.h"
+#import "MediaKeyController.h"
 
 static const BOOL kShowTextInMenuBar = NO;
 
 @implementation BrightnessExtra
 {
-    SysfsBacklightBackend *_backend;
+    id<BacklightBackend> _backend;
     int _current;
     int _maximum;
     GSMenuExtraContext *_context;
@@ -61,8 +62,9 @@ static const BOOL kShowTextInMenuBar = NO;
 
 - (BOOL)isCompatibleWithSystem
 {
-    SysfsBacklightBackend *backend = [[SysfsBacklightBackend alloc] init];
-    BOOL compatible = ([backend maximum] > 0);
+    id<BacklightBackend> backend = BacklightBackendCreateDefault();
+    BOOL compatible = (backend != nil);
+    RELEASE(backend);
     return compatible;
 }
 
@@ -131,24 +133,16 @@ static const BOOL kShowTextInMenuBar = NO;
 {
     @try {
         _running = YES;
-        _backend = [[SysfsBacklightBackend alloc] init];
+        _backend = BacklightBackendCreateDefault();
         [self refreshBrightnessPresentation];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(brightnessChanged:)
-                                                      name:@"BrightnessChanged"
+                                                      name:MediaKeyBrightnessChangedNotification
                                                     object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(brightnessUp:)
-                                                     name:@"GSMenuExtraBrightnessUp"
-                                                   object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(brightnessDown:)
-                                                     name:@"GSMenuExtraBrightnessDown"
-                                                   object:nil];
     } @catch (NSException *e) {
         NSLog(@"BrightnessExtra: exception in menuExtraDidLoad: %@", e);
         _running = NO;
-        _backend = nil;
+        DESTROY(_backend);
         _context = nil;
     }
 }
@@ -162,7 +156,7 @@ static const BOOL kShowTextInMenuBar = NO;
 {
     _running = NO;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
-    _backend = nil;
+    DESTROY(_backend);
 }
 
 - (void)refreshTimerFired:(NSTimer *)timer

@@ -32,13 +32,14 @@ typedef NS_ENUM(NSInteger, GWPackageInstallSpecType) {
 // AppImage support.  A spec is an AppImage install when either a direct
 // per-architecture URL map (`AppImage`) or a GitHub release repo
 // (`AppImage_github`) is supplied.  AppImages are installed into
-// ~/Library/Applications/<name>.app and need no distribution package manager
+// ~/Applications/<name>.AppImage and need no distribution package manager
 // (Linux only).
 @property (readonly) BOOL isAppImage;
 // Resolved direct download URL for the current architecture, if a direct
 // `appimage` map lists the current arch.  nil otherwise.
 @property (readonly, copy, nullable) NSString *appImageDirectURL;
-// "owner/repo" GitHub repository whose latest release provides the AppImage,
+// "owner/repo" (or "owner/repo#Channel", see GWAppImageDownloader.h) GitHub
+// repository whose latest release provides the AppImage,
 // or nil if not a GitHub-sourced AppImage.
 @property (readonly, copy, nullable) NSString *appImageGitHubRepo;
 

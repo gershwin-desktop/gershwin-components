@@ -6,6 +6,7 @@
 
 
 #import "KeyboardController.h"
+#import "KeyboardBackend.h"
 #import "AppearanceMetrics.h"
 #import <dispatch/dispatch.h>
 
@@ -46,8 +47,6 @@
 
 static NSString *const kKeyboardDomain = @"KeyboardPreferences";
 static NSString *const kDefaultKeyboardFile = @"/etc/default/keyboard";
-static NSString *const kSetxkbmapLocal = @"/usr/local/bin/setxkbmap";
-static NSString *const kSetxkbmapSystem = @"/usr/bin/setxkbmap";
 
 static NSComparisonResult LayoutComparator(id a, id b, void *context)
 {
@@ -61,7 +60,6 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
 - (void)ensureMetadataLoaded;
 - (void)parseKeyboardMetadata;
 - (NSDictionary *)fallbackLayouts;
-- (NSString *)findExecutableFromCandidates:(NSArray *)candidates;
 - (NSDictionary *)savedPreferences;
 - (NSDictionary *)systemKeyboardDefaults;
 - (NSDictionary *)currentXkbmapSettingsSync;
@@ -367,7 +365,7 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
     }
 
     [self parseKeyboardMetadata];
-    setxkbmapPath = [[self findExecutableFromCandidates:[NSArray arrayWithObjects:kSetxkbmapLocal, kSetxkbmapSystem, nil]] retain];
+    setxkbmapPath = [[KeyboardBackend findSetxkbmap] retain];
     metadataLoaded = YES;
 }
 
@@ -473,35 +471,6 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
             @"Spanish", @"es",
             @"Italian", @"it",
             nil];
-}
-
-- (NSString *)findExecutableFromCandidates:(NSArray *)candidates
-{
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *path in candidates) {
-        if ([fm isExecutableFileAtPath:path]) {
-            return path;
-        }
-    }
-
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:[NSArray arrayWithObject:@"setxkbmap"]];
-
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task launch];
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
-    [task release];
-
-    NSString *trim = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([trim length] > 0 && [fm isExecutableFileAtPath:trim]) {
-        return trim;
-    }
-
-    return nil;
 }
 
 - (NSDictionary *)savedPreferences
@@ -714,68 +683,16 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         return YES;  // Pretend success during refresh
     }
     NSDebugLog(@"[Keyboard] applyLayout: layout='%@' variant='%@' options='%@'", layout, variant, options);
-    if (!setxkbmapPath) {
-        if (error) {
-            *error = @"setxkbmap not found";
-        }
-        return NO;
-    }
-
-    NSString *trimmedLayout = [self trimmed:layout];
-    NSString *trimmedVariant = [self trimmed:variant];
-    NSString *trimmedOptions = [self trimmed:options];
-
-    NSTask *clearTask = [[NSTask alloc] init];
-    [clearTask setLaunchPath:setxkbmapPath];
-    [clearTask setArguments:[NSArray arrayWithObjects:@"-option", @"", nil]];
-    [clearTask launch];
-    [clearTask waitUntilExit];
-    [clearTask release];
-
-    NSMutableArray *args = [NSMutableArray array];
-    if ([trimmedLayout length]) {
-        [args addObject:@"-layout"];
-        [args addObject:trimmedLayout];
-    }
-
-    if ([trimmedVariant length]) {
-        [args addObject:@"-variant"];
-        [args addObject:trimmedVariant];
-    }
-
-    if ([trimmedOptions length]) {
-        [args addObject:@"-option"];
-        [args addObject:trimmedOptions];
-    }
-
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:setxkbmapPath];
-    [task setArguments:args];
-
-    NSPipe *stderrPipe = [NSPipe pipe];
-    [task setStandardError:stderrPipe];
-
-    [task launch];
-    // Drain stderr before waitUntilExit to avoid pipe-buffer deadlock
-    NSData *stderrData = [[stderrPipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-
-    int status = [task terminationStatus];
-    [task release];
-
-    if (status != 0) {
-        NSString *stderrString = [[[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] autorelease];
-        if (error) {
-            *error = (stderrString.length ? stderrString : @"Failed to run setxkbmap");
-        }
+    if (![KeyboardBackend applyLayout:layout variant:variant options:options
+                            setxkbmap:setxkbmapPath error:error]) {
         return NO;
     }
 
     [lastAppliedLayout release];
     [lastAppliedVariant release];
 
-    lastAppliedLayout = [trimmedLayout copy];
-    lastAppliedVariant = [trimmedVariant copy];
+    lastAppliedLayout = [[self trimmed:layout] copy];
+    lastAppliedVariant = [[self trimmed:variant] copy];
 
     return YES;
 }
@@ -1064,17 +981,9 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         NSString *errorCopy = [applyError copy];
 
         // Apple ISO TLDE/LSGT swap
-        if (success && isApple && [keyboardType isEqualToString:@"ISO"]) {
+        if (success && [KeyboardBackend needsAppleISOKeySwapForKeyboardType:keyboardType isApple:isApple]) {
             NSDebugLog(@"[Keyboard] Applying TLDE/LSGT swap for Apple ISO keyboard");
-            NSTask *xmodmapTask = [[NSTask alloc] init];
-            [xmodmapTask setLaunchPath:@"/usr/bin/xmodmap"];
-            [xmodmapTask setArguments:[NSArray arrayWithObjects:
-                @"-e", @"keycode 49 = less greater less greater bar dagger bar",
-                @"-e", @"keycode 94 = asciicircum degree asciicircum degree notsign notsign notsign",
-                nil]];
-            [xmodmapTask launch];
-            [xmodmapTask waitUntilExit];
-            [xmodmapTask release];
+            [KeyboardBackend applyAppleISOKeySwap];
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{

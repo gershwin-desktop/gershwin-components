@@ -22,7 +22,7 @@
 				<string>appmenu-gtk-module</string>
 			</array>
 			<key>postinstall_command</key>
-			<string>/usr/local/bin/chromium</string>
+			<string>/usr/local/bin/chrome</string>
 		</dict>
 		<key>openbsd</key>
 		<dict>

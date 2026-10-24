@@ -98,6 +98,7 @@ DiskUtility_OBJC_FILES = \
 	Sources/Models/DUPartitionPlan.m \
 	Sources/Services/DUStorageManager.m \
 	Sources/Services/DUOperationManager.m \
+	Sources/Services/DUDeviceEventSource.m \
 	Sources/Services/DUDeviceMonitor.m \
 	Sources/Services/DUAuthorizationManager.m \
 	Sources/Services/DUImageService.m \

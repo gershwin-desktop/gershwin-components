@@ -14,10 +14,13 @@
 - (void)pageViewDidRequestPrevious:(BookPageView *)view;
 // Ctrl + scroll wheel: `delta` is the wheel's deltaY (positive = zoom in).
 - (void)pageView:(BookPageView *)view fontSizeDelta:(CGFloat)delta;
-// A drag over the page selected a run of reading text; `range` is the absolute
-// character range in the book's concatenated reading text. Sent on mouse-up when
-// the drag exceeded the click threshold (otherwise the gesture is a page turn).
-- (void)pageView:(BookPageView *)view didSelectRange:(NSRange)range;
+// The user asked to highlight the selection (menu, context menu); `range` is
+// absolute in the book's concatenated reading text. Selecting alone never
+// highlights, so copying text leaves no marks behind.
+- (void)pageView:(BookPageView *)view highlightRange:(NSRange)range;
+// Select All selects the reading unit (the chapter) around `index`, the first
+// character shown; the page view does not know where chapters begin.
+- (NSRange)pageView:(BookPageView *)view selectAllRangeAtIndex:(NSUInteger)index;
 @end
 
 @interface BookPageView : NSView
@@ -55,5 +58,12 @@
 - (void)next;
 - (void)previous;
 - (NSUInteger)pageForCharacterIndex:(NSUInteger)idx;
+// The current selection, absolute in the reading text; {NSNotFound, 0} if none.
+- (NSRange)selectedRange;
+// Edit actions answered by this view as first responder; Copy writes plain text
+// and RTF to the general pasteboard.
+- (void)copy:(id)sender;
+- (void)selectAll:(id)sender;
+- (void)highlightSelection:(id)sender;
 
 @end

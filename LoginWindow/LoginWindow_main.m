@@ -26,6 +26,8 @@
 #import <AppKit/AppKit.h>
 #import "LoginWindow.h"
 #import "KeyboardManager.h"
+#import "LWLanguageNames.h"
+#import "LWCJKFontInstaller.h"
 #include <X11/Xlib.h>
 #include <X11/Xauth.h>
 #include <signal.h>
@@ -620,7 +622,37 @@ void stopXorgLikeShellScript(void)
 int main(int argc, const char *argv[])
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    
+
+    // Helper mode, started by -loadDesktopBackground: paint the root window and
+    // exit, so the image decoding never grows the long-lived login process.
+    if (argc > 1 && strcmp(argv[1], "--set-background") == 0) {
+        setenv("DISPLAY", ":0", 1);
+        [NSApplication sharedApplication];
+        LoginWindow *painter = [[LoginWindow alloc] init];
+        [painter renderDesktopBackground];
+        [painter release];
+        [pool drain];
+        return 0;
+    }
+
+    // Helper mode, started by -startCJKFontInstall once the session language
+    // is final: fetches a CJK font in the background, so it never delays the
+    // login and never needs the display.
+    if (argc > 2 && strcmp(argv[1], "--install-cjk-font") == 0) {
+        NSString *license = [[NSBundle mainBundle]
+            pathForResource:@"SarasaGothic-OFL" ofType:@"txt"];
+        if (!license) {
+            fprintf(stderr, "FATAL: [LoginWindow] CJK font: "
+                    "SarasaGothic-OFL.txt missing from the LoginWindow bundle\n");
+            [pool drain];
+            return 1;
+        }
+        int status = LWInstallCJKFont([NSString stringWithUTF8String:argv[2]],
+                                      license);
+        [pool drain];
+        return status;
+    }
+
     // Install X11 error handlers FIRST before any X operations
     XSetIOErrorHandler(mainXIOErrorHandler);
     XSetErrorHandler(mainXErrorHandler);
@@ -649,56 +681,19 @@ int main(int argc, const char *argv[])
         KeyboardManager *km = [[KeyboardManager alloc] init];
         [km detectKeyboardWithPasswd:NULL];
 
-        static const char *langMap[][2] = {
-            {"de","German"},{"fr","French"},{"es","Spanish"},
-            {"it","Italian"},{"pt","Portuguese"},{"ru","Russian"},
-            {"nl","Dutch"},{"tr","Turkish"},{"il","Hebrew"},
-            {"dk","Danish"},{"se","Swedish"},{"no","Norwegian"},
-            {"fi","Finnish"},{"jp","Japanese"},{"kr","Korean"},
-            {"cn","Chinese"},{"cz","Czech"},{"hu","Hungarian"},
-            {"pl","Polish"},{"sk","Slovak"},{"bg","Bulgarian"},
-            {"ua","Ukrainian"},{"hr","Croatian"},{"ro","Romanian"},
-            {"si","Slovenian"},{"ee","Estonian"},{"lv","Latvian"},
-            {"lt","Lithuanian"},{"is","Icelandic"},{"gr","Greek"},
-            {"vn","Vietnamese"},{"th","Thai"},{"by","Belarusian"},
-            {"mk","Macedonian"},{"mt","Maltese"},{"ca","French"},
-            {"gb","English"},{"us","English"},{"br","Portuguese"},
-            {NULL,NULL}
-        };
         NSString *localeStr = km.language;
         if (localeStr) {
-            NSString *langCode = nil;
-            NSRange underscore = [localeStr rangeOfString:@"_"];
-            if (underscore.location != NSNotFound)
-                langCode = [localeStr substringToIndex:underscore.location];
-            else {
-                NSRange dot = [localeStr rangeOfString:@"."];
-                if (dot.location != NSNotFound)
-                    langCode = [localeStr substringToIndex:dot.location];
-                else
-                    langCode = localeStr;
+            NSString *gsLanguage = LWLanguageNameForLocale(localeStr);
+            if (gsLanguage) {
+                [[NSUserDefaults standardUserDefaults] setObject:
+                    @[gsLanguage, @"English"] forKey:@"Languages"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
             }
-            if (langCode && [langCode length] >= 2) {
-                NSString *gsLanguage = nil;
-                for (int i = 0; langMap[i][0]; i++) {
-                    if ([[NSString stringWithUTF8String:langMap[i][0]]
-                            isEqualToString:langCode]) {
-                        gsLanguage = [NSString stringWithUTF8String:
-                            langMap[i][1]];
-                        break;
-                    }
-                }
-                if (gsLanguage) {
-                    [[NSUserDefaults standardUserDefaults] setObject:
-                        @[gsLanguage, @"English"] forKey:@"Languages"];
-                    [[NSUserDefaults standardUserDefaults] synchronize];
-                }
-                setenv("LANG", [localeStr UTF8String], 1);
-                setenv("LANGUAGE",
-                    [[[localeStr componentsSeparatedByString:@"."]
-                        firstObject] UTF8String], 1);
-                setenv("LC_ALL", [localeStr UTF8String], 1);
-            }
+            setenv("LANG", [localeStr UTF8String], 1);
+            setenv("LANGUAGE",
+                [[[localeStr componentsSeparatedByString:@"."]
+                    firstObject] UTF8String], 1);
+            setenv("LC_ALL", [localeStr UTF8String], 1);
         }
         [km release];
     }

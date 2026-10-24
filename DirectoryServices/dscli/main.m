@@ -3,6 +3,7 @@
 #import <pwd.h>
 #import <grp.h>
 #import "DSPlatform.h"
+#import "DSUserCheck.h"
 
 // Network paths (checked first - used when mounted from server)
 #define DS_NETWORK_USERS_PLIST @"/Network/Library/DirectoryServices/Users.plist"
@@ -12,6 +13,17 @@
 #define DS_LOCAL_USERS_PLIST @"/Local/Library/DirectoryServices/Users.plist"
 #define DS_LOCAL_GROUPS_PLIST @"/Local/Library/DirectoryServices/Groups.plist"
 #define DS_DOMAIN_PLIST @"/Local/Library/DirectoryServices/Domain.plist"
+
+// NextBSD ships its own NSS module for these plists (nss_directory_services),
+// owns /etc/nsswitch.conf, and has sudo in base reading only /etc/sudoers.d.
+// Detected at runtime, not by #ifdef: NextBSD compiles as FreeBSD. The marker
+// is nextbsd-version, which both image builders write before anything else is
+// built, so it is on every NextBSD image and on no other system.
+// (/usr/lib/system would be wrong: macOS has that too.)
+static BOOL isNextBSD(void) {
+    return [[NSFileManager defaultManager]
+               fileExistsAtPath:@"/bin/nextbsd-version"];
+}
 
 // Get the appropriate users plist path (Network first, then Local)
 static NSString *getUsersPlistPath(void) {
@@ -404,9 +416,24 @@ static int cmdUserAdd(NSArray *args) {
         }
     }
 
-    // Auto-assign UID if not specified
+    // Auto-assign UID if not specified; skip UIDs that /etc/passwd, NIS etc.
+    // already hand out, since the Gershwin store does not know about them.
     if (uid == 0) {
-        uid = findNextUID(users);
+        uid = [DSUserCheck firstFreeUIDFrom:findNextUID(users)
+                                  uidLookup:[DSUserCheck systemUIDLookup]];
+        if (uid == 0) {
+            fprintf(stderr, "Cannot find a free UID in the system user database\n");
+            return 1;
+        }
+    }
+
+    NSString *conflict = [DSUserCheck errorForNewUserName:username
+                                                      uid:uid
+                                               nameLookup:[DSUserCheck systemNameLookup]
+                                                uidLookup:[DSUserCheck systemUIDLookup]];
+    if (conflict) {
+        fprintf(stderr, "%s\n", [conflict UTF8String]);
+        return 1;
     }
 
     // Auto-assign GID (create user's private group) if not specified
@@ -915,8 +942,16 @@ static BOOL configureSudoers(void) {
     NSString *sudoersFile = nil;
 
 #if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__GhostBSD__)
-    sudoersDir = @"/usr/local/etc/sudoers.d";
-    sudoersFile = @"/usr/local/etc/sudoers.d/gershwin";
+    // NextBSD's sudo is in base and reads only /etc/sudoers.d; the ports
+    // sudo on FreeBSD reads /usr/local/etc/sudoers.d. NextBSD compiles as
+    // FreeBSD, so this is decided at runtime.
+    if (isNextBSD()) {
+        sudoersDir = @"/etc/sudoers.d";
+        sudoersFile = @"/etc/sudoers.d/gershwin";
+    } else {
+        sudoersDir = @"/usr/local/etc/sudoers.d";
+        sudoersFile = @"/usr/local/etc/sudoers.d/gershwin";
+    }
 #elif defined(__linux__)
     sudoersDir = @"/etc/sudoers.d";
     sudoersFile = @"/etc/sudoers.d/gershwin";
@@ -978,8 +1013,11 @@ static BOOL configureSudoers(void) {
 
     [content appendString:@"\n"];
 
-    // Allow admin group to use sudo
-    [content appendString:@"%admin ALL = (ALL) ALL\n"];
+    // Allow admin group to use sudo. NextBSD's base /etc/sudoers already
+    // grants %admin, so there the drop-in carries only the Defaults lines.
+    if (!isNextBSD()) {
+        [content appendString:@"%admin ALL = (ALL) ALL\n"];
+    }
 
     // Write the sudoers file
     [content writeToFile:sudoersFile
@@ -1144,8 +1182,13 @@ static int cmdInit(void) {
         printf("Created: %s\n", [DS_LOCAL_GROUPS_PLIST UTF8String]);
     }
 
-    // Configure nsswitch.conf
-    configureNsswitch();
+    // Configure nsswitch.conf. On NextBSD the switch names
+    // nss_directory_services and is seeded from nextbsd-overlays; leave it.
+    if (isNextBSD()) {
+        printf("nsswitch.conf: managed by NextBSD (directory_services); not modified\n");
+    } else {
+        configureNsswitch();
+    }
 
     // Configure sudoers for admin group with GNUstep environment
     printf("\nConfiguring sudo environment...\n");

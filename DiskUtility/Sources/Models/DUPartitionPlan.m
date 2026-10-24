@@ -8,6 +8,8 @@
 
 #import "DUPartition.h"
 #import "DUPartitionLayout.h"
+#import "DUErrors.h"
+#import "DUStorageDevice.h"
 #import "DUStorageObject.h"
 
 @implementation DUPartitionPlan {
@@ -15,6 +17,40 @@
     NSString *_scheme;
     NSArray<DUPartition *> *_entries;
     BOOL _destructive;
+}
+
++ (instancetype)planForWholeDiskErase:(DUStorageObject *)disk
+                           filesystem:(NSString *)filesystemType
+                                 name:(NSString *)name
+                                error:(NSError **)error
+{
+    // The first MiB is skipped for alignment and the last one is left for
+    // the backup table, so the partition spans everything in between.
+    static const unsigned long long kMargin = 2ULL * 1024 * 1024;
+    unsigned long long capacity =
+        [disk isKindOfClass:[DUStorageDevice class]]
+            ? ((DUStorageDevice *)disk).capacityBytes : 0;
+    if (capacity < kMargin + 2ULL * 1024 * 1024) {
+        if (error != NULL) {
+            *error = DUErrorMake(DUErrorInvalidArgument,
+                                 NSLocalizedString(@"The disk is too small "
+                                                   @"to hold a partition "
+                                                   @"table.", nil));
+        }
+        return nil;
+    }
+    NSString *scheme =
+        [filesystemType isEqualToString:@"vfat"] ||
+        [filesystemType isEqualToString:@"fat32"] ? @"mbr" : @"gpt";
+    DUPartitionLayout *layout =
+        [[DUPartitionLayout alloc] initWithCapacity:capacity scheme:scheme];
+    if (![layout addPartitionWithSize:capacity - kMargin
+                                 name:name
+                                error:error]) {
+        return nil;
+    }
+    [layout setFormat:filesystemType forPartition:layout.partitions[0]];
+    return [self planFromLayout:layout forDevice:disk destructive:YES];
 }
 
 + (instancetype)planFromLayout:(DUPartitionLayout *)layout

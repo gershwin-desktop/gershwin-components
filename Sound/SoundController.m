@@ -7,9 +7,11 @@
  */
 
 #import "SoundController.h"
-#import "ALSABackend.h"
-#import "OSSBackend.h"
+#import "SoundBackendFactory.h"
 #import "AppearanceMetrics.h"
+#import "JackSupport.h"
+#import "SoundJackSettingsModel.h"
+#import "SoundJackAlertPolicy.h"
 
 // UI Constants. Content area matches the 640x480 window (24px side margins
 // per AppearanceMetrics; the tab bar eats the rest of the height).
@@ -23,6 +25,10 @@ static const CGFloat kLabelHeight = 17.0;
 static const CGFloat kSliderHeight = 21.0;
 static const CGFloat kCheckboxHeight = 18.0;
 static const CGFloat kTableRowHeight = 18.0;
+// JACK box: the title bar and margins of the box plus its rows
+static const CGFloat kJackRowHeight = 22.0;
+static const CGFloat kJackBoxExpandedHeight = 75.0;
+static const CGFloat kJackBoxCollapsedHeight = 52.0;
 
 @class SoundController;
 
@@ -44,6 +50,7 @@ static const CGFloat kTableRowHeight = 18.0;
 - (void)viewDidMoveToWindow
 {
     [super viewDidMoveToWindow];
+    [_layoutOwner mainViewDidMoveToWindow:[self window]];
     if ([self window] && [self superview]) {
         /* GNUstep's setFrame: bypasses setFrameSize:, so re-lay out explicitly */
         [self setFrame:[[self superview] bounds]];
@@ -88,41 +95,7 @@ static const CGFloat kTableRowHeight = 18.0;
    devices), so only called on backendQueue. */
 - (id<SoundBackend>)newAvailableBackend
 {
-    id<SoundBackend> found = nil;
-
-#if defined(__FreeBSD__) || defined(__DragonFly__)
-    // On FreeBSD/DragonFly, prefer OSS
-    OSSBackend *ossBackend = [[OSSBackend alloc] init];
-    if ([ossBackend isAvailable]) {
-        found = ossBackend;
-    } else {
-        [ossBackend release];
-    }
-#endif
-
-    // If no backend yet, try ALSA (Linux)
-    if (found == nil) {
-        ALSABackend *alsaBackend = [[ALSABackend alloc] init];
-        if ([alsaBackend isAvailable]) {
-            found = alsaBackend;
-        } else {
-            [alsaBackend release];
-        }
-    }
-
-#if !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__OpenBSD__)
-    // On non-BSD systems, also try OSS as fallback (e.g., OSS4 on Linux)
-    // (OpenBSD excluded: no OSS there; sndio backend is a future addition.)
-    if (found == nil) {
-        OSSBackend *ossBackend = [[OSSBackend alloc] init];
-        if ([ossBackend isAvailable]) {
-            found = ossBackend;
-        } else {
-            [ossBackend release];
-        }
-    }
-#endif
-
+    id<SoundBackend> found = SoundBackendCreateDefault();
     if (found == nil) {
         NSDebugLLog(@"gwcomp", @"SoundController: No audio backend available");
     } else {
@@ -134,6 +107,11 @@ static const CGFloat kTableRowHeight = 18.0;
 
 - (void)dealloc
 {
+    [self mainViewDidMoveToWindow:nil];
+    [jackStatusReader release];
+    [jackSettingsReader release];
+    [jackAlertTimer invalidate];
+    [jackAlertStart release];
     [self stopInputLevelMonitoring];
     if (outputVolumeTimer) {
         dispatch_source_cancel(outputVolumeTimer);
@@ -468,6 +446,16 @@ static const CGFloat kTableRowHeight = 18.0;
     [noOutputDevicesLabel setTextColor:[NSColor grayColor]];
     [noOutputDevicesLabel setHidden:YES];
     [[tab view] addSubview:noOutputDevicesLabel];
+
+    // The table and the JACK box share the band down to the settings; the
+    // table gets what the box leaves
+    outputRegionTop = yPos;
+    outputRegionBottom = yPos - tableHeight;
+#ifdef __linux__
+    if ([JackSupport isJackdAvailable]) {
+        [self createJackBoxInView:[tab view] width:contentWidth];
+    }
+#endif
     
     yPos -= tableHeight + kMargin;
     
@@ -574,6 +562,287 @@ static const CGFloat kTableRowHeight = 18.0;
     [outputMuteCheckbox setTarget:self];
     [outputMuteCheckbox setAction:@selector(outputMuteChanged:)];
     [[tab view] addSubview:outputMuteCheckbox];
+}
+
+#pragma mark - JACK box
+
+static NSTextField *jackLabel(NSString *text, NSRect frame, NSTextAlignment alignment)
+{
+    NSTextField *label = [[NSTextField alloc] initWithFrame:frame];
+    [label setStringValue:text];
+    [label setBezeled:NO];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    [label setDrawsBackground:NO];
+    [label setAlignment:alignment];
+    [label setFont:[NSFont systemFontOfSize:12]];
+    [label setAutoresizingMask:NSViewMinYMargin];
+    return [label autorelease];
+}
+
+static NSPopUpButton *jackPopup(NSRect frame, id target, SEL action)
+{
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:frame pullsDown:NO];
+    [popup setFont:[NSFont systemFontOfSize:12]];
+    [popup setTarget:target];
+    [popup setAction:action];
+    [popup setAutoresizingMask:NSViewMinYMargin];
+    return [popup autorelease];
+}
+
+- (void)createJackBoxInView:(NSView *)parent width:(CGFloat)contentWidth
+{
+    jackStatusReader = [[SoundJackStatusReader alloc]
+        initWithPath:[SoundJackSettingsModel defaultStatusPath]];
+    jackSettingsReader = [[SoundJackStatusReader alloc]
+        initWithPath:[JackSupport defaultSettingsPath]];
+
+    jackBox = [[NSBox alloc] initWithFrame:
+               NSMakeRect(kMargin, outputRegionBottom,
+                          contentWidth - 2 * kMargin, kJackBoxExpandedHeight)];
+    [jackBox setTitle:@"JACK"];
+    [jackBox setTitlePosition:NSAtTop];
+    [jackBox setBorderType:NSGrooveBorder];
+    [jackBox setContentViewMargins:NSMakeSize(kSmallMargin, 4)];
+    [jackBox setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+    [jackBox setHidden:YES];
+
+    // Rows are laid out from the top of the content so that collapsing the
+    // box (which cuts its bottom) leaves the first row in place
+    NSView *content = [jackBox contentView];
+    NSRect cb = [content bounds];
+    CGFloat width = cb.size.width;
+    CGFloat y = cb.size.height - kJackRowHeight;
+    jackUseCheckbox = [[NSButton alloc] initWithFrame:
+                       NSMakeRect(0, y, 90, kJackRowHeight)];
+    [jackUseCheckbox setButtonType:NSSwitchButton];
+    [jackUseCheckbox setTitle:@"Use JACK"];
+    [jackUseCheckbox setFont:[NSFont systemFontOfSize:12]];
+    [jackUseCheckbox setToolTip:@"JACK is a professional audio server for "
+        @"music production. It lets applications exchange sound with very "
+        @"little delay, at the price of more work for the computer."];
+    [jackUseCheckbox setTarget:self];
+    [jackUseCheckbox setAction:@selector(jackUseChanged:)];
+    [jackUseCheckbox setAutoresizingMask:NSViewMinYMargin];
+    [content addSubview:jackUseCheckbox];
+    [jackUseCheckbox release];
+
+    // The popups share the checkbox row: with the device choice gone there
+    // is nothing else to put on it, and the box stays two rows high
+    jackBufferLabel = jackLabel(@"Buffer size:",
+        NSMakeRect(106, y + 2, 70, kLabelHeight), NSLeftTextAlignment);
+    [content addSubview:jackBufferLabel];
+    jackBufferPopup = jackPopup(NSMakeRect(178, y, 170, kJackRowHeight),
+                                self, @selector(jackBufferChanged:));
+    [content addSubview:jackBufferPopup];
+    jackRateLabel = jackLabel(@"Sample rate:",
+        NSMakeRect(364, y + 2, 76, kLabelHeight), NSLeftTextAlignment);
+    [content addSubview:jackRateLabel];
+    jackRatePopup = jackPopup(NSMakeRect(442, y, 110, kJackRowHeight),
+                              self, @selector(jackRateChanged:));
+    [content addSubview:jackRatePopup];
+
+    y -= kLabelHeight + 6;
+    jackStatusLabel = jackLabel(@"", NSMakeRect(0, y, width, kLabelHeight),
+                                NSLeftTextAlignment);
+    [jackStatusLabel setFont:[NSFont systemFontOfSize:11]];
+    [jackStatusLabel setTextColor:[NSColor grayColor]];
+    [jackStatusLabel setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+    [[jackStatusLabel cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    [content addSubview:jackStatusLabel];
+
+    [parent addSubview:jackBox];
+    [jackBox release];
+}
+
+/* Table and JACK box share the band between the labels above and the
+   settings below. */
+- (void)layoutOutputRegion
+{
+    BOOL showBox = jackBox && ![jackBox isHidden];
+    CGFloat boxHeight = 0;
+    CGFloat gap = 0;
+    CGFloat width = [outputDevicesScrollView frame].size.width;
+    if (showBox) {
+        boxHeight = jackBoxExpanded ? kJackBoxExpandedHeight : kJackBoxCollapsedHeight;
+        gap = kSmallMargin;
+        [jackBox setFrame:NSMakeRect(kMargin, outputRegionBottom, width, boxHeight)];
+    }
+    CGFloat tableBottom = outputRegionBottom + boxHeight + gap;
+    NSRect table = NSMakeRect(kMargin, tableBottom, width, outputRegionTop - tableBottom);
+    [outputDevicesScrollView setFrame:table];
+    NSRect none = [noOutputDevicesLabel frame];
+    none.origin.y = NSMidY(table) - none.size.height / 2;
+    [noOutputDevicesLabel setFrame:none];
+}
+
+/* Brings the box in line with the settings file and the supervisor's status.
+   Only reads; nothing here writes a setting. */
+- (void)updateJackControls
+{
+    if (!jackBox) return;
+    BOOL available = [backend respondsToSelector:@selector(jackModeEnabled)];
+    if ([jackBox isHidden] == available) {
+        [jackBox setHidden:!available];
+    }
+    if (!available) {
+        [self layoutOutputRegion];
+        return;
+    }
+    [jackStatusReader refresh];
+    [jackSettingsReader refresh];
+
+    NSDictionary *settings = [JackSupport settings];
+    NSDictionary *status = [jackStatusReader status];
+    BOOL on = [[settings objectForKey:JackSettingUseJack] boolValue];
+    BOOL running = [[status objectForKey:@"state"] isEqual:@"running"];
+    BOOL adopted = [SoundJackSettingsModel statusIsAdopted:status];
+
+    BOOL wasUpdating = isUpdatingUI;
+    isUpdatingUI = YES;
+
+    [jackUseCheckbox setState:on ? NSOnState : NSOffState];
+    jackBoxExpanded = on;
+    for (NSView *v in @[jackBufferLabel, jackBufferPopup,
+                        jackRateLabel, jackRatePopup, jackStatusLabel]) {
+        [v setHidden:!on];
+    }
+
+    // An adopted server runs at the rate and size of its owner
+    NSUInteger rate = [[settings objectForKey:JackSettingSampleRate] unsignedIntegerValue];
+    NSUInteger frames = [[settings objectForKey:JackSettingBufferFrames] unsignedIntegerValue];
+    if (adopted && running) {
+        rate = [SoundJackSettingsModel statusSampleRate:status] ?: rate;
+        frames = [SoundJackSettingsModel statusBufferFrames:status] ?: frames;
+    }
+
+    [jackBufferPopup removeAllItems];
+    for (NSNumber *size in [SoundJackSettingsModel bufferSizes]) {
+        [jackBufferPopup addItemWithTitle:
+            [SoundJackSettingsModel titleForBufferFrames:[size unsignedIntegerValue]
+                                              sampleRate:rate]];
+        [[jackBufferPopup lastItem] setTag:[size integerValue]];
+    }
+    [jackBufferPopup selectItemWithTag:(NSInteger)frames];
+
+    [jackRatePopup removeAllItems];
+    for (NSNumber *r in [SoundJackSettingsModel sampleRates]) {
+        [jackRatePopup addItemWithTitle:
+            [SoundJackSettingsModel titleForSampleRate:[r unsignedIntegerValue]]];
+        [[jackRatePopup lastItem] setTag:[r integerValue]];
+    }
+    [jackRatePopup selectItemWithTag:(NSInteger)rate];
+    [jackRatePopup setEnabled:[SoundJackSettingsModel statusAllowsChangingRate:status]];
+
+    NSString *selectedName = selectedOutputDevice.displayName ?: selectedOutputDevice.name;
+    NSString *text = [SoundJackSettingsModel statusTextForStatus:status
+                                              selectedDeviceName:selectedName];
+    [jackStatusLabel setStringValue:text];
+    [jackStatusLabel setToolTip:adopted ? [SoundJackSettingsModel adoptedHint] : text];
+    [jackRatePopup setToolTip:adopted ? [SoundJackSettingsModel adoptedHint] : nil];
+    [jackBufferPopup setToolTip:adopted ? @"The buffer size of the JACK server that is already running is changed live." : nil];
+
+    isUpdatingUI = wasUpdating;
+    [self layoutOutputRegion];
+}
+
+#pragma mark JACK status timer
+
+- (void)startJackStatusTimer
+{
+    if (jackStatusTimer || !jackBox || ![[mainView window] isVisible]) return;
+    jackStatusTimer = [[NSTimer scheduledTimerWithTimeInterval:1.0
+                                                        target:self
+                                                      selector:@selector(jackStatusTimerFired:)
+                                                      userInfo:nil
+                                                       repeats:YES] retain];
+}
+
+- (void)stopJackStatusTimer
+{
+    [jackStatusTimer invalidate];
+    [jackStatusTimer release];
+    jackStatusTimer = nil;
+}
+
+- (void)jackStatusTimerFired:(NSTimer *)timer
+{
+    // Both files are read only when their modification time changed
+    BOOL statusChanged = [jackStatusReader refresh];
+    BOOL settingsChanged = [jackSettingsReader refresh];
+    if (statusChanged || settingsChanged) {
+        [self updateJackControls];
+    }
+}
+
+- (void)windowShouldStopStatus:(NSNotification *)note
+{
+    [self stopJackStatusTimer];
+}
+
+- (void)windowShouldStartStatus:(NSNotification *)note
+{
+    [self startJackStatusTimer];
+}
+
+/* The timer lives only while the pane's window is on screen: closing or
+   miniaturizing the window ends it, showing it again restarts it. */
+- (void)mainViewDidMoveToWindow:(NSWindow *)window
+{
+    if (window == observedWindow) return;
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    if (observedWindow) {
+        [nc removeObserver:self name:nil object:observedWindow];
+        [self stopJackStatusTimer];
+    }
+    [observedWindow release];
+    observedWindow = [window retain];
+    if (!window || !jackBox) return;
+    [nc addObserver:self selector:@selector(windowShouldStopStatus:)
+               name:NSWindowWillCloseNotification object:window];
+    [nc addObserver:self selector:@selector(windowShouldStopStatus:)
+               name:NSWindowDidMiniaturizeNotification object:window];
+    [nc addObserver:self selector:@selector(windowShouldStartStatus:)
+               name:NSWindowDidDeminiaturizeNotification object:window];
+    [nc addObserver:self selector:@selector(windowShouldStartStatus:)
+               name:NSWindowDidBecomeKeyNotification object:window];
+    [self startJackStatusTimer];
+}
+
+#pragma mark JACK actions
+
+- (void)writeJackSettings:(NSDictionary *)settings
+{
+    NSString *problem = nil;
+    if (![SoundJackSettingsModel writeSettings:settings
+                                        atPath:[JackSupport defaultSettingsPath]
+                                         error:&problem]) {
+        [self showErrorAlert:@"The JACK setting could not be saved" informativeText:problem];
+    }
+}
+
+- (IBAction)jackUseChanged:(id)sender
+{
+    if (isUpdatingUI) return;
+    [self writeJackSettings:@{JackSettingUseJack:
+        @([jackUseCheckbox state] == NSOnState)}];
+    // The backend now acts on the cards of the other mode
+    [self refreshDevices];
+    [self updateJackControls];
+}
+
+- (IBAction)jackBufferChanged:(id)sender
+{
+    if (isUpdatingUI) return;
+    [self writeJackSettings:@{JackSettingBufferFrames: @([[jackBufferPopup selectedItem] tag])}];
+}
+
+- (IBAction)jackRateChanged:(id)sender
+{
+    if (isUpdatingUI) return;
+    [self writeJackSettings:@{JackSettingSampleRate: @([[jackRatePopup selectedItem] tag])}];
+    // The latencies in the buffer popup follow the rate
+    [self updateJackControls];
 }
 
 - (void)createInputTab:(NSTabViewItem *)tab
@@ -826,6 +1095,7 @@ static const CGFloat kTableRowHeight = 18.0;
             [self updateOutputDeviceList];
             [self updateInputDeviceList];
             // Alert sounds are now updated inside updateOutputDeviceList
+            [self updateJackControls];
 
             // Update controls with pre-fetched values (no blocking backend calls)
             [self updateOutputControlsWithVolume:outVol muted:outMuted balance:outBalance];
@@ -1084,6 +1354,8 @@ static const CGFloat kTableRowHeight = 18.0;
         // Save preference synchronously first.  If the user quits before the
         // background audio-switching block runs, the selection still persists.
         [backend setDefaultOutputDevice:device];
+        // The status line names the selected device
+        [self updateJackControls];
 
         // Switch audio on background queue (amixer commands are slow)
         AudioDevice *retained = [device retain];
@@ -1393,6 +1665,14 @@ static const CGFloat kTableRowHeight = 18.0;
 {
     NSDebugLLog(@"gwcomp", @"SoundController: UI ACTION - outputDeviceSelected:");
 
+    // With JACK the cards belong to jackd: the alert plays through the
+    // default PCM once the routing reached the clicked device.
+    if ([backend respondsToSelector:@selector(jackAlertActionForElapsed:timeout:)] &&
+        [backend jackModeEnabled]) {
+        [self startJackAlertWait];
+        return;
+    }
+
     // Play a confirmation alert whenever the user clicks a device,
     // even if it is already the selected one.
     AlertSound *alert = [backend currentAlertSound];
@@ -1402,6 +1682,52 @@ static const CGFloat kTableRowHeight = 18.0;
         });
     }
     // Switching to a different device is handled in tableViewSelectionDidChange
+}
+
+// Seconds the routing may take to follow the click before the alert plays
+// anyway.
+static const NSTimeInterval kJackAlertTimeout = 3.0;
+static const NSTimeInterval kJackAlertPollInterval = 0.1;
+
+// One timer for all clicks: a new click replaces the wait, so only the last
+// click plays.  A timer, not a sleep, keeps the pane responsive meanwhile.
+- (void)startJackAlertWait
+{
+    [jackAlertTimer invalidate];
+    jackAlertTimer = nil;
+    [jackAlertStart release];
+    jackAlertStart = [[NSDate date] retain];
+    [self jackAlertPoll:nil];
+    if (jackAlertStart) {
+        jackAlertTimer = [NSTimer scheduledTimerWithTimeInterval:kJackAlertPollInterval
+                                                          target:self
+                                                        selector:@selector(jackAlertPoll:)
+                                                        userInfo:nil
+                                                         repeats:YES];
+    }
+}
+
+- (void)jackAlertPoll:(NSTimer *)timer
+{
+    NSTimeInterval elapsed = -[jackAlertStart timeIntervalSinceNow];
+    SoundJackAlertAction action = [backend jackAlertActionForElapsed:elapsed
+                                                             timeout:kJackAlertTimeout];
+    if (action == SoundJackAlertKeepWaiting) {
+        return;
+    }
+    [jackAlertTimer invalidate];
+    jackAlertTimer = nil;
+    [jackAlertStart release];
+    jackAlertStart = nil;
+    if (action == SoundJackAlertPlayDefaultUnconfirmed) {
+        NSLog(@"[JACK] routing not confirmed");
+    }
+    AlertSound *alert = [backend currentAlertSound];
+    if (alert) {
+        dispatch_async(backendQueue, ^{
+            [backend playAlertSound:alert];
+        });
+    }
 }
 
 - (IBAction)outputVolumeChanged:(id)sender

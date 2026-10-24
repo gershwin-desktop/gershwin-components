@@ -1,0 +1,35 @@
+#!/usr/bin/env run_uitest
+# OnDemand progress bar UI test
+# Verifies that the progress bar appears when installing missing packages.
+#
+# Under 'heavy' because it needs a machine prepared for it and really
+# installs software, so it cannot run in the ordinary suite:
+# - the OnDemand bundle must be listed in GSAppKitUserBundles (the UI test
+#   session loads DriveUI.bundle only, so the alert never appears there)
+# - Profiler.app must have a Resources/Dependencies.plist listing packages
+# - those packages must NOT be installed (e.g. sudo apt-get remove linux-perf)
+# - the package manager must be able to install them without asking
+#
+# Run with: UI_TEST_LEVEL=full run_uitest Profiler/Tests/heavy/OnDemand_progress.uitest
+
+# Launch Profiler
+launch application "Profiler"
+
+# Wait for the "needs additional software" alert and click Install
+wait until button "Install" timeout 10s
+click button "Install"
+
+# Verify the progress window with progress bar appears
+wait until exists NSProgressIndicator in window "Installing..." timeout 5s
+assert exists NSProgressIndicator in window "Installing..."
+
+# Verify the progress window has a cancel button
+assert exists button "Cancel" in window "Installing..."
+
+# Wait for install to complete (progress window should close)
+wait until not exists window "Installing..." timeout 30s
+
+# Profiler should now be running normally
+assert exists window "Profiler"
+
+log "OnDemand progress bar test PASSED"
