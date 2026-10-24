@@ -10,6 +10,7 @@
 #import "GMPeerConnection.h"
 #import "GMSessionMessage.h"
 #import "GMRTPMIDI.h"
+#import "GMLatencyEstimator.h"
 #import "GMTestHex.h"
 
 @interface Recorder : NSObject <GMPeerConnectionDelegate>
@@ -106,9 +107,9 @@ int main(void)
       && [[r last].name isEqual: @"local"] && [r last].ssrc == 0x1111,
       "IN with our name and SSRC goes to the control port");
     tok = [r last].token;
-    PASS(p.nextDeadline == 101.0, "invitation retry scheduled a second later");
+    PASS(p.nextDeadline == 101.5, "invitation retry scheduled 1.5 s later");
 
-    [p fireTimersAt: 101.0];
+    [p fireTimersAt: 101.5];
     PASS([r.sent count] == 2 && [r last].token == tok && [r lastOnControl],
       "the invitation is retried with the same token");
 
@@ -198,6 +199,104 @@ int main(void)
       "nothing is sent after close");
   END_SET("initiator")
 
+  START_SET("invitation retries with the default timing")
+    /* A peer on WLAN may sleep for many seconds; common practice is to
+     * keep inviting every 1.5 s for about 30 s. */
+    Recorder *r = [[Recorder new] autorelease];
+    GMPeerConnection *p = [[[GMPeerConnection alloc]
+      initWithRole: GMPeerRoleInitiator localSSRC: 1 localName: @"l"
+        clockEpoch: 0] autorelease];
+    NSUInteger i, sent = 0;
+    p.delegate = r;
+    [p inviteAt: 0];
+    PASS(EQ(p.nextDeadline, 1.5), "the first retry follows 1.5 s later");
+    for (i = 1; i < 20; i++) [p fireTimersAt: 1.5 * i];
+    for (id m in r.sent) if ([m command] == GMSessionCommandInvitation) sent++;
+    PASS(sent == 20 && p.state == GMPeerStateInvitingControl,
+      "20 invitations on the control port, still inviting after 28.5 s");
+    [p fireTimersAt: 30.0];
+    PASS(p.state == GMPeerStateClosed && p.closeReason == GMPeerCloseReasonTimeout,
+      "given up after 30 s without an answer");
+  END_SET("invitation retries with the default timing")
+
+  START_SET("late OK for an earlier attempt")
+    Recorder *r = [[Recorder new] autorelease];
+    GMPeerConnection *p = [[[GMPeerConnection alloc]
+      initWithRole: GMPeerRoleInitiator localSSRC: 1 localName: @"l"
+        clockEpoch: 0] autorelease];
+    uint32_t tok;
+    NSUInteger i;
+    p.delegate = r;
+    [p inviteAt: 0];
+    tok = p.token;
+    for (i = 1; i <= 4; i++) [p fireTimersAt: 1.5 * i];
+    [p handleSessionMessage: Msg(GMSessionCommandAccept, tok, 0x77)
+              onControlPort: YES at: 6.2];
+    PASS(p.state == GMPeerStateInvitingData && ![r lastOnControl],
+      "an OK that answers the first of five invitations is accepted");
+    [r clear];
+    [p fireTimersAt: 7.7];
+    PASS([r last].command == GMSessionCommandInvitation && ![r lastOnControl]
+      && [r last].token == tok, "the data port is retried the same way");
+    [p handleSessionMessage: Msg(GMSessionCommandAccept, tok, 0x77)
+              onControlPort: YES at: 7.8];
+    PASS(p.state == GMPeerStateInvitingData,
+      "a second late OK for the control port changes nothing");
+    [p handleSessionMessage: Msg(GMSessionCommandAccept, tok, 0x77)
+              onControlPort: NO at: 8.0];
+    PASS(p.state == GMPeerStateSynchronising, "the late data OK is accepted too");
+  END_SET("late OK for an earlier attempt")
+
+  START_SET("clock sync schedule")
+    Recorder *r = [[Recorder new] autorelease];
+    GMPeerConnection *p = [[[GMPeerConnection alloc]
+      initWithRole: GMPeerRoleInitiator localSSRC: 1 localName: @"l"
+        clockEpoch: 0] autorelease];
+    NSMutableArray *gaps = [NSMutableArray array];
+    NSTimeInterval t = 1.0, last = 0;
+    NSUInteger i;
+    p.delegate = r;
+    [p inviteAt: 0];
+    [p handleSessionMessage: Msg(GMSessionCommandAccept, p.token, 9)
+              onControlPort: YES at: 0.1];
+    [p handleSessionMessage: Msg(GMSessionCommandAccept, p.token, 9)
+              onControlPort: NO at: 0.2];
+    for (i = 0; i < 9; i++)
+      {
+        GMSessionMessage *ck = [r last];
+        if (i > 0) { t = p.nextDeadline; [p fireTimersAt: t]; ck = [r last]; }
+        else t = 0.2;
+        if (i > 0) [gaps addObject: [NSNumber numberWithDouble: t - last]];
+        last = t;
+        [p handleSessionMessage: CK(9, 1, ck.timestamp1, 5, 0) onControlPort: NO
+                             at: t + 0.001];
+      }
+    {
+      BOOL fast = YES, slow = YES;
+      for (i = 0; i < 5; i++) fast = fast && EQ([[gaps objectAtIndex: i] doubleValue], 1.501);
+      for (i = 5; i < 8; i++) slow = slow && EQ([[gaps objectAtIndex: i] doubleValue], 10.001);
+      PASS(fast, "the first six syncs come 1.5 s apart");
+      PASS(slow, "then every 10 s");
+    }
+  END_SET("clock sync schedule")
+
+  START_SET("latency spike")
+    Recorder *r = [[Recorder new] autorelease];
+    GMPeerConnection *p = [[[GMPeerConnection alloc]
+      initWithRole: GMPeerRoleResponder localSSRC: 1 localName: @"l"
+        clockEpoch: 0] autorelease];
+    p.delegate = r;
+    [p handleSessionMessage: Msg(GMSessionCommandInvitation, 7, 8) onControlPort: YES at: 0];
+    [p handleSessionMessage: Msg(GMSessionCommandInvitation, 7, 8) onControlPort: NO at: 0];
+    /* round trips of 980 ms, then 2.4, 4.6 and 3 ms (10 kHz ticks) */
+    [p handleSessionMessage: CK(8, 2, 100, 0, 9900) onControlPort: NO at: 1];
+    PASS(EQ(p.latency, 0.490), "one measurement: shown as it is");
+    [p handleSessionMessage: CK(8, 2, 200, 0, 224) onControlPort: NO at: 2];
+    [p handleSessionMessage: CK(8, 2, 300, 0, 346) onControlPort: NO at: 3];
+    PASS(EQ(p.latency, 0.0023), "the 490 ms spike no longer shows once three syncs are in");
+    PASS(EQ(p.lastLatencySample, 0.0023), "the raw last value stays available");
+  END_SET("latency spike")
+
   START_SET("initiator gives up")
     Recorder *r = [[Recorder new] autorelease];
     GMPeerConnection *p = [[[GMPeerConnection alloc]
@@ -206,6 +305,7 @@ int main(void)
     NSUInteger i;
     p.delegate = r;
     p.invitationAttempts = 3;
+    p.invitationRetryInterval = 1;
     [p inviteAt: 0];
     for (i = 1; i <= 3; i++) [p fireTimersAt: (double)i];
     PASS([r.sent count] == 3, "three invitations in all");

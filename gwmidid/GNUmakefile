@@ -23,7 +23,8 @@ PROTOCOL_FILES = \
 	Sources/Protocol/GMMIDIStreamParser.m \
 	Sources/Protocol/GMPeerConnection.m \
 	Sources/Protocol/GMLocalSession.m \
-	Sources/Protocol/GMSocketAddress.m
+	Sources/Protocol/GMSocketAddress.m \
+	Sources/Protocol/GMLatencyEstimator.m
 
 gwmidid_OBJC_FILES = \
 	$(PROTOCOL_FILES) \

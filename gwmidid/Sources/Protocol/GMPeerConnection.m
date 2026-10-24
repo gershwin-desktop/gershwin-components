@@ -7,6 +7,7 @@
 #import "GMPeerConnection.h"
 #import "GMSessionMessage.h"
 #import "GMRTPMIDI.h"
+#import "GMLatencyEstimator.h"
 #include <stdlib.h>
 #include <math.h>
 
@@ -180,6 +181,23 @@ NSString *GMPeerEventName(GMPeerEvent e)
   return (e >= 0 && e < GMPeerEventCount) ? names[e] : @"invalid";
 }
 
+/* Invitations are repeated for about 30 s: a peer on WLAN may be asleep in
+ * power save for many seconds, and other implementations keep inviting
+ * about as long. */
+#define GM_INVITATION_RETRY_INTERVAL 1.5
+#define GM_INVITATION_ATTEMPTS 20
+
+/* A burst of clock syncs right after connecting gives a usable latency
+ * within seconds; after that every 10 s keeps the clocks and the liveness
+ * check current without much traffic. */
+#define GM_INITIAL_CLOCK_SYNC_INTERVAL 1.5
+#define GM_INITIAL_CLOCK_SYNC_COUNT 6
+#define GM_CLOCK_SYNC_INTERVAL 10.0
+#define GM_CLOCK_SYNC_TIMEOUT 2.0
+#define GM_CLOCK_SYNC_ATTEMPTS 3
+#define GM_IDLE_PROBE_INTERVAL 30.0
+#define GM_FEEDBACK_INTERVAL 1.0
+
 /* Clock sync timestamps tick at 10 kHz. */
 #define GM_TICKS_PER_SECOND 10000.0
 
@@ -189,6 +207,7 @@ NSString *GMPeerEventName(GMPeerEvent e)
   NSTimeInterval _epoch;
   GMRTPMIDIEncoder *_encoder;
   GMRTPMIDIDecoder *_decoder;
+  GMLatencyEstimator *_latencyEstimator;
 
   NSUInteger _attempts;            /* invitations or CK0s sent unanswered */
   NSTimeInterval _retryAt;         /* resend the pending invitation */
@@ -216,21 +235,19 @@ NSString *GMPeerEventName(GMPeerEvent e)
       _localSSRC = ssrc;
       _localName = [name copy];
       _epoch = epoch;
-      _latency = -1;
+      _latencyEstimator = [GMLatencyEstimator new];
       _encoder = [[GMRTPMIDIEncoder alloc] initWithSSRC: ssrc
                                                sequence: (uint16_t)arc4random()];
       _decoder = [GMRTPMIDIDecoder new];
-      /* Twelve tries a second apart is what other implementations do too,
-       * so a peer that is just starting up is still reached. */
-      _invitationRetryInterval = 1.0;
-      _invitationAttempts = 12;
-      _clockSyncTimeout = 2.0;
-      _clockSyncAttempts = 3;
-      _initialClockSyncInterval = 1.5;
-      _initialClockSyncCount = 5;
-      _clockSyncInterval = 10.0;
-      _idleProbeInterval = 30.0;
-      _feedbackInterval = 1.0;
+      _invitationRetryInterval = GM_INVITATION_RETRY_INTERVAL;
+      _invitationAttempts = GM_INVITATION_ATTEMPTS;
+      _clockSyncTimeout = GM_CLOCK_SYNC_TIMEOUT;
+      _clockSyncAttempts = GM_CLOCK_SYNC_ATTEMPTS;
+      _initialClockSyncInterval = GM_INITIAL_CLOCK_SYNC_INTERVAL;
+      _initialClockSyncCount = GM_INITIAL_CLOCK_SYNC_COUNT;
+      _clockSyncInterval = GM_CLOCK_SYNC_INTERVAL;
+      _idleProbeInterval = GM_IDLE_PROBE_INTERVAL;
+      _feedbackInterval = GM_FEEDBACK_INTERVAL;
     }
   return self;
 }
@@ -317,6 +334,24 @@ NSString *GMPeerEventName(GMPeerEvent e)
     {
       _nextSyncAt = now + _idleProbeInterval;
     }
+}
+
+- (void) learnLatency: (NSTimeInterval)sample
+{
+  [_latencyEstimator addSample: sample];
+  NSDebugMLLog(@"gwmidid", @"%@: clock sync %.2f ms, shown %.2f ms",
+    _remoteName, sample * 1000.0, [_latencyEstimator estimate] * 1000.0);
+  [_delegate peerDidUpdateLatency: self];
+}
+
+- (NSTimeInterval) latency
+{
+  return [_latencyEstimator estimate];
+}
+
+- (NSTimeInterval) lastLatencySample
+{
+  return [_latencyEstimator lastSample];
 }
 
 - (void) perform: (GMPeerAction)action at: (NSTimeInterval)now
@@ -408,8 +443,8 @@ NSString *GMPeerEventName(GMPeerEvent e)
                                                timestamp2: m.timestamp2
                                                timestamp3: t3]
              control: NO];
-          _latency = (double)(t3 - m.timestamp1) / 2.0 / GM_TICKS_PER_SECOND;
-          [_delegate peerDidUpdateLatency: self];
+          [self learnLatency: (double)(t3 - m.timestamp1) / 2.0
+            / GM_TICKS_PER_SECOND];
           _pendingSyncStamp = 0;
           _syncTimeoutAt = 0;
           _attempts = 0;
@@ -425,9 +460,8 @@ NSString *GMPeerEventName(GMPeerEvent e)
          * loopback, not a missing measurement. */
         if (m.timestamp3 >= m.timestamp1)
           {
-            _latency = (double)(m.timestamp3 - m.timestamp1) / 2.0
-              / GM_TICKS_PER_SECOND;
-            [_delegate peerDidUpdateLatency: self];
+            [self learnLatency: (double)(m.timestamp3 - m.timestamp1) / 2.0
+              / GM_TICKS_PER_SECOND];
           }
         _syncsDone++;
         [self heardFromPeerAt: now];

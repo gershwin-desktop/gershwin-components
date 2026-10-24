@@ -96,8 +96,11 @@ onControlPort: (BOOL)control;
 @property (nonatomic, readonly) uint32_t token;
 @property (nonatomic, readonly, copy) NSString *remoteName;
 
-/* One-way latency from the last clock sync, negative until there was one. */
+/* One-way latency, robust against single spikes (median of the last
+ * clock syncs), negative until there was one. */
 @property (nonatomic, readonly) NSTimeInterval latency;
+/* The newest raw measurement, for debugging */
+@property (nonatomic, readonly) NSTimeInterval lastLatencySample;
 
 /* Owner's bookkeeping: where the peer's control and data ports are. */
 @property (nonatomic, strong) id controlAddress;
