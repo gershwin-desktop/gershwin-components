@@ -7,7 +7,7 @@
 /*
  * The interface the MIDI preference pane (and any other client) uses to
  * manage network MIDI. A backend hides where the sessions really live:
- * gwmidid, the per-user network MIDI daemon, in normal use; an in-memory
+ * networkmidid, the per-user network MIDI daemon, in normal use; an in-memory
  * simulation in tests and development; or nothing at all, in which case
  * the unavailable backend says why.
  *
@@ -66,7 +66,7 @@ typedef NS_ENUM(NSInteger, MIDINetworkBackendStatus) {
 
 @protocol MIDINetworkBackend <NSObject>
 
-/* Short, untranslated name for logs ("gwmidid", "simulation", ...). */
+/* Short, untranslated name for logs ("networkmidid", "simulation", ...). */
 - (NSString *)backendName;
 
 - (MIDINetworkBackendStatus)status;

@@ -28,7 +28,7 @@ id<MIDINetworkBackend> MIDINetworkBackendCreate(NSString *requestedName,
     }
     return [[MIDINetworkUnavailableBackend alloc]
                initWithReason:MIDINetworkMakeError(MIDINetworkErrorUnavailable,
-                                                   @"The network MIDI service (gwmidid) is not installed.")];
+                                                   @"The network MIDI service is not installed.")];
 }
 
 id<MIDINetworkBackend> MIDINetworkBackendCreateDefault(void)

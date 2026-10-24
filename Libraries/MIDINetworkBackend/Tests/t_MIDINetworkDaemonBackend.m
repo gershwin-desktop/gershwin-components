@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-3.0-or-later
  */
 
-/* The factory's choice, and the gwmidid client against an in-process
+/* The factory's choice, and the networkmidid client against an in-process
    daemon that speaks the control interface (MIDINetworkControl.h). The
-   test daemon doubles as a reference for gwmidid's side. */
+   test daemon doubles as a reference for networkmidid's side. */
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
@@ -115,7 +115,7 @@
     BOOL ok = [state setRoute:[MIDINetworkRoute routeWithPropertyList:plist] error:&e];
     return [self reply:ok error:e sections:@[ MIDINetworkStateKeyRoutes ]];
 }
-/* What gwmidid does when the network changes something. */
+/* What networkmidid does when the network changes something. */
 - (void)push:(NSArray *)keys
 {
     NSDictionary *all = [state propertyList];
@@ -164,16 +164,16 @@ int main(void)
     START_SET("factory")
     TestConnector *c = [[TestConnector new] autorelease];
     id<MIDINetworkBackend> b = MIDINetworkBackendCreate(nil, c);
-    PASS([(id)b isKindOfClass:[MIDINetworkUnavailableBackend class]], "without gwmidid the backend is unavailable");
+    PASS([(id)b isKindOfClass:[MIDINetworkUnavailableBackend class]], "without networkmidid the backend is unavailable");
     PASS([b status] == MIDINetworkBackendStatusUnavailable
          && [[b statusError] code] == MIDINetworkErrorUnavailable, "and says so with the unavailable code");
-    PASS([[[b statusError] localizedDescription] rangeOfString:@"gwmidid"].location != NSNotFound,
-         "the reason names the missing service");
+    PASS([[[b statusError] localizedDescription] isEqual:@"The network MIDI service is not installed."],
+         "the reason says that the service is missing, in generic words");
     PASS(![b addSession:[MIDINetworkSession sessionWithName:@"S" port:5004] error:&error]
          && [error code] == MIDINetworkErrorUnavailable, "every change is refused");
     c->installed = YES;
     b = MIDINetworkBackendCreate(nil, c);
-    PASS([(id)b isKindOfClass:[MIDINetworkDaemonBackend class]], "with gwmidid installed its backend is chosen");
+    PASS([(id)b isKindOfClass:[MIDINetworkDaemonBackend class]], "with networkmidid installed its backend is chosen");
     PASS([b status] == MIDINetworkBackendStatusDaemonNotRunning, "which is not running until it connects");
     b = MIDINetworkBackendCreate(MIDINetworkBackendNameSimulation, c);
     PASS([(id)b isKindOfClass:[MIDINetworkFakeBackend class]], "the simulation only when asked for by name");
@@ -262,7 +262,7 @@ int main(void)
     NSError *back = MIDINetworkErrorFromReply(MIDINetworkReplyWithError(e));
     PASS([back code] == MIDINetworkErrorPortInUse && [[back localizedDescription] isEqual:@"taken"],
          "an error survives the reply form");
-    PASS([MIDINetworkDaemonServiceName() hasPrefix:@"io.github.gershwin-desktop.gwmidid."],
+    PASS([MIDINetworkDaemonServiceName() hasPrefix:@"io.github.gershwin-desktop.networkmidid."],
          "the service name is per user under our identifier");
     END_SET("replies")
 

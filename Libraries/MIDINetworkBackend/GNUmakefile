@@ -4,7 +4,7 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 LIBRARY_NAME = libMIDINetworkBackend
 VERSION = 1.0
 
-# Shared by the MIDI pane and gwmidid: the models, the consistency rules
+# Shared by the MIDI pane and networkmidid: the models, the consistency rules
 # (MIDINetworkState) and the control interface must be one copy for both,
 # so the sources live here rather than in either consumer.
 libMIDINetworkBackend_OBJC_FILES = \

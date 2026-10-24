@@ -10,7 +10,7 @@
  * only in enabled sessions, routes only to existing ports).
  *
  * The simulation backend keeps one of these as its whole world; the
- * gwmidid client keeps the daemon's last snapshot in one; and gwmidid can
+ * networkmidid client keeps the daemon's last snapshot in one; and networkmidid can
  * link this class to hold its own configuration, so that the rules a user
  * meets are the same in tests, in development and in the real service.
  * Foundation only, main thread only.

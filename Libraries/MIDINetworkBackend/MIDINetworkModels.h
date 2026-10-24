@@ -10,7 +10,7 @@
  * routing between a session and those ports.
  *
  * Every model converts to and from a property list. That one form is what
- * the gwmidid control interface carries (see CONTROL-INTERFACE.md), so the
+ * the networkmidid control interface carries (see CONTROL-INTERFACE.md), so the
  * pane, the daemon and the tests can never disagree about field names.
  * The names do not mention a wire protocol on purpose: the same models are
  * meant to describe Network MIDI 2.0 sessions later.

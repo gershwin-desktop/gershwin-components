@@ -1,20 +1,20 @@
-# gwmidid control interface
+# networkmidid control interface
 
 How network MIDI clients (the MIDI preference pane, through
-`MIDINetworkDaemonBackend`) talk to `gwmidid`, the per-user network MIDI
+`MIDINetworkDaemonBackend`) talk to `networkmidid`, the per-user network MIDI
 daemon. The binding contract is `MIDINetworkControl.h`; this document
 explains it. Protocol version: **1** (`MIDINETWORK_CONTROL_PROTOCOL_VERSION`).
 
 ## Process and transport
 
-- `gwmidid` runs once per logged-in user, as that user (no root). It is a
+- `networkmidid` runs once per logged-in user, as that user (no root). It is a
   GNUstep tool installed to the SYSTEM Tools directory
-  (`/System/Library/Tools/gwmidid`); the client treats "installed" as
+  (`/System/Library/Tools/networkmidid`); the client treats "installed" as
   "this file exists and is executable" and shows "not installed" otherwise.
   Starting it at login is the session's job, not the pane's.
 - Transport: Distributed Objects over `NSMessagePort`, registered with
   `[NSMessagePortNameServer sharedInstance]` under
-  `MIDINetworkDaemonServiceName()` = `io.github.gershwin-desktop.gwmidid.<uid>`.
+  `MIDINetworkDaemonServiceName()` = `io.github.gershwin-desktop.networkmidid.<uid>`.
   Message ports are Unix domain sockets in the user's private GNUstep
   directory, so only the same user can connect; this works the same on
   Linux, FreeBSD, NextBSD and OpenBSD. No TCP, no D-Bus.
@@ -26,7 +26,7 @@ NSConnection *c = [NSConnection serviceConnectionWithName:MIDINetworkDaemonServi
                                           usingNameServer:[NSMessagePortNameServer sharedInstance]];
 ```
 
-  If the name is already registered, another gwmidid of this user runs:
+  If the name is already registered, another networkmidid of this user runs:
   exit with an error instead of starting a second one.
 - Clients set request and reply timeouts of 5 s. Every daemon method must
   answer quickly; anything slow (an invitation, discovery) answers at once

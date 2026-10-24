@@ -8,7 +8,7 @@
 #import "MIDINetworkBackend.h"
 #include <unistd.h>
 
-NSString * const MIDINetworkDaemonToolName = @"gwmidid";
+NSString * const MIDINetworkDaemonToolName = @"networkmidid";
 
 NSString * const MIDINetworkReplyKeyError = @"error";
 NSString * const MIDINetworkReplyKeyChanges = @"changes";
@@ -19,7 +19,7 @@ NSString *MIDINetworkDaemonServiceName(void)
 {
     /* The uid keeps the name unique even if a name server were ever
        shared between users; message ports are per user already. */
-    return [NSString stringWithFormat:@"io.github.gershwin-desktop.gwmidid.%lu", (unsigned long)getuid()];
+    return [NSString stringWithFormat:@"io.github.gershwin-desktop.networkmidid.%lu", (unsigned long)getuid()];
 }
 
 NSDictionary *MIDINetworkReplyWithError(NSError *error)

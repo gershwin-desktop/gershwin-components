@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-3.0-or-later
  */
 
-/* The consistency rules every backend (and gwmidid) gets from
+/* The consistency rules every backend (and networkmidid) gets from
    MIDINetworkState, and its snapshot round trip. */
 
 #import <Foundation/Foundation.h>

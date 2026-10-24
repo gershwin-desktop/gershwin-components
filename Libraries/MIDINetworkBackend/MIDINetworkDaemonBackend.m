@@ -158,7 +158,7 @@ static const NSTimeInterval kDaemonCallTimeout = 5.0;
         }
     }
     @catch (NSException *exception) {
-        NSDebugLLog(@"MIDINetwork", @"gwmidid connection failed: %@", exception);
+        NSDebugLLog(@"MIDINetwork", @"networkmidid connection failed: %@", exception);
         if (control != nil) {
             [_connector disconnectControl:control];
         }
@@ -202,7 +202,7 @@ static const NSTimeInterval kDaemonCallTimeout = 5.0;
             [control unregisterClient:self];
         }
         @catch (NSException *exception) {
-            NSDebugLLog(@"MIDINetwork", @"gwmidid unregister failed: %@", exception);
+            NSDebugLLog(@"MIDINetwork", @"networkmidid unregister failed: %@", exception);
         }
     }
     [_connector disconnectControl:control];
@@ -237,7 +237,7 @@ static const NSTimeInterval kDaemonCallTimeout = 5.0;
     [merged addEntriesFromDictionary:changes];
     MIDINetworkState *state = [MIDINetworkState stateWithPropertyList:merged];
     if (state == nil) {
-        NSDebugLLog(@"MIDINetwork", @"gwmidid sent malformed changes: %@", changes);
+        NSDebugLLog(@"MIDINetwork", @"networkmidid sent malformed changes: %@", changes);
         [self notifyError:MIDINetworkMakeError(MIDINetworkErrorInvalidArgument,
                                                @"The network MIDI service sent an answer that is not understood.")];
         return;

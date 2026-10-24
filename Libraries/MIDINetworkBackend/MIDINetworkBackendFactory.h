@@ -10,7 +10,7 @@
 #import "MIDINetworkBackend.h"
 #import "MIDINetworkDaemonBackend.h"
 
-/* Defaults domain and key that ask for the simulation instead of gwmidid:
+/* Defaults domain and key that ask for the simulation instead of networkmidid:
      defaults write io.github.gershwin-desktop.MIDINetwork Backend simulation
    Meant for working on clients without a daemon; nothing sets it. */
 extern NSString * const MIDINetworkDefaultsDomain;
@@ -18,7 +18,7 @@ extern NSString * const MIDINetworkDefaultsKeyBackend;
 extern NSString * const MIDINetworkBackendNameSimulation;
 
 /* The decision itself, with its inputs passed in so tests can walk it:
-   "simulation" requested -> the fake backend; gwmidid installed -> its
+   "simulation" requested -> the fake backend; networkmidid installed -> its
    backend (DaemonNotRunning until it answers); otherwise an unavailable
    backend whose statusError says the service is not installed. Any other
    requested name is refused with an unavailable backend that names it,

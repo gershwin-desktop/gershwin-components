@@ -6,13 +6,13 @@
 
 /*
  * The control interface between network MIDI clients (the MIDI pane via
- * MIDINetworkDaemonBackend) and gwmidid, the per-user network MIDI daemon.
+ * MIDINetworkDaemonBackend) and networkmidid, the per-user network MIDI daemon.
  * CONTROL-INTERFACE.md next to this file describes the conversation; this
  * header is its binding contract.
  *
  * Transport: Distributed Objects over NSMessagePort (Unix domain sockets
  * in the user's private GNUstep directory, so only the same user can
- * connect; works the same on Linux and the BSDs). gwmidid vends an object
+ * connect; works the same on Linux and the BSDs). networkmidid vends an object
  * conforming to MIDINetworkDaemonControl under MIDINetworkDaemonServiceName()
  * with the NSMessagePortNameServer.
  *
@@ -33,7 +33,7 @@
 /* Name of the daemon executable, installed in the SYSTEM Tools directory. */
 extern NSString * const MIDINetworkDaemonToolName;
 
-/* "io.github.gershwin-desktop.gwmidid.<uid>" for the calling user. */
+/* "io.github.gershwin-desktop.networkmidid.<uid>" for the calling user. */
 NSString *MIDINetworkDaemonServiceName(void);
 
 /* Reply and change keys. */
@@ -60,7 +60,7 @@ NSError *MIDINetworkErrorFromReply(id reply);
 - (oneway void)daemonDidEncounterError:(bycopy NSDictionary *)error;
 @end
 
-/* Vended by gwmidid. Every change returns a reply dictionary: an empty
+/* Vended by networkmidid. Every change returns a reply dictionary: an empty
    one or { changes } on success, { error } on failure; never nil. */
 @protocol MIDINetworkDaemonControl
 - (int)protocolVersion;

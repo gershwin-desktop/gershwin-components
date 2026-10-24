@@ -5,7 +5,7 @@
  */
 
 /*
- * The backend for gwmidid, the per-user network MIDI daemon. It keeps the
+ * The backend for networkmidid, the per-user network MIDI daemon. It keeps the
  * daemon's last snapshot in its state, forwards changes over the control
  * interface (MIDINetworkControl.h) and applies the change sections the
  * daemon sends back or pushes. While the daemon cannot be reached the
@@ -31,7 +31,7 @@
 - (void)disconnectControl:(id<MIDINetworkDaemonControl>)control;
 @end
 
-/* gwmidid in the SYSTEM Tools directory, reached over NSMessagePort. */
+/* networkmidid in the SYSTEM Tools directory, reached over NSMessagePort. */
 @interface MIDINetworkDistributedObjectsConnector : NSObject <MIDINetworkDaemonConnector>
 @end
 
