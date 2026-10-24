@@ -78,24 +78,6 @@ static NSTimeInterval ForceQuitMonotonicTime(void)
 
 @end
 
-/* A plain text cell draws the name at the top of the row; it has to sit on
-   the same center line as the icon next to it. */
-@interface ForceQuitNameCell : NSTextFieldCell
-@end
-
-@implementation ForceQuitNameCell
-
-- (NSRect)titleRectForBounds:(NSRect)bounds
-{
-    NSRect titleRect = [super titleRectForBounds:bounds];
-    CGFloat titleHeight = [[self attributedStringValue] size].height;
-    titleRect.origin.y = bounds.origin.y + floor((bounds.size.height - titleHeight) / 2);
-    titleRect.size.height = titleHeight;
-    return titleRect;
-}
-
-@end
-
 @interface ForceQuitPanelController () <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate>
 {
     NSTableView *_tableView;
@@ -226,18 +208,19 @@ static NSTimeInterval ForceQuitMonotonicTime(void)
     [iconColumn setEditable:NO];
     [_tableView addTableColumn:iconColumn];
 
+    /* The columns keep their own data cells: those truncate, and only a
+       non-wrapping cell gets its text centered in the row by the table.
+       A bare NSTextFieldCell wraps and would sit at the top. */
     NSTableColumn *nameColumn = [[NSTableColumn alloc] initWithIdentifier:@"name"];
-    [nameColumn setDataCell:[[ForceQuitNameCell alloc] init]];
     [nameColumn setEditable:NO];
     [nameColumn setWidth:tableSize.width - kForceQuitIconColumnWidth - kForceQuitDetailColumnWidth];
     [nameColumn setResizingMask:NSTableColumnAutoresizingMask];
     [_tableView addTableColumn:nameColumn];
 
     NSTableColumn *detailColumn = [[NSTableColumn alloc] initWithIdentifier:@"detail"];
-    ForceQuitNameCell *detailCell = [[ForceQuitNameCell alloc] init];
+    NSTextFieldCell *detailCell = (NSTextFieldCell *)[detailColumn dataCell];
     [detailCell setAlignment:NSRightTextAlignment];
     [detailCell setTextColor:[NSColor darkGrayColor]];
-    [detailColumn setDataCell:detailCell];
     [detailColumn setEditable:NO];
     [detailColumn setWidth:kForceQuitDetailColumnWidth];
     [detailColumn setMinWidth:kForceQuitDetailColumnWidth];
