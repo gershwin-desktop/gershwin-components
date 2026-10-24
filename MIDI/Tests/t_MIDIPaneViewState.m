@@ -22,12 +22,12 @@ int main(void)
     NSAutoreleasePool *arp = [NSAutoreleasePool new];
 
     START_SET("no service")
-    NSError *why = MIDINetworkMakeError(MIDINetworkErrorUnavailable, @"The network MIDI service (gwmidid) is not installed.");
+    NSError *why = MIDINetworkMakeError(MIDINetworkErrorUnavailable, @"The network MIDI service is not installed.");
     MIDINetworkUnavailableBackend *u = [[[MIDINetworkUnavailableBackend alloc] initWithReason:why] autorelease];
     MIDIPaneViewState *v = View(u, nil, nil);
     PASS(!v.canAddSession && !v.canAddHost && !v.detailsEnabled && !v.routingEnabled,
          "without a service nothing can be changed");
-    PASS_EQUAL(v.statusText, @"The network MIDI service (gwmidid) is not installed.", "the status says why");
+    PASS_EQUAL(v.statusText, @"The network MIDI service is not installed.", "the status says why");
     PASS(v.statusIsError, "as an error");
     PASS(v.selectedSessionRow == -1 && [v.sessionRows count] == 0, "no rows, no selection");
     END_SET("no service")

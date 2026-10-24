@@ -1,4 +1,4 @@
-/* MIDI pane. Error texts come from libMIDINetworkBackend and gwmidid. */
+/* MIDI pane. Error texts come from libMIDINetworkBackend and networkmidid. */
 "My Sessions:" = "My Sessions:";
 "Session" = "Session";
 "Local Name:" = "Local Name:";
@@ -40,7 +40,7 @@
 "The MIDI port cannot receive from the session." = "The MIDI port cannot receive from the session.";
 "The MIDI port cannot send to the session." = "The MIDI port cannot send to the session.";
 "The network MIDI service did not answer in time." = "The network MIDI service did not answer in time.";
-"The network MIDI service (gwmidid) is not installed." = "The network MIDI service (gwmidid) is not installed.";
+"The network MIDI service is not installed." = "The network MIDI service is not installed.";
 "The network MIDI service is a different version than this program." = "The network MIDI service is a different version than this program.";
 "The network MIDI service is not running." = "The network MIDI service is not running.";
 "The network MIDI service sent an answer that is not understood." = "The network MIDI service sent an answer that is not understood.";

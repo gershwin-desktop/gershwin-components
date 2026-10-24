@@ -31,9 +31,9 @@ to the SYSTEM domain unless noted.
 - `Libraries/` holds shared backends (`SoundBackend`, `NetworkBackend`) that
   `Menu`, `Network`, `Sound`, `Whisper` link against.
 - `Libraries/MIDINetworkBackend/` keeps its sources in its own directory
-  (shared by the `MIDI` pane and the `gwmidid` daemon): models,
+  (shared by the `MIDI` pane and the `networkmidid` daemon): models,
   `MIDINetworkState` (the consistency rules every backend and the daemon
-  use), the `MIDINetworkBackend` protocol, the gwmidid client (Distributed
+  use), the `MIDINetworkBackend` protocol, the networkmidid client (Distributed
   Objects, contract in `CONTROL-INTERFACE.md` and `MIDINetworkControl.h`)
   and a simulation backend. `defaults write
   io.github.gershwin-desktop.MIDINetwork Backend simulation` makes the pane
@@ -88,7 +88,7 @@ to the SYSTEM domain unless noted.
   `AGAppImageAssetPickerTests.m` (deliberately not in `OBJC_FILES`: its cases
   use the `TAssert` macros, which expand to a `return NO`).
 - `Libraries/MIDINetworkBackend/Tests/` (models, state rules, simulation,
-  factory, gwmidid client against an in-process daemon) and
+  factory, networkmidid client against an in-process daemon) and
   `MIDI/Tests/` (view state): `gnustep-tests --sequential Tests`, headless;
   both link the library built in the tree. `MIDI/Tests/live-pane.sh` drives
   the pane with DriveUI in an isolated slot (instructions in the script).
