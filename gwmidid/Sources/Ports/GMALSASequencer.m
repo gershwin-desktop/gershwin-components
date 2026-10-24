@@ -1,0 +1,246 @@
+/*
+ * Copyright (c) 2026 Simon Peter
+ *
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-3.0-or-later
+ */
+
+#import "GMALSASequencer.h"
+#import "GMDescriptorWatcher.h"
+#import "GMMIDIStreamParser.h"
+#import "GMRTPMIDI.h"
+
+#if GM_HAVE_ALSA
+
+#include <alsa/asoundlib.h>
+#include <poll.h>
+
+/* ALSA's own MIDI drivers hand sysex over in pieces of this size, and
+ * applications expect to reassemble them. */
+#define GM_SYSEX_EVENT_CHUNK 256
+
+static NSError *GMALSAError(NSString *what, int err)
+{
+  return [NSError errorWithDomain: @"GMALSASequencerErrorDomain" code: -err
+    userInfo: @{NSLocalizedDescriptionKey: [NSString stringWithFormat:
+      @"ALSA sequencer: %@: %s", what, snd_strerror(err)]}];
+}
+
+@implementation GMALSASequencer
+{
+  snd_seq_t *_seq;
+  snd_midi_event_t *_decoder;
+  snd_midi_event_t *_encoder;
+  NSMutableArray *_watchers;
+  NSMutableDictionary *_parsers;   /* port -> GMMIDIStreamParser */
+  uint8_t *_decodeBuffer;
+}
+
+@synthesize delegate = _delegate;
+
+- (instancetype) initWithClientName: (NSString *)name error: (NSError **)error
+{
+  int err, n, i;
+  struct pollfd *pfd;
+
+  if ((self = [super init]) == nil) return nil;
+  _watchers = [NSMutableArray array];
+  _parsers = [NSMutableDictionary dictionary];
+  if ((err = snd_seq_open(&_seq, "default", SND_SEQ_OPEN_DUPLEX,
+      SND_SEQ_NONBLOCK)) < 0)
+    {
+      _seq = NULL;
+      if (error) *error = GMALSAError(@"cannot open the sequencer", err);
+      return nil;
+    }
+  snd_seq_set_client_name(_seq, [name UTF8String]);
+  if ((err = snd_midi_event_new(GM_RTP_MIDI_MAX_SYSEX, &_decoder)) < 0
+    || (err = snd_midi_event_new(GM_RTP_MIDI_MAX_SYSEX, &_encoder)) < 0)
+    {
+      if (error) *error = GMALSAError(@"cannot create the event coder", err);
+      [self close];
+      return nil;
+    }
+  /* Every decoded event becomes a complete message with its status byte;
+   * the stream parser then has nothing to undo. */
+  snd_midi_event_no_status(_decoder, 1);
+  _decodeBuffer = malloc(GM_RTP_MIDI_MAX_SYSEX);
+
+  n = snd_seq_poll_descriptors_count(_seq, POLLIN);
+  pfd = calloc((size_t)n, sizeof *pfd);
+  n = snd_seq_poll_descriptors(_seq, pfd, (unsigned)n, POLLIN);
+  for (i = 0; i < n; i++)
+    {
+      __weak GMALSASequencer *weakSelf = self;
+      [_watchers addObject: [[GMDescriptorWatcher alloc]
+        initWithDescriptor: pfd[i].fd handler: ^{ [weakSelf drain]; }]];
+    }
+  free(pfd);
+  return self;
+}
+
+- (NSString *) portLayerDescription
+{
+  return [NSString stringWithFormat: @"ALSA sequencer client %d",
+    _seq ? snd_seq_client_id(_seq) : -1];
+}
+
+- (NSString *) addressOfPort: (int)port
+{
+  return [NSString stringWithFormat: @"%d:%d", snd_seq_client_id(_seq), port];
+}
+
+- (int) createPortNamed: (NSString *)name error: (NSError **)error
+{
+  int port = snd_seq_create_simple_port(_seq, [name UTF8String],
+    SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ
+    | SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE
+    | SND_SEQ_PORT_CAP_DUPLEX,
+    SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_SOFTWARE
+    | SND_SEQ_PORT_TYPE_PORT | SND_SEQ_PORT_TYPE_APPLICATION);
+  if (port < 0)
+    {
+      if (error) *error = GMALSAError([NSString stringWithFormat:
+        @"cannot create port \"%@\"", name], port);
+      return -1;
+    }
+  [_parsers setObject: [GMMIDIStreamParser new] forKey: @(port)];
+  return port;
+}
+
+- (void) removePort: (int)port
+{
+  [_parsers removeObjectForKey: @(port)];
+  if (_seq) snd_seq_delete_simple_port(_seq, port);
+}
+
+- (void) renamePort: (int)port to: (NSString *)name
+{
+  snd_seq_port_info_t *info;
+  snd_seq_port_info_alloca(&info);
+  if (snd_seq_get_port_info(_seq, port, info) < 0) return;
+  snd_seq_port_info_set_name(info, [name UTF8String]);
+  snd_seq_set_port_info(_seq, port, info);
+}
+
+- (void) drain
+{
+  NSMutableDictionary *byPort = [NSMutableDictionary dictionary];
+  snd_seq_event_t *ev;
+  int r;
+
+  while ((r = snd_seq_event_input(_seq, &ev)) >= 0 || r == -ENOSPC)
+    {
+      GMMIDIStreamParser *parser;
+      long n;
+      NSArray *msgs;
+
+      if (r == -ENOSPC)
+        {
+          /* The kernel dropped events because we were too slow; there is
+           * nothing to recover them from. */
+          NSLog(@"gwmidid: ALSA input overrun, events lost");
+          continue;
+        }
+      if (ev == NULL) continue;
+      parser = [_parsers objectForKey: @(ev->dest.port)];
+      if (parser == nil) continue;
+      snd_midi_event_reset_decode(_decoder);
+      n = snd_midi_event_decode(_decoder, _decodeBuffer,
+        GM_RTP_MIDI_MAX_SYSEX, ev);
+      if (n <= 0) continue; /* not a MIDI event (port subscribed etc.) */
+      msgs = [parser messagesFromBytes: _decodeBuffer length: (NSUInteger)n];
+      if ([msgs count] > 0)
+        {
+          NSMutableArray *a = [byPort objectForKey: @(ev->dest.port)];
+          if (a == nil)
+            [byPort setObject: (a = [NSMutableArray array])
+                       forKey: @(ev->dest.port)];
+          [a addObjectsFromArray: msgs];
+        }
+    }
+  /* One delegate call per port and wakeup, so the messages of one burst go
+   * out in as few packets as possible. */
+  for (NSNumber *port in byPort)
+    [_delegate ports: self didReceiveMessages: [byPort objectForKey: port]
+              onPort: [port intValue]];
+}
+
+- (void) output: (snd_seq_event_t *)ev port: (int)port
+{
+  int err;
+  snd_seq_ev_set_source(ev, port);
+  snd_seq_ev_set_subs(ev);
+  snd_seq_ev_set_direct(ev);
+  if ((err = snd_seq_event_output_direct(_seq, ev)) < 0)
+    NSLog(@"gwmidid: ALSA output on port %d failed: %s", port, snd_strerror(err));
+}
+
+- (void) sendMessages: (NSArray *)messages fromPort: (int)port
+{
+  for (NSData *m in messages)
+    {
+      const uint8_t *b = [m bytes];
+      NSUInteger len = [m length];
+      snd_seq_event_t ev;
+
+      if (len == 0) continue;
+      if (b[0] == 0xF0)
+        {
+          NSUInteger off;
+          for (off = 0; off < len; off += GM_SYSEX_EVENT_CHUNK)
+            {
+              NSUInteger n = MIN(len - off, (NSUInteger)GM_SYSEX_EVENT_CHUNK);
+              snd_seq_ev_clear(&ev);
+              snd_seq_ev_set_sysex(&ev, (unsigned)n, (void *)(b + off));
+              [self output: &ev port: port];
+            }
+          continue;
+        }
+      snd_seq_ev_clear(&ev);
+      snd_midi_event_reset_encode(_encoder);
+      if (snd_midi_event_encode(_encoder, b, (long)len, &ev) == (long)len
+        && ev.type != SND_SEQ_EVENT_NONE)
+        {
+          [self output: &ev port: port];
+        }
+    }
+}
+
+- (void) close
+{
+  for (GMDescriptorWatcher *w in _watchers) [w invalidate];
+  [_watchers removeAllObjects];
+  if (_decoder) snd_midi_event_free(_decoder);
+  if (_encoder) snd_midi_event_free(_encoder);
+  _decoder = _encoder = NULL;
+  free(_decodeBuffer);
+  _decodeBuffer = NULL;
+  if (_seq) snd_seq_close(_seq);
+  _seq = NULL;
+}
+
+- (void) dealloc
+{
+  [self close];
+}
+
+@end
+
+id<GMMIDIPorts> GMMIDIPortsOpen(NSString *clientName, NSError **error)
+{
+  return [[GMALSASequencer alloc] initWithClientName: clientName error: error];
+}
+
+#else /* !GM_HAVE_ALSA */
+
+id<GMMIDIPorts> GMMIDIPortsOpen(NSString *clientName, NSError **error)
+{
+  if (error)
+    *error = [NSError errorWithDomain: @"GMALSASequencerErrorDomain" code: 1
+      userInfo: @{NSLocalizedDescriptionKey:
+        @"this system has no MIDI port layer for gwmidid yet "
+        @"(the sndio one is still to be written)"}];
+  return nil;
+}
+
+#endif
