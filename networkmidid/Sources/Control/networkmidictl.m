@@ -18,7 +18,7 @@ static void usage(void)
 {
   fprintf(stderr,
     "usage: networkmidictl status\n"
-    "       networkmidictl add <name> <port> [<advertised name>]\n"
+    "       networkmidictl add [<name> [<port> [<advertised name>]]]\n"
     "       networkmidictl remove <session>\n"
     "       networkmidictl enable|disable <session>\n"
     "       networkmidictl policy <session> anyone|directory|nobody\n"
@@ -115,12 +115,16 @@ int main(int argc, const char **argv)
 #define ARG(i) [a objectAtIndex: (i)]
       if ([cmd isEqual: @"status"] && n == 2)
         printStatus(st);
-      else if ([cmd isEqual: @"add"] && (n == 4 || n == 5))
+      else if ([cmd isEqual: @"add"] && n <= 5)
         {
-          MIDINetworkSession *s = [MIDINetworkSession
-            sessionWithName: ARG(2) port: (NSUInteger)[ARG(3) integerValue]];
-          s.advertisedName = (n == 5) ? ARG(4) : ARG(2);
+          /* Without a name the session is named after this machine, as
+           * in the MIDI pane, so peers see which computer they join. */
+          MIDINetworkSession *s = [st proposedSession];
+          if (n >= 3) s.name = s.advertisedName = ARG(2);
+          if (n >= 4) s.port = (NSUInteger)[ARG(3) integerValue];
+          if (n == 5) s.advertisedName = ARG(4);
           check([d addSession: [s propertyList]]);
+          printf("%s\n", [s.name UTF8String]);
         }
       else if ([cmd isEqual: @"remove"] && n == 3)
         check([d removeSession: sessionNamed(st, ARG(2)).identifier]);
