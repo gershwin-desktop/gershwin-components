@@ -420,7 +420,9 @@ NSString *GMPeerEventName(GMPeerEvent e)
       case GMPeerActionLearnLatency:
         /* Both stamps are on the initiator's clock, so their difference is
          * the round trip as it measured it. */
-        if (m.timestamp3 > m.timestamp1)
+        /* Equal stamps are a round trip below one tick (100 us), as on
+         * loopback, not a missing measurement. */
+        if (m.timestamp3 >= m.timestamp1)
           _latency = (double)(m.timestamp3 - m.timestamp1) / 2.0
             / GM_TICKS_PER_SECOND;
         _syncsDone++;

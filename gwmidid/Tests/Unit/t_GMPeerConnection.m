@@ -256,6 +256,9 @@ int main(void)
                          at: 11.2];
     PASS(p.state == GMPeerStateConnected, "CK2 -> connected");
     PASS(EQ(p.latency, 0.002), "latency from the initiator's stamps: 2 ms");
+    [p handleSessionMessage: CK(0x4444, 2, 600, 111500, 600) onControlPort: NO
+                         at: 11.2];
+    PASS(p.latency == 0.0, "a round trip below one tick is a latency of 0");
 
     /* the peer goes silent: probe, then give up */
     PASS(EQ(p.nextDeadline, 41.2), "idle probe 30 s after the last packet");

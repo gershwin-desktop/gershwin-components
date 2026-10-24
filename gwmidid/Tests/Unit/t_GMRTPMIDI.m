@@ -180,6 +180,29 @@ int main(void)
     }
   END_SET("decoder")
 
+  START_SET("rtpmidid capture")
+    /* Packets rtpmidid sent to gwmidid on loopback (interop-run2,
+     * cap-sysex.pcap): every packet carries a recovery journal, some
+     * carry nothing else. */
+    dec = [[GMRTPMIDIDecoder new] autorelease];
+    msgs = Decode(dec, "8061166800004ecf0000078d43903c64800000", &err);
+    PASS_EQUAL(Joined(msgs), @"903c64", "note on with an empty journal");
+    msgs = Decode(dec, "80611669000056200000078d4020166800070881f03ce4", &err);
+    PASS(msgs != nil && [msgs count] == 0,
+      "a packet with only a journal (chapter N) yields nothing");
+    msgs = Decode(dec, "8061166a000058940000078d43803c00a0166880070881f0bc64", &err);
+    PASS_EQUAL(Joined(msgs), @"803c00", "note off followed by its journal");
+    msgs = Decode(dec, "8061166b00005dfb0000078d40201668000608007708", &err);
+    msgs = Decode(dec, "8061166c000062580000078d43b00764a01668800608807708", &err);
+    PASS_EQUAL(Joined(msgs), @"b00764", "control change followed by its journal");
+    PASS([dec journalsSkipped] == 5, "all five journals walked");
+    PASS([dec sequenceGaps] == 0, "consecutive sequence numbers");
+    msgs = Decode(dec, "8061167b000075e20000078dc018f77f000102030405060708090a0b"
+      "0c0d0e0f1011121314f7a01668800608807708", &err);
+    PASS(msgs != nil && [msgs count] == 0,
+      "a last sysex segment without its start (sequence gap) is dropped");
+  END_SET("rtpmidid capture")
+
   START_SET("journal length")
     PASS(GMRTPMIDIJournalLength(GMHex("20001900060801 3c64").bytes, 9) == 9,
       "one channel journal");
