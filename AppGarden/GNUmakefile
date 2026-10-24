@@ -98,13 +98,15 @@ include $(GNUSTEP_MAKEFILES)/application.make
 # The sidebar glyphs are drawn as 16-point SVGs; each TIFF carries a 16 px
 # 72 dpi page and a 32 px 144 dpi page so NSImage picks a sharp bitmap at
 # GSScaleFactor 1 and 2. The TIFFs are committed so that building needs no
-# SVG renderer; run "gmake icons" after editing an SVG.
+# SVG renderer; run "gmake icons" after editing an SVG. svgconvert is built
+# from this repository; ImageMagick's convert only assembles the TIFF pages,
+# so only someone regenerating the icons needs it.
 .PHONY: icons
 icons:
 	set -e; for svg in Resources/Icons/*.svg; do \
 	  tiff=$${svg%.svg}.tiff; \
-	  inkscape -w 16 -h 16 -o $$tiff.1x.png $$svg; \
-	  inkscape -w 32 -h 32 -o $$tiff.2x.png $$svg; \
+	  svgconvert -background none $$svg -resize 16x16! $$tiff.1x.png; \
+	  svgconvert -background none $$svg -resize 32x32! $$tiff.2x.png; \
 	  convert \( $$tiff.1x.png -set units PixelsPerInch -set density 72 \) \
 	    \( $$tiff.2x.png -set units PixelsPerInch -set density 144 \) \
 	    -type TrueColorAlpha -compress lzw -define tiff:alpha=associated $$tiff; \
