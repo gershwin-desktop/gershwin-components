@@ -17,6 +17,7 @@
 @property (retain) NSMutableArray *ports;     /* @YES = control */
 @property (retain) NSMutableArray *received;
 @property NSUInteger stateChanges;
+@property NSUInteger latencyUpdates;
 @end
 
 @implementation Recorder
@@ -41,6 +42,7 @@
   [_ports addObject: [NSNumber numberWithBool: c]];
 }
 - (void) peerDidChangeState: (GMPeerConnection *)p { _stateChanges++; }
+- (void) peerDidUpdateLatency: (GMPeerConnection *)p { _latencyUpdates++; }
 - (void) peer: (GMPeerConnection *)p didReceiveMIDIMessages: (NSArray *)m
 {
   [_received addObjectsFromArray: m];
@@ -140,6 +142,7 @@ int main(void)
       && [r last].timestamp2 == 777 && [r last].timestamp3 == 14200,
       "CK2 echoes timestamps 1 and 2 and adds ours");
     PASS(EQ(p.latency, 0.01), "latency is half the round trip: 10 ms");
+    PASS(r.latencyUpdates == 1, "the delegate hears about the new latency");
 
     PASS(EQ(p.nextDeadline, 101.42 + 1.5), "next sync in the fast phase");
     [r clear];

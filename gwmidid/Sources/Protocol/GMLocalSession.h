@@ -31,6 +31,9 @@ NSString *GMConnectionPolicyString(GMConnectionPolicy p);
   didReceiveMIDIMessages: (NSArray *)messages
                 fromPeer: (GMPeerConnection *)peer;
 - (void) sessionParticipantsDidChange: (GMLocalSession *)session;
+- (void) sessionParticipantLatencyDidChange: (GMLocalSession *)session;
+/* Before a closed participant is removed; its closeReason says why. */
+- (void) session: (GMLocalSession *)session peerDidClose: (GMPeerConnection *)peer;
 @end
 
 /* One local endpoint: a name and a pair of UDP ports, with any number of

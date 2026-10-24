@@ -23,6 +23,7 @@
 @property (retain) NSMutableArray *midi;
 @property BOOL allowDirectory;
 @property NSUInteger changes;
+@property GMPeerCloseReason lastCloseReason;
 @end
 
 @interface Net : NSObject
@@ -54,6 +55,11 @@
   [_midi addObjectsFromArray: m];
 }
 - (void) sessionParticipantsDidChange: (GMLocalSession *)s { _changes++; }
+- (void) sessionParticipantLatencyDidChange: (GMLocalSession *)s { }
+- (void) session: (GMLocalSession *)s peerDidClose: (GMPeerConnection *)p
+{
+  _lastCloseReason = p.closeReason;
+}
 @end
 
 @implementation Net
@@ -186,6 +192,8 @@ int main(void)
     [net runAt: 1];
     PASS([a.session.peers count] == 0 && [b.session.peers count] == 0,
       "policy nobody: NO, and the inviter drops the attempt");
+    PASS(a.lastCloseReason == GMPeerCloseReasonRejected,
+      "the inviter is told that it was rejected");
 
     b.session.policy = GMConnectionPolicyDirectory;
     b.allowDirectory = NO;

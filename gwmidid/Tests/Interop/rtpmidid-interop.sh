@@ -65,8 +65,12 @@ grep -v -e '^GNUSTEP_USER_DEFAULTS_DIR' -e '^GNUSTEP_FILESYSTEM_LAYOUT' \
 echo "GNUSTEP_USER_DEFAULTS_DIR=$OUT/defaults" >> "$OUT/GNUstep.conf"
 GNUSTEP_CONFIG_FILE=$OUT/GNUstep.conf
 export GNUSTEP_CONFIG_FILE
-defaults write io.github.gershwin-desktop.gwmidid Sessions \
-  "({Name = \"$SESSION\"; Port = $PORT; Policy = anyone;})"
+# The library the uninstalled gwmidid was linked against
+MNB=$TOP/../Libraries/MIDINetworkBackend/obj
+[ -d "$MNB" ] && { LD_LIBRARY_PATH=$MNB:${LD_LIBRARY_PATH:-}; export LD_LIBRARY_PATH; }
+if pgrep -u "$(id -u)" -x gwmidid >/dev/null; then
+  echo "a gwmidid of this user is running; the test needs the control name"; exit 2
+fi
 
 cat > "$OUT/rtpmidid.ini" <<EOF
 [general]
@@ -179,12 +183,13 @@ latency() {
 echo "== start"
 start_rtpmidid
 start_gwmidid
-OURPORT=$(status | sed -n 's/^session .* midi=\([0-9:]*\).*/\1/p' | head -1)
+"$GWMIDICTL" add "$SESSION" $PORT && "$GWMIDICTL" enable "$SESSION"
+OURPORT=$(alsa_port "Network MIDI" "$SESSION")
 [ -n "$OURPORT" ] && pass "gwmidid session has MIDI port $OURPORT" \
   || fail "gwmidid session has a MIDI port"
 
 echo "== A: gwmidid invites rtpmidid"
-if wait_for 15 sh -c "\"$GWMIDICTL\" status | grep -q '^discovered \"$PEER\" .*addresses=[0-9]'"; then
+if wait_for 15 sh -c "\"$GWMIDICTL\" status | grep -q '^host \"$PEER\" address=[0-9]'"; then
   pass "A: rtpmidid's announcement is discovered"
 else
   fail "A: rtpmidid's announcement is discovered"
@@ -197,8 +202,7 @@ else
 fi
 THEIRS=$(alsa_port "$PEER" "$SESSION")
 [ -n "$THEIRS" ] && exchange A "$OURPORT" "$THEIRS" || fail "A: rtpmidid port for $SESSION"
-ID=$(status | awk '/^  participant / { print $2; exit }')
-"$GWMIDICTL" disconnect "$SESSION" "$ID"
+"$GWMIDICTL" disconnect "$SESSION" "$PEER"
 sleep 1
 if no_participants && grep -q 'Disconnect from '"$SESSION" "$OUT/rtpmidid.log"; then
   pass "A: clean disconnect seen by both sides"
@@ -215,7 +219,7 @@ if [ -n "$THEIRS" ]; then
   # when nothing does any more, so this listener stays until C.
   aseqdump -p "$THEIRS" > /dev/null 2>&1 &
   KEEPPID=$!
-  if wait_for 10 connected && status | grep -q 'role=responder'; then
+  if wait_for 10 connected; then
     pass "B: rtpmidid joined, clock synced, latency $(latency) ms"
   else
     fail "B: rtpmidid joined"
@@ -242,7 +246,7 @@ fi
 echo "== D: gwmidid stops while connected"
 [ -n "$RTPID" ] && { kill $RTPID; wait $RTPID 2>/dev/null; RTPID=; }
 start_rtpmidid
-wait_for 15 sh -c "\"$GWMIDICTL\" status | grep -q '^discovered \"$PEER\" .*addresses=[0-9]'"
+wait_for 15 sh -c "\"$GWMIDICTL\" status | grep -q '^host \"$PEER\" address=[0-9]'"
 wait_for 10 "$GWMIDICTL" connect "$SESSION" "$PEER"
 if wait_for 10 connected; then
   N=$(grep -c 'Parse BY' "$OUT/rtpmidid.log")

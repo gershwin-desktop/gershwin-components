@@ -9,6 +9,11 @@
 #import "GMMIDIStreamParser.h"
 #import "GMRTPMIDI.h"
 
+NSString * const GMLocalPortIdentifier = @"identifier";
+NSString * const GMLocalPortName = @"name";
+NSString * const GMLocalPortCanSend = @"canSend";
+NSString * const GMLocalPortCanReceive = @"canReceive";
+
 #if GM_HAVE_ALSA
 
 #include <alsa/asoundlib.h>
@@ -33,6 +38,7 @@ static NSError *GMALSAError(NSString *what, int err)
   NSMutableArray *_watchers;
   NSMutableDictionary *_parsers;   /* port -> GMMIDIStreamParser */
   uint8_t *_decodeBuffer;
+  int _announcePort;               /* receives the system's port events */
 }
 
 @synthesize delegate = _delegate;
@@ -64,6 +70,23 @@ static NSError *GMALSAError(NSString *what, int err)
    * the stream parser then has nothing to undo. */
   snd_midi_event_no_status(_decoder, 1);
   _decodeBuffer = malloc(GM_RTP_MIDI_MAX_SYSEX);
+
+  /* Ports of other programs come and go (a USB keyboard plugged in, a
+   * synth started); the system announces that on a port of its own, which
+   * needs a port of ours to arrive at.  No subscription capabilities, so
+   * applications do not list it. */
+  _announcePort = snd_seq_create_simple_port(_seq, "system announcements",
+    SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_NO_EXPORT,
+    SND_SEQ_PORT_TYPE_APPLICATION);
+  if (_announcePort < 0
+    || (err = snd_seq_connect_from(_seq, _announcePort, SND_SEQ_CLIENT_SYSTEM,
+      SND_SEQ_PORT_SYSTEM_ANNOUNCE)) < 0)
+    {
+      if (error) *error = GMALSAError(@"cannot follow port changes",
+        _announcePort < 0 ? _announcePort : err);
+      [self close];
+      return nil;
+    }
 
   n = snd_seq_poll_descriptors_count(_seq, POLLIN);
   pfd = calloc((size_t)n, sizeof *pfd);
@@ -127,6 +150,7 @@ static NSError *GMALSAError(NSString *what, int err)
   NSMutableDictionary *byPort = [NSMutableDictionary dictionary];
   snd_seq_event_t *ev;
   int r;
+  BOOL portsChanged = NO;
 
   while ((r = snd_seq_event_input(_seq, &ev)) >= 0 || r == -ENOSPC)
     {
@@ -142,6 +166,20 @@ static NSError *GMALSAError(NSString *what, int err)
           continue;
         }
       if (ev == NULL) continue;
+      if (ev->dest.port == _announcePort)
+        {
+          switch (ev->type)
+            {
+              case SND_SEQ_EVENT_CLIENT_START: case SND_SEQ_EVENT_CLIENT_EXIT:
+              case SND_SEQ_EVENT_CLIENT_CHANGE: case SND_SEQ_EVENT_PORT_START:
+              case SND_SEQ_EVENT_PORT_EXIT: case SND_SEQ_EVENT_PORT_CHANGE:
+                portsChanged = YES;
+                break;
+              default:
+                break;
+            }
+          continue;
+        }
       parser = [_parsers objectForKey: @(ev->dest.port)];
       if (parser == nil) continue;
       snd_midi_event_reset_decode(_decoder);
@@ -163,6 +201,93 @@ static NSError *GMALSAError(NSString *what, int err)
   for (NSNumber *port in byPort)
     [_delegate ports: self didReceiveMessages: [byPort objectForKey: port]
               onPort: [port intValue]];
+  if (portsChanged)
+    [_delegate portsDidChangeLocalPorts: self];
+}
+
+- (NSArray *) localPorts
+{
+  NSMutableArray *out = [NSMutableArray array];
+  snd_seq_client_info_t *ci;
+  snd_seq_port_info_t *pi;
+  int me = snd_seq_client_id(_seq);
+
+  snd_seq_client_info_alloca(&ci);
+  snd_seq_port_info_alloca(&pi);
+  snd_seq_client_info_set_client(ci, -1);
+  while (snd_seq_query_next_client(_seq, ci) >= 0)
+    {
+      int client = snd_seq_client_info_get_client(ci);
+      NSString *clientName;
+      if (client == me || client == SND_SEQ_CLIENT_SYSTEM) continue;
+      clientName = [NSString stringWithUTF8String:
+        snd_seq_client_info_get_name(ci)];
+      snd_seq_port_info_set_client(pi, client);
+      snd_seq_port_info_set_port(pi, -1);
+      while (snd_seq_query_next_port(_seq, pi) >= 0)
+        {
+          unsigned caps = snd_seq_port_info_get_capability(pi);
+          BOOL canSend = (caps & SND_SEQ_PORT_CAP_READ)
+            && (caps & SND_SEQ_PORT_CAP_SUBS_READ);
+          BOOL canReceive = (caps & SND_SEQ_PORT_CAP_WRITE)
+            && (caps & SND_SEQ_PORT_CAP_SUBS_WRITE);
+          NSString *portName = [NSString stringWithUTF8String:
+            snd_seq_port_info_get_name(pi)];
+          NSString *name;
+          if ((caps & SND_SEQ_PORT_CAP_NO_EXPORT) || (!canSend && !canReceive))
+            continue;
+          /* Hardware ports usually repeat the device name already. */
+          name = [portName hasPrefix: clientName] ? portName
+            : [NSString stringWithFormat: @"%@: %@", clientName, portName];
+          [out addObject: @{
+            GMLocalPortIdentifier: [NSString stringWithFormat: @"%d:%d",
+              client, snd_seq_port_info_get_port(pi)],
+            GMLocalPortName: name,
+            GMLocalPortCanSend: @(canSend),
+            GMLocalPortCanReceive: @(canReceive) }];
+        }
+    }
+  return out;
+}
+
+static BOOL GMParseAddress(NSString *identifier, int *client, int *port)
+{
+  return sscanf([identifier UTF8String], "%d:%d", client, port) == 2;
+}
+
+- (BOOL) connectPort: (int)port
+         toLocalPort: (NSString *)identifier
+               input: (BOOL)input
+               error: (NSError **)error
+{
+  int client, other, err;
+  if (!GMParseAddress(identifier, &client, &other))
+    {
+      if (error) *error = GMALSAError(@"bad port address", -EINVAL);
+      return NO;
+    }
+  err = input ? snd_seq_connect_from(_seq, port, client, other)
+              : snd_seq_connect_to(_seq, port, client, other);
+  /* Already connected (by the user, with another tool) is what we want. */
+  if (err < 0 && err != -EBUSY)
+    {
+      if (error) *error = GMALSAError([NSString stringWithFormat:
+        @"cannot connect %@", identifier], err);
+      return NO;
+    }
+  return YES;
+}
+
+- (void) disconnectPort: (int)port
+          fromLocalPort: (NSString *)identifier
+                  input: (BOOL)input
+{
+  int client, other;
+  if (!GMParseAddress(identifier, &client, &other)) return;
+  if (input)
+    snd_seq_disconnect_from(_seq, port, client, other);
+  else
+    snd_seq_disconnect_to(_seq, port, client, other);
 }
 
 - (void) output: (snd_seq_event_t *)ev port: (int)port

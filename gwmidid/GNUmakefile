@@ -31,21 +31,28 @@ gwmidid_OBJC_FILES = \
 	Sources/Transport/GMUDPEndpoint.m \
 	Sources/Ports/GMALSASequencer.m \
 	Sources/Discovery/GMServiceDirectory.m \
-	Sources/Daemon/GMConfiguration.m \
 	Sources/Daemon/GMDaemon.m \
 	Sources/Daemon/main.m
 
-gwmidictl_OBJC_FILES = \
-	Sources/Protocol/GMSocketAddress.m \
-	Sources/Protocol/GMLocalSession.m \
-	Sources/Protocol/GMPeerConnection.m \
-	Sources/Protocol/GMSessionMessage.m \
-	Sources/Protocol/GMRTPMIDI.m \
-	Sources/Daemon/GMConfiguration.m \
-	Sources/Control/gwmidictl.m
+gwmidictl_OBJC_FILES = Sources/Control/gwmidictl.m
+
+# The models, the configuration rules and the control interface are shared
+# with the MIDI pane in libMIDINetworkBackend.  The library in this tree is
+# used when it has been built, so gwmidid can be built and tested before
+# the library is installed; otherwise the installed one.
+MNB_DIR = $(CURDIR)/../Libraries/MIDINetworkBackend
+MNB_LIB := $(wildcard $(MNB_DIR)/obj/libMIDINetworkBackend.so)
+ifneq ($(MNB_LIB),)
+ADDITIONAL_INCLUDE_DIRS += -I$(MNB_DIR)
+ADDITIONAL_LIB_DIRS += -L$(MNB_DIR)/obj
+else
+ADDITIONAL_INCLUDE_DIRS += -I$(GNUSTEP_SYSTEM_HEADERS)/MIDINetworkBackend
+endif
+gwmidid_TOOL_LIBS += -lMIDINetworkBackend
+gwmidictl_TOOL_LIBS += -lMIDINetworkBackend
 
 ADDITIONAL_INCLUDE_DIRS += -ISources/Protocol -ISources/Transport \
-	-ISources/Ports -ISources/Discovery -ISources/Daemon -ISources/Control
+	-ISources/Ports -ISources/Discovery -ISources/Daemon
 ADDITIONAL_OBJCFLAGS += -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 
 # The MIDI port layer is the ALSA sequencer, through alsa-seq-server on the

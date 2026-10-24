@@ -4,153 +4,168 @@
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-3.0-or-later
  */
 /*
- * gwmidictl: talks to the running gwmidid of the current user, for
- * scripts, tests and the terminal.
+ * gwmidictl: talks to the running gwmidid of the current user over the
+ * same control interface as the MIDI pane, for scripts, tests and the
+ * terminal.  Sessions, hosts and participants are named by name here; the
+ * identifiers are looked up in the daemon's snapshot.
  */
 #import <Foundation/Foundation.h>
-#import "GMDaemonControl.h"
-#import "GMConfiguration.h"
-
-/* One line per object, key=value, so both people and scripts can read it. */
-static void printStatus(NSDictionary *st)
-{
-  printf("port-layer %s\n", [[st objectForKey: @"PortLayer"] UTF8String]);
-  for (NSDictionary *s in [st objectForKey: GMKeySessions])
-    {
-      printf("session \"%s\" port=%s enabled=%s announce=%s policy=%s running=%s",
-        [[s objectForKey: GMKeyName] UTF8String],
-        [[[s objectForKey: GMKeyPort] description] UTF8String],
-        [[s objectForKey: GMKeyEnabled] boolValue] ? "yes" : "no",
-        [[s objectForKey: GMKeyAnnounce] boolValue] ? "yes" : "no",
-        [[s objectForKey: GMKeyPolicy] UTF8String],
-        [[s objectForKey: @"Running"] boolValue] ? "yes" : "no");
-      if ([s objectForKey: @"MIDIPort"])
-        printf(" midi=%s", [[s objectForKey: @"MIDIPort"] UTF8String]);
-      if ([s objectForKey: @"Error"])
-        printf(" error=\"%s\"", [[s objectForKey: @"Error"] UTF8String]);
-      printf("\n");
-      for (NSDictionary *p in [s objectForKey: @"Participants"])
-        printf("  participant %s name=\"%s\" address=%s role=%s state=%s "
-          "latency-ms=%.2f sent=%s received=%s gaps=%s\n",
-          [[p objectForKey: @"Identifier"] UTF8String],
-          [[p objectForKey: @"Name"] UTF8String],
-          [[p objectForKey: @"Address"] UTF8String],
-          [[p objectForKey: @"Role"] UTF8String],
-          [[p objectForKey: @"State"] UTF8String],
-          [[p objectForKey: @"LatencyMs"] doubleValue],
-          [[[p objectForKey: @"PacketsSent"] description] UTF8String],
-          [[[p objectForKey: @"PacketsReceived"] description] UTF8String],
-          [[[p objectForKey: @"SequenceGaps"] description] UTF8String]);
-    }
-  for (NSDictionary *d in [st objectForKey: GMKeyDirectory])
-    printf("directory \"%s\" host=%s port=%s\n",
-      [[d objectForKey: GMKeyName] UTF8String],
-      [[d objectForKey: GMKeyHost] UTF8String],
-      [[[d objectForKey: GMKeyPort] description] UTF8String]);
-  for (NSDictionary *d in [st objectForKey: @"Discovered"])
-    printf("discovered \"%s\" host=%s port=%s addresses=%s\n",
-      [[d objectForKey: GMKeyName] UTF8String],
-      [[d objectForKey: @"HostName"] UTF8String],
-      [[[d objectForKey: GMKeyPort] description] UTF8String],
-      [[[d objectForKey: @"Addresses"] componentsJoinedByString: @","] UTF8String]);
-  for (NSString *e in [st objectForKey: @"Errors"])
-    printf("error \"%s\"\n", [e UTF8String]);
-}
+#import "MIDINetworkControl.h"
+#import "MIDINetworkState.h"
+#import "MIDINetworkBackend.h"
 
 static void usage(void)
 {
   fprintf(stderr,
-    "usage: gwmidictl status [--plist]\n"
-    "       gwmidictl add <name> <port> [anyone|directory|nobody]\n"
-    "       gwmidictl remove <name>\n"
-    "       gwmidictl policy <name> anyone|directory|nobody\n"
-    "       gwmidictl connect <session> <directory name|service|host:port>\n"
-    "       gwmidictl disconnect <session> <participant identifier>\n"
-    "       gwmidictl directory [<name> <host> <port>]...\n");
+    "usage: gwmidictl status\n"
+    "       gwmidictl add <name> <port> [<advertised name>]\n"
+    "       gwmidictl remove <session>\n"
+    "       gwmidictl enable|disable <session>\n"
+    "       gwmidictl policy <session> anyone|directory|nobody\n"
+    "       gwmidictl host <name> <address> <port>\n"
+    "       gwmidictl unhost <host>\n"
+    "       gwmidictl connect <session> <host>\n"
+    "       gwmidictl disconnect <session> <participant name or identifier>\n"
+    "       gwmidictl route <session> <input port id|-> <output port id|->\n");
   exit(2);
+}
+
+static void fail(NSString *msg)
+{
+  fprintf(stderr, "gwmidictl: %s\n", [msg UTF8String]);
+  exit(1);
+}
+
+static void check(NSDictionary *reply)
+{
+  NSError *e = MIDINetworkErrorFromReply(reply);
+  if (e != nil)
+    fail([NSString stringWithFormat: @"%@ (code %ld)",
+      [e localizedDescription], (long)[e code]]);
+}
+
+static MIDINetworkSession *sessionNamed(MIDINetworkState *st, NSString *n)
+{
+  for (MIDINetworkSession *s in [st sessions])
+    if ([s.name isEqual: n] || [s.identifier isEqual: n]) return s;
+  fail([NSString stringWithFormat: @"no session \"%@\"", n]);
+  return nil;
+}
+
+static MIDINetworkHost *hostNamed(MIDINetworkState *st, NSString *n)
+{
+  for (MIDINetworkHost *h in [st directory])
+    if ([h.name isEqual: n] || [h.identifier isEqual: n]) return h;
+  fail([NSString stringWithFormat: @"no host \"%@\" in the directory", n]);
+  return nil;
+}
+
+/* One line per object, key=value, so both people and scripts can read it. */
+static void printStatus(MIDINetworkState *st)
+{
+  for (MIDINetworkSession *s in [st sessions])
+    {
+      MIDINetworkRoute *r = [st routeForSessionWithIdentifier: s.identifier];
+      printf("session \"%s\" advertised=\"%s\" port=%lu enabled=%s policy=%s"
+        " input=%s output=%s id=%s\n", [s.name UTF8String],
+        [s.advertisedName UTF8String], (unsigned long)s.port,
+        s.enabled ? "yes" : "no",
+        [MIDINetworkConnectionPolicyName(s.policy) UTF8String],
+        r.inputPortIdentifier ? [r.inputPortIdentifier UTF8String] : "-",
+        r.outputPortIdentifier ? [r.outputPortIdentifier UTF8String] : "-",
+        [s.identifier UTF8String]);
+      for (MIDINetworkParticipant *p in
+           [st participantsForSessionWithIdentifier: s.identifier])
+        printf("  participant %s name=\"%s\" address=%s state=%s latency-ms=%.2f\n",
+          [p.identifier UTF8String], [p.name UTF8String], [p.address UTF8String],
+          [p isConnected] ? "connected" : "inviting", p.latency);
+    }
+  for (MIDINetworkHost *h in [st directory])
+    printf("host \"%s\" address=%s port=%lu source=%s id=%s\n",
+      [h.name UTF8String], [h.address UTF8String], (unsigned long)h.port,
+      [h isManual] ? "manual" : "discovered", [h.identifier UTF8String]);
+  for (MIDINetworkPort *p in [st localPorts])
+    printf("port %s name=\"%s\" send=%s receive=%s\n", [p.identifier UTF8String],
+      [p.name UTF8String], p.canSend ? "yes" : "no", p.canReceive ? "yes" : "no");
 }
 
 int main(int argc, const char **argv)
 {
   @autoreleasepool
     {
-      NSArray *args = [[NSProcessInfo processInfo] arguments];
+      NSArray *a = [[NSProcessInfo processInfo] arguments];
+      NSUInteger n = [a count];
       NSString *cmd;
-      id<GMDaemonControl> proxy;
-      NSString *err = nil;
+      id<MIDINetworkDaemonControl> d;
+      MIDINetworkState *st;
 
-      if ([args count] < 2) usage();
-      cmd = [args objectAtIndex: 1];
-      proxy = (id<GMDaemonControl>)[NSConnection rootProxyForConnectionWithRegisteredName: GMDefaultsDomain
-        host: @"" usingNameServer: [NSMessagePortNameServer sharedInstance]];
-      if (proxy == nil)
-        {
-          fprintf(stderr, "gwmidictl: gwmidid is not running for this user\n");
-          return 1;
-        }
-      [(NSDistantObject *)proxy setProtocolForProxy: @protocol(GMDaemonControl)];
+      if (n < 2) usage();
+      cmd = [a objectAtIndex: 1];
+      d = (id<MIDINetworkDaemonControl>)[NSConnection
+        rootProxyForConnectionWithRegisteredName: MIDINetworkDaemonServiceName()
+                                            host: @""
+                                 usingNameServer: [NSMessagePortNameServer sharedInstance]];
+      if (d == nil) fail(@"gwmidid is not running for this user");
+      [(NSDistantObject *)d setProtocolForProxy: @protocol(MIDINetworkDaemonControl)];
+      if ([d protocolVersion] != MIDINETWORK_CONTROL_PROTOCOL_VERSION)
+        fail(@"gwmidid speaks another version of the control interface");
+      st = [MIDINetworkState stateWithPropertyList: [d snapshot]];
+      if (st == nil) fail(@"gwmidid sent a snapshot that is not understood");
 
-      if ([cmd isEqual: @"status"] && [args count] == 2)
+#define ARG(i) [a objectAtIndex: (i)]
+      if ([cmd isEqual: @"status"] && n == 2)
+        printStatus(st);
+      else if ([cmd isEqual: @"add"] && (n == 4 || n == 5))
         {
-          printStatus([proxy daemonStatus]);
-          return 0;
+          MIDINetworkSession *s = [MIDINetworkSession
+            sessionWithName: ARG(2) port: (NSUInteger)[ARG(3) integerValue]];
+          s.advertisedName = (n == 5) ? ARG(4) : ARG(2);
+          check([d addSession: [s propertyList]]);
         }
-      else if ([cmd isEqual: @"status"] && [args count] == 3
-        && [[args objectAtIndex: 2] isEqual: @"--plist"])
+      else if ([cmd isEqual: @"remove"] && n == 3)
+        check([d removeSession: sessionNamed(st, ARG(2)).identifier]);
+      else if (([cmd isEqual: @"enable"] || [cmd isEqual: @"disable"]) && n == 3)
+        check([d setEnabled: [cmd isEqual: @"enable"]
+                 forSession: sessionNamed(st, ARG(2)).identifier]);
+      else if ([cmd isEqual: @"policy"] && n == 4)
         {
-          NSData *xml = [NSPropertyListSerialization
-            dataFromPropertyList: [proxy daemonStatus]
-                          format: NSPropertyListXMLFormat_v1_0
-                errorDescription: NULL];
-          fwrite([xml bytes], 1, [xml length], stdout);
-          return 0;
+          MIDINetworkSession *s = [sessionNamed(st, ARG(2)) copy];
+          MIDINetworkConnectionPolicy p;
+          if (!MIDINetworkConnectionPolicyFromName(ARG(3), &p))
+            fail(@"policy must be anyone, directory or nobody");
+          s.policy = p;
+          check([d updateSession: [s propertyList]]);
         }
-      else if ([cmd isEqual: @"add"] && ([args count] == 4 || [args count] == 5))
+      else if ([cmd isEqual: @"host"] && n == 5)
+        check([d addManualHost: [[MIDINetworkHost manualHostWithName: ARG(2)
+          address: ARG(3) port: (NSUInteger)[ARG(4) integerValue]] propertyList]]);
+      else if ([cmd isEqual: @"unhost"] && n == 3)
+        check([d removeHost: hostNamed(st, ARG(2)).identifier]);
+      else if ([cmd isEqual: @"connect"] && n == 4)
+        check([d connectSession: sessionNamed(st, ARG(2)).identifier
+                         toHost: hostNamed(st, ARG(3)).identifier]);
+      else if ([cmd isEqual: @"disconnect"] && n == 4)
         {
-          NSMutableDictionary *d = [NSMutableDictionary dictionaryWithObjectsAndKeys:
-            [args objectAtIndex: 2], GMKeyName, [args objectAtIndex: 3], GMKeyPort, nil];
-          if ([args count] == 5) [d setObject: [args objectAtIndex: 4] forKey: GMKeyPolicy];
-          err = [proxy addSession: d];
+          MIDINetworkSession *s = sessionNamed(st, ARG(2));
+          NSString *pid = nil;
+          for (MIDINetworkParticipant *p in
+               [st participantsForSessionWithIdentifier: s.identifier])
+            if ([p.name isEqual: ARG(3)] || [p.identifier isEqual: ARG(3)])
+              pid = p.identifier;
+          if (pid == nil) fail(@"no such participant");
+          check([d disconnectParticipant: pid fromSession: s.identifier]);
         }
-      else if ([cmd isEqual: @"remove"] && [args count] == 3)
-        err = [proxy removeSession: [args objectAtIndex: 2]];
-      else if ([cmd isEqual: @"policy"] && [args count] == 4)
+      else if ([cmd isEqual: @"route"] && n == 5)
         {
-          NSDictionary *s = nil;
-          for (NSDictionary *d in [[proxy daemonStatus] objectForKey: GMKeySessions])
-            if ([[d objectForKey: GMKeyName] isEqual: [args objectAtIndex: 2]]) s = d;
-          if (s == nil)
-            err = @"no such session";
-          else
-            {
-              NSMutableDictionary *m = [s mutableCopy];
-              [m setObject: [args objectAtIndex: 3] forKey: GMKeyPolicy];
-              err = [proxy updateSession: [args objectAtIndex: 2] withConfiguration: m];
-            }
-        }
-      else if ([cmd isEqual: @"connect"] && [args count] == 4)
-        err = [proxy connectSession: [args objectAtIndex: 2] to: [args objectAtIndex: 3]];
-      else if ([cmd isEqual: @"disconnect"] && [args count] == 4)
-        err = [proxy disconnectParticipant: [args objectAtIndex: 3]
-                                 inSession: [args objectAtIndex: 2]];
-      else if ([cmd isEqual: @"directory"] && ([args count] - 2) % 3 == 0)
-        {
-          NSMutableArray *entries = [NSMutableArray array];
-          NSUInteger i;
-          for (i = 2; i < [args count]; i += 3)
-            [entries addObject: @{ GMKeyName: [args objectAtIndex: i],
-              GMKeyHost: [args objectAtIndex: i + 1],
-              GMKeyPort: [args objectAtIndex: i + 2] }];
-          err = [proxy setDirectoryEntries: entries];
+          NSString *in = [ARG(3) isEqual: @"-"] ? nil : ARG(3);
+          NSString *out = [ARG(4) isEqual: @"-"] ? nil : ARG(4);
+          check([d setRoute: [[MIDINetworkRoute
+            routeForSession: sessionNamed(st, ARG(2)).identifier
+                  inputPort: in outputPort: out] propertyList]]);
         }
       else
         usage();
-
-      if (err != nil)
-        {
-          fprintf(stderr, "gwmidictl: %s\n", [err UTF8String]);
-          return 1;
-        }
+#undef ARG
     }
   return 0;
 }

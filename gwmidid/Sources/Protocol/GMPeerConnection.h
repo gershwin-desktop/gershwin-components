@@ -74,6 +74,8 @@ NSString *GMPeerEventName(GMPeerEvent event);
      sendData: (NSData *)data
 onControlPort: (BOOL)control;
 - (void) peerDidChangeState: (GMPeerConnection *)peer;
+/* After every clock sync, also those that do not change the state */
+- (void) peerDidUpdateLatency: (GMPeerConnection *)peer;
 - (void) peer: (GMPeerConnection *)peer didReceiveMIDIMessages: (NSArray *)messages;
 @end
 

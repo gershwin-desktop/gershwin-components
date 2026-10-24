@@ -215,6 +215,7 @@ onControlPort: (BOOL)control
         @"rejected by peer", @"no answer" };
       NSLog(@"gwmidid: %@: %@ (%@) left: %@", _name, peer.remoteName,
         GMAddressDescription(peer.controlAddress), reasons[peer.closeReason]);
+      [_delegate session: self peerDidClose: peer];
       [_peers removeObject: peer];
     }
   else if (peer.state == GMPeerStateConnected)
@@ -224,6 +225,11 @@ onControlPort: (BOOL)control
         peer.latency * 1000.0);
     }
   [_delegate sessionParticipantsDidChange: self];
+}
+
+- (void) peerDidUpdateLatency: (GMPeerConnection *)peer
+{
+  [_delegate sessionParticipantLatencyDidChange: self];
 }
 
 - (void) peer: (GMPeerConnection *)peer didReceiveMIDIMessages: (NSArray *)messages

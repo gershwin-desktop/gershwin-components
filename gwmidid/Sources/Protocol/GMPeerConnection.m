@@ -409,6 +409,7 @@ NSString *GMPeerEventName(GMPeerEvent e)
                                                timestamp3: t3]
              control: NO];
           _latency = (double)(t3 - m.timestamp1) / 2.0 / GM_TICKS_PER_SECOND;
+          [_delegate peerDidUpdateLatency: self];
           _pendingSyncStamp = 0;
           _syncTimeoutAt = 0;
           _attempts = 0;
@@ -423,8 +424,11 @@ NSString *GMPeerEventName(GMPeerEvent e)
         /* Equal stamps are a round trip below one tick (100 us), as on
          * loopback, not a missing measurement. */
         if (m.timestamp3 >= m.timestamp1)
-          _latency = (double)(m.timestamp3 - m.timestamp1) / 2.0
-            / GM_TICKS_PER_SECOND;
+          {
+            _latency = (double)(m.timestamp3 - m.timestamp1) / 2.0
+              / GM_TICKS_PER_SECOND;
+            [_delegate peerDidUpdateLatency: self];
+          }
         _syncsDone++;
         [self heardFromPeerAt: now];
         break;

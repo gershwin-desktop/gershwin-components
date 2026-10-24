@@ -5,15 +5,17 @@
  */
 
 #import <Foundation/Foundation.h>
-#import "GMDaemonControl.h"
+#import "MIDINetworkControl.h"
 
-/* Ties the pieces together for one user: the configured sessions with
- * their sockets and MIDI ports, the mDNS directory, the timers, and the
- * control interface. */
-@interface GMDaemon : NSObject <GMDaemonControl>
+/* Ties the pieces together for one user: the sessions with their sockets
+ * and MIDI ports, the mDNS directory, the routes to local ports, the
+ * timers, and the control interface of CONTROL-INTERFACE.md in
+ * Libraries/MIDINetworkBackend.  The configuration lives in a
+ * MIDINetworkState, so the rules are those the MIDI pane knows. */
+@interface GMDaemon : NSObject <MIDINetworkDaemonControl>
 
 /* Fails when another gwmidid of this user runs or there is no MIDI port
- * layer; individual sessions that cannot start are reported in -status. */
+ * layer; sessions that cannot start are logged and stay disabled. */
 - (BOOL) startWithError: (NSString **)error;
 
 /* Ends every session with BY and withdraws the announcements. */

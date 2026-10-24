@@ -13,7 +13,15 @@
 - (void) ports: (id<GMMIDIPorts>)ports
   didReceiveMessages: (NSArray *)messages
               onPort: (int)port;
+/* A port of another program appeared, disappeared or changed. */
+- (void) portsDidChangeLocalPorts: (id<GMMIDIPorts>)ports;
 @end
+
+/* Keys of the dictionaries -localPorts returns */
+extern NSString * const GMLocalPortIdentifier;   /* "client:port" */
+extern NSString * const GMLocalPortName;
+extern NSString * const GMLocalPortCanSend;      /* it produces MIDI */
+extern NSString * const GMLocalPortCanReceive;   /* it consumes MIDI */
 
 /* The local side: one MIDI port per session that applications connect to.
  * ALSA sequencer on Linux and on FreeBSD/NextBSD (through alsa-seq-server);
@@ -26,6 +34,18 @@
 - (void) renamePort: (int)port to: (NSString *)name;
 /* Sends to every application connected to the port. */
 - (void) sendMessages: (NSArray *)messages fromPort: (int)port;
+/* The ports of other programs that a session can be routed to or from;
+ * our own session ports are not among them. */
+- (NSArray *) localPorts;
+/* input: the local port plays into our port; otherwise our port plays
+ * into the local port. */
+- (BOOL) connectPort: (int)port
+         toLocalPort: (NSString *)identifier
+               input: (BOOL)input
+               error: (NSError **)error;
+- (void) disconnectPort: (int)port
+          fromLocalPort: (NSString *)identifier
+                  input: (BOOL)input;
 /* "client:port" as aconnect and other tools take it */
 - (NSString *) addressOfPort: (int)port;
 /* Client number and name, for the control interface and logs */
