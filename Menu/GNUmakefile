@@ -253,13 +253,15 @@ include $(GNUSTEP_MAKEFILES)/application.make
 # 72 dpi page and a 36px 144 dpi page so NSImage picks a sharp bitmap at
 # GSScaleFactor 1 and 2.  The TIFFs are committed so that building does not
 # need an SVG renderer; run "make icons" after editing an SVG.  Defined after
-# application.make so it does not become the default goal.
+# application.make so it does not become the default goal.  svgconvert is
+# built from this repository; ImageMagick's convert only assembles the TIFF
+# pages, so only someone regenerating the icons needs it.
 .PHONY: icons
 icons:
 	set -e; for svg in Resources/Icons/*.svg; do \
 	  tiff=$${svg%.svg}.tiff; \
-	  inkscape -w 18 -h 18 -o $$tiff.1x.png $$svg; \
-	  inkscape -w 36 -h 36 -o $$tiff.2x.png $$svg; \
+	  svgconvert -background none $$svg -resize 18x18! $$tiff.1x.png; \
+	  svgconvert -background none $$svg -resize 36x36! $$tiff.2x.png; \
 	  convert \( $$tiff.1x.png -set units PixelsPerInch -set density 72 \) \
 	    \( $$tiff.2x.png -set units PixelsPerInch -set density 144 \) \
 	    -type TrueColorAlpha -compress lzw -define tiff:alpha=associated $$tiff; \
