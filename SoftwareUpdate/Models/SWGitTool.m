@@ -811,6 +811,47 @@ static BOOL SWIsFullSha(NSString *sha)
   return [output dataUsingEncoding:NSUTF8StringEncoding];
 }
 
+// Resolves a link target against the directory of the link, inside the tree:
+// a target that climbs above the tree's root names nothing git can show.
+static NSString *SWResolveTreeLink(NSString *linkPath, NSString *target)
+{
+  if ([target hasPrefix:@"/"]) return nil;
+  NSMutableArray<NSString *> *parts = [[[linkPath stringByDeletingLastPathComponent]
+    pathComponents] mutableCopy];
+  for (NSString *part in [target pathComponents]) {
+    if ([part isEqualToString:@"."] || [part length] == 0) continue;
+    if ([part isEqualToString:@".."]) {
+      if ([parts count] == 0) return nil;
+      [parts removeLastObject];
+    } else {
+      [parts addObject:part];
+    }
+  }
+  return [parts count] > 0 ? [NSString pathWithComponents:parts] : nil;
+}
+
+- (NSString *)textOfFileAtRef:(NSString *)ref path:(NSString *)path
+{
+  // Bounded so that a link cycle in the tree cannot hang the run.
+  static const NSUInteger kMaxLinkHops = 8;
+  NSString *current = path;
+  for (NSUInteger hop = 0; hop <= kMaxLinkHops && current; hop++) {
+    NSString *entry = nil;
+    if ([self runGit:@[@"ls-tree", ref, @"--", current] output:&entry] != 0) return nil;
+    entry = [entry stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([entry length] == 0) return nil;
+
+    NSData *data = [self showFileAtRef:ref path:current];
+    if (!data) return nil;
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (![entry hasPrefix:@"120000 "]) return text;
+
+    current = SWResolveTreeLink(current, [text stringByTrimmingCharactersInSet:
+      [NSCharacterSet whitespaceAndNewlineCharacterSet]]);
+  }
+  return nil;
+}
+
 - (NSString *)fullShaForRef:(NSString *)ref
 {
   NSString *output = nil;

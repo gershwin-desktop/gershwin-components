@@ -9,6 +9,7 @@
 #import "AppMenuWidget.h"
 #import "X11ShortcutManager.h"
 #import "MenuUtils.h"
+#import "PrimaryMonitor.h"
 #import <X11/Xatom.h>
 #import "WindowMonitor.h"
 #import "DBusConnection.h"
@@ -441,9 +442,10 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     [self.searchField setStringValue:@""];
     [self.filteredResults removeAllObjects];
 
-    // Position panel at the given point, constrained to screen bounds
+    // Position panel at the given point, constrained to the primary
+    // monitor, which is where the menu bar opening it lives
     NSRect panelFrame = [self.searchPanel frame];
-    NSRect screenFrame = [[NSScreen mainScreen] frame];
+    NSRect screenFrame = PrimaryMonitorScreenFrame([MenuUtils sharedDisplay]);
 
     panelFrame.origin.x = point.x;
     panelFrame.origin.y = point.y;
@@ -571,8 +573,10 @@ static const NSTimeInterval kFocusLossArmDelay = 0.05;
     }
 
     // Position at the left edge, below the menu bar (matching the original
-     // top-left positioning from the search icon click)
-    NSRect screenFrame = [[NSScreen mainScreen] frame];
+     // top-left positioning from the search icon click), on the primary
+     // monitor like the bar; mainScreen is whichever screen has the key window
+     // or merely the first output when no RandR primary is set
+    NSRect screenFrame = PrimaryMonitorScreenFrame([MenuUtils sharedDisplay]);
     const CGFloat menuBarHeight = [[GSTheme theme] menuBarHeight];
     NSPoint topLeftPoint = NSMakePoint(
         screenFrame.origin.x + 8,

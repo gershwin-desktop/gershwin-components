@@ -17,7 +17,9 @@ static const CGFloat kPaneHeight = 440.0;
 
 static const CGFloat kSessionListWidth = 170.0;
 static const CGFloat kMiniButtonWidth = 28.0;
-static const CGFloat kStatusHeight = 20.0;
+/* Two lines: the reason why network MIDI is unavailable names the missing
+   device and what provides it, which does not fit on one line. */
+static const CGFloat kStatusHeight = 34.0;
 static const CGFloat kListHeaderHeight = 17.0;
 static const CGFloat kListHeaderGap = 4.0;
 static const CGFloat kBoxTitleInset = 14.0;
@@ -271,6 +273,8 @@ static NSTextField *MakeLabel(NSString *text, NSTextAlignment alignment)
     [[_routingBox contentView] addSubview:_outputPopUp];
 
     _statusField = MakeLabel(@"", NSLeftTextAlignment);
+    [[_statusField cell] setWraps:YES];
+    [[_statusField cell] setLineBreakMode:NSLineBreakByWordWrapping];
 
     for (NSView *v in @[ _sessionsHeader, _sessionScroll, _addSessionButton, _removeSessionButton,
                          _sessionBox, _directoryHeader, _directoryScroll, _addHostButton,

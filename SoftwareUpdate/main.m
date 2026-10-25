@@ -7,6 +7,8 @@
 #import <AppKit/AppKit.h>
 #import "Controllers/SWAppDelegate.h"
 #import "Models/SWRepository.h"
+#import "Models/SWCheckoutLayout.h"
+#import "Models/SWGitTool.h"
 #import "Models/SWRepositoryUpdater.h"
 #import "Models/SWPrerequisitesInstaller.h"
 #import "Models/SWRunGuard.h"
@@ -70,21 +72,47 @@ static SWRepositoryUpdateOutcome runOneRepository(SWRepositoryUpdater *updater,
   return outcome;
 }
 
+static void emitPrerequisitesFatal(NSString *reason)
+{
+  printf("FATAL:PREREQ:%s\n", [reason UTF8String]);
+  fflush(stdout);
+}
+
 // Phase 2 of the update run, and phase 1 of a rebuild: install the OS
 // packages the checked-out code needs, once per run, from the list in
-// gershwin-developer's Library/OSSupport. Emits the same events either way.
-// Returns NO (after emitting FATAL:) if the install failed, which stops the
-// run before anything else is touched.
-static BOOL runPrerequisitesPhase(NSString *osSupportDirectory)
+// gershwin-developer's Library/OSSupport. incomingRef, when given, names a
+// fetched gershwin-developer version this run does not apply; what its list
+// adds is installed too (see SWPrerequisitesInstaller -incomingPackageList).
+// Emits the same events either way. Returns NO (after emitting FATAL:) if
+// the install failed, which stops the run before anything else is touched.
+static BOOL runPrerequisitesPhase(SWCheckoutLayout *layout, NSString *incomingRef)
 {
   printf("PHASE:prereqs\n"); fflush(stdout);
   SWPrerequisitesInstaller *installer =
-    [[SWPrerequisitesInstaller alloc] initWithOSSupportDirectory:osSupportDirectory
+    [[SWPrerequisitesInstaller alloc] initWithOSSupportDirectory:[layout osSupportDirectory]
                                                     packageManager:nil
                                                      osIdentifier:nil];
   [installer setLogHandler:^(NSString *line) {
     emitLog(line);
   }];
+
+  if (incomingRef && [installer osIdentifier]) {
+    NSString *listPath = [SWCheckoutLayout packageListPathForOSIdentifier:[installer osIdentifier]];
+    SWGitTool *developerGit = [[SWGitTool alloc] initWithRepositoryPath:[layout developerDirectory]];
+    [developerGit setLogHandler:^(NSString *line) { emitLog(line); }];
+    NSString *incomingList = [developerGit textOfFileAtRef:incomingRef path:listPath];
+    if (!incomingList) {
+      // Without it a repository updated now may need a package nobody
+      // installs, and the build fails much later with a missing header.
+      emitPrerequisitesFatal([NSString stringWithFormat:
+        @"Couldn't read %@ from gershwin-developer's %@.", listPath, incomingRef]);
+      return NO;
+    }
+    emitLog([NSString stringWithFormat:
+      @"Also installing what %@ in gershwin-developer's %@ lists, which this run does not apply.",
+      listPath, incomingRef]);
+    [installer setIncomingPackageList:incomingList];
+  }
   NSArray *missing = [installer missingPackages];
   printf("PREREQ_MISSING:%s\n", [[missing componentsJoinedByString:@";"] UTF8String]);
   fflush(stdout);
@@ -97,9 +125,7 @@ static BOOL runPrerequisitesPhase(NSString *osSupportDirectory)
       fflush(stdout);
     } error:&prereqError];
   if (!prereqsOK) {
-    printf("FATAL:PREREQ:%s\n",
-           [([prereqError localizedDescription] ?: @"prerequisite install failed") UTF8String]);
-    fflush(stdout);
+    emitPrerequisitesFatal([prereqError localizedDescription] ?: @"prerequisite install failed");
     return NO;
   }
   printf("PHASE_DONE:prereqs\n"); fflush(stdout);
@@ -171,21 +197,22 @@ static int runPrivilegedUpdate(NSString *argsPath)
 {
   NSDictionary *args = [NSDictionary dictionaryWithContentsOfFile:argsPath];
   NSMutableArray *repoDicts = [[args objectForKey:@"Repositories"] mutableCopy];
+  NSString *developerDirectory = [args objectForKey:@"DeveloperDirectory"];
   NSString *sourcesDirectory = [args objectForKey:@"SourcesDirectory"];
-  NSString *installScriptPath = [args objectForKey:@"InstallScriptPath"];
-  NSString *osSupportDirectory = [args objectForKey:@"OSSupportDirectory"];
+  NSString *incomingDeveloperRef = [args objectForKey:@"IncomingDeveloperRef"];
   BOOL systemPackages = [[args objectForKey:@"SystemPackages"] boolValue];
 
-  if ((![repoDicts count] && !systemPackages) || !sourcesDirectory || !installScriptPath) {
+  if ((![repoDicts count] && !systemPackages) || !developerDirectory || !sourcesDirectory) {
     printf("FATAL:Malformed update arguments\n");
     fflush(stdout);
     return 1;
   }
   if (!claimTheRun()) return 1;
 
-  SWRepositoryUpdater *updater = [[SWRepositoryUpdater alloc] initWithSourcesDirectory:sourcesDirectory
-                                                                      installScriptPath:installScriptPath
-                                                                             logHandler:^(NSString *line) {
+  SWCheckoutLayout *layout = [[SWCheckoutLayout alloc] initWithDeveloperDirectory:developerDirectory
+                                                                 sourcesDirectory:sourcesDirectory];
+  SWRepositoryUpdater *updater = [[SWRepositoryUpdater alloc] initWithCheckoutLayout:layout
+                                                                          logHandler:^(NSString *line) {
     emitLog(line);
   }];
 
@@ -196,7 +223,7 @@ static int runPrivilegedUpdate(NSString *argsPath)
 
   // Phase 1: gershwin-developer, if it was selected (always first in list
   // order, per Repositories.csv - never re-sorted).
-  if ([[[repoDicts firstObject] objectForKey:@"Name"] isEqualToString:@"gershwin-developer"]) {
+  if ([[[repoDicts firstObject] objectForKey:@"Name"] isEqualToString:SWDeveloperRepositoryName]) {
     printf("PHASE:developer\n"); fflush(stdout);
     NSDictionary *developerDict = repoDicts[0];
     [repoDicts removeObjectAtIndex:0];
@@ -207,10 +234,12 @@ static int runPrivilegedUpdate(NSString *argsPath)
       return 1;
     }
     printf("PHASE_DONE:developer\n"); fflush(stdout);
+    // Its checkout now has the incoming package list itself.
+    incomingDeveloperRef = nil;
   }
 
   // Phase 2: prerequisites.
-  if (!runPrerequisitesPhase(osSupportDirectory)) return 1;
+  if (!runPrerequisitesPhase(layout, incomingDeveloperRef)) return 1;
 
   // Phase 3: every other selected repository (pinned upstream libraries,
   // then Gershwin repositories), in the order Repositories.csv lists them.
@@ -243,24 +272,25 @@ static int runPrivilegedRebuild(NSString *argsPath)
 {
   NSDictionary *args = [NSDictionary dictionaryWithContentsOfFile:argsPath];
   NSArray *repoDicts = [args objectForKey:@"Repositories"];
+  NSString *developerDirectory = [args objectForKey:@"DeveloperDirectory"];
   NSString *sourcesDirectory = [args objectForKey:@"SourcesDirectory"];
-  NSString *installScriptPath = [args objectForKey:@"InstallScriptPath"];
-  NSString *osSupportDirectory = [args objectForKey:@"OSSupportDirectory"];
 
-  if (![repoDicts count] || !sourcesDirectory || !installScriptPath) {
+  if (![repoDicts count] || !developerDirectory || !sourcesDirectory) {
     printf("FATAL:Malformed rebuild arguments\n");
     fflush(stdout);
     return 1;
   }
   if (!claimTheRun()) return 1;
 
-  SWRepositoryUpdater *updater = [[SWRepositoryUpdater alloc] initWithSourcesDirectory:sourcesDirectory
-                                                                      installScriptPath:installScriptPath
-                                                                             logHandler:^(NSString *line) {
+  SWCheckoutLayout *layout = [[SWCheckoutLayout alloc] initWithDeveloperDirectory:developerDirectory
+                                                                 sourcesDirectory:sourcesDirectory];
+  SWRepositoryUpdater *updater = [[SWRepositoryUpdater alloc] initWithCheckoutLayout:layout
+                                                                          logHandler:^(NSString *line) {
     emitLog(line);
   }];
 
-  if (!runPrerequisitesPhase(osSupportDirectory)) return 1;
+  // A rebuild compiles what is checked out, so only that list applies.
+  if (!runPrerequisitesPhase(layout, nil)) return 1;
 
   printf("PHASE:repos\n"); fflush(stdout);
   NSUInteger total = [repoDicts count];

@@ -10,7 +10,7 @@
 
 @interface SWUpdateChecker ()
 {
-  NSString *_sourcesDirectory;
+  SWCheckoutLayout *_layout;
   BOOL _useDevBranch;
   SWGitTool * (^_gitToolFactory)(NSString *);
   SWGitHubBuildStatus *_buildStatusClient;
@@ -27,15 +27,15 @@
 
 @synthesize localFailureReason = _localFailureReason;
 
-- (instancetype)initWithSourcesDirectory:(NSString *)sourcesDirectory
-                             useDevBranch:(BOOL)useDevBranch
-                           gitToolFactory:(SWGitTool * (^)(NSString *))gitToolFactory
-                        buildStatusClient:(SWGitHubBuildStatus *)buildStatusClient
-                               logHandler:(SWGitLogLine)logHandler
+- (instancetype)initWithCheckoutLayout:(SWCheckoutLayout *)layout
+                          useDevBranch:(BOOL)useDevBranch
+                        gitToolFactory:(SWGitTool * (^)(NSString *))gitToolFactory
+                     buildStatusClient:(SWGitHubBuildStatus *)buildStatusClient
+                            logHandler:(SWGitLogLine)logHandler
 {
   self = [super init];
   if (self) {
-    _sourcesDirectory = [sourcesDirectory copy];
+    _layout = layout;
     _useDevBranch = useDevBranch;
     _gitToolFactory = gitToolFactory ? [gitToolFactory copy] : nil;
     _buildStatusClient = buildStatusClient ?: [[SWGitHubBuildStatus alloc] initWithFetcher:nil];
@@ -46,7 +46,7 @@
 
 - (NSString *)pathForRepository:(SWRepository *)repository
 {
-  return [_sourcesDirectory stringByAppendingPathComponent:[repository name]];
+  return [_layout pathForRepositoryNamed:[repository name]];
 }
 
 - (SWGitTool *)gitToolForRepository:(SWRepository *)repository
@@ -326,7 +326,7 @@
 {
   if (_incomingPins) return;
 
-  NSString *developerPath = [_sourcesDirectory stringByAppendingPathComponent:@"gershwin-developer"];
+  NSString *developerPath = [_layout pathForRepositoryNamed:SWDeveloperRepositoryName];
   SWGitTool *developerGit = _gitToolFactory ? _gitToolFactory(developerPath)
                                              : [[SWGitTool alloc] initWithRepositoryPath:developerPath];
   [developerGit setLogHandler:_logHandler];

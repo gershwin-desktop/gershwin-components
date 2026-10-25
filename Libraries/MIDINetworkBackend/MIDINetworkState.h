@@ -28,6 +28,8 @@ extern NSString * const MIDINetworkStateKeyDirectory;
 extern NSString * const MIDINetworkStateKeyParticipants;
 extern NSString * const MIDINetworkStateKeyRoutes;
 extern NSString * const MIDINetworkStateKeyLocalPorts;
+/* Optional in a snapshot; missing means the MIDI system is available. */
+extern NSString * const MIDINetworkStateKeyMIDISystem;
 
 /* UDP ports a session may use: the data port is port + 1, and ports
    below 1024 need root, which a per-user service does not have. */
@@ -36,6 +38,10 @@ extern NSString * const MIDINetworkStateKeyLocalPorts;
 #define MIDINETWORK_DEFAULT_PORT 5004
 
 @interface MIDINetworkState : NSObject
+
+/* Whether the computer's MIDI system can be used; never nil, available
+   in a new state. */
+@property (nonatomic, copy) MIDINetworkMIDISystem *midiSystem;
 
 /* nil if the snapshot is malformed in any part. */
 + (instancetype)stateWithPropertyList:(id)plist;

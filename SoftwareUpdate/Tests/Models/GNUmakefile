@@ -1,6 +1,6 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_SWRepositoryList t_SWGitTool t_SWSelectionRules t_SWGitHubBuildStatus t_SWUpdateChecker t_SWPrerequisitesInstaller t_SWRepositoryUpdater t_SWCompletionSummary t_SWProgressPhase t_SWRunGuard t_SWSystemPackages
+TEST_TOOL_NAME = t_SWRepositoryList t_SWGitTool t_SWSelectionRules t_SWGitHubBuildStatus t_SWUpdateChecker t_SWPrerequisitesInstaller t_SWRepositoryUpdater t_SWCompletionSummary t_SWProgressPhase t_SWRunGuard t_SWSystemPackages t_SWCheckoutLayout
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Wno-unused-parameter -Wno-deprecated
@@ -20,6 +20,7 @@ t_SWUpdateChecker_OBJC_FILES = t_SWUpdateChecker.m
 t_SWPrerequisitesInstaller_OBJC_FILES = t_SWPrerequisitesInstaller.m
 t_SWRepositoryUpdater_OBJC_FILES = t_SWRepositoryUpdater.m
 t_SWSystemPackages_OBJC_FILES = t_SWSystemPackages.m
+t_SWCheckoutLayout_OBJC_FILES = t_SWCheckoutLayout.m
 
 -include GNUmakefile.preamble
 

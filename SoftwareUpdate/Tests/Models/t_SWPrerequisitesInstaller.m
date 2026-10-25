@@ -188,6 +188,59 @@ int main(void)
          "the run stops at the failing package - third is never attempted");
   }
 
+  /* --- an incoming list (gershwin-developer fetched, not applied) adds what
+   * the newer code needs to what the checked-out list declares --- */
+  {
+    writeOSSupportFile(osSupportDir, @"nextbsd", @"gmake\nclang # compiler\n");
+    MockPrereqBackend *backend = [[MockPrereqBackend alloc] init];
+    [backend setInstalledPackages:@[@"gmake", @"clang"]];
+    GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:backend];
+
+    SWPrerequisitesInstaller *installer =
+      [[SWPrerequisitesInstaller alloc] initWithOSSupportDirectory:osSupportDir
+                                                      packageManager:pm
+                                                       osIdentifier:@"nextbsd"];
+    PASS_EQUAL([installer osIdentifier], @"nextbsd", "the OS whose list is used is exposed");
+    [installer setIncomingPackageList:@"gmake\nalsa-lib\nclang\nalsa-seq-server # midi\n"];
+    NSArray *wantDeclared = @[@"gmake", @"clang", @"alsa-lib", @"alsa-seq-server"];
+    PASS_EQUAL([installer declaredPackages], wantDeclared,
+               "declared is the union: checked-out order first, then what the incoming list adds");
+    NSError *error = nil;
+    BOOL ok = [installer installMissingPackagesWithProgress:nil error:&error];
+    PASS(ok, "the union installs");
+    NSArray *wantInstalled = @[@"alsa-lib", @"alsa-seq-server"];
+    PASS_EQUAL([backend installCalls], wantInstalled,
+               "only the packages the incoming list adds are installed");
+  }
+
+  /* --- an incoming list alone is enough when the checkout has none yet --- */
+  {
+    MockPrereqBackend *backend = [[MockPrereqBackend alloc] init];
+    GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:backend];
+    SWPrerequisitesInstaller *installer =
+      [[SWPrerequisitesInstaller alloc] initWithOSSupportDirectory:osSupportDir
+                                                      packageManager:pm
+                                                       osIdentifier:@"brand-new-os"];
+    [installer setIncomingPackageList:@"one\n"];
+    PASS_EQUAL([installer declaredPackages], @[@"one"],
+               "a list that only exists in the incoming version is used");
+  }
+
+  /* --- no list at all for this OS fails loudly instead of passing as "nothing missing" --- */
+  {
+    MockPrereqBackend *backend = [[MockPrereqBackend alloc] init];
+    GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:backend];
+    SWPrerequisitesInstaller *installer =
+      [[SWPrerequisitesInstaller alloc] initWithOSSupportDirectory:osSupportDir
+                                                      packageManager:pm
+                                                       osIdentifier:@"totally-unknown-os"];
+    NSError *error = nil;
+    BOOL ok = [installer installMissingPackagesWithProgress:nil error:&error];
+    PASS(!ok, "an OS without a package list is a failure, not a silent skip");
+    PASS([[error localizedDescription] rangeOfString:@"totally-unknown-os"].location != NSNotFound,
+         "and the error names the OS it has no list for");
+  }
+
   [[NSFileManager defaultManager] removeItemAtPath:osSupportDir error:NULL];
   [arp release];
   return 0;

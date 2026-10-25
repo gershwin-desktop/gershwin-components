@@ -32,6 +32,21 @@ int main(void)
     PASS(v.selectedSessionRow == -1 && [v.sessionRows count] == 0, "no rows, no selection");
     END_SET("no service")
 
+    START_SET("MIDI system unavailable")
+    MIDINetworkMIDISystem *down = [MIDINetworkMIDISystem
+        unavailableSystemWithProblem:MIDINetworkMIDIProblemSequencerServerNotRunning
+                              device:@"/dev/snd/seq" detail:nil];
+    MIDINetworkUnavailableBackend *u = [[[MIDINetworkUnavailableBackend alloc] initWithReason:[down error]] autorelease];
+    MIDIPaneViewState *v = View(u, nil, nil);
+    PASS_EQUAL(v.statusText,
+               @"Network MIDI is unavailable: the ALSA sequencer (/dev/snd/seq) is missing. alsa-seq-server is not running.",
+               "the status line gives the daemon's specific reason");
+    PASS(v.statusIsError, "as an error");
+    PASS(!v.canAddSession && !v.canRemoveSession && !v.detailsEnabled && !v.canAddHost
+         && !v.canConnect && !v.canDisconnect && !v.routingEnabled,
+         "and every session control is disabled");
+    END_SET("MIDI system unavailable")
+
     MIDINetworkFakeBackend *b = [[[MIDINetworkFakeBackend alloc] initWithTimers:NO] autorelease];
 
     START_SET("daemon not running")

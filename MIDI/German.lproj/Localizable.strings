@@ -56,3 +56,10 @@
 "The session needs a local name." = "Die Sitzung braucht einen lokalen Namen.";
 "The session needs an advertised name." = "Die Sitzung braucht einen Netzwerknamen.";
 "Turn the session on before connecting." = "Schalte die Sitzung vor dem Verbinden ein.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. The snd-seq kernel module is not loaded." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Der ALSA-Sequencer (%@) fehlt. Das Kernelmodul snd-seq ist nicht geladen.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server is not running." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Der ALSA-Sequencer (%@) fehlt. alsa-seq-server l\U00e4uft nicht.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server cannot run because this kernel has no cuse support." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Der ALSA-Sequencer (%@) fehlt. alsa-seq-server kann nicht laufen, weil dieser Kernel kein cuse hat.";
+"Network MIDI is unavailable: there is no permission to open the ALSA sequencer (%@)." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Es fehlt die Berechtigung, den ALSA-Sequencer (%@) zu \U00f6ffnen.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) cannot be opened (%@)." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Der ALSA-Sequencer (%@) kann nicht ge\U00f6ffnet werden (%@).";
+"Network MIDI is unavailable: this system has no MIDI port layer for it yet." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Dieses System hat noch keine MIDI-Anbindung daf\U00fcr.";
+"Network MIDI is unavailable: the computer's MIDI system cannot be used." = "Netzwerk-MIDI ist nicht verf\U00fcgbar: Das MIDI-System des Computers kann nicht verwendet werden.";

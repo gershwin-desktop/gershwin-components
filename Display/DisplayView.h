@@ -7,38 +7,43 @@
 
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#import "DisplayArrangement.h"
 
 @class DisplayController;
-@class DisplayInfo;
+@class DisplayOutput;
 
 // Custom view that represents a single display rectangle
 @interface DisplayRectView : NSView
 {
     BOOL isDragging;
+    BOOL didMove;
     NSPoint dragOffset;
 }
 
-@property (retain) DisplayInfo *displayInfo;
+@property (retain) DisplayOutput *output;
+/* Shown instead of the output's name when set (mirrored outputs). */
+@property (copy) NSString *label;
 @property BOOL showsMenuBar;
 @property BOOL isSelected;
 @property BOOL isDraggingMenuBar;
 @property BOOL isMenuBarDropTarget;
-@property NSPoint menuBarDragPoint;
 
 @end
 
-// Main view that contains all display rectangles and handles arrangement
+// Main view that contains all display rectangles and handles arrangement.
+// It only ever shows the controller's layout; the rectangles' positions are
+// view coordinates and never written back into the model.
 @interface DisplayView : NSView
 {
     DisplayController *controller;
     NSMutableArray *displayRects;
-    DisplayRectView *draggingView;
+    DisplayViewMapping mapping;
 }
 
 @property (assign) DisplayController *controller;
 
 - (void)updateDisplayRects;
-- (DisplayRectView *)displayRectAtPoint:(NSPoint)point;
 - (NSArray *)displayRects;
+- (DisplayViewMapping)mapping;
 
 @end

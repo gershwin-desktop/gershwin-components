@@ -14,8 +14,11 @@
  * MIDINetworkState, so the rules are those the MIDI pane knows. */
 @interface NMDDaemon : NSObject <MIDINetworkDaemonControl>
 
-/* Fails when another networkmidid of this user runs or there is no MIDI port
- * layer; sessions that cannot start are logged and stay disabled. */
+/* Fails only when another networkmidid of this user runs.  Without the MIDI
+ * system (no sequencer device) it keeps running, reports why through the
+ * control interface, refuses changes and starts the sessions once the
+ * sequencer appears; sessions that cannot start are logged and stay
+ * disabled. */
 - (BOOL) startWithError: (NSString **)error;
 
 /* Ends every session with BY and withdraws the announcements. */

@@ -255,6 +255,50 @@ int main(void)
     [b stop];
     END_SET("daemon backend")
 
+    START_SET("MIDI system unavailable")
+    TestConnector *c = [[TestConnector new] autorelease];
+    c->installed = YES;
+    MNRecorder *rec = [[MNRecorder new] autorelease];
+    MIDINetworkDaemonBackend *b = [[[MIDINetworkDaemonBackend alloc] initWithConnector:c] autorelease];
+    b.retryInterval = 0;
+    [b setDelegate:rec];
+    TestDaemon *d = [[TestDaemon new] autorelease];
+    MIDINetworkMIDISystem *down = [MIDINetworkMIDISystem
+        unavailableSystemWithProblem:MIDINetworkMIDIProblemSequencerServerNotRunning
+                              device:@"/dev/snd/seq" detail:nil];
+    d->state.midiSystem = down;
+    c->daemon = [d retain];
+    [b start];
+    PASS([b status] == MIDINetworkBackendStatusUnavailable,
+         "a daemon whose MIDI system is unavailable makes the backend unavailable");
+    PASS([[b statusError] code] == MIDINetworkErrorMIDISystemUnavailable
+         && [[[b statusError] userInfo] objectForKey:MIDINetworkMIDISystemErrorKey] != nil,
+         "with the daemon's reason");
+    PASS([d->clients count] == 1, "it stays registered to hear when that changes");
+    error = nil;
+    PASS(![b addSession:[MIDINetworkSession sessionWithName:@"Desk" port:5004] error:&error]
+         && [error code] == MIDINetworkErrorMIDISystemUnavailable && [[d->state sessions] count] == 0,
+         "changes are refused with that reason");
+
+    [rec reset];
+    [d push:@[ MIDINetworkStateKeyMIDISystem ]];
+    PASS(rec->status == 0, "the same reason pushed again changes nothing");
+
+    d->state.midiSystem = [MIDINetworkMIDISystem availableSystem];
+    [d push:@[ MIDINetworkStateKeyMIDISystem ]];
+    PASS([b status] == MIDINetworkBackendStatusRunning && [b statusError] == nil && rec->status == 1,
+         "once the MIDI system appears the backend runs");
+    PASS([b addSession:[MIDINetworkSession sessionWithName:@"Desk" port:5004] error:NULL],
+         "and changes go through");
+
+    [rec reset];
+    d->state.midiSystem = down;
+    [d push:@[ MIDINetworkStateKeyMIDISystem ]];
+    PASS([b status] == MIDINetworkBackendStatusUnavailable && rec->status == 1,
+         "losing it again is announced");
+    [b stop];
+    END_SET("MIDI system unavailable")
+
     START_SET("replies")
     PASS(MIDINetworkErrorFromReply(@{}) == nil, "an empty reply is success");
     PASS([MIDINetworkErrorFromReply(nil) code] == MIDINetworkErrorInvalidArgument, "nil is a malformed reply");

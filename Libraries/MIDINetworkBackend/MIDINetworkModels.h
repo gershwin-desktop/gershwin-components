@@ -135,6 +135,50 @@ NSString *MIDINetworkMachineName(void);
 - (NSDictionary *)propertyList;
 @end
 
+/* Keys of the MIDI system's property list. */
+extern NSString * const MIDINetworkKeyAvailable;
+extern NSString * const MIDINetworkKeyProblem;
+extern NSString * const MIDINetworkKeyDevice;
+extern NSString * const MIDINetworkKeyDetail;
+
+/* Why the computer's MIDI system cannot be used. They travel as strings,
+   so a newer daemon may name a problem this version does not know. */
+extern NSString * const MIDINetworkMIDIProblemSequencerModuleMissing;    /* Linux: snd-seq not loaded */
+extern NSString * const MIDINetworkMIDIProblemSequencerServerNotRunning; /* BSD: no alsa-seq-server */
+extern NSString * const MIDINetworkMIDIProblemKernelLacksCUSE;           /* BSD: alsa-seq-server cannot run */
+extern NSString * const MIDINetworkMIDIProblemPermissionDenied;
+extern NSString * const MIDINetworkMIDIProblemOpenFailed;                /* detail says why */
+extern NSString * const MIDINetworkMIDIProblemNoPortLayer;               /* nothing to wait for */
+
+/* userInfo key of the MIDISystemUnavailable error: the MIDINetworkMIDISystem,
+   so that a client can word the reason in its own language. */
+extern NSString * const MIDINetworkMIDISystemErrorKey;
+
+/* Whether networkmidid can use the computer's MIDI system (the ALSA
+   sequencer), and if not, why. Sessions need it for their MIDI ports, so
+   while it is unavailable the daemon runs but refuses every change. */
+@interface MIDINetworkMIDISystem : NSObject <NSCopying>
+@property (nonatomic, readonly, getter=isAvailable) BOOL available;
+@property (nonatomic, readonly, copy) NSString *problem;   /* nil when available */
+@property (nonatomic, readonly, copy) NSString *device;    /* e.g. /dev/snd/seq */
+@property (nonatomic, readonly, copy) NSString *detail;    /* the system's own reason */
+
++ (instancetype)availableSystem;
++ (instancetype)unavailableSystemWithProblem:(NSString *)problem
+                                      device:(NSString *)device
+                                      detail:(NSString *)detail;
++ (instancetype)midiSystemWithPropertyList:(id)plist;
+- (NSDictionary *)propertyList;
+
+/* The status sentence. translate maps each fixed English format (the
+   strings-table key) to the client's language before device and detail are
+   inserted; nil keeps English. */
+- (NSString *)descriptionWithTranslator:(NSString *(^)(NSString *format))translate;
+/* MIDINetworkErrorMIDISystemUnavailable with the English sentence and
+   self under MIDINetworkMIDISystemErrorKey; nil when available. */
+- (NSError *)error;
+@end
+
 /* Map an array of property lists to models; nil if any element is bad, so
    a malformed daemon reply is noticed instead of half applied. */
 NSArray *MIDINetworkModelsFromPropertyLists(id plists, Class modelClass);

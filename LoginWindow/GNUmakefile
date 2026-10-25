@@ -14,7 +14,15 @@ LoginWindow_OBJC_FILES = \
     KeyboardManager.m \
     LWLanguageNames.m \
     LWCJKFont.m \
-    LWCJKFontInstaller.m
+    LWCJKFontInstaller.m \
+    LWDisplayScale.m \
+    ../Display/DisplaySystemDefaults.m \
+    ../Display/DisplayScaleHeuristic.m
+
+# The system-wide scale file and the scale heuristic are the Display pane's
+# own Foundation-only sources, so LoginWindow, displayconfig and the pane can
+# never disagree about them.
+ADDITIONAL_INCLUDE_DIRS += -I../Display
 
 LoginWindow_RESOURCE_FILES = \
     Resources/English.lproj \
@@ -27,7 +35,7 @@ LoginWindow_PRINCIPAL_CLASS = LoginWindow
 
 # Additional libraries
 # Ensure we search /usr/local/lib (FreeBSD ports) for libXau
-LoginWindow_LDFLAGS += -L/usr/local/lib -lpam -lutil -lX11 -lXau
+LoginWindow_LDFLAGS += -L/usr/local/lib -lpam -lutil -lX11 -lXrandr -lXau
 
 # Installation directories
 INSTALL_APPS_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/CoreServices/Applications
