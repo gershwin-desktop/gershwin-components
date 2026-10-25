@@ -343,16 +343,9 @@ static BOOL scaleIsIdentity(double s)
 
 #pragma mark - Operations
 
-/* Gives a primary to a layout that lost it: the top-left enabled output. */
 - (void)ensurePrimary
 {
-    if ([self primaryOutput]) return;
-    DisplayOutput *best = nil;
-    for (DisplayOutput *o in [self enabledOutputs]) {
-        if (best == nil || [o y] < [best y] || ([o y] == [best y] && [o x] < [best x])) {
-            best = o;
-        }
-    }
+    DisplayOutput *best = DisplayFallbackPrimary([self enabledOutputs]);
     for (DisplayOutput *o in _outputs) [o setPrimary:(o == best)];
 }
 
@@ -481,6 +474,9 @@ static BOOL scaleIsIdentity(double s)
         [o setEnabled:YES];
         [o setX:0];
         [o setY:0];
+        /* A turned output would show the picture turned and cover another
+         * area, which is not a mirror. */
+        [o setRotation:1];
         [o setPrimary:(o == primary)];
     }
     return l;
@@ -502,7 +498,10 @@ static BOOL scaleIsIdentity(double s)
     }
     int x = 0;
     for (DisplayOutput *o in order) {
-        DisplayMode *m = [o preferredMode];
+        /* Keep what the user picked; only an output that was dark needs a
+         * mode chosen for it.  Rotation stays: a portrait monitor is still
+         * portrait next to the others. */
+        DisplayMode *m = [o enabled] && [o currentMode] ? [o currentMode] : [o preferredMode];
         if (m == nil) return nil;
         [o setMode:m];
         [o clearTransform];
@@ -553,6 +552,19 @@ static BOOL scaleIsIdentity(double s)
 }
 
 @end
+
+#pragma mark - Primary
+
+DisplayOutput *DisplayFallbackPrimary(NSArray *enabledOutputs)
+{
+    for (DisplayOutput *o in enabledOutputs) {
+        if ([o primary]) return o;
+    }
+    for (DisplayOutput *o in enabledOutputs) {
+        if (NSPointInRect(NSZeroPoint, [o frame])) return o;
+    }
+    return [enabledOutputs count] ? [enabledOutputs objectAtIndex:0] : nil;
+}
 
 #pragma mark - EDID
 

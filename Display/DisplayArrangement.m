@@ -9,17 +9,31 @@
 
 #import <math.h>
 
-const double DisplayScaleFactorMinimum = 0.8;
+const double DisplayScaleFactorMinimum = 1.0;
 /* HiDPI laptop panels (13 inch 4K) need more than 2.0 to be readable. */
 const double DisplayScaleFactorMaximum = 3.0;
-const double DisplayScaleFactorStep = 0.1;
+const NSUInteger DisplayScaleFactorStepCount = 7;
+
+static const double scaleSteps[] = {1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
+
+double DisplayScaleFactorAtStep(NSUInteger index)
+{
+    if (index >= DisplayScaleFactorStepCount) index = DisplayScaleFactorStepCount - 1;
+    return scaleSteps[index];
+}
+
+NSUInteger DisplayScaleFactorStepIndex(double factor)
+{
+    NSUInteger best = 0;
+    for (NSUInteger i = 1; i < DisplayScaleFactorStepCount; i++) {
+        if (fabs(scaleSteps[i] - factor) < fabs(scaleSteps[best] - factor)) best = i;
+    }
+    return best;
+}
 
 double DisplayClampScaleFactor(double factor)
 {
-    double f = round(factor / DisplayScaleFactorStep) * DisplayScaleFactorStep;
-    if (f < DisplayScaleFactorMinimum) f = DisplayScaleFactorMinimum;
-    if (f > DisplayScaleFactorMaximum) f = DisplayScaleFactorMaximum;
-    return f;
+    return scaleSteps[DisplayScaleFactorStepIndex(factor)];
 }
 
 DisplayMode *DisplaySelectMode(NSArray *modes, int width, int height,

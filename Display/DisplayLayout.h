@@ -134,6 +134,10 @@
 /* Union of the frames of all enabled outputs. */
 - (NSRect)boundingRect;
 
+/* Makes sure exactly one enabled output is primary, by
+ * DisplayFallbackPrimary(). */
+- (void)ensurePrimary;
+
 /* Each operation returns a new layout and leaves the receiver alone, so the
  * pane can keep the previous layout for reverting.  They return nil when the
  * request cannot be satisfied (unknown output, mode the output lacks,
@@ -158,6 +162,12 @@
 - (NSString *)configurationKey;
 
 @end
+
+/* The output desktop components treat as the main one, the same rule as
+ * Menu's PrimaryMonitor: the RandR primary if it is lit, else the output
+ * containing screen point 0,0, else the first lit one; nil when none is
+ * lit. */
+DisplayOutput *DisplayFallbackPrimary(NSArray *enabledOutputs);
 
 /* "VVV-PPPP-SSSSSSSS" from a 128-byte EDID block; nil if it is not one. */
 NSString *DisplayEDIDIdentity(NSData *edid);

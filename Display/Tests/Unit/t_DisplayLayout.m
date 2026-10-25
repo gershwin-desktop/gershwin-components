@@ -175,8 +175,43 @@ int main(void)
         b = [ext outputNamed:@"VGA-1"];
         PASS(![ext isMirrored] && ![b hasTransform] && [a x] == 0 && [b x] == 2048,
              "unmirroring restores an extended layout without transforms");
+
+        l = [DisplayLayout layoutWithOutputs:[NSArray arrayWithObjects:
+            O(kInternal, ma, YES, 1920, 1080, 60, 0, 0, YES),
+            O(@"VGA-1", mb, YES, 1680, 1050, 60, 1920, 0, NO), nil]];
+        [[l outputNamed:@"VGA-1"] setRotation:2];
+        mir = [l mirroredLayout];
+        PASS([[mir outputNamed:@"VGA-1"] rotation] == 1 && [mir isMirrored],
+             "mirroring turns a rotated output back upright, so both show the same picture");
+
+        l = [DisplayLayout layoutWithOutputs:[NSArray arrayWithObjects:
+            O(kInternal, ma, YES, 1280, 1024, 60, 0, 0, YES),
+            O(@"VGA-1", mb, YES, 1280, 1024, 60, 0, 0, NO), nil]];
+        ext = [l extendedLayout];
+        PASS([[ext outputNamed:kInternal] modeWidth] == 1280
+             && [[ext outputNamed:@"VGA-1"] modeWidth] == 1280
+             && [[ext outputNamed:@"VGA-1"] x] == 1280,
+             "unmirroring keeps the modes the outputs run");
+        [[l outputNamed:@"VGA-1"] setEnabled:NO];
+        ext = [l extendedLayout];
+        PASS([[ext outputNamed:@"VGA-1"] modeWidth] == 1680,
+             "an output that was dark is lit at its preferred mode");
     }
     END_SET("mirror")
+
+    START_SET("rotation and transform")
+    {
+        DisplayOutput *o = O(@"DP-1", modes, YES, 1920, 1080, 60, 0, 0, YES);
+        [o setRotation:2];
+        [o setTransformScaleX:1.5];
+        [o setTransformScaleY:2.0];
+        /* The server composes the CRTC transform as scale x rotation
+         * (RRTransformCompute), so the mode is turned first and the turned
+         * picture is scaled along the screen axes. */
+        PASS(NSEqualSizes([o size], NSMakeSize(1620, 3840)),
+             "a turned output is scaled along the screen's axes");
+    }
+    END_SET("rotation and transform")
 
     START_SET("stored form")
     {

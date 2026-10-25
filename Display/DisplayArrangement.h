@@ -14,9 +14,14 @@
 /* The user interface scale range the pane offers. */
 extern const double DisplayScaleFactorMinimum;
 extern const double DisplayScaleFactorMaximum;
-extern const double DisplayScaleFactorStep;
+/* The factors offered, the same steps LoginWindow's recommendation uses,
+ * so a recommended factor is always one the slider can show. */
+extern const NSUInteger DisplayScaleFactorStepCount;
+double DisplayScaleFactorAtStep(NSUInteger index);
+/* Index of the step nearest to `factor`. */
+NSUInteger DisplayScaleFactorStepIndex(double factor);
 
-/* Rounds to DisplayScaleFactorStep and clamps to the offered range. */
+/* The offered step nearest to `factor`. */
 double DisplayClampScaleFactor(double factor);
 
 /* The mode of an output's own list for width x height.  Progressive modes

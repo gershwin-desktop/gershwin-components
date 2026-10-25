@@ -315,8 +315,20 @@ int main(void)
     {
         PASS(EQ(DisplayClampScaleFactor(3.0), 3.0), "3.0 is accepted");
         PASS(EQ(DisplayClampScaleFactor(3.4), 3.0), "above 3.0 is clamped");
-        PASS(EQ(DisplayClampScaleFactor(0.5), 0.8), "below 0.8 is clamped");
-        PASS(EQ(DisplayClampScaleFactor(2.47), 2.5), "rounded to one decimal");
+        PASS(EQ(DisplayClampScaleFactor(0.5), 1.0), "below 1.0 is clamped");
+        PASS(EQ(DisplayClampScaleFactor(1.3), 1.25), "snapped to the nearest offered step");
+        PASS(EQ(DisplayClampScaleFactor(2.2), 2.0), "between 2.0 and 2.5 the nearer one");
+        PASS(EQ(DisplayClampScaleFactor(2.3), 2.5), "between 2.0 and 2.5 the nearer one, upwards");
+        PASS(DisplayScaleFactorStepCount == 7, "seven steps, as LoginWindow recommends them");
+        double steps[] = {1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
+        BOOL all = YES;
+        for (NSUInteger i = 0; i < 7; i++) {
+            all = all && EQ(DisplayScaleFactorAtStep(i), steps[i])
+                && DisplayScaleFactorStepIndex(steps[i]) == i;
+        }
+        PASS(all, "the steps are 1.0, 1.25, 1.5, 1.75, 2.0, 2.5 and 3.0, both ways");
+        PASS(DisplayScaleFactorStepIndex(1.1) == 0 && DisplayScaleFactorStepIndex(9) == 6,
+             "any factor maps to the nearest step's index");
     }
     END_SET("scale factor range")
 
