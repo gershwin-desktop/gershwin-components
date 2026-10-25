@@ -1,3 +1,16 @@
+# Keychain is a Secret Service provider (org.freedesktop.secrets) on the
+# session bus, so without D-Bus it has nothing to serve.  NextBSD ships no
+# D-Bus, so there it builds and installs nothing, says why, and succeeds.
+# uname says FreeBSD on NextBSD, so it is recognised by what it ships, as
+# elsewhere in Gershwin: /etc/os-release ID=nextbsd, /bin/nextbsd-version or
+# /usr/lib/system.
+IS_NEXTBSD := $(shell if [ "$$(uname -s)" = NextBSD ] || grep -Eqs '^ID="?nextbsd"?$$' /etc/os-release || \
+	[ -e /bin/nextbsd-version ] || [ -d /usr/lib/system ]; then echo yes; else echo no; fi)
+ifeq ($(IS_NEXTBSD),yes)
+.PHONY: all install uninstall clean distclean check
+all install uninstall clean distclean check:
+	@echo "Keychain: skipped on NextBSD — a Secret Service provider over D-Bus, and NextBSD ships no D-Bus"
+else
 include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
@@ -52,3 +65,4 @@ after-clean::
 
 before-install::
 	mkdir -p $(GNUSTEP_APPS)
+endif

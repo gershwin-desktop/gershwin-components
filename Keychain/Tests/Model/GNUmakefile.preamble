@@ -2,6 +2,17 @@
 # test tool links them directly and runs without a display or a bus.
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
+# Keychain itself is not built on NextBSD, which ships no D-Bus (see
+# ../../GNUmakefile), so neither are its tests.  This is the preamble because
+# gnustep-tests regenerates GNUmakefile; with no tools to build it reports the
+# tests as not built rather than failed.
+IS_NEXTBSD := $(shell if [ "$$(uname -s)" = NextBSD ] || grep -Eqs '^ID="?nextbsd"?$$' /etc/os-release || \
+	[ -e /bin/nextbsd-version ] || [ -d /usr/lib/system ]; then echo yes; else echo no; fi)
+ifeq ($(IS_NEXTBSD),yes)
+TEST_TOOL_NAME :=
+$(info Keychain tests: skipped on NextBSD — Keychain needs D-Bus, and NextBSD ships no D-Bus)
+else
+
 KC_SOURCES = \
 	../../Model/KCCrypto.m \
 	../../Model/KCSecretSession.m \
@@ -22,3 +33,4 @@ ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags dbus-1)
 ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags libcrypto)
 ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs dbus-1)
 ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs libcrypto)
+endif

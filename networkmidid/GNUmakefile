@@ -6,6 +6,20 @@
 # networkmidid, the per-user network MIDI (RTP-MIDI) daemon, and networkmidictl, its
 # command line client.  Foundation only.
 #
+
+# The port layer is the ALSA sequencer, through alsa-seq-server on the BSDs,
+# and NextBSD has neither yet, so there networkmidid and networkmidictl are
+# not built or installed; it says why, and that is not a failure.  (OpenBSD,
+# which has no ALSA either, is handled below.)  uname says FreeBSD on NextBSD,
+# so it is recognised by what it ships, as elsewhere in Gershwin:
+# /etc/os-release ID=nextbsd, /bin/nextbsd-version or /usr/lib/system.
+IS_NEXTBSD := $(shell if [ "$$(uname -s)" = NextBSD ] || grep -Eqs '^ID="?nextbsd"?$$' /etc/os-release || \
+	[ -e /bin/nextbsd-version ] || [ -d /usr/lib/system ]; then echo yes; else echo no; fi)
+ifeq ($(IS_NEXTBSD),yes)
+.PHONY: all install uninstall clean distclean check
+all install uninstall clean distclean check:
+	@echo "networkmidid: skipped on NextBSD — requires ALSA (alsa-lib, alsa-seq-server), not available on NextBSD yet"
+else
 include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
@@ -71,3 +85,4 @@ ADDITIONAL_LIB_DIRS += -L/usr/local/lib
 endif
 
 include $(GNUSTEP_MAKEFILES)/tool.make
+endif
