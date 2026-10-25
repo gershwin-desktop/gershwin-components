@@ -18,6 +18,7 @@ displayconfig_OBJC_FILES = main.m \
 	$(DISPLAY_DIR)/DisplayLayout.m \
 	$(DISPLAY_DIR)/DisplayArrangement.m \
 	$(DISPLAY_DIR)/DisplayConfiguration.m \
+	$(DISPLAY_DIR)/DisplaySystemDefaults.m \
 	$(DISPLAY_DIR)/X11DisplayManager.m
 displayconfig_TOOL_LIBS = -lXrandr -lX11
 ADDITIONAL_INCLUDE_DIRS += -I$(DISPLAY_DIR)

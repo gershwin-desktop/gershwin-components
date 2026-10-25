@@ -12,7 +12,7 @@
  * one scale for the whole desktop, so with several monitors only the primary
  * one counts: the login window and the menu bar live there.
  *
- * Does nothing when the system-wide file (see LWSystemScale.h) is owned by the
+ * Does nothing when the system-wide file (see DisplaySystemDefaults.h) is owned by the
  * user or an administrator, or when a GSScaleFactor is configured elsewhere
  * and there is no file of ours. Otherwise, with updateSystemFile, it
  * recomputes and rewrites GlobalDefaults/Display.plist with

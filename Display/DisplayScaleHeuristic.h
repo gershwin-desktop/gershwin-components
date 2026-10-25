@@ -8,8 +8,9 @@
 
 /* Recommended user space scale (GSScaleFactor) for a monitor, from its pixel
  * size and the physical size the display reports (EDID, as RandR mm_width and
- * mm_height). Foundation only, so the layout model and LoginWindow share it. */
-@interface GSDisplayScaleHeuristic : NSObject
+ * mm_height). Foundation only, so the Display pane, displayconfig and
+ * LoginWindow share it. */
+@interface DisplayScaleHeuristic : NSObject
 
 /* The steps the Display pane offers: 1.0 1.25 1.5 1.75 2.0 2.5 3.0 (NSNumber). */
 + (NSArray *)supportedScales;

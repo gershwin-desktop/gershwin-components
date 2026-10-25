@@ -16,8 +16,13 @@ LoginWindow_OBJC_FILES = \
     LWCJKFont.m \
     LWCJKFontInstaller.m \
     LWDisplayScale.m \
-    LWSystemScale.m \
-    GSDisplayScaleHeuristic.m
+    ../Display/DisplaySystemDefaults.m \
+    ../Display/DisplayScaleHeuristic.m
+
+# The system-wide scale file and the scale heuristic are the Display pane's
+# own Foundation-only sources, so LoginWindow, displayconfig and the pane can
+# never disagree about them.
+ADDITIONAL_INCLUDE_DIRS += -I../Display
 
 LoginWindow_RESOURCE_FILES = \
     Resources/English.lproj \

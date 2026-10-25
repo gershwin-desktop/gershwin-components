@@ -55,7 +55,7 @@ Logs are written to `/var/log/LoginWindow.log` if invoked from the rc script.
 
 Before the first NSApplication call, LoginWindow asks RandR for the primary
 output (or the first connected one) and registers the scale that
-`GSDisplayScaleHeuristic` recommends for its pixel and millimeter size as
+`DisplayScaleHeuristic` (`Display/DisplayScaleHeuristic.m`) recommends for its pixel and millimeter size as
 `GSScaleFactor`. Nothing is registered when a `GSScaleFactor` is configured
 anywhere (user defaults or the system-wide file below).
 
@@ -75,5 +75,7 @@ root, mode 0644 (libs-base ignores files that group or others can write).
   user picks a scale. LoginWindow never touches it. A file with a scale and no
   source is treated the same way.
 
-The write goes through a temporary file and a rename. If the directory is
+Reading and writing the file is `Display/DisplaySystemDefaults.m`, which
+LoginWindow builds from the Display pane's sources together with
+`displayconfig`, so both always agree on the format. The write goes through a temporary file and a rename. If the directory is
 read-only, LoginWindow logs it and still uses the recommended scale itself.

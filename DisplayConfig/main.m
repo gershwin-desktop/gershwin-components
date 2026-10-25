@@ -24,6 +24,7 @@
 #import "DisplayLayout.h"
 #import "DisplayArrangement.h"
 #import "DisplayConfiguration.h"
+#import "DisplaySystemDefaults.h"
 #import "X11DisplayManager.h"
 
 #import <stdio.h>
@@ -209,7 +210,7 @@ static int writeSystemScale(NSString *argument)
     }
     NSString *path = DisplaySystemDefaultsPath();
     NSString *problem = nil;
-    if (!DisplayWriteSystemScale(path, factor, &problem)) {
+    if (!DisplayWriteSystemScale(path, factor, DisplayScaleSourceUser, &problem)) {
         complain(@"%@", problem);
         return ExitNotSaved;
     }

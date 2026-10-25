@@ -5,8 +5,8 @@
  */
 
 #import "LWDisplayScale.h"
-#import "GSDisplayScaleHeuristic.h"
-#import "LWSystemScale.h"
+#import "DisplayScaleHeuristic.h"
+#import "DisplaySystemDefaults.h"
 #include <X11/extensions/Xrandr.h>
 
 // The primary output, or the first connected one when no primary is set
@@ -48,7 +48,7 @@ static double scaleFromRandR(Display *display)
         // mm_height, while the crtc size is already rotated.
         for (int i = 0; i < res->nmode; i++) {
             if (res->modes[i].id == crtc->mode) {
-                scale = [GSDisplayScaleHeuristic
+                scale = [DisplayScaleHeuristic
                     recommendedScaleForPixelWidth:res->modes[i].width
                                       pixelHeight:res->modes[i].height
                                   millimeterWidth:info->mm_width
@@ -71,14 +71,14 @@ static double scaleFromRandR(Display *display)
 
 double LWRegisterRecommendedScale(Display *display, BOOL updateSystemFile)
 {
-    NSString *directory = LWSystemDefaultsDirectory();
+    NSString *path = DisplaySystemDefaultsPath();
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    LWSystemScaleState state = LWSystemScaleStateInDirectory(directory);
-    if (state == LWSystemScaleConfigured) {
+    DisplaySystemScaleState state = DisplaySystemScaleStateAtPath(path);
+    if (state == DisplaySystemScaleConfigured) {
         return 0.0;
     }
     // Without our own file, a scale that is set anywhere else is the user's.
-    if (state == LWSystemScaleAbsent &&
+    if (state == DisplaySystemScaleAbsent &&
         [defaults objectForKey:@"GSScaleFactor"] != nil) {
         return 0.0;
     }
@@ -93,8 +93,10 @@ double LWRegisterRecommendedScale(Display *display, BOOL updateSystemFile)
     [args setObject:[NSNumber numberWithDouble:scale] forKey:@"GSScaleFactor"];
     [defaults removeVolatileDomainForName:NSArgumentDomain];
     [defaults setVolatileDomain:args forName:NSArgumentDomain];
-    if (updateSystemFile && directory != nil) {
-        LWWriteRecommendedScale(directory, scale);
+    NSString *problem = nil;
+    if (updateSystemFile && !DisplayWriteRecommendedScale(path, scale, &problem)) {
+        // LoginWindow still uses the scale itself; only new users miss it.
+        NSLog(@"[LoginWindow] Cannot save the recommended scale for new users: %@", problem);
     }
     return scale;
 }

@@ -66,16 +66,3 @@ DisplayLayout *DisplayDefaultLayout(DisplayLayout *current);
  * announce a RandR change, which the window manager answers by applying
  * again; this check keeps that from looping. */
 BOOL DisplayLayoutsDiffer(DisplayLayout *wanted, DisplayLayout *current);
-
-/* System-wide defaults that LoginWindow (and every user without an own
- * value) reads: GlobalDefaults/Display.plist beside the GNUstep.conf
- * libs-base loaded. */
-NSString *DisplaySystemDefaultsPath(void);
-/* The file content: `existing` (may be nil) with GSScaleFactor replaced, so
- * keys written by others survive. */
-NSDictionary *DisplaySystemDefaultsBySettingScale(NSDictionary *existing,
-                                                  double scale);
-/* Writes the system defaults at `path` with GSScaleFactor set to `scale`,
- * atomically and with mode 0644: libs-base ignores a defaults file that
- * group or others can write.  NO with *problem when it cannot. */
-BOOL DisplayWriteSystemScale(NSString *path, double scale, NSString **problem);

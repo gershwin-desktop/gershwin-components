@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause OR GPL-3.0-or-later
  */
 
-#import "GSDisplayScaleHeuristic.h"
+#import "DisplayScaleHeuristic.h"
 #include <math.h>
 
 /*
@@ -48,7 +48,7 @@ static const double kAspectTolerance = 0.12;
 static const double kAbsoluteMinLogicalHeight = 720.0;
 static const double kComfortableLogicalHeight = 1080.0;
 
-@implementation GSDisplayScaleHeuristic
+@implementation DisplayScaleHeuristic
 
 + (NSArray *)supportedScales
 {

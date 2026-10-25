@@ -7,16 +7,12 @@
 /* t_DisplayConfiguration - the per-user display configuration: the
  * configuration key, the layout chosen for monitors seen for the first
  * time, a saved layout laid onto the monitors connected now, the "differs"
- * check that keeps apply idempotent, the per-user store and the system-wide
- * scale file.  Headless. */
+ * check that keeps apply idempotent and the per-user store.  Headless. */
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
 #import "DisplayLayout.h"
 #import "DisplayConfiguration.h"
-
-#import <sys/stat.h>
-#import <unistd.h>
 
 static DisplayMode *M(unsigned long ident, int w, int h, double r, BOOL pref)
 {
@@ -227,53 +223,6 @@ int main(void)
         PASS_EQUAL(DisplayLayoutsDomain, @"io.github.gershwin-desktop.DisplayLayouts",
                    "the user's layouts live in the Gershwin reverse-DNS domain");
     END_SET("per-user store")
-
-    START_SET("system-wide scale")
-        NSDictionary *d = DisplaySystemDefaultsBySettingScale(nil, 2.0);
-        PASS_EQUAL(d, ([NSDictionary dictionaryWithObjectsAndKeys:
-                           [NSNumber numberWithDouble:2.0], @"GSScaleFactor",
-                           @"user", @"GSScaleFactorSource", nil]),
-                   "a new file holds GSScaleFactor, marked as the user's choice");
-        d = DisplaySystemDefaultsBySettingScale(
-            [NSDictionary dictionaryWithObjectsAndKeys:@"x", @"Other",
-                [NSNumber numberWithDouble:1.0], @"GSScaleFactor",
-                @"recommended", @"GSScaleFactorSource", nil], 1.5);
-        PASS([[d objectForKey:@"GSScaleFactor"] doubleValue] == 1.5
-             && [[d objectForKey:@"Other"] isEqual:@"x"]
-             && [[d objectForKey:@"GSScaleFactorSource"] isEqual:@"user"],
-             "other keys survive a scale change, and LoginWindow's recommendation becomes the user's choice");
-
-        NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"t_DisplayConfiguration.%d", getpid()]];
-        [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                                  withIntermediateDirectories:YES attributes:nil error:NULL];
-        NSString *path = [dir stringByAppendingPathComponent:@"Display.plist"];
-        mode_t old = umask(0);
-        NSString *problem = nil;
-        BOOL ok = DisplayWriteSystemScale(path, 1.25, &problem);
-        umask(old);
-        struct stat st;
-        PASS(ok && stat([path fileSystemRepresentation], &st) == 0
-             && (st.st_mode & 07777) == 0644,
-             "the file is written with mode 0644 whatever the umask");
-        NSDictionary *back = [NSDictionary dictionaryWithContentsOfFile:path];
-        PASS([[back objectForKey:@"GSScaleFactor"] doubleValue] == 1.25,
-             "it holds the scale as a real");
-        chmod([path fileSystemRepresentation], 0666);
-        ok = DisplayWriteSystemScale(path, 2.0, &problem);
-        PASS(ok && stat([path fileSystemRepresentation], &st) == 0
-             && (st.st_mode & 07777) == 0644
-             && [[[NSDictionary dictionaryWithContentsOfFile:path]
-                    objectForKey:@"GSScaleFactor"] doubleValue] == 2.0,
-             "rewriting a group-writable file leaves it at 0644 with the new scale");
-        problem = nil;
-        ok = DisplayWriteSystemScale(@"/nonexistent-dir/Display.plist", 2.0, &problem);
-        PASS(!ok && problem != nil, "a file that cannot be written fails with a reason");
-        [[NSFileManager defaultManager] removeItemAtPath:dir error:NULL];
-
-        PASS([DisplaySystemDefaultsPath() hasSuffix:@"/GlobalDefaults/Display.plist"],
-             "the system file is GlobalDefaults/Display.plist");
-    END_SET("system-wide scale")
 
     [arp release];
     return 0;

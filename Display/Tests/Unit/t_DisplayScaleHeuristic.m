@@ -6,11 +6,11 @@
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
-#include "../GSDisplayScaleHeuristic.m"
+#import "DisplayScaleHeuristic.h"
 
 static double scale(NSUInteger w, NSUInteger h, NSUInteger mmw, NSUInteger mmh)
 {
-    return [GSDisplayScaleHeuristic recommendedScaleForPixelWidth:w
+    return [DisplayScaleHeuristic recommendedScaleForPixelWidth:w
                                                       pixelHeight:h
                                                 millimeterWidth:mmw
                                                millimeterHeight:mmh];
@@ -51,12 +51,12 @@ int main(void)
     PASS(scale(3840, 2160, 9000, 5000) == 1.0, "huge size is 1.0");
 
     /* Result is always one of the offered steps. */
-    NSArray *steps = [GSDisplayScaleHeuristic supportedScales];
+    NSArray *steps = [DisplayScaleHeuristic supportedScales];
     PASS([steps count] == 7, "seven steps");
     PASS_EQUAL([steps objectAtIndex:0], [NSNumber numberWithDouble:1.0],
                "first step is 1.0");
-    PASS_EQUAL(NSStringFromClass([GSDisplayScaleHeuristic class]),
-               @"GSDisplayScaleHeuristic", "class name");
+    PASS_EQUAL(NSStringFromClass([DisplayScaleHeuristic class]),
+               @"DisplayScaleHeuristic", "class name");
     PASS([steps containsObject:[NSNumber numberWithDouble:
         scale(3200, 1800, 345, 194)]], "result is a supported step");
 

@@ -8,12 +8,7 @@
 #import "DisplayLayout.h"
 #import "DisplayArrangement.h"
 
-#import <errno.h>
 #import <math.h>
-#import <stdio.h>
-#import <string.h>
-#import <sys/stat.h>
-#import <unistd.h>
 
 NSString * const DisplayLayoutsDomain = @"io.github.gershwin-desktop.DisplayLayouts";
 
@@ -225,63 +220,4 @@ BOOL DisplayLayoutsDiffer(DisplayLayout *wanted, DisplayLayout *current)
         if ([w primary] != [c primary]) return YES;
     }
     return NO;
-}
-
-NSString *DisplaySystemDefaultsPath(void)
-{
-    /* libs-base looks for GlobalDefaults beside the GNUstep.conf it loaded,
-     * which GNUSTEP_CONFIG_FILE relocates in the isolated test sessions. */
-    NSString *confFile = [[[NSProcessInfo processInfo] environment]
-        objectForKey:@"GNUSTEP_CONFIG_FILE"];
-    NSString *prefs;
-    if ([confFile length] > 0) {
-        prefs = [confFile stringByDeletingLastPathComponent];
-    } else {
-        NSArray *libs = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
-                                                            NSSystemDomainMask, YES);
-        if ([libs count] == 0) return nil;
-        prefs = [[libs objectAtIndex:0] stringByAppendingPathComponent:@"Preferences"];
-    }
-    return [[prefs stringByAppendingPathComponent:@"GlobalDefaults"]
-               stringByAppendingPathComponent:@"Display.plist"];
-}
-
-NSDictionary *DisplaySystemDefaultsBySettingScale(NSDictionary *existing, double scale)
-{
-    NSMutableDictionary *d = [NSMutableDictionary dictionaryWithDictionary:existing];
-    [d setObject:[NSNumber numberWithDouble:scale] forKey:@"GSScaleFactor"];
-    /* LoginWindow recomputes a "recommended" scale at every start but never
-     * overrides one the user picked. */
-    [d setObject:@"user" forKey:@"GSScaleFactorSource"];
-    return d;
-}
-
-BOOL DisplayWriteSystemScale(NSString *path, double scale, NSString **problem)
-{
-    if ([path length] == 0) {
-        setProblem(problem, @"The system defaults directory is unknown.");
-        return NO;
-    }
-    NSDictionary *existing = [NSDictionary dictionaryWithContentsOfFile:path];
-    NSDictionary *content = DisplaySystemDefaultsBySettingScale(existing, scale);
-    NSData *data = [NSPropertyListSerialization dataFromPropertyList:content
-                                                              format:NSPropertyListXMLFormat_v1_0
-                                                    errorDescription:NULL];
-    NSString *tmp = [path stringByAppendingFormat:@".%d.tmp", (int)getpid()];
-    const char *ctmp = [tmp fileSystemRepresentation];
-    if (data == nil || ![data writeToFile:tmp atomically:NO]) {
-        setProblem(problem, [NSString stringWithFormat:@"Cannot write %@: %s.",
-                             path, strerror(errno)]);
-        return NO;
-    }
-    /* chmod rather than relying on the umask: libs-base ignores a defaults
-     * file that group or others can write. */
-    if (chmod(ctmp, 0644) != 0 || rename(ctmp, [path fileSystemRepresentation]) != 0) {
-        int err = errno;
-        unlink(ctmp);
-        setProblem(problem, [NSString stringWithFormat:@"Cannot write %@: %s.",
-                             path, strerror(err)]);
-        return NO;
-    }
-    return YES;
 }
