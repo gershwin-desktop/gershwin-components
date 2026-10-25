@@ -28,6 +28,7 @@
 #import "KeyboardManager.h"
 #import "LWLanguageNames.h"
 #import "LWCJKFontInstaller.h"
+#import "LWDisplayScale.h"
 #include <X11/Xlib.h>
 #include <X11/Xauth.h>
 #include <signal.h>
@@ -619,6 +620,21 @@ void stopXorgLikeShellScript(void)
     }
 }
 
+// The backend reads GSScaleFactor when NSApplication sets up the screen and the
+// fonts, so the recommended scale has to be registered before that. The seed
+// gives every user's first session the same scale without a per-user write.
+static void registerDisplayScale(BOOL seedSystemWide)
+{
+    Display *display = mainSafeXOpenDisplay(":0", 5);
+    if (!display) {
+        fprintf(stderr, "ERROR: [LoginWindow] Cannot ask RandR for the display "
+                "scale: no connection to :0\n");
+        return;
+    }
+    LWRegisterRecommendedScale(display, seedSystemWide);
+    XCloseDisplay(display);
+}
+
 int main(int argc, const char *argv[])
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -627,6 +643,7 @@ int main(int argc, const char *argv[])
     // exit, so the image decoding never grows the long-lived login process.
     if (argc > 1 && strcmp(argv[1], "--set-background") == 0) {
         setenv("DISPLAY", ":0", 1);
+        registerDisplayScale(NO);
         [NSApplication sharedApplication];
         LoginWindow *painter = [[LoginWindow alloc] init];
         [painter renderDesktopBackground];
@@ -672,6 +689,7 @@ int main(int argc, const char *argv[])
     // Additional delay before starting GUI application
     NSDebugLLog(@"gwcomp", @"[DEBUG] Starting LoginWindow GUI application");
     
+    registerDisplayScale(YES);
     [NSApplication sharedApplication];
 
     // Detect keyboard layout and set the UI language BEFORE the first

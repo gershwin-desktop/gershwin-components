@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_CJKFont t_LanguageNames
+TEST_TOOL_NAME =  t_CJKFont t_DisplayScale t_LanguageNames t_SystemScale
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -22,7 +22,9 @@ ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 
 
 t_CJKFont_OBJC_FILES=t_CJKFont.m
+t_DisplayScale_OBJC_FILES=t_DisplayScale.m
 t_LanguageNames_OBJC_FILES=t_LanguageNames.m
+t_SystemScale_OBJC_FILES=t_SystemScale.m
 
 -include GNUmakefile.preamble
 -include make-check.mak
