@@ -12,6 +12,7 @@ NSString * const MIDINetworkStateKeyDirectory = @"directory";
 NSString * const MIDINetworkStateKeyParticipants = @"participants";
 NSString * const MIDINetworkStateKeyRoutes = @"routes";
 NSString * const MIDINetworkStateKeyLocalPorts = @"localPorts";
+NSString * const MIDINetworkStateKeyMIDISystem = @"midiSystem";
 
 /* Error texts are fixed strings without inserted values, so a client can
    translate them by looking them up in its own strings table. */
@@ -58,8 +59,14 @@ static NSString *TrimmedString(NSString *s)
         _participants = [NSMutableDictionary dictionary];
         _routes = [NSMutableDictionary dictionary];
         _localPorts = @[];
+        _midiSystem = [MIDINetworkMIDISystem availableSystem];
     }
     return self;
+}
+
+- (void)setMidiSystem:(MIDINetworkMIDISystem *)midiSystem
+{
+    _midiSystem = [midiSystem copy] ?: [MIDINetworkMIDISystem availableSystem];
 }
 
 + (instancetype)stateWithPropertyList:(id)plist
@@ -76,7 +83,10 @@ static NSString *TrimmedString(NSString *s)
     NSArray *ports = MIDINetworkModelsFromPropertyLists([plist objectForKey:MIDINetworkStateKeyLocalPorts],
                                                         [MIDINetworkPort class]);
     id participants = [plist objectForKey:MIDINetworkStateKeyParticipants];
-    if (sessions == nil || hosts == nil || routes == nil || ports == nil
+    id midiPlist = [plist objectForKey:MIDINetworkStateKeyMIDISystem];
+    MIDINetworkMIDISystem *midiSystem = midiPlist ? [MIDINetworkMIDISystem midiSystemWithPropertyList:midiPlist]
+                                                  : [MIDINetworkMIDISystem availableSystem];
+    if (sessions == nil || hosts == nil || routes == nil || ports == nil || midiSystem == nil
         || ![participants isKindOfClass:[NSDictionary class]]) {
         return nil;
     }
@@ -87,6 +97,7 @@ static NSString *TrimmedString(NSString *s)
         [([host isManual] ? state->_manual : state->_discovered) addObject:host];
     }
     state->_localPorts = [ports copy];
+    state->_midiSystem = midiSystem;
     for (MIDINetworkRoute *route in routes) {
         [state->_routes setObject:route forKey:route.sessionIdentifier];
     }
@@ -119,7 +130,8 @@ static NSString *TrimmedString(NSString *s)
               MIDINetworkStateKeyDirectory: MIDINetworkPropertyListsFromModels([self directory]),
               MIDINetworkStateKeyParticipants: participants,
               MIDINetworkStateKeyRoutes: routes,
-              MIDINetworkStateKeyLocalPorts: MIDINetworkPropertyListsFromModels(_localPorts) };
+              MIDINetworkStateKeyLocalPorts: MIDINetworkPropertyListsFromModels(_localPorts),
+              MIDINetworkStateKeyMIDISystem: [_midiSystem propertyList] };
 }
 
 #pragma mark - Reads

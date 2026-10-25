@@ -3,7 +3,7 @@
 How network MIDI clients (the MIDI preference pane, through
 `MIDINetworkDaemonBackend`) talk to `networkmidid`, the per-user network MIDI
 daemon. The binding contract is `MIDINetworkControl.h`; this document
-explains it. Protocol version: **1** (`MIDINETWORK_CONTROL_PROTOCOL_VERSION`).
+explains it. Protocol version: **2** (`MIDINETWORK_CONTROL_PROTOCOL_VERSION`).
 
 ## Process and transport
 
@@ -47,8 +47,9 @@ build and parse them with the model classes (`-propertyList`,
 | participant | `identifier`, `name`, `address` (`host:port`), `latency` (ms, double, < 0 = not measured), `state` (`inviting`, `connected`) |
 | local port | `identifier` (stable for the port's life, e.g. ALSA `client:port`), `name`, `canSend`, `canReceive` |
 | route | `session`, optional `inputPort` (local port -> session), optional `outputPort` (session -> local port) |
+| MIDI system | `available` (bool); when not available also `problem` (`sequencerModuleMissing`, `sequencerServerNotRunning`, `kernelLacksCUSE`, `permissionDenied`, `openFailed`, `noPortLayer`), optional `device` (e.g. `/dev/snd/seq`), optional `detail` (the system's error text) |
 
-A **snapshot** is a dictionary with five sections:
+A **snapshot** is a dictionary with six sections:
 
 ```
 sessions     = ( session, ... )
@@ -56,7 +57,16 @@ directory    = ( host, ... )                 discovered and manual
 participants = { <session identifier> = ( participant, ... ); ... }
 routes       = ( route, ... )                at most one per session
 localPorts   = ( local port, ... )
+midiSystem   = MIDI system                   whether sessions can have MIDI ports
 ```
+
+While `midiSystem` is not available (the ALSA sequencer cannot be opened),
+the daemon runs and answers, but has not restored the stored sessions, and
+refuses every changing message with code 7 (midiSystemUnavailable). It
+retries opening the sequencer (1, 2, 4, ... s, at most every 30 s; never
+for `noPortLayer`), and when it succeeds restores the sessions and pushes
+every section. The client shows the reason with
+`-[MIDINetworkMIDISystem descriptionWithTranslator:]`.
 
 `+[MIDINetworkState stateWithPropertyList:]` must accept every snapshot the
 daemon sends; the client rejects a malformed one as a whole.
@@ -65,7 +75,7 @@ daemon sends; the client rejects a malformed one as a whole.
 
 | Method | Effect |
 |---|---|
-| `-protocolVersion` | returns 1; the client refuses any other value |
+| `-protocolVersion` | returns 2; the client refuses any other value |
 | `-registerClient:` | adds a `MIDINetworkDaemonClient` proxy for change callbacks (synchronous) |
 | `-unregisterClient:` | removes it |
 | `-snapshot` | the whole state |
@@ -88,7 +98,8 @@ no change can fall between registration and snapshot.
 - failure: `{ error = { code = <int>; message = <string>; }; }` with a code
   from `MIDINetworkErrorCode` (`MIDINetworkBackend.h`):
   1 unavailable, 2 daemonNotRunning, 3 portInUse, 4 peerRejected,
-  5 timeout, 6 invalidArgument. Nothing has changed after a failure.
+  5 timeout, 6 invalidArgument, 7 midiSystemUnavailable. Nothing has
+  changed after a failure.
 
 Use `MIDINetworkReplyWithChanges()` and `MIDINetworkReplyWithError()`.
 Messages should be the fixed English sentences `MIDINetworkState` and
