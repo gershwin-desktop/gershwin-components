@@ -8,6 +8,7 @@
 #define MENU_BAR_GEOMETRY_H
 
 #import <Foundation/Foundation.h>
+#include <X11/Xlib.h>
 
 /* Where the menu bar goes, decided from the primary monitor alone so that
  * the application menu on the left and the menu extras on the right always
@@ -26,6 +27,17 @@ typedef struct {
  * in points; scale is GSScaleFactor. */
 MenuBarGeometry MenuBarGeometryForMonitor(NSRect primaryXRect, NSSize rootSize,
                                           CGFloat themeHeight, CGFloat scale);
+
+/* The factor the toolkit draws the primary monitor at, so the bar's
+ * content is laid out for the same scale its window is drawn at.  dpi is
+ * the monitor's RandR output property "DPI" (0 when it has none); like
+ * libs-back, 96 dpi is 1.0 and a monitor without one follows globalScale
+ * (GSScaleFactor). */
+CGFloat MenuBarScaleForMonitor(long dpi, CGFloat globalScale);
+
+/* The RandR "DPI" of the lit output whose CRTC is exactly xRect (X root
+ * coordinates), 0 when no output matches or it has no such property. */
+long MenuBarMonitorDPI(Display *dpy, NSRect xRect);
 
 /* Top edge (GNUstep screen coordinates, device pixels) of the bar during
  * its slide-in from one bar height above finalTop, for progress 0..1

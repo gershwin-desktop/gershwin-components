@@ -81,6 +81,26 @@ int main(void)
          "the step just before the end is the final top, not 800.0003");
   }
 
+  {
+    /* Per-monitor scale: libs-back draws a monitor at its RandR "DPI" / 96
+     * and falls back to GSScaleFactor where the output has no DPI, so the
+     * bar on the primary must be laid out at that same factor. */
+    PASS(MenuBarScaleForMonitor(96, 1.25) == 1.0,
+         "a 100%% primary is drawn at 1.0 although GSScaleFactor is 1.25");
+    PASS(MenuBarScaleForMonitor(120, 1.0) == 1.25,
+         "a 125%% primary is drawn at 1.25 although GSScaleFactor is 1.0");
+    PASS(MenuBarScaleForMonitor(0, 1.5) == 1.5,
+         "a primary without a DPI follows GSScaleFactor");
+    PASS(MenuBarScaleForMonitor(-1, 0) == 1.0,
+         "nothing known means 1.0");
+
+    MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(1920, 0, 1920, 1080),
+                                                  NSMakeSize(3840, 1080), 22,
+                                                  MenuBarScaleForMonitor(96, 1.25));
+    PASS(g.windowFrame.size.height == 22 && g.contentSize.width == 1920,
+         "on a 100%% primary the bar is 22 px high and lays out 1920 points");
+  }
+
   [arp release];
   return 0;
 }

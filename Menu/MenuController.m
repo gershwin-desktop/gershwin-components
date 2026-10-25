@@ -70,6 +70,25 @@
 
 @end
 
+/* The menu bar window.  The controller places it on the primary monitor
+ * from the X server's state whenever the screens change
+ * (screenParametersChanged:), so the toolkit's own reaction, moving every
+ * window by as much as its monitor moved, is left out: on top of the
+ * controller's placement it moved the bar a second time, by the primary's
+ * offset, often onto a monitor with another scale, which then resized it
+ * (2400x35 instead of 1920x28 after the primary moved below a 100%
+ * monitor). */
+@interface MenuBarWindow : NSWindow
+@end
+
+@implementation MenuBarWindow
+
+- (void)applicationDidChangeScreenParameters:(NSNotification *)notification
+{
+}
+
+@end
+
 @interface MenuController () <MenuExtraManagerDelegate>
 {
     MediaKeyController *_mediaKeyController;
@@ -89,6 +108,9 @@
 @implementation MenuController
 
 static CGFloat MenuControllerLastScaleFactor = 1.0;
+/* The primary monitor's scale the bar was last laid out for; 0 before the
+ * first layout. */
+static CGFloat MenuControllerBarScale = 0;
 
 /* Current GSScaleFactor (1.0 when unset or non-positive). */
 static CGFloat MenuControllerScaleFactor(void)
@@ -113,16 +135,25 @@ static MenuBarGeometry MenuControllerBarGeometry(NSRect *primaryFrame)
                   format:@"MenuController: no X display to place the menu bar on"];
     }
   *primaryFrame = PrimaryMonitorFlipRect(xRect, rootSize.height);
+  /* With per-monitor scales the toolkit draws the bar at the primary's own
+   * factor, which differs from GSScaleFactor when the primary is not the
+   * monitor GSScaleFactor was chosen for; laid out at GSScaleFactor the
+   * extras ended short of the bar's right edge. */
+  MenuControllerBarScale = MenuBarScaleForMonitor(
+      MenuBarMonitorDPI([MenuUtils sharedDisplay], xRect),
+      MenuControllerScaleFactor());
   return MenuBarGeometryForMonitor(xRect, rootSize,
                                    [[GSTheme theme] menuBarHeight],
-                                   MenuControllerScaleFactor());
+                                   MenuControllerBarScale);
 }
 
-/* Menu bar height scaled by GSScaleFactor: the bar keeps the primary
- * monitor's width but its height grows/shrinks with the scale factor. */
+/* Menu bar height in device pixels: the bar keeps the primary monitor's
+ * width but its height grows/shrinks with the primary's scale. */
 static CGFloat MenuControllerMenuBarHeight(void)
 {
-  return [[GSTheme theme] menuBarHeight] * MenuControllerScaleFactor();
+  CGFloat scale = (MenuControllerBarScale > 0) ? MenuControllerBarScale
+                                               : MenuControllerScaleFactor();
+  return [[GSTheme theme] menuBarHeight] * scale;
 }
 
 #if MENU_PROFILING
@@ -782,14 +813,24 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     self.screenSize = primary.size;
     NSDebugLLog(@"gwcomp", @"MenuController: Primary monitor %.0f,%.0f %.0fx%.0f (scale=%.2f)",
                 primary.origin.x, primary.origin.y,
-                primary.size.width, primary.size.height, MenuControllerScaleFactor());
+                primary.size.width, primary.size.height, MenuControllerBarScale);
 }
 
 - (void)positionMenuBarWindow
 {
     NSRect menuRect = _barGeometry.windowFrame;
+    BOOL unchanged = NSEqualRects([self.menuBar frame], menuRect);
     [self.menuBar setFrame:menuRect display:NO];
     [self.menuBar setFrameTopLeftPoint:NSMakePoint(NSMinX(menuRect), NSMaxY(menuRect))];
+    /* GNUstep frames count from the bottom of the X screen: when the
+     * primary moves down by as much as the screen grows (another monitor
+     * put above it), the bar's frame stays the same and NSWindow skips an
+     * equal frame, so the window has to be placed again for the new screen
+     * height.  MenuBarWindow leaves this to us. */
+    if (unchanged && [self.menuBar windowNumber] > 0) {
+        [GSServerForWindow(self.menuBar) placewindow:menuRect
+                                                    :(int)[self.menuBar windowNumber]];
+    }
 }
 
 - (void)repositionMenuBarAfterScreenChange
@@ -1299,7 +1340,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     NSDebugLLog(@"gwcomp", @"MenuController: Menu bar rect: %.0f,%.0f %.0fx%.0f",
           rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
     
-    self.menuBar = [[NSWindow alloc] initWithContentRect:rect
+    self.menuBar = [[MenuBarWindow alloc] initWithContentRect:rect
                                           styleMask:NSBorderlessWindowMask
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
