@@ -137,18 +137,28 @@ static BOOL scaleIsIdentity(double s)
 
 - (NSSize)size
 {
-    /* A quarter turn swaps the mode's width and height on the screen. */
-    BOOL quarter = (_rotation & (2 | 8)) != 0;
-    int w = quarter ? _modeHeight : _modeWidth;
-    int h = quarter ? _modeWidth : _modeHeight;
-    return NSMakeSize(DisplayTransformedExtent(w, _transformScaleX),
-                      DisplayTransformedExtent(h, _transformScaleY));
+    NSSize m = [self rotatedModeSize];
+    return NSMakeSize(DisplayTransformedExtent((int)m.width, _transformScaleX),
+                      DisplayTransformedExtent((int)m.height, _transformScaleY));
 }
 
 - (NSRect)frame
 {
     NSSize s = [self size];
     return NSMakeRect(_x, _y, s.width, s.height);
+}
+
+- (NSSize)rotatedModeSize
+{
+    BOOL quarter = (_rotation & (2 | 8)) != 0;
+    return quarter ? NSMakeSize(_modeHeight, _modeWidth)
+                   : NSMakeSize(_modeWidth, _modeHeight);
+}
+
+- (NSRect)screenExtent
+{
+    NSSize m = [self rotatedModeSize];
+    return NSUnionRect([self frame], NSMakeRect(_x, _y, m.width, m.height));
 }
 
 - (BOOL)hasTransform
@@ -432,6 +442,32 @@ static BOOL scaleIsIdentity(double s)
     DisplayOutput *target = [l outputNamed:name];
     if (target == nil || ![target enabled]) return nil;
     for (DisplayOutput *o in [l outputs]) [o setPrimary:(o == target)];
+    return l;
+}
+
+- (DisplayLayout *)layoutBySettingTransformScaleX:(double)scaleX
+                                                y:(double)scaleY
+                                        forOutput:(NSString *)name
+{
+    if (scaleX <= 0 || scaleY <= 0 || [self isMirrored]) return nil;
+    DisplayLayout *l = [[self copy] autorelease];
+    DisplayOutput *o = [l outputNamed:name];
+    if (o == nil || ![o enabled]) return nil;
+    NSMutableDictionary *frames = [NSMutableDictionary dictionary];
+    for (DisplayOutput *e in [l enabledOutputs]) {
+        [frames setObject:[NSValue valueWithRect:[e frame]] forKey:[e name]];
+    }
+    [o setTransformScaleX:scaleX];
+    [o setTransformScaleY:scaleY];
+    /* Neighbors keep their side of the scaled output rather than being
+     * snapped to whichever free spot happens to be nearest. */
+    NSDictionary *shifted = DisplayResizeRect(frames, name, [o size]);
+    for (NSString *n in shifted) {
+        NSRect f = [[shifted objectForKey:n] rectValue];
+        [[l outputNamed:n] setX:(int)NSMinX(f)];
+        [[l outputNamed:n] setY:(int)NSMinY(f)];
+    }
+    [l arrangeMoving:nil toOrigin:NSZeroPoint snap:0];
     return l;
 }
 

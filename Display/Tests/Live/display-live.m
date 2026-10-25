@@ -16,6 +16,9 @@
  *   display-live place OUTPUT left-of|right-of|above|below OTHER
  *   display-live primary OUTPUT
  *   display-live mirror | unmirror
+ *   display-live looks-like OUTPUT [WxH] [-GSScaleFactor F]
+ *                 without WxH: list the "looks like" sizes, the current one
+ *                 marked with "*"; with WxH: switch to that size
  */
 
 #import <Foundation/Foundation.h>
@@ -23,6 +26,7 @@
 #import <string.h>
 #import "DisplayLayout.h"
 #import "X11DisplayManager.h"
+#import "DisplayScaledResolution.h"
 
 static int fail(NSString *text)
 {
@@ -84,6 +88,38 @@ int main(int argc, char **argv)
         wanted = [layout layoutByMovingOutput:arg1 toOrigin:p snapDistance:64];
     } else if ([cmd isEqualToString:@"primary"]) {
         wanted = [layout layoutBySettingPrimary:arg1];
+    } else if ([cmd isEqualToString:@"looks-like"]) {
+        DisplayOutput *o = [layout outputNamed:arg1];
+        if (o == nil || ![o enabled]) return fail(@"looks-like needs an output that is on");
+        /* Tests pass the factor as -GSScaleFactor F (argument domain). */
+        double scale = [[NSUserDefaults standardUserDefaults] doubleForKey:@"GSScaleFactor"];
+        NSSize mode = [o rotatedModeSize];
+        NSSize max = [x11 maximumScreenSize];
+        NSArray *options = DisplayScaledResolutions((int)mode.width, (int)mode.height,
+                                                    scale > 0 ? scale : 1.0,
+                                                    (int)max.width, (int)max.height);
+        NSString *size = [args count] > 3 ? [args objectAtIndex:3] : nil;
+        if (size == nil || [size hasPrefix:@"-"]) {
+            DisplayScaledResolution *cur = DisplayScaledResolutionForTransform(
+                options, [o transformScaleX], [o transformScaleY]);
+            for (DisplayScaledResolution *r in options) {
+                printf("%s %s fb=%dx%d transform=%.6fx%.6f\n", r == cur ? "*" : " ",
+                       [[r title] UTF8String], [r framebufferWidth], [r framebufferHeight],
+                       [r transformScaleX], [r transformScaleY]);
+            }
+            [pool release];
+            return 0;
+        }
+        for (DisplayScaledResolution *r in options) {
+            NSString *rsize = [NSString stringWithFormat:@"%dx%d",
+                               [r logicalWidth], [r logicalHeight]];
+            if ([rsize isEqualToString:size]) {
+                wanted = [layout layoutBySettingTransformScaleX:[r transformScaleX]
+                                                              y:[r transformScaleY]
+                                                      forOutput:arg1];
+            }
+        }
+        if (wanted == nil) return fail([NSString stringWithFormat:@"%@ is no looks-like size of %@", size, arg1]);
     } else if ([cmd isEqualToString:@"mirror"]) {
         wanted = [layout mirroredLayout];
     } else if ([cmd isEqualToString:@"unmirror"]) {

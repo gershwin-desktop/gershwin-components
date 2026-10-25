@@ -49,6 +49,10 @@ extern NSString * const X11DisplayManagerErrorDomain;
 
 /* The lit output RandR names as primary, or nil when the server has none
  * (a bare server until a client sets one) or it is dark. */
+/* The largest screen the server allows (XRRGetScreenSizeRange); the
+ * framebuffer of a scaled monitor must fit into it. */
+- (NSSize)maximumScreenSize;
+
 - (NSString *)primaryOutputName;
 /* Makes `name` the RandR primary without touching any CRTC. */
 - (BOOL)setPrimaryOutputNamed:(NSString *)name error:(NSError **)error;

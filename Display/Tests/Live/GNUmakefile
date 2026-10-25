@@ -7,7 +7,8 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 TOOL_NAME = display-live
 display-live_OBJC_FILES = display-live.m ../../DisplayLayout.m \
-	../../DisplayArrangement.m ../../X11DisplayManager.m
+	../../DisplayArrangement.m ../../X11DisplayManager.m \
+	../../DisplayScaledResolution.m
 display-live_TOOL_LIBS = -lXrandr -lX11
 ADDITIONAL_INCLUDE_DIRS += -I../..
 ADDITIONAL_OBJCFLAGS += -Wall

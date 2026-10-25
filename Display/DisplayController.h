@@ -24,6 +24,9 @@
     NSTextField *scaleValueLabel;
     NSTextField *statusLabel;
     NSButton *mirrorDisplaysCheckbox;
+    NSScrollView *looksLikeScrollView;
+    NSTableView *looksLikeTable;
+    NSArray *looksLikeOptions;      /* DisplayScaledResolution, selected output */
     X11DisplayManager *x11;
 }
 
@@ -46,5 +49,6 @@
 - (void)resolutionChanged:(id)sender;
 - (void)mirrorDisplaysChanged:(id)sender;
 - (void)scaleFactorChanged:(id)sender;
+- (void)looksLikeChanged:(id)sender;
 
 @end

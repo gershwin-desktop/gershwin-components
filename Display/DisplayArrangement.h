@@ -52,6 +52,13 @@ int DisplayFixedFromDouble(double value);
 NSDictionary *DisplayArrangeRects(NSDictionary *proposed, NSString *primary,
                                   NSString *moved, CGFloat snap);
 
+/* `frames` (name -> NSValue rect) with the rectangle of `resized` given
+ * `newSize` at its own origin.  Rectangles lying wholly to its right or
+ * below it move by the change in width or height, so they keep their side
+ * and their contact with it; everything else stays.  Feed the result to
+ * DisplayArrangeRects to repair what a shift alone cannot. */
+NSDictionary *DisplayResizeRect(NSDictionary *frames, NSString *resized, NSSize newSize);
+
 /* How the pane's arrangement view maps screen pixels to its own points: the
  * view is not flipped (y up) and scaled down. */
 typedef struct {
@@ -75,7 +82,8 @@ typedef struct {
     NSSize grow;
     NSSize final;
 } DisplayScreenSizePlan;
-/* `frames`: NSValue rects of all enabled outputs in the new layout. */
+/* `frames`: NSValue rects each enabled output of the new layout needs on
+ * the screen (-[DisplayOutput screenExtent]). */
 DisplayScreenSizePlan DisplayPlanScreenSize(NSSize current, NSArray *frames);
 
 /* CRTC for every output to enable.  `requests` is an array of dictionaries

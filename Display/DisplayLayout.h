@@ -108,6 +108,15 @@
 - (NSSize)size;
 - (NSRect)frame;
 - (BOOL)hasTransform;
+/* The mode size as it lies on the screen: a quarter turn swaps width and
+ * height.  What "looks like" sizes are computed from. */
+- (NSSize)rotatedModeSize;
+/* What the X screen must cover for this output: its frame, but at least
+ * the untransformed mode at its origin, because RRSetScreenSize checks the
+ * screen against the mode size, not the transformed one.  A "looks like"
+ * size larger than the panel's default (transform below 1) therefore
+ * keeps a screen as large as the mode. */
+- (NSRect)screenExtent;
 
 @end
 
@@ -149,6 +158,14 @@
                                toOrigin:(NSPoint)proposed
                            snapDistance:(CGFloat)snap;
 - (DisplayLayout *)layoutBySettingPrimary:(NSString *)name;
+/* `name` with the CRTC transform of a "looks like" size
+ * (DisplayScaledResolution); the neighbors move so the arrangement stays
+ * connected and free of overlaps around the new size.  nil for a mirror,
+ * whose transforms make the outputs show the same picture, and for an
+ * output that is off. */
+- (DisplayLayout *)layoutBySettingTransformScaleX:(double)scaleX
+                                                y:(double)scaleY
+                                        forOutput:(NSString *)name;
 - (DisplayLayout *)mirroredLayout;
 - (DisplayLayout *)extendedLayout;
 

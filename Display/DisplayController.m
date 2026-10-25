@@ -11,6 +11,7 @@
 #import "DisplayLayout.h"
 #import "DisplayArrangement.h"
 #import "DisplayConfiguration.h"
+#import "DisplayScaledResolution.h"
 #import "AppearanceMetrics.h"
 #import <math.h>
 
@@ -98,6 +99,10 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [scaleValueLabel release];
     [statusLabel release];
     [mirrorDisplaysCheckbox release];
+    [looksLikeTable setDataSource:nil];
+    [looksLikeTable release];
+    [looksLikeScrollView release];
+    [looksLikeOptions release];
     [x11 release];
     [super dealloc];
 }
@@ -167,10 +172,15 @@ static NSMutableDictionary *activeDialogsByID = nil;
                                    frame:NSMakeRect(sideMargin, y - settingsBoxH, boxW, settingsBoxH)
                                   inView:mainView];
     {
-        CGFloat by = settingsBoxH - boxTitleInset - METRICS_SPACE_16 - checkboxRowH;
+        /* The "looks like" list fills the right of the box next to the
+         * rows, so the arrangement keeps its height. */
+        const CGFloat listW = 180;
+        const CGFloat rowsW = boxW - listW - METRICS_SPACE_16;
+        CGFloat top = settingsBoxH - boxTitleInset - METRICS_SPACE_16;
+        CGFloat by = top - checkboxRowH;
         [self addCheckbox:mirrorDisplaysCheckbox =
                    [[NSButton alloc] initWithFrame:NSZeroRect]
-                    toBox:settingsBox y:by width:boxW];
+                    toBox:settingsBox y:by width:rowsW];
         [mirrorDisplaysCheckbox setButtonType:NSSwitchButton];
         [mirrorDisplaysCheckbox setTitle:@"Mirror Displays"];
         [mirrorDisplaysCheckbox setTarget:self];
@@ -182,7 +192,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
         [self addPopUpRowWithLabel:@"Display:"
                             popup:outputPopup =
                             [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
-                            toBox:settingsBox y:by width:boxW];
+                            toBox:settingsBox y:by width:rowsW];
         [outputPopup setTarget:self];
         [outputPopup setAction:@selector(outputChanged:)];
         by -= METRICS_SPACE_8 + rowH;
@@ -190,7 +200,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
         [self addPopUpRowWithLabel:@"Resolution:"
                             popup:resolutionPopup =
                             [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
-                            toBox:settingsBox y:by width:boxW];
+                            toBox:settingsBox y:by width:rowsW];
         [resolutionPopup setTarget:self];
         [resolutionPopup setAction:@selector(resolutionChanged:)];
 
@@ -200,7 +210,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
                              [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:scaleValueLabel =
                              [[NSTextField alloc] initWithFrame:NSZeroRect]
-                              toBox:settingsBox y:by width:boxW];
+                              toBox:settingsBox y:by width:rowsW];
         /* The offered factors are not evenly spaced, so the slider moves
          * over their indexes, one tick each. */
         [scaleSlider setMinValue:0];
@@ -213,6 +223,10 @@ static NSMutableDictionary *activeDialogsByID = nil;
         double factor = [self effectiveScaleFactor];
         [scaleSlider setDoubleValue:DisplayScaleFactorStepIndex(factor)];
         [scaleValueLabel setStringValue:scaleFactorTitle(factor)];
+
+        [self addLooksLikeListToBox:settingsBox
+                              frame:NSMakeRect(boxW - METRICS_SPACE_16 - listW, by,
+                                               listW, top - by)];
     }
     y -= settingsBoxH + boxGap;
 
@@ -378,6 +392,36 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [box addSubview:value];
 }
 
+/* The per-monitor "looks like" sizes: a one-column list, so every choice
+ * and the default are visible at once. */
+- (void)addLooksLikeListToBox:(NSBox *)box frame:(NSRect)frame
+{
+    looksLikeScrollView = [[NSScrollView alloc] initWithFrame:frame];
+    [looksLikeScrollView setHasVerticalScroller:YES];
+    [looksLikeScrollView setHasHorizontalScroller:NO];
+    [looksLikeScrollView setBorderType:NSBezelBorder];
+    [looksLikeScrollView setAutoresizingMask:NSViewMinXMargin];
+
+    NSSize content = [looksLikeScrollView contentSize];
+    looksLikeTable = [[NSTableView alloc] initWithFrame:
+        NSMakeRect(0, 0, content.width, content.height)];
+    NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"looksLike"];
+    [[column headerCell] setStringValue:@"Looks Like"];
+    [column setWidth:content.width];
+    [column setEditable:NO];
+    [looksLikeTable addTableColumn:column];
+    [column release];
+    /* An empty selection stands for a transform none of the sizes has (a
+     * mirror); a table that forbids it selects a row on reloadData. */
+    [looksLikeTable setAllowsEmptySelection:YES];
+    [looksLikeTable setAllowsMultipleSelection:NO];
+    [looksLikeTable setDataSource:(id)self];
+    [looksLikeTable setTarget:self];
+    [looksLikeTable setAction:@selector(looksLikeChanged:)];
+    [looksLikeScrollView setDocumentView:looksLikeTable];
+    [box addSubview:looksLikeScrollView];
+}
+
 #pragma mark - Model
 
 static NSString *scaleFactorTitle(double factor)
@@ -438,6 +482,7 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [mirrorDisplaysCheckbox setState:[layout isMirrored] ? NSOnState : NSOffState];
     [self updateOutputPopup];
     [self updateResolutionPopup];
+    [self updateLooksLikeList];
 }
 
 - (void)updateOutputPopup
@@ -481,6 +526,7 @@ static NSString * const DisplayOffItemTitle = @"Off";
     }
     [self updateOutputPopup];
     [self updateResolutionPopup];
+    [self updateLooksLikeList];
 }
 
 - (void)updateResolutionPopup
@@ -503,6 +549,54 @@ static NSString * const DisplayOffItemTitle = @"Off";
     } else {
         [resolutionPopup selectItemWithTitle:DisplayOffItemTitle];
     }
+}
+
+/* The sizes depend on the global factor, the selected output's mode and
+ * the server's maximum screen; a mirror's transforms are not the user's. */
+- (void)updateLooksLikeList
+{
+    DisplayOutput *o = [layout outputNamed:selectedOutputName];
+    NSArray *options = [NSArray array];
+    if (o && [o enabled] && ![layout isMirrored]) {
+        NSSize mode = [o rotatedModeSize];
+        NSSize max = [x11 maximumScreenSize];
+        options = DisplayScaledResolutions((int)mode.width, (int)mode.height,
+                                           [self effectiveScaleFactor],
+                                           (int)max.width, (int)max.height);
+    }
+    /* The periodic refresh calls this every few seconds; reloading only on
+     * a real change keeps the list from flickering under the pointer. */
+    if (![[options valueForKey:@"title"] isEqual:[looksLikeOptions valueForKey:@"title"]]) {
+        [looksLikeOptions release];
+        looksLikeOptions = [options retain];
+        [looksLikeTable reloadData];
+    }
+    DisplayScaledResolution *current = o
+        ? DisplayScaledResolutionForTransform(looksLikeOptions, [o transformScaleX],
+                                              [o transformScaleY])
+        : nil;
+    NSUInteger row = current ? [looksLikeOptions indexOfObject:current] : NSNotFound;
+    if (row == NSNotFound) {
+        [looksLikeTable deselectAll:nil];
+    } else if ([looksLikeTable selectedRow] != (NSInteger)row) {
+        [looksLikeTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+                    byExtendingSelection:NO];
+        [looksLikeTable scrollRowToVisible:row];
+    }
+    [looksLikeTable setEnabled:[looksLikeOptions count] > 1];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    return [looksLikeOptions count];
+}
+
+- (id)tableView:(NSTableView *)tableView
+    objectValueForTableColumn:(NSTableColumn *)column
+                          row:(NSInteger)row
+{
+    if (row < 0 || row >= (NSInteger)[looksLikeOptions count]) return nil;
+    return [[looksLikeOptions objectAtIndex:row] title];
 }
 
 #pragma mark - Applying
@@ -601,6 +695,31 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [self applyLayout:wanted confirm:YES];
 }
 
+- (void)looksLikeChanged:(id)sender
+{
+    NSInteger row = [looksLikeTable selectedRow];
+    DisplayOutput *o = [layout outputNamed:selectedOutputName];
+    if (o == nil || row < 0 || row >= (NSInteger)[looksLikeOptions count]) {
+        [self updateLooksLikeList];
+        return;
+    }
+    DisplayScaledResolution *r = [looksLikeOptions objectAtIndex:row];
+    if (r == DisplayScaledResolutionForTransform(looksLikeOptions, [o transformScaleX],
+                                                 [o transformScaleY])) {
+        return;
+    }
+    DisplayLayout *wanted = [layout layoutBySettingTransformScaleX:[r transformScaleX]
+                                                                 y:[r transformScaleY]
+                                                         forOutput:[o name]];
+    if (wanted == nil) {
+        [self updateLooksLikeList];
+        return;
+    }
+    /* A scaled size can leave the panel unreadable; the confirmation
+     * reverts it on its own. */
+    [self applyLayout:wanted confirm:YES];
+}
+
 - (void)mirrorDisplaysChanged:(id)sender
 {
     BOOL mirror = [mirrorDisplaysCheckbox state] == NSOnState;
@@ -649,6 +768,8 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [defaults setPersistentDomain:domain forName:NSGlobalDomain];
     [defaults synchronize];
     [self saveCurrentLayout];
+    /* The points each size stands for follow the factor. */
+    [self updateLooksLikeList];
 
     /* LoginWindow and users without an own factor read the system-wide
      * file, which only root may write. */

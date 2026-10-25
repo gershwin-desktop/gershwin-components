@@ -342,6 +342,13 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     return NSMakeSize(w, h);
 }
 
+- (NSSize)maximumScreenSize
+{
+    int minW, minH, maxW = 0, maxH = 0;
+    XRRGetScreenSizeRange((Display *)_display, _root, &minW, &minH, &maxW, &maxH);
+    return NSMakeSize(maxW, maxH);
+}
+
 - (void)setScreenSize:(NSSize)size
 {
     /* 96 DPI, so the reported physical size follows the pixel size the
@@ -425,7 +432,7 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     }
 
     NSMutableDictionary *modeIDs = [NSMutableDictionary dictionary];
-    NSMutableArray *frames = [NSMutableArray array];
+    NSMutableArray *extents = [NSMutableArray array];
     for (DisplayOutput *o in enabled) {
         if (problem) break;
         DisplayMode *m = DisplaySelectMode([serverModes objectForKey:[o name]],
@@ -436,11 +443,11 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
             break;
         }
         [modeIDs setObject:[NSNumber numberWithUnsignedLong:[m modeID]] forKey:[o name]];
-        [frames addObject:[NSValue valueWithRect:[o frame]]];
+        [extents addObject:[NSValue valueWithRect:[o screenExtent]]];
     }
 
     NSSize current = [self screenSize];
-    DisplayScreenSizePlan plan = DisplayPlanScreenSize(current, frames);
+    DisplayScreenSizePlan plan = DisplayPlanScreenSize(current, extents);
     if (!problem) {
         int minW, minH, maxW, maxH;
         XRRGetScreenSizeRange(dpy, _root, &minW, &minH, &maxW, &maxH);
@@ -503,7 +510,7 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
             t.matrix[1][1] = DisplayFixedFromDouble([o transformScaleY]);
             t.matrix[2][2] = XDoubleToFixed(1.0);
             /* The transform takes effect with the next CRTC configuration;
-             * bilinear keeps a scaled mirror readable. */
+             * bilinear keeps a scaled mirror or "looks like" size readable. */
             char *filter = [o hasTransform] ? "bilinear" : "nearest";
             XRRSetCrtcTransform(dpy, crtc, &t, filter, NULL, 0);
         }
@@ -535,8 +542,9 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
             NSString *why;
             if (firstErrorCode) XGetErrorText(dpy, firstErrorCode, text, sizeof(text));
             if (firstErrorCode && firstErrorMinor == X_RRSetCrtcTransform) {
-                why = @"The graphics driver cannot scale a display, so these displays "
-                      @"can only mirror at a resolution they all support.";
+                why = @"The graphics driver cannot scale a display: scaled sizes are "
+                      @"not available, and displays can only mirror at a resolution "
+                      @"they all support.";
             } else if (firstErrorCode) {
                 why = [NSString stringWithFormat:
                     @"The X server refused the display configuration (%s, request %d.%d).",

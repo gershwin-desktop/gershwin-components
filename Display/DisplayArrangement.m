@@ -236,6 +236,26 @@ NSDictionary *DisplayArrangeRects(NSDictionary *proposed, NSString *primary,
     return result;
 }
 
+NSDictionary *DisplayResizeRect(NSDictionary *frames, NSString *resized, NSSize newSize)
+{
+    NSValue *v = [frames objectForKey:resized];
+    if (v == nil) return frames;
+    NSRect old = [v rectValue];
+    CGFloat dw = newSize.width - NSWidth(old), dh = newSize.height - NSHeight(old);
+    NSMutableDictionary *result = [NSMutableDictionary dictionaryWithCapacity:[frames count]];
+    for (NSString *name in frames) {
+        NSRect r = [[frames objectForKey:name] rectValue];
+        if ([name isEqualToString:resized]) {
+            r.size = newSize;
+        } else {
+            if (NSMinX(r) >= NSMaxX(old)) r.origin.x += dw;
+            if (NSMinY(r) >= NSMaxY(old)) r.origin.y += dh;
+        }
+        [result setObject:[NSValue valueWithRect:r] forKey:name];
+    }
+    return result;
+}
+
 #pragma mark - View mapping
 
 DisplayViewMapping DisplayViewMappingMake(NSRect modelBounds, NSRect viewBounds,
