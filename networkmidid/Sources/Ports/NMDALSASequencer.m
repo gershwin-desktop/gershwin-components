@@ -5,6 +5,7 @@
  */
 
 #import "NMDALSASequencer.h"
+#import "NMDMIDISystemProblem.h"
 #import "NMDDescriptorWatcher.h"
 #import "NMDMIDIStreamParser.h"
 #import "NMDRTPMIDI.h"
@@ -18,6 +19,7 @@ NSString * const NMDLocalPortCanReceive = @"canReceive";
 
 #include <alsa/asoundlib.h>
 #include <poll.h>
+#include <unistd.h>
 
 /* ALSA's own MIDI drivers hand sysex over in pieces of this size, and
  * applications expect to reassemble them. */
@@ -28,6 +30,11 @@ static NSError *NMDALSAError(NSString *what, int err)
   return [NSError errorWithDomain: @"NMDALSASequencerErrorDomain" code: -err
     userInfo: @{NSLocalizedDescriptionKey: [NSString stringWithFormat:
       @"ALSA sequencer: %@: %s", what, snd_strerror(err)]}];
+}
+
+static void NMDALSASilentErrorHandler(const char *file, int line,
+  const char *function, int err, const char *fmt, ...)
+{
 }
 
 @implementation NMDALSASequencer
@@ -51,8 +58,13 @@ static NSError *NMDALSAError(NSString *what, int err)
   if ((self = [super init]) == nil) return nil;
   _watchers = [NSMutableArray array];
   _parsers = [NSMutableDictionary dictionary];
-  if ((err = snd_seq_open(&_seq, "default", SND_SEQ_OPEN_DUPLEX,
-      SND_SEQ_NONBLOCK)) < 0)
+  /* While the sequencer is missing networkmidid retries the open every
+   * 30 s, and alsa-lib would print the same failure to the session log each
+   * time; the daemon logs the reason once itself. */
+  snd_lib_error_set_handler(NMDALSASilentErrorHandler);
+  err = snd_seq_open(&_seq, "default", SND_SEQ_OPEN_DUPLEX, SND_SEQ_NONBLOCK);
+  snd_lib_error_set_handler(NULL);
+  if (err < 0)
     {
       _seq = NULL;
       if (error) *error = NMDALSAError(@"cannot open the sequencer", err);
@@ -351,20 +363,32 @@ static BOOL NMDParseAddress(NSString *identifier, int *client, int *port)
 
 @end
 
-id<NMDMIDIPorts> NMDMIDIPortsOpen(NSString *clientName, NSError **error)
+id<NMDMIDIPorts> NMDMIDIPortsOpen(NSString *clientName,
+  MIDINetworkMIDISystem **problem)
 {
-  return [[NMDALSASequencer alloc] initWithClientName: clientName error: error];
+  NSError *error = nil;
+  NMDALSASequencer *seq = [[NMDALSASequencer alloc]
+    initWithClientName: clientName error: &error];
+  int errnum = (int)[error code];
+
+  if (seq != nil) return seq;
+  if (problem)
+    *problem = NMDMIDISystemForSequencerOpenFailure(errnum,
+      [NSString stringWithUTF8String: snd_strerror(-errnum)],
+      NMDSequencerProviderOfThisSystem(),
+      access("/dev/cuse", F_OK) == 0);
+  return nil;
 }
 
 #else /* !NMD_HAVE_ALSA */
 
-id<NMDMIDIPorts> NMDMIDIPortsOpen(NSString *clientName, NSError **error)
+id<NMDMIDIPorts> NMDMIDIPortsOpen(NSString *clientName,
+  MIDINetworkMIDISystem **problem)
 {
-  if (error)
-    *error = [NSError errorWithDomain: @"NMDALSASequencerErrorDomain" code: 1
-      userInfo: @{NSLocalizedDescriptionKey:
-        @"this system has no MIDI port layer for networkmidid yet "
-        @"(the sndio one is still to be written)"}];
+  /* The sndio port layer is still to be written. */
+  if (problem)
+    *problem = [MIDINetworkMIDISystem unavailableSystemWithProblem:
+        MIDINetworkMIDIProblemNoPortLayer device: nil detail: nil];
   return nil;
 }
 

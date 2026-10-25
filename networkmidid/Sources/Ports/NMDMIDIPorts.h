@@ -5,6 +5,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import "MIDINetworkModels.h"
 
 @protocol NMDMIDIPorts;
 
@@ -53,6 +54,8 @@ extern NSString * const NMDLocalPortCanReceive;   /* it consumes MIDI */
 - (void) close;
 @end
 
-/* The port layer of this platform, or nil with an error when there is none
- * or it cannot be opened (no sequencer device, no permission). */
-id<NMDMIDIPorts> NMDMIDIPortsOpen(NSString *clientName, NSError **error);
+/* The port layer of this platform, or nil with the reason the clients are
+ * shown when there is none or it cannot be opened (no sequencer device, no
+ * permission). */
+id<NMDMIDIPorts> NMDMIDIPortsOpen(NSString *clientName,
+  MIDINetworkMIDISystem **problem);

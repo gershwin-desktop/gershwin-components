@@ -63,6 +63,12 @@ static MIDINetworkHost *hostNamed(MIDINetworkState *st, NSString *n)
 /* One line per object, key=value, so both people and scripts can read it. */
 static void printStatus(MIDINetworkState *st)
 {
+  MIDINetworkMIDISystem *midi = st.midiSystem;
+  if ([midi isAvailable])
+    printf("midi available\n");
+  else
+    printf("midi unavailable problem=%s reason=\"%s\"\n", [midi.problem UTF8String],
+      [[midi descriptionWithTranslator: nil] UTF8String]);
   for (MIDINetworkSession *s in [st sessions])
     {
       MIDINetworkRoute *r = [st routeForSessionWithIdentifier: s.identifier];
