@@ -5,11 +5,77 @@
  */
 
 #import "X11DisplayManager.h"
-#import "DisplayController.h"
+#import "DisplayLayout.h"
+#import "DisplayArrangement.h"
 
 #import <X11/Xlib.h>
+#import <X11/Xatom.h>
 #import <X11/extensions/Xrandr.h>
 #import <stdlib.h>
+
+NSString * const X11DisplayManagerErrorDomain = @"X11DisplayManagerErrorDomain";
+
+/* X errors arrive asynchronously through a process-wide handler; while a
+ * layout is applied, the errors of our own connection are collected here
+ * so a refused step is reported instead of looking like success. */
+static Display *trackedDisplay = NULL;
+static int firstErrorCode = 0;
+static unsigned char firstErrorRequest = 0;
+static unsigned char firstErrorMinor = 0;
+static int (*previousHandler)(Display *, XErrorEvent *) = NULL;
+
+static int collectError(Display *dpy, XErrorEvent *ev)
+{
+    if (dpy != trackedDisplay) {
+        return previousHandler ? previousHandler(dpy, ev) : 0;
+    }
+    if (firstErrorCode == 0) {
+        firstErrorCode = ev->error_code;
+        firstErrorRequest = ev->request_code;
+        firstErrorMinor = ev->minor_code;
+    }
+    return 0;
+}
+
+static NSString *outputName(XRROutputInfo *oi)
+{
+    return [[[NSString alloc] initWithBytes:oi->name length:oi->nameLen
+                                   encoding:NSUTF8StringEncoding] autorelease];
+}
+
+static XRRModeInfo *modeInfo(XRRScreenResources *res, RRMode mode)
+{
+    for (int j = 0; j < res->nmode; j++) {
+        if (res->modes[j].id == mode) return &res->modes[j];
+    }
+    return NULL;
+}
+
+/* Same rate formula as xrandr. */
+static double refreshOf(XRRModeInfo *mi)
+{
+    if (mi->hTotal == 0 || mi->vTotal == 0) return 0;
+    double v = (double)mi->vTotal;
+    if (mi->modeFlags & RR_DoubleScan) v *= 2;
+    if (mi->modeFlags & RR_Interlace) v /= 2;
+    return (double)mi->dotClock / ((double)mi->hTotal * v);
+}
+
+static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
+{
+    NSMutableArray *modes = [NSMutableArray array];
+    for (int k = 0; k < oi->nmode; k++) {
+        XRRModeInfo *mi = modeInfo(res, oi->modes[k]);
+        if (mi == NULL) continue;
+        [modes addObject:[DisplayMode modeWithID:mi->id
+                                           width:(int)mi->width
+                                          height:(int)mi->height
+                                         refresh:refreshOf(mi)
+                                      interlaced:(mi->modeFlags & RR_Interlace) != 0
+                                       preferred:k < oi->npreferred]];
+    }
+    return modes;
+}
 
 @implementation X11DisplayManager
 
@@ -34,19 +100,22 @@
 {
     if (_display) return YES;
 
-    // Get DISPLAY from the actual process environment
-    const char *dpyName = getenv("DISPLAY");
-    if (!dpyName) dpyName = ":0";
-    NSDebugLog(@"X11DisplayManager: opening display '%s'", dpyName);
-    _display = XOpenDisplay(dpyName);
+    /* XOpenDisplay(NULL) reads DISPLAY itself; guessing ":0" when it is
+     * unset would configure somebody else's screen. */
+    _display = XOpenDisplay(NULL);
     if (!_display) {
-        NSDebugLog(@"X11DisplayManager: XOpenDisplay(\"%s\") failed", dpyName);
+        NSLog(@"X11DisplayManager: cannot open display '%s'", getenv("DISPLAY") ?: "");
+        return NO;
+    }
+    int eventBase, errorBase;
+    if (!XRRQueryExtension((Display *)_display, &eventBase, &errorBase)) {
+        NSLog(@"X11DisplayManager: the X server has no RandR extension");
+        XCloseDisplay((Display *)_display);
+        _display = NULL;
         return NO;
     }
     _screen = DefaultScreen((Display *)_display);
     _root = RootWindow((Display *)_display, _screen);
-
-    NSDebugLog(@"X11DisplayManager: connected to X11 display");
     return YES;
 }
 
@@ -60,409 +129,332 @@
 
 - (BOOL)isAvailable
 {
-    if (!_display) {
-        [self connect];
-    }
-    return _display != NULL;
+    return [self connect];
 }
 
 #pragma mark - Query
 
-- (NSArray<DisplayInfo *> *)listOutputs
+- (NSData *)edidOfOutput:(RROutput)output
 {
-    if (![self connect]) return nil;
-
     Display *dpy = (Display *)_display;
-    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
-    if (!res) {
-        NSDebugLog(@"X11DisplayManager: XRRGetScreenResourcesCurrent failed");
-        return nil;
-    }
-
-    NSMutableArray *result = [NSMutableArray array];
-
-    for (int i = 0; i < res->noutput; i++) {
-        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
-        if (!oi) continue;
-
-        BOOL connected = (oi->connection == RR_Connected);
-        NSString *outputName = [[[NSString alloc] initWithBytes:oi->name
-                                                         length:oi->nameLen
-                                                       encoding:NSUTF8StringEncoding] autorelease];
-
-        // Collect all available resolution strings for this output
-        NSMutableArray *availRes = [NSMutableArray array];
-        for (int m = 0; m < oi->nmode; m++) {
-            for (int j = 0; j < res->nmode; j++) {
-                if (res->modes[j].id == oi->modes[m]) {
-                    NSString *r = [NSString stringWithFormat:@"%dx%d",
-                                             res->modes[j].width,
-                                             res->modes[j].height];
-                    if (![availRes containsObject:r]) {
-                        [availRes addObject:r];
-                    }
-                    break;
-                }
-            }
+    Atom edidAtom = XInternAtom(dpy, RR_PROPERTY_RANDR_EDID, True);
+    if (edidAtom == None) return nil;
+    Atom type;
+    int format;
+    unsigned long count, after;
+    unsigned char *data = NULL;
+    NSData *result = nil;
+    if (XRRGetOutputProperty(dpy, output, edidAtom, 0, 64, False, False,
+                             AnyPropertyType, &type, &format, &count, &after,
+                             &data) == Success) {
+        if (type == XA_INTEGER && format == 8 && count >= 128) {
+            result = [NSData dataWithBytes:data length:count];
         }
-
-        DisplayInfo *di = [[DisplayInfo alloc] init];
-        [di setOutput:outputName];
-        [di setName:outputName];
-        [di setIsConnected:connected];
-        [di setIsPrimary:NO];
-        [di setCurrentResolutionString:nil];
-        [di setAvailableResolutions:availRes];
-
-        if (connected && oi->crtc && oi->nmode > 0) {
-            XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
-            if (ci) {
-                [di setFrame:NSMakeRect(ci->x, ci->y, ci->width, ci->height)];
-                [di setResolution:NSMakeSize(ci->width, ci->height)];
-
-                // Find the current mode info
-                for (int j = 0; j < res->nmode; j++) {
-                    if (res->modes[j].id == ci->mode) {
-                        NSString *resStr = [NSString stringWithFormat:@"%dx%d",
-                                                     res->modes[j].width,
-                                                     res->modes[j].height];
-                        [di setCurrentResolutionString:resStr];
-                        break;
-                    }
-                }
-
-                XRRFreeCrtcInfo(ci);
-            }
-
-            // Check primary - the X server tracks this per-output
-            if (res->noutput > 0 && res->outputs[i] == XRRGetOutputPrimary(dpy, _root)) {
-                [di setIsPrimary:YES];
-            }
-
-            [result addObject:di];
-        } else if (connected) {
-            // Connected but no CRTC yet - give it defaults so it appears in the UI
-            [di setResolution:NSMakeSize(1920, 1080)];
-            [di setFrame:NSMakeRect(0, 0, 1920, 1080)];
-            if ([availRes count] == 0) {
-                [availRes addObject:@"1920x1080"];
-            }
-            [result addObject:di];
-        }
-
-        [di release];
-        XRRFreeOutputInfo(oi);
     }
-
-    XRRFreeScreenResources(res);
-
-    // If no display was marked primary, mark the first one
-    BOOL hasPrimary = NO;
-    for (DisplayInfo *d in result) {
-        if ([d isPrimary]) { hasPrimary = YES; break; }
-    }
-    if (!hasPrimary && [result count] > 0) {
-        [[result objectAtIndex:0] setIsPrimary:YES];
-    }
-
+    if (data) XFree(data);
     return result;
 }
 
-#pragma mark - Mode / Position
-
-- (BOOL)setMode:(NSString *)output
-          mode:(NSString *)modeId
-    positionX:(int)x
-    positionY:(int)y
+- (DisplayLayout *)currentLayoutProbingOutputs:(BOOL)probe
 {
-    if (![self connect]) return NO;
+    if (![self connect]) return nil;
     Display *dpy = (Display *)_display;
 
-    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
-    if (!res) return NO;
+    XRRScreenResources *res = probe ? XRRGetScreenResources(dpy, _root)
+                                    : XRRGetScreenResourcesCurrent(dpy, _root);
+    if (!res) return nil;
+    RROutput primaryID = XRRGetOutputPrimary(dpy, _root);
 
-    // Parse the target resolution from the mode string (e.g. "1920x1080")
-    int targetW = 0, targetH = 0;
-    NSScanner *scanner = [NSScanner scannerWithString:modeId];
-    [scanner scanInt:&targetW];
-    if ([scanner scanString:@"x" intoString:NULL] || [scanner scanString:@"X" intoString:NULL]) {
-        [scanner scanInt:&targetH];
+    NSMutableArray *outputs = [NSMutableArray array];
+    for (int i = 0; i < res->noutput; i++) {
+        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
+        if (!oi) continue;
+        if (oi->connection != RR_Connected) {
+            XRRFreeOutputInfo(oi);
+            continue;
+        }
+
+        DisplayOutput *o = [[[DisplayOutput alloc] init] autorelease];
+        [o setName:outputName(oi)];
+        [o setConnected:YES];
+        [o setModes:modesOfOutput(res, oi)];
+        [o setWidthMM:(int)oi->mm_width];
+        [o setHeightMM:(int)oi->mm_height];
+        NSMutableArray *possible = [NSMutableArray array];
+        for (int c = 0; c < oi->ncrtc; c++) {
+            [possible addObject:[NSNumber numberWithUnsignedLong:oi->crtcs[c]]];
+        }
+        [o setPossibleCrtcs:possible];
+
+        NSData *edid = [self edidOfOutput:res->outputs[i]];
+        [o setEdidIdentity:DisplayEDIDIdentity(edid)];
+        [o setMonitorName:DisplayEDIDMonitorName(edid)];
+
+        XRRCrtcInfo *ci = oi->crtc ? XRRGetCrtcInfo(dpy, res, oi->crtc) : NULL;
+        XRRModeInfo *mi = ci ? modeInfo(res, ci->mode) : NULL;
+        if (ci && mi) {
+            [o setEnabled:YES];
+            [o setCrtc:oi->crtc];
+            [o setX:ci->x];
+            [o setY:ci->y];
+            [o setModeWidth:(int)mi->width];
+            [o setModeHeight:(int)mi->height];
+            [o setModeRefresh:refreshOf(mi)];
+            [o setRotation:ci->rotation];
+            XRRCrtcTransformAttributes *attr = NULL;
+            if (XRRGetCrtcTransform(dpy, oi->crtc, &attr) && attr) {
+                [o setTransformScaleX:XFixedToDouble(attr->currentTransform.matrix[0][0])];
+                [o setTransformScaleY:XFixedToDouble(attr->currentTransform.matrix[1][1])];
+                XFree(attr);
+            }
+            [o setPrimary:(res->outputs[i] == primaryID)];
+        } else {
+            /* Connected but dark (a monitor plugged in after X started):
+             * offer its native mode until the user picks one. */
+            [o setEnabled:NO];
+            DisplayMode *pm = [o preferredMode];
+            [o setModeWidth:[pm width]];
+            [o setModeHeight:[pm height]];
+            [o setModeRefresh:[pm refresh]];
+        }
+        if (ci) XRRFreeCrtcInfo(ci);
+        XRRFreeOutputInfo(oi);
+        [outputs addObject:o];
     }
-    if (targetW <= 0 || targetH <= 0) {
-        NSDebugLog(@"X11DisplayManager: invalid mode string: %@", modeId);
-        XRRFreeScreenResources(res);
+    XRRFreeScreenResources(res);
+
+    DisplayLayout *layout = [DisplayLayout layoutWithOutputs:outputs];
+    if ([layout primaryOutput] == nil && [[layout enabledOutputs] count] > 0) {
+        /* Without a RandR primary, X clients take the first enabled output
+         * as the main one; show it that way so applying makes it explicit. */
+        [[[layout enabledOutputs] objectAtIndex:0] setPrimary:YES];
+    }
+    return layout;
+}
+
+#pragma mark - Apply
+
+- (NSError *)errorWithText:(NSString *)text
+{
+    return [NSError errorWithDomain:X11DisplayManagerErrorDomain code:1
+                           userInfo:[NSDictionary dictionaryWithObject:text
+                                                                forKey:NSLocalizedDescriptionKey]];
+}
+
+- (NSSize)screenSize
+{
+    /* DisplayWidth()/DisplayHeight() are cached per connection and not
+     * updated when another client resizes the screen; ask the server. */
+    Window rootReturn;
+    int x, y;
+    unsigned int w = 0, h = 0, border, depth;
+    XGetGeometry((Display *)_display, _root, &rootReturn, &x, &y, &w, &h, &border, &depth);
+    return NSMakeSize(w, h);
+}
+
+- (void)setScreenSize:(NSSize)size
+{
+    /* 96 DPI, so the reported physical size follows the pixel size the
+     * way it always did in this pane. */
+    int w = (int)size.width, h = (int)size.height;
+    XRRSetScreenSize((Display *)_display, _root, w, h,
+                     (int)(w * 25.4 / 96.0), (int)(h * 25.4 / 96.0));
+}
+
+- (BOOL)crtcHasTransform:(RRCrtc)crtc
+{
+    XRRCrtcTransformAttributes *attr = NULL;
+    BOOL scaled = NO;
+    if (XRRGetCrtcTransform((Display *)_display, crtc, &attr) && attr) {
+        XTransform *t = &attr->currentTransform;
+        scaled = t->matrix[0][0] != XDoubleToFixed(1.0) || t->matrix[1][1] != XDoubleToFixed(1.0)
+            || t->matrix[0][1] != 0 || t->matrix[1][0] != 0;
+        XFree(attr);
+    }
+    return scaled;
+}
+
+- (BOOL)applyLayout:(DisplayLayout *)layout error:(NSError **)error
+{
+    if (![self connect]) {
+        if (error) *error = [self errorWithText:@"The X display cannot be opened."];
+        return NO;
+    }
+    Display *dpy = (Display *)_display;
+    NSArray *enabled = [layout enabledOutputs];
+    if ([enabled count] == 0) {
+        if (error) *error = [self errorWithText:@"At least one display must stay on."];
         return NO;
     }
 
-    BOOL ok = NO;
-    for (int i = 0; i < res->noutput; i++) {
-        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
-        if (!oi) continue;
-        NSString *nm = [[[NSString alloc] initWithBytes:oi->name
-                                                 length:oi->nameLen
-                                               encoding:NSUTF8StringEncoding] autorelease];
-        if (![nm isEqualToString:output] || !oi->crtc) {
-            XRRFreeOutputInfo(oi);
-            continue;
-        }
-
-        XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
-        if (!ci) { XRRFreeOutputInfo(oi); continue; }
-
-        // Find the RRMode matching targetW x targetH
-        RRMode targetRRMode = None;
-        for (int j = 0; j < res->nmode; j++) {
-            if ((int)res->modes[j].width == targetW && (int)res->modes[j].height == targetH) {
-                targetRRMode = res->modes[j].id;
-                break;
-            }
-        }
-
-        if (targetRRMode) {
-            Status st = XRRSetCrtcConfig(dpy, res, oi->crtc, CurrentTime,
-                                          x, y, targetRRMode, ci->rotation,
-                                          ci->outputs, ci->noutput);
-            NSDebugLog(@"X11DisplayManager: setMode %@ -> %s pos %d,%d (st=%d)",
-                  output, [modeId UTF8String], x, y, (int)st);
-            ok = (st == Success);
-        } else {
-            NSDebugLog(@"X11DisplayManager: mode %dx%d not found for %@", targetW, targetH, output);
-        }
-
-        XRRFreeCrtcInfo(ci);
-        XRRFreeOutputInfo(oi);
-        break;
-    }
-
-    XSync(dpy, False);
-
-    /* XRRSetCrtcConfig only changes the output's mode; the root window (and
-     * therefore the X screen size that the Menu bar, Workspace etc. size to)
-     * is not resized unless XRRSetScreenSize is called - which the xrandr
-     * CLI does automatically.  Compute the bounding box of all configured
-     * CRTCs and resize the screen to it, keeping the physical size (mm) so
-     * the DPI follows the new resolution like xrandr does.
-     *
-     * Always call XRRSetScreenSize: the client's cached DisplayWidth/Height on
-     * this raw connection is NOT refreshed when other clients (or a previous
-     * call) change the screen size, so comparing against it would skip the
-     * resize whenever the cache is stale.  Setting the same size is a no-op. */
-    if (ok) {
-        int bw = 0, bh = 0;
-        for (int i = 0; i < res->noutput; i++) {
-            XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
-            if (oi) {
-                if (oi->crtc) {
-                    XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
-                    if (ci) {
-                        int right = ci->x + ci->width;
-                        int bottom = ci->y + ci->height;
-                        if (right > bw) bw = right;
-                        if (bottom > bh) bh = bottom;
-                        XRRFreeCrtcInfo(ci);
-                    }
-                }
-                XRRFreeOutputInfo(oi);
-            }
-        }
-        if (bw > 0 && bh > 0) {
-            /* Same 96 DPI assumption the other screen-size calls in this file
-             * use, so the physical size stays consistent across resolutions. */
-            int mmW = (int)(bw * 25.4 / 96.0);
-            int mmH = (int)(bh * 25.4 / 96.0);
-            XRRSetScreenSize(dpy, _root, bw, bh, mmW, mmH);
-        }
-    }
-
-    XRRFreeScreenResources(res);
-    return ok;
-}
-
-- (BOOL)setPosition:(NSString *)output x:(int)x y:(int)y
-{
-    if (![self connect]) return NO;
-    Display *dpy = (Display *)_display;
-
     XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
-    if (!res) return NO;
+    if (!res) {
+        if (error) *error = [self errorWithText:@"The display configuration cannot be read."];
+        return NO;
+    }
 
-    BOOL ok = NO;
+    /* Server state per output name. */
+    NSMutableDictionary *outputIDs = [NSMutableDictionary dictionary];
+    NSMutableDictionary *serverModes = [NSMutableDictionary dictionary];
+    NSMutableArray *requests = [NSMutableArray array];
     for (int i = 0; i < res->noutput; i++) {
         XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
         if (!oi) continue;
-        NSString *nm = [[[NSString alloc] initWithBytes:oi->name
-                                                 length:oi->nameLen
-                                               encoding:NSUTF8StringEncoding] autorelease];
-        if (![nm isEqualToString:output] || !oi->crtc) {
-            XRRFreeOutputInfo(oi);
-            continue;
-        }
-
-        XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
-        if (!ci) { XRRFreeOutputInfo(oi); continue; }
-
-        Status st = XRRSetCrtcConfig(dpy, res, oi->crtc, CurrentTime,
-                                      x, y, ci->mode, ci->rotation,
-                                      ci->outputs, ci->noutput);
-        NSDebugLog(@"X11DisplayManager: setPosition %@ %d,%d (st=%d)", output, x, y, (int)st);
-        ok = (st == Success);
-        XRRFreeCrtcInfo(ci);
-        XRRFreeOutputInfo(oi);
-        break;
-    }
-
-    XSync(dpy, False);
-    XRRFreeScreenResources(res);
-    return ok;
-}
-
-#pragma mark - Batch operations
-
-- (BOOL)applyPositions:(NSDictionary<NSString *, NSValue *> *)placements
-{
-    if (![self connect]) return NO;
-    Display *dpy = (Display *)_display;
-
-    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
-    if (!res) return NO;
-
-    // Build output-name -> desired position lookup
-    NSMutableDictionary *posMap = [NSMutableDictionary dictionary];
-    for (NSString *key in placements) {
-        NSPoint pt = [placements[key] pointValue];
-        posMap[key] = [NSValue valueWithPoint:pt];
-    }
-
-    // Calculate bounding box of the new layout
-    int newW = 0, newH = 0;
-    for (int i = 0; i < res->noutput; i++) {
-        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
-        if (!oi) continue;
-        NSString *nm = [[[NSString alloc] initWithBytes:oi->name
-                                                 length:oi->nameLen
-                                               encoding:NSUTF8StringEncoding] autorelease];
-        if (oi->crtc) {
-            XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
-            if (ci) {
-                int x = ci->x, y = ci->y;
-                NSValue *val = posMap[nm];
-                if (val) { NSPoint p = [val pointValue]; x = p.x; y = p.y; }
-                // Find the mode dimensions for this CRTC
-                unsigned int modeW = 0, modeH = 0;
-                for (int j = 0; j < res->nmode; j++) {
-                    if (res->modes[j].id == ci->mode) {
-                        modeW = res->modes[j].width;
-                        modeH = res->modes[j].height;
-                        break;
-                    }
-                }
-                int right = x + (int)modeW;
-                int bottom = y + (int)modeH;
-                if (right  > newW) newW = right;
-                if (bottom > newH) newH = bottom;
-                XRRFreeCrtcInfo(ci);
+        NSString *name = outputName(oi);
+        [outputIDs setObject:[NSNumber numberWithUnsignedLong:res->outputs[i]] forKey:name];
+        [serverModes setObject:modesOfOutput(res, oi) forKey:name];
+        DisplayOutput *wanted = [layout outputNamed:name];
+        if (wanted && [wanted enabled]) {
+            NSMutableArray *possible = [NSMutableArray array];
+            for (int c = 0; c < oi->ncrtc; c++) {
+                [possible addObject:[NSNumber numberWithUnsignedLong:oi->crtcs[c]]];
             }
+            [requests addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                name, @"name",
+                [NSNumber numberWithUnsignedLong:oi->crtc], @"crtc",
+                possible, @"possible", nil]];
         }
         XRRFreeOutputInfo(oi);
     }
 
-    // Expand screen to cover the new layout BEFORE moving CRTCs
-    int curW = DisplayWidth(dpy, _screen);
-    int curH = DisplayHeight(dpy, _screen);
-    if (newW > curW || newH > curH) {
-        int w = (newW > curW) ? newW : curW;
-        int h = (newH > curH) ? newH : curH;
-        NSDebugLog(@"X11DisplayManager: expanding screen to %dx%d", w, h);
-
-        // XRRSetScreenSize needs mm dimensions; estimate from dpi
-        int mmW = (int)(w * 25.4 / 96.0);
-        int mmH = (int)(h * 25.4 / 96.0);
-        XRRSetScreenSize(dpy, _root, w, h, mmW, mmH);
-        XSync(dpy, False);
-
-        XRRFreeScreenResources(res);
-        res = XRRGetScreenResourcesCurrent(dpy, _root);
-        if (!res) return NO;
-    }
-
-    // Move each CRTC that has a new position
-    BOOL allOk = YES;
-    for (int i = 0; i < res->noutput; i++) {
-        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
-        if (!oi) continue;
-        NSString *nm = [[[NSString alloc] initWithBytes:oi->name
-                                                 length:oi->nameLen
-                                               encoding:NSUTF8StringEncoding] autorelease];
-        NSValue *val = posMap[nm];
-        if (oi->crtc && val) {
-            XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
-            if (ci) {
-                NSPoint p = [val pointValue];
-                Status st = XRRSetCrtcConfig(dpy, res, oi->crtc, CurrentTime,
-                                              (int)p.x, (int)p.y, ci->mode, ci->rotation,
-                                              ci->outputs, ci->noutput);
-                NSDebugLog(@"X11DisplayManager: moved %@ to %.0f,%.0f (st=%d)", nm, p.x, p.y, (int)st);
-                if (st != Success) allOk = NO;
-                XRRFreeCrtcInfo(ci);
-            }
-        }
-        XRRFreeOutputInfo(oi);
-    }
-
-    // Shrink screen if layout got smaller
-    if (newW < curW || newH < curH) {
-        int w = (newW > 0) ? newW : curW;
-        int h = (newH > 0) ? newH : curH;
-        NSDebugLog(@"X11DisplayManager: shrinking screen to %dx%d", w, h);
-        int mmW = (int)(w * 25.4 / 96.0);
-        int mmH = (int)(h * 25.4 / 96.0);
-        XRRSetScreenSize(dpy, _root, w, h, mmW, mmH);
-    }
-
-    XSync(dpy, False);
-    XRRFreeScreenResources(res);
-    return allOk;
-}
-
-- (BOOL)setScreenSize:(int)width height:(int)height
-{
-    if (![self connect]) return NO;
-    Display *dpy = (Display *)_display;
-
-    int mmW = (int)(width  * 25.4 / 96.0);
-    int mmH = (int)(height * 25.4 / 96.0);
-    XRRSetScreenSize(dpy, _root, width, height, mmW, mmH);
-    XSync(dpy, False);
-    return YES;
-}
-
-- (BOOL)setPrimaryOutput:(NSString *)output
-{
-    if (![self connect]) return NO;
-    Display *dpy = (Display *)_display;
-
-    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
-    if (!res) return NO;
-
-    BOOL ok = NO;
-    for (int i = 0; i < res->noutput; i++) {
-        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
-        if (!oi) continue;
-        NSString *nm = [[[NSString alloc] initWithBytes:oi->name
-                                                 length:oi->nameLen
-                                               encoding:NSUTF8StringEncoding] autorelease];
-        if ([nm isEqualToString:output]) {
-            XRRSetOutputPrimary(dpy, _root, res->outputs[i]);
-            XSync(dpy, False);
-            ok = YES;
-            XRRFreeOutputInfo(oi);
+    NSString *problem = nil;
+    for (DisplayOutput *o in enabled) {
+        if ([outputIDs objectForKey:[o name]] == nil) {
+            problem = [NSString stringWithFormat:@"Display %@ is not connected.", [o name]];
             break;
         }
-        XRRFreeOutputInfo(oi);
+    }
+    NSString *failed = nil;
+    NSDictionary *crtcs = problem ? nil : DisplayAssignCrtcs(requests, &failed);
+    if (!problem && crtcs == nil) {
+        problem = [NSString stringWithFormat:
+            @"No free display controller (CRTC) can drive %@.", failed];
     }
 
+    NSMutableDictionary *modeIDs = [NSMutableDictionary dictionary];
+    NSMutableArray *frames = [NSMutableArray array];
+    for (DisplayOutput *o in enabled) {
+        if (problem) break;
+        DisplayMode *m = DisplaySelectMode([serverModes objectForKey:[o name]],
+                                           [o modeWidth], [o modeHeight], [o modeRefresh]);
+        if (m == nil) {
+            problem = [NSString stringWithFormat:@"Display %@ does not support %dx%d.",
+                       [o name], [o modeWidth], [o modeHeight]];
+            break;
+        }
+        [modeIDs setObject:[NSNumber numberWithUnsignedLong:[m modeID]] forKey:[o name]];
+        [frames addObject:[NSValue valueWithRect:[o frame]]];
+    }
+
+    NSSize current = [self screenSize];
+    DisplayScreenSizePlan plan = DisplayPlanScreenSize(current, frames);
+    if (!problem) {
+        int minW, minH, maxW, maxH;
+        XRRGetScreenSizeRange(dpy, _root, &minW, &minH, &maxW, &maxH);
+        if (plan.grow.width > maxW || plan.grow.height > maxH) {
+            problem = [NSString stringWithFormat:
+                @"The arrangement needs a %.0fx%.0f screen; this X server allows at most %dx%d.",
+                plan.grow.width, plan.grow.height, maxW, maxH];
+        } else if (plan.final.width < minW || plan.final.height < minH) {
+            problem = [NSString stringWithFormat:
+                @"The arrangement is smaller than the minimum screen size %dx%d.", minW, minH];
+        }
+    }
+    if (problem) {
+        XRRFreeScreenResources(res);
+        if (error) *error = [self errorWithText:problem];
+        return NO;
+    }
+
+    NSSet *keptCrtcs = [NSSet setWithArray:[crtcs allValues]];
+    BOOL refused = NO;
+
+    /* Nobody may see, or act on, the half-configured screen in between. */
+    XGrabServer(dpy);
+    XSync(dpy, False);
+    trackedDisplay = dpy;
+    firstErrorCode = 0;
+    previousHandler = XSetErrorHandler(collectError);
+
+    /* 1. Switch off every CRTC that is not part of the new layout, so its
+     *    old size cannot keep the screen from shrinking and its outputs
+     *    (turned off, unplugged, moved elsewhere) go dark. */
+    for (int c = 0; c < res->ncrtc; c++) {
+        if ([keptCrtcs containsObject:[NSNumber numberWithUnsignedLong:res->crtcs[c]]]) continue;
+        XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, res->crtcs[c]);
+        if (ci && ci->mode != None) {
+            if (XRRSetCrtcConfig(dpy, res, res->crtcs[c], CurrentTime, 0, 0, None,
+                                 RR_Rotate_0, NULL, 0) != RRSetConfigSuccess) {
+                refused = YES;
+            }
+        }
+        if (ci) XRRFreeCrtcInfo(ci);
+    }
+
+    /* 2. Grow first: a CRTC must lie inside the screen when it is set. */
+    if (!NSEqualSizes(plan.grow, current)) [self setScreenSize:plan.grow];
+
+    /* 3. Every enabled output on its CRTC, with its transform. */
+    for (DisplayOutput *o in enabled) {
+        RRCrtc crtc = [[crtcs objectForKey:[o name]] unsignedLongValue];
+        RROutput out = [[outputIDs objectForKey:[o name]] unsignedLongValue];
+        RRMode mode = [[modeIDs objectForKey:[o name]] unsignedLongValue];
+
+        /* Only touch the transform when one is wanted or must be undone:
+         * drivers without transform support refuse even the identity. */
+        if ([o hasTransform] || [self crtcHasTransform:crtc]) {
+            XTransform t;
+            memset(&t, 0, sizeof(t));
+            t.matrix[0][0] = DisplayFixedFromDouble([o transformScaleX]);
+            t.matrix[1][1] = DisplayFixedFromDouble([o transformScaleY]);
+            t.matrix[2][2] = XDoubleToFixed(1.0);
+            /* The transform takes effect with the next CRTC configuration;
+             * bilinear keeps a scaled mirror readable. */
+            char *filter = [o hasTransform] ? "bilinear" : "nearest";
+            XRRSetCrtcTransform(dpy, crtc, &t, filter, NULL, 0);
+        }
+
+        if (XRRSetCrtcConfig(dpy, res, crtc, CurrentTime, [o x], [o y], mode,
+                             (Rotation)[o rotation], &out, 1) != RRSetConfigSuccess) {
+            refused = YES;
+        }
+    }
+
+    /* 4. Shrink to the new layout once nothing lies outside it. */
+    if (!NSEqualSizes(plan.final, plan.grow)) [self setScreenSize:plan.final];
+
+    DisplayOutput *primary = [layout primaryOutput];
+    if (primary) {
+        XRRSetOutputPrimary(dpy, _root,
+                            [[outputIDs objectForKey:[primary name]] unsignedLongValue]);
+    }
+
+    XUngrabServer(dpy);
+    XSync(dpy, False);
+    XSetErrorHandler(previousHandler);
+    trackedDisplay = NULL;
     XRRFreeScreenResources(res);
-    return ok;
+
+    if (firstErrorCode != 0 || refused) {
+        if (error) {
+            char text[128] = "";
+            NSString *why;
+            if (firstErrorCode) XGetErrorText(dpy, firstErrorCode, text, sizeof(text));
+            if (firstErrorCode && firstErrorMinor == X_RRSetCrtcTransform) {
+                why = @"The graphics driver cannot scale a display, so these displays "
+                      @"can only mirror at a resolution they all support.";
+            } else if (firstErrorCode) {
+                why = [NSString stringWithFormat:
+                    @"The X server refused the display configuration (%s, request %d.%d).",
+                    text, firstErrorRequest, firstErrorMinor];
+            } else {
+                why = @"The X server refused the display configuration.";
+            }
+            *error = [self errorWithText:why];
+        }
+        return NO;
+    }
+    return YES;
 }
 
 @end

@@ -6,8 +6,14 @@
 
 #import <Foundation/Foundation.h>
 
-@class DisplayInfo;
+@class DisplayLayout;
 
+extern NSString * const X11DisplayManagerErrorDomain;
+
+/* Reads the RandR state of the X server into a DisplayLayout and applies a
+ * DisplayLayout to it.  All decisions (modes, CRTCs, screen size, mirror
+ * transforms) come from the Foundation-only model; this class only talks
+ * to the server. */
 @interface X11DisplayManager : NSObject
 {
     void *_display;     // Display*
@@ -17,26 +23,18 @@
 
 - (BOOL)isAvailable;
 
-// Query outputs and populate DisplayInfo objects.  Returns nil on error.
-- (NSArray<DisplayInfo *> *)listOutputs;
+/* The connected outputs with their modes, positions, primary and
+ * transforms; nil when RandR cannot be queried.  With `probe` the server
+ * asks the hardware again which monitors are connected, like xrandr does:
+ * outputs without hotplug detection (VGA, some docks) only show up that
+ * way, but probing can take a moment, so it is not for periodic polling. */
+- (DisplayLayout *)currentLayoutProbingOutputs:(BOOL)probe;
 
-// Atomically set mode and position for one output.
-- (BOOL)setMode:(NSString *)output
-          mode:(NSString *)modeId
-    positionX:(int)x
-    positionY:(int)y;
-
-// Set CRTC position while preserving the current mode.
-- (BOOL)setPosition:(NSString *)output x:(int)x y:(int)y;
-
-// Apply multiple position changes in one batch, expanding/shrinking the
-// virtual screen to match the bounding box before moving CRTCs.
-- (BOOL)applyPositions:(NSDictionary<NSString *, NSValue *> *)placements;
-
-// Ensure the virtual screen is at least width x height.
-- (BOOL)setScreenSize:(int)width height:(int)height;
-
-// Mark an output as the primary display.
-- (BOOL)setPrimaryOutput:(NSString *)output;
+/* Configures the server like `layout`: newly enabled outputs get a free
+ * CRTC, modes come from each output's own list, the screen grows before
+ * and shrinks after the CRTCs change, and the primary is set.  CRTCs of
+ * outputs that are off, or no longer connected, are switched off.  Returns
+ * NO with a description in *error when the server refused any step. */
+- (BOOL)applyLayout:(DisplayLayout *)layout error:(NSError **)error;
 
 @end

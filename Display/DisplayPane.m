@@ -71,8 +71,9 @@
 - (void)didSelect
 {
     [super didSelect];
-    // Refresh display data when the pane is (re-)selected
-    [displayController refreshDisplays:nil];
+    // Ask the hardware again when the pane is (re-)selected, so a monitor
+    // without hotplug detection that was plugged in meanwhile shows up.
+    [displayController probeDisplays];
     // Start polling so hot-plugged monitors are detected while the pane is open
     [self startRefreshTimer];
     [self setInitialKeyView:nil];
