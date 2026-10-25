@@ -145,7 +145,11 @@ int main(void)
              && [[readFile(d) objectForKey:@"GSScaleFactor"] doubleValue] == 2.0,
              "rewriting a group-writable file leaves it at 0644 with the new scale");
         problem = nil;
-        ok = DisplayWriteSystemScale(@"/nonexistent-dir/GlobalDefaults/Display.plist", 2.0,
+        // A plain file as the parent directory, because root (as in CI) may
+        // create any missing directory.
+        NSString *notADir = [d stringByAppendingPathComponent:@"not-a-directory"];
+        [fm createFileAtPath:notADir contents:[NSData data] attributes:nil];
+        ok = DisplayWriteSystemScale([notADir stringByAppendingPathComponent:@"Display.plist"], 2.0,
                                      DisplayScaleSourceUser, &problem);
         PASS(!ok && problem != nil, "a file that cannot be written fails with a reason");
     END_SET("user (displayconfig)")

@@ -50,6 +50,16 @@ bad() { fails=$((fails + 1)); echo "FAIL: $1"; }
 # GNUstep.sh reads unset variables, so -u only starts here.
 set -u
 
+# GNU make is "gmake" on the BSDs but only "make" on Arch and others.
+if command -v gmake >/dev/null 2>&1; then
+  gnumake=gmake
+elif make --version 2>/dev/null | grep -q 'GNU Make'; then
+  gnumake=make
+else
+  echo "FATAL: GNU make not found" >&2
+  exit 1
+fi
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/multihead.XXXXXX") || exit 1
 logs=${MULTIHEAD_KEEP:-$work/logs}
 mkdir -p "$logs" "$work/home"
@@ -113,7 +123,7 @@ run_tools() {
 build() {  # build DIR [make args...]
   dir=$1; shift
   [ "${MULTIHEAD_NO_BUILD:-}" = 1 ] && return 0
-  if ( cd "$dir" && gmake -j1 "$@" ) > "$logs/build-$(echo "$dir" | tr / _).log" 2>&1; then
+  if ( cd "$dir" && $gnumake -j1 "$@" ) > "$logs/build-$(echo "$dir" | tr / _).log" 2>&1; then
     return 0
   fi
   bad "build of $dir (log $logs/build-$(echo "$dir" | tr / _).log)"
