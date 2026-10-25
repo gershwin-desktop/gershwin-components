@@ -56,3 +56,10 @@
 "The session needs a local name." = "The session needs a local name.";
 "The session needs an advertised name." = "The session needs an advertised name.";
 "Turn the session on before connecting." = "Turn the session on before connecting.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. The snd-seq kernel module is not loaded." = "Network MIDI is unavailable: the ALSA sequencer (%@) is missing. The snd-seq kernel module is not loaded.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server is not running." = "Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server is not running.";
+"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server cannot run because this kernel has no cuse support." = "Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server cannot run because this kernel has no cuse support.";
+"Network MIDI is unavailable: there is no permission to open the ALSA sequencer (%@)." = "Network MIDI is unavailable: there is no permission to open the ALSA sequencer (%@).";
+"Network MIDI is unavailable: the ALSA sequencer (%@) cannot be opened (%@)." = "Network MIDI is unavailable: the ALSA sequencer (%@) cannot be opened (%@).";
+"Network MIDI is unavailable: this system has no MIDI port layer for it yet." = "Network MIDI is unavailable: this system has no MIDI port layer for it yet.";
+"Network MIDI is unavailable: the computer's MIDI system cannot be used." = "Network MIDI is unavailable: the computer's MIDI system cannot be used.";

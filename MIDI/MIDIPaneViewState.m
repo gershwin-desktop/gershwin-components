@@ -172,8 +172,15 @@ static NSInteger PopUpIndex(NSArray *identifiers, NSString *portIdentifier)
     /* Status: the newest problem wins over the steady state. */
     if (!running) {
         NSError *reason = [backend statusError];
-        _statusText = MIDIPaneLocalized([reason localizedDescription]
-                                        ?: @"Network MIDI is not available on this computer.");
+        MIDINetworkMIDISystem *midi = [[reason userInfo] objectForKey:MIDINetworkMIDISystemErrorKey];
+        if ([midi isKindOfClass:[MIDINetworkMIDISystem class]]) {
+            /* The sentence carries the device path, so it is translated as
+               a format and not looked up whole. */
+            _statusText = [midi descriptionWithTranslator:^(NSString *format) { return MIDIPaneLocalized(format); }];
+        } else {
+            _statusText = MIDIPaneLocalized([reason localizedDescription]
+                                            ?: @"Network MIDI is not available on this computer.");
+        }
         _statusIsError = YES;
     } else if (lastError != nil) {
         _statusText = MIDIPaneLocalized([lastError localizedDescription]);
