@@ -40,6 +40,10 @@ num=${2:-}
 DISPLAY=:$num
 export DISPLAY
 
+# CI containers run as root and have no sudo; a desktop user needs it.
+SUDO=sudo
+[ "$(id -u)" = 0 ] && SUDO=
+
 # Debian's /usr/bin/Xorg is a wrapper that wants a console; the server
 # binary itself runs without one.
 XORG=/usr/lib/xorg/Xorg
@@ -83,11 +87,17 @@ EOF
   chmod a+r "$conf"
   # Root, like the uitest session's Xvfb: an Xorg owned by the slot user
   # would die with the session script's pkill of that user.
-  sudo "$XORG" ":$num" -noreset -nolisten tcp -ac -config "$conf" \
-    -logfile "/tmp/xorg-dummy-$num.log" >/dev/null 2>&1 &
+  # The log sits next to the config so a caller that owns CONFDIR keeps it
+  # (a failed CI start is otherwise undiagnosable).
+  $SUDO "$XORG" ":$num" -noreset -nolisten tcp -ac -config "$conf" \
+    -logfile "$confdir/xorg-dummy-$num.log" >/dev/null 2>&1 &
   i=0
   while [ $i -lt 50 ] && ! xrandr >/dev/null 2>&1; do sleep 0.2; i=$((i + 1)); done
-  xrandr | grep -q '^DUMMY0 connected' || { echo "dummy Xorg did not start" >&2; exit 1; }
+  xrandr | grep -q '^DUMMY0 connected' || {
+    echo "dummy Xorg did not start" >&2
+    tail -n 30 "$confdir/xorg-dummy-$num.log" >&2 2>/dev/null
+    exit 1
+  }
   echo "dummy Xorg on :$num"
 }
 
@@ -113,7 +123,7 @@ unplug() {
 stop() {
   pid=$(tr -d ' ' < /tmp/.X$num-lock 2>/dev/null)
   if [ -n "$pid" ] && ps -o args= -p "$pid" | grep -q "Xorg :$num "; then
-    sudo kill "$pid"
+    $SUDO kill "$pid"
   else
     echo "no dummy Xorg of ours on :$num" >&2
     exit 1
