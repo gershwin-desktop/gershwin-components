@@ -7,6 +7,8 @@
 #import "MenuBarGeometry.h"
 #import "PrimaryMonitor.h"
 
+#include <math.h>
+
 MenuBarGeometry MenuBarGeometryForMonitor(NSRect primaryXRect, NSSize rootSize,
                                           CGFloat themeHeight, CGFloat scale)
 {
@@ -24,4 +26,17 @@ MenuBarGeometry MenuBarGeometryForMonitor(NSRect primaryXRect, NSSize rootSize,
   g.contentSize = NSMakeSize(NSWidth(primaryXRect) / scale, themeHeight);
   PrimaryMonitorStrutForPanel(barXRect, rootSize, PrimaryMonitorEdgeTop, g.strut);
   return g;
+}
+
+CGFloat MenuBarSlideInTop(CGFloat finalTop, CGFloat barHeight, CGFloat progress)
+{
+  CGFloat eased;
+
+  if (progress < 0)
+    progress = 0;
+  if (progress > 1)
+    progress = 1;
+  /* Ease-out cubic: fast start, gentle stop. */
+  eased = 1.0 - (1.0 - progress) * (1.0 - progress) * (1.0 - progress);
+  return round(finalTop + barHeight - eased * barHeight);
 }

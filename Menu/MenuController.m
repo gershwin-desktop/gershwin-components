@@ -2067,12 +2067,10 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         [self revealAppMenuWidget];
         NSDebugLLog(@"gwcomp", @"MenuController: Menu slide-in animation completed");
     } else {
-        // Calculate progress (0.0 to 1.0) using ease-out cubic for smooth deceleration
-        CGFloat progress = elapsed / duration;
-        progress = 1.0 - ((1.0 - progress) * (1.0 - progress) * (1.0 - progress));  // Ease-out cubic
-        
-        // Interpolate position from above screen to final position
-        CGFloat currentY = self.slideInStartY - (progress * menuBarHeight);
+        // Interpolate from above the screen to the final position, in whole
+        // pixels (see MenuBarSlideInTop)
+        CGFloat currentY = MenuBarSlideInTop(self.slideInStartY - menuBarHeight,
+                                             menuBarHeight, elapsed / duration);
         [self.menuBar setFrameTopLeftPoint:NSMakePoint(self.screenFrame.origin.x, currentY)];
     }
 }

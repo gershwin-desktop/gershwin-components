@@ -27,4 +27,12 @@ typedef struct {
 MenuBarGeometry MenuBarGeometryForMonitor(NSRect primaryXRect, NSSize rootSize,
                                           CGFloat themeHeight, CGFloat scale);
 
+/* Top edge (GNUstep screen coordinates, device pixels) of the bar during
+ * its slide-in from one bar height above finalTop, for progress 0..1
+ * (eased out).  Whole pixels only: the X11 backend truncates a fractional
+ * window position, and NSWindow treats the final exact frame as equal to
+ * an almost-equal fractional one and skips it, so the bar stayed a pixel
+ * too high once the backend reported the truncated position back. */
+CGFloat MenuBarSlideInTop(CGFloat finalTop, CGFloat barHeight, CGFloat progress);
+
 #endif

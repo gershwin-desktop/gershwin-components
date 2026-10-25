@@ -61,6 +61,26 @@ int main(void)
          "top strut is the primary's top plus the bar, over its columns");
   }
 
+  {
+    /* Slide-in at 60 fps over 0.3 s from one 22 px bar height above the
+     * top of a primary whose top is at GNUstep y 800. */
+    BOOL whole = YES;
+    int i;
+
+    for (i = 0; i <= 20; i++)
+      {
+        CGFloat top = MenuBarSlideInTop(800, 22, i / 18.0);
+        if (top != floor(top))
+          whole = NO;
+      }
+    PASS(whole, "every slide-in step is a whole pixel");
+    PASS(MenuBarSlideInTop(800, 22, 0) == 822
+         && MenuBarSlideInTop(800, 22, 1) == 800,
+         "slide-in runs from one bar height above to the final top");
+    PASS(MenuBarSlideInTop(800, 22, 0.99) == 800,
+         "the step just before the end is the final top, not 800.0003");
+  }
+
   [arp release];
   return 0;
 }
