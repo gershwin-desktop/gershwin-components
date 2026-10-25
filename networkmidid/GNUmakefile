@@ -12,9 +12,10 @@
 # not built or installed; it says why, and that is not a failure.  (OpenBSD,
 # which has no ALSA either, is handled below.)  uname says FreeBSD on NextBSD,
 # so it is recognised by what it ships, as elsewhere in Gershwin:
-# /etc/os-release ID=nextbsd, /bin/nextbsd-version or /usr/lib/system.
+# /etc/os-release ID=nextbsd or /bin/nextbsd-version (not /usr/lib/system:
+# macOS has it too).
 IS_NEXTBSD := $(shell if [ "$$(uname -s)" = NextBSD ] || grep -Eqs '^ID="?nextbsd"?$$' /etc/os-release || \
-	[ -e /bin/nextbsd-version ] || [ -d /usr/lib/system ]; then echo yes; else echo no; fi)
+	[ -e /bin/nextbsd-version ]; then echo yes; else echo no; fi)
 ifeq ($(IS_NEXTBSD),yes)
 .PHONY: all install uninstall clean distclean check
 all install uninstall clean distclean check:

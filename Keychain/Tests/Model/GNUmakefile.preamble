@@ -7,7 +7,7 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 # gnustep-tests regenerates GNUmakefile; with no tools to build it reports the
 # tests as not built rather than failed.
 IS_NEXTBSD := $(shell if [ "$$(uname -s)" = NextBSD ] || grep -Eqs '^ID="?nextbsd"?$$' /etc/os-release || \
-	[ -e /bin/nextbsd-version ] || [ -d /usr/lib/system ]; then echo yes; else echo no; fi)
+	[ -e /bin/nextbsd-version ]; then echo yes; else echo no; fi)
 ifeq ($(IS_NEXTBSD),yes)
 TEST_TOOL_NAME :=
 $(info Keychain tests: skipped on NextBSD — Keychain needs D-Bus, and NextBSD ships no D-Bus)
