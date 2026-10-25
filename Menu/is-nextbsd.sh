@@ -10,16 +10,14 @@
 # So the system is recognised by what it ships instead, in the same ways
 # the rest of Gershwin already does: /etc/os-release says ID=nextbsd (as
 # gershwin-developer's bootstrap.sh reads it), /bin/nextbsd-version is
-# there (as DirectoryServices checks), or /usr/lib/system, where the base
-# system keeps its libraries, exists (as gershwin-developer's
-# install-system-domain.sh checks).  macOS has /usr/lib/system too, but
-# Menu is not built there.
+# there (as DirectoryServices checks).  /usr/lib/system is deliberately not
+# used: macOS has it too.
 
 if [ "$(uname -s 2>/dev/null)" = "NextBSD" ]; then
     echo yes
 elif [ -f /etc/os-release ] && grep -Eq '^ID="?nextbsd"?$' /etc/os-release; then
     echo yes
-elif [ -e /bin/nextbsd-version ] || [ -d /usr/lib/system ]; then
+elif [ -e /bin/nextbsd-version ]; then
     echo yes
 else
     echo no
