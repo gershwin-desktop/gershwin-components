@@ -12,6 +12,7 @@
 
 #import <Foundation/Foundation.h>
 #import "SWRepository.h"
+#import "SWCheckoutLayout.h"
 
 typedef NS_ENUM(NSInteger, SWRepositoryUpdateOutcome) {
   SWRepositoryUpdateOutcomeUpdated = 0,       // succeeded, nothing left over
@@ -29,14 +30,12 @@ typedef NS_ENUM(NSInteger, SWRepositoryUpdateOutcome) {
 
 @interface SWRepositoryUpdater : NSObject
 
-// sourcesDirectory: Library/Sources under the gershwin-developer checkout.
-// installScriptPath: Library/Scripts/install-system-domain.sh.
+// layout: where each working copy, the install script and the patch sets are.
 // stepHandler is called before each step for the progress window's status
 // line, e.g. "Building gershwin-workspace (repository 2 of 6)" is composed
 // by the caller from the verb this reports.
-- (instancetype)initWithSourcesDirectory:(NSString *)sourcesDirectory
-                       installScriptPath:(NSString *)installScriptPath
-                              logHandler:(void (^)(NSString *line))logHandler;
+- (instancetype)initWithCheckoutLayout:(SWCheckoutLayout *)layout
+                            logHandler:(void (^)(NSString *line))logHandler;
 
 - (SWRepositoryUpdateOutcome)updateRepository:(SWRepository *)repository
                                   targetBranch:(NSString *)targetBranch

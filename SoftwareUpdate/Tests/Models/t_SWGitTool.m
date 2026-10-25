@@ -475,6 +475,36 @@ int main(void)
     [sg release];
   }
 
+  /* --- textOfFileAtRef: reads a file as a ref has it, following the per-OS
+   * symlinks Library/OSSupport carries (ghostbsd.txt -> freebsd.txt) --- */
+  {
+    NSString *lBase = [gBaseDir stringByAppendingPathComponent:@"links"];
+    NSString *lOrigin = [lBase stringByAppendingPathComponent:@"origin"];
+    NSString *lWork = [lBase stringByAppendingPathComponent:@"work"];
+    runShell([NSString stringWithFormat:
+      @"mkdir -p %@ && git init -q -b main %@ && cd %@ && "
+       "git config user.email t@example.invalid && git config user.name Test && "
+       "mkdir -p Library/OSSupport && printf 'old\\n' > Library/OSSupport/freebsd.txt && "
+       "ln -s freebsd.txt Library/OSSupport/ghostbsd.txt && "
+       "ln -s ghostbsd.txt Library/OSSupport/chained.txt && "
+       "git add -A && git commit -q -m lists && git clone -q %@ %@ && "
+       "printf 'old\\nalsa-lib\\n' > Library/OSSupport/freebsd.txt && git commit -q -am alsa && "
+       "cd %@ && git fetch -q origin",
+      lBase, lOrigin, lOrigin, lOrigin, lWork, lWork]);
+    SWGitTool *lg = [[SWGitTool alloc] initWithRepositoryPath:lWork];
+    PASS_EQUAL([lg textOfFileAtRef:@"origin/main" path:@"Library/OSSupport/freebsd.txt"],
+               @"old\nalsa-lib\n", "a plain file is read as the fetched ref has it, not the checkout");
+    PASS_EQUAL([lg textOfFileAtRef:@"origin/main" path:@"Library/OSSupport/ghostbsd.txt"],
+               @"old\nalsa-lib\n", "a symlinked OS list yields its target's content, not the link text");
+    PASS_EQUAL([lg textOfFileAtRef:@"origin/main" path:@"Library/OSSupport/chained.txt"],
+               @"old\nalsa-lib\n", "a chain of symlinks is followed to the end");
+    PASS([lg textOfFileAtRef:@"origin/main" path:@"Library/OSSupport/nosuch.txt"] == nil,
+         "a file the ref does not have is nil");
+    PASS([lg textOfFileAtRef:@"origin/nosuch" path:@"Library/OSSupport/freebsd.txt"] == nil,
+         "an unknown ref is nil");
+    [lg release];
+  }
+
   runShell([NSString stringWithFormat:@"rm -rf %@", gBaseDir]);
   [arp release];
   return 0;

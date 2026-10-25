@@ -42,12 +42,15 @@
   NSString *_osSupportDirectory;
   GWPackageManager *_packageManager;
   NSString *_osIdentifier;
+  NSString *_incomingPackageList;
 }
 @end
 
 @implementation SWPrerequisitesInstaller
 
 @synthesize logHandler = _logHandler;
+@synthesize osIdentifier = _osIdentifier;
+@synthesize incomingPackageList = _incomingPackageList;
 
 - (instancetype)initWithOSSupportDirectory:(NSString *)osSupportDirectory
                             packageManager:(GWPackageManager *)packageManager
@@ -62,29 +65,39 @@
   return self;
 }
 
-- (NSArray<NSString *> *)declaredPackages
+- (NSString *)packageListPath
 {
   if (!_osIdentifier) return nil;
-
   // Library/OSSupport/ already carries a symlink per OS variant onto its
   // family's file (e.g. artix.txt -> arch.txt, ubuntu.txt -> debian.txt), so
   // a single direct lookup is enough - no extra ID_LIKE fallback needed here.
-  NSString *path = [_osSupportDirectory stringByAppendingPathComponent:
+  return [_osSupportDirectory stringByAppendingPathComponent:
     [_osIdentifier stringByAppendingPathExtension:@"txt"]];
-  NSString *contents = [NSString stringWithContentsOfFile:path
-                                                   encoding:NSUTF8StringEncoding
-                                                      error:NULL];
-  if (!contents) return nil; // no package list known for this OS - not an error
+}
 
-  NSMutableArray *packages = [NSMutableArray array];
+static void SWAppendPackagesFromList(NSString *contents, NSMutableArray<NSString *> *packages)
+{
   for (NSString *rawLine in [contents componentsSeparatedByString:@"\n"]) {
     // debian.txt allows a trailing "# comment"; strip it before trimming.
     NSString *line = rawLine;
     NSRange hash = [line rangeOfString:@"#"];
     if (hash.location != NSNotFound) line = [line substringToIndex:hash.location];
     line = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([line length] > 0) [packages addObject:line];
+    if ([line length] > 0 && ![packages containsObject:line]) [packages addObject:line];
   }
+}
+
+- (NSArray<NSString *> *)declaredPackages
+{
+  NSString *path = [self packageListPath];
+  NSString *contents = path ? [NSString stringWithContentsOfFile:path
+                                                         encoding:NSUTF8StringEncoding
+                                                            error:NULL] : nil;
+  if (!contents && !_incomingPackageList) return nil;
+
+  NSMutableArray<NSString *> *packages = [NSMutableArray array];
+  if (contents) SWAppendPackagesFromList(contents, packages);
+  if (_incomingPackageList) SWAppendPackagesFromList(_incomingPackageList, packages);
   return [packages copy];
 }
 
@@ -102,6 +115,19 @@
 - (BOOL)installMissingPackagesWithProgress:(void (^)(NSString *, NSUInteger, NSUInteger))progress
                                        error:(NSError **)error
 {
+  if (![self declaredPackages]) {
+    if (error) {
+      NSString *description = _osIdentifier
+        ? [NSString stringWithFormat:@"There is no package list for %@ at %@.",
+            _osIdentifier, [self packageListPath]]
+        : @"The operating system could not be identified, so its package list is unknown.";
+      *error = [NSError errorWithDomain:@"SWPrerequisitesInstallerErrorDomain"
+                                    code:1
+                                userInfo:@{NSLocalizedDescriptionKey: description}];
+    }
+    return NO;
+  }
+
   NSArray<NSString *> *missing = [self missingPackages];
   if ([missing count] == 0) {
     if (_logHandler) _logHandler(@"All prerequisites are already installed.");

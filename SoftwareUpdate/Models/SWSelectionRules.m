@@ -5,6 +5,7 @@
  */
 
 #import "SWSelectionRules.h"
+#import "SWCheckoutLayout.h"
 
 @implementation SWSelectionRules
 
@@ -49,6 +50,20 @@
     return YES;
   }
   return [self blockedReasonForRepository:repository] == nil;
+}
+
++ (NSString *)incomingDeveloperRefForRepositories:(NSArray<SWRepository *> *)all
+                                         selected:(NSArray<SWRepository *> *)selected
+{
+  for (SWRepository *repo in selected) {
+    if ([[repo name] isEqualToString:SWDeveloperRepositoryName]) return nil;
+  }
+  for (SWRepository *repo in all) {
+    if (![[repo name] isEqualToString:SWDeveloperRepositoryName]) continue;
+    if ([repo commitCount] == 0 || ![repo targetBranch]) return nil;
+    return [NSString stringWithFormat:@"origin/%@", [repo targetBranch]];
+  }
+  return nil;
 }
 
 @end

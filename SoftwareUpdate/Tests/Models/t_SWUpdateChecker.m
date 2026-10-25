@@ -8,6 +8,7 @@
 #import "SWRepository.h"
 #import "SWRepositoryList.h"
 #import "SWUpdateChecker.h"
+#import "SWCheckoutLayout.h"
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -61,7 +62,9 @@ int main(void)
 
   /* --- gershwin-developer: declares libobjc2's incoming pin --- */
   NSString *originDeveloper = [originDir stringByAppendingPathComponent:@"gershwin-developer"];
-  NSString *workDeveloper = [sourcesDir stringByAppendingPathComponent:@"gershwin-developer"];
+  // Outside Sources on purpose: /Developer is the gershwin-developer checkout,
+  // and a stale copy in Sources must not be where the incoming pins come from.
+  NSString *workDeveloper = [base stringByAppendingPathComponent:@"Developer"];
   NSString *csv = [NSString stringWithFormat:
     @"Name,URL,Pin,RestartRequired\n"
      "gershwin-workspace,u,,\n"
@@ -88,11 +91,13 @@ int main(void)
              dataUsingEncoding:NSUTF8StringEncoding];
   }];
 
-  SWUpdateChecker *checker = [[SWUpdateChecker alloc] initWithSourcesDirectory:sourcesDir
-                                                                    useDevBranch:NO
-                                                                  gitToolFactory:nil
-                                                               buildStatusClient:buildStatus
-                                                                      logHandler:nil];
+  SWCheckoutLayout *layout = [[SWCheckoutLayout alloc] initWithDeveloperDirectory:workDeveloper
+                                                                   sourcesDirectory:sourcesDir];
+  SWUpdateChecker *checker = [[SWUpdateChecker alloc] initWithCheckoutLayout:layout
+                                                                useDevBranch:NO
+                                                              gitToolFactory:nil
+                                                           buildStatusClient:buildStatus
+                                                                  logHandler:nil];
 
   __block NSArray *result = nil;
   __block BOOL reachableResult = NO;
@@ -167,11 +172,11 @@ int main(void)
     SWRepository *blocked = [[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-blocked", @"URL": @"u"}];
     __block SWRepository *checked = [blocked retain];
     __block NSArray *blockedResult = nil;
-    SWUpdateChecker *blockedChecker = [[SWUpdateChecker alloc] initWithSourcesDirectory:sourcesDir
-                                                                           useDevBranch:NO
-                                                                         gitToolFactory:nil
-                                                                      buildStatusClient:buildStatus
-                                                                             logHandler:nil];
+    SWUpdateChecker *blockedChecker = [[SWUpdateChecker alloc] initWithCheckoutLayout:layout
+                                                                         useDevBranch:NO
+                                                                       gitToolFactory:nil
+                                                                    buildStatusClient:buildStatus
+                                                                           logHandler:nil];
     [blockedChecker checkRepositories:@[blocked]
                        stopRequested:nil
                             progress:nil
@@ -232,8 +237,8 @@ int main(void)
       @"git init -q -b main %@ && cd %@ && git config user.email t@x.invalid && "
        "git config user.name T && mkdir -p Library && printf '%@' > Library/Repositories.csv && "
        "git add Library/Repositories.csv && git commit -q -m csv && "
-       "git clone -q --depth 1 file://%@ %@/gershwin-developer",
-      oDev, oDev, sCsv, oDev, sSources]);
+       "git clone -q --depth 1 file://%@ %@/Developer",
+      oDev, oDev, sCsv, oDev, sBase]);
 
     SWRepository *sLib = [[SWRepository alloc] initWithPlistEntry:
       @{@"Name": @"libobjc2", @"URL": @"u", @"Pin": @"stale"}];
@@ -242,11 +247,14 @@ int main(void)
     NSArray *sEntries = @[
       [[[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-developer", @"URL": @"u"}] autorelease],
       sLib, sWs];
-    SWUpdateChecker *sChecker = [[SWUpdateChecker alloc] initWithSourcesDirectory:sSources
-                                                                     useDevBranch:NO
-                                                                   gitToolFactory:nil
-                                                                buildStatusClient:buildStatus
-                                                                       logHandler:nil];
+    SWCheckoutLayout *sLayout = [[[SWCheckoutLayout alloc]
+      initWithDeveloperDirectory:[sBase stringByAppendingPathComponent:@"Developer"]
+                sourcesDirectory:sSources] autorelease];
+    SWUpdateChecker *sChecker = [[SWUpdateChecker alloc] initWithCheckoutLayout:sLayout
+                                                                   useDevBranch:NO
+                                                                 gitToolFactory:nil
+                                                              buildStatusClient:buildStatus
+                                                                     logHandler:nil];
     [sChecker checkRepositories:sEntries stopRequested:nil progress:nil
                      completion:^(NSArray *withUpdates, BOOL anyReachable) { (void)withUpdates; (void)anyReachable; }];
 

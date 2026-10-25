@@ -85,10 +85,11 @@ int main(void)
   runShell([NSString stringWithFormat:@"cd %@ && git fetch -q origin", work]);
 
   SWRepository *repo = [[SWRepository alloc] initWithPlistEntry:@{@"Name": @"gershwin-workspace", @"URL": @"u"}];
+  SWCheckoutLayout *layout = [[SWCheckoutLayout alloc] initWithDeveloperDirectory:developerRoot
+                                                                   sourcesDirectory:sourcesDir];
 
-  SWRepositoryUpdater *updater = [[SWRepositoryUpdater alloc] initWithSourcesDirectory:sourcesDir
-                                                                      installScriptPath:installScript
-                                                                             logHandler:nil];
+  SWRepositoryUpdater *updater = [[SWRepositoryUpdater alloc] initWithCheckoutLayout:layout
+                                                                          logHandler:nil];
 
   __block NSMutableArray *steps = [NSMutableArray array];
   SWRepositoryUpdateOutcome outcome = [updater updateRepository:repo
@@ -171,9 +172,8 @@ int main(void)
     __block NSMutableArray *live = [NSMutableArray array];
     __block BOOL firstLineSeen = NO;
     NSDate *started = [NSDate date];
-    SWRepositoryUpdater *watcher = [[SWRepositoryUpdater alloc] initWithSourcesDirectory:sourcesDir
-                                                                    installScriptPath:installScript
-                                                                           logHandler:^(NSString *line) {
+    SWRepositoryUpdater *watcher = [[SWRepositoryUpdater alloc] initWithCheckoutLayout:layout
+                                                                            logHandler:^(NSString *line) {
       @synchronized (live) {
         if (!firstLineSeen && [line hasPrefix:@"line 1"]) firstLineSeen = YES;
         [live addObject:line];
@@ -584,9 +584,8 @@ int main(void)
     runShell([NSString stringWithFormat:@"cd %@ && git fetch -q origin", dw]);
 
     SWRepositoryUpdater *logged = [[SWRepositoryUpdater alloc]
-      initWithSourcesDirectory:sourcesDir
-             installScriptPath:installScript
-                    logHandler:^(NSString *line) {
+      initWithCheckoutLayout:layout
+                  logHandler:^(NSString *line) {
       @synchronized (logLines) { [logLines addObject:line]; }
     }];
     SWRepositoryUpdateOutcome dwOutcome = [logged updateRepository:
@@ -648,9 +647,8 @@ int main(void)
 
     __block NSMutableArray *blockedLog = [NSMutableArray array];
     SWRepositoryUpdater *blocking = [[SWRepositoryUpdater alloc]
-      initWithSourcesDirectory:sourcesDir
-             installScriptPath:installScript
-                    logHandler:^(NSString *line) {
+      initWithCheckoutLayout:layout
+                  logHandler:^(NSString *line) {
       @synchronized (blockedLog) { [blockedLog addObject:line]; }
     }];
     SWRepositoryUpdateOutcome blockedOutcome = [blocking updateRepository:
