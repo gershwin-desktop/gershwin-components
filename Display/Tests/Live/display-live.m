@@ -14,6 +14,9 @@
  *   display-live mode OUTPUT WxH
  *   display-live off OUTPUT
  *   display-live place OUTPUT left-of|right-of|above|below OTHER
+ *   display-live move OUTPUT X Y
+ *                 drop OUTPUT with its top-left at X,Y (screen pixels of the
+ *                 current layout), snapped like a drop in the pane
  *   display-live primary OUTPUT
  *   display-live mirror | unmirror
  *   display-live looks-like OUTPUT [WxH] [-GSScaleFactor F]
@@ -90,6 +93,13 @@ int main(int argc, char **argv)
         else if ([where isEqualToString:@"below"]) p = NSMakePoint(NSMinX(r) + 21, NSMaxY(r) + 37);
         else return fail(@"place: left-of, right-of, above or below");
         wanted = [layout layoutByMovingOutput:arg1 toOrigin:p snapDistance:64];
+    } else if ([cmd isEqualToString:@"move"] && [args count] > 4) {
+        if ([layout outputNamed:arg1] == nil) return fail(@"unknown output");
+        /* The pane snaps edges within 8 view points; at its usual view
+         * scale of about 1/7 that is some 60 screen pixels. */
+        NSPoint p = NSMakePoint([[args objectAtIndex:3] doubleValue],
+                                [[args objectAtIndex:4] doubleValue]);
+        wanted = [layout layoutByMovingOutput:arg1 toOrigin:p snapDistance:56];
     } else if ([cmd isEqualToString:@"primary"]) {
         wanted = [layout layoutBySettingPrimary:arg1];
     } else if ([cmd isEqualToString:@"looks-like"]) {

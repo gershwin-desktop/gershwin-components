@@ -190,6 +190,12 @@
  * and applications with a single factor fall back to it, and the menu bar
  * lives on the primary. */
 - (double)preferredScaleFactor;
+/* The GSScaleFactor to write in place of `current` after this layout was
+ * applied for another reason than a scale change (a new primary): the
+ * primary's scale while the scales are mixed, as -preferredScaleFactor
+ * says; 0 when `current` stays.  With equal scales GSScaleFactor is the
+ * factor applications start with and only a scale change sets it. */
+- (double)scaleFactorToStoreReplacing:(double)current;
 /* The "DPI" value for every lit output, keyed by output name. */
 - (NSDictionary *)DPIByOutputName;
 /* For a layout read from the server: when some lit output has a DPI, the

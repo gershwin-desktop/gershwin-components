@@ -74,6 +74,31 @@ int main(void)
     }
     END_SET("when a DPI is written")
 
+    START_SET("GSScaleFactor follows a new primary")
+    {
+        /* The 125%% laptop is primary, the 100%% monitor beside it becomes
+         * primary: the menu bar, the window manager and single-scale
+         * applications fall back to GSScaleFactor, so it has to become the
+         * new primary's scale, as the pane documents. */
+        DisplayLayout *l = two(1.25, 1.0, 1.25);
+        DisplayLayout *w = [l layoutBySettingPrimary:@"B"];
+        PASS([w hasMixedScales] && [w preferredScaleFactor] == 1.0,
+             "with B primary the layout's GSScaleFactor is B's 1.0");
+        PASS([w effectiveScaleForOutputNamed:@"A"] == 1.25
+             && [w effectiveScaleForOutputNamed:@"B"] == 1.0,
+             "both monitors keep their own scales");
+        PASS([w scaleFactorToStoreReplacing:1.25] == 1.0,
+             "the pane stores 1.0 in place of 1.25");
+        PASS([l scaleFactorToStoreReplacing:1.25] == 0,
+             "nothing to store while A stays primary");
+        PASS([two(0, 0, 1.5) scaleFactorToStoreReplacing:1.5] == 0,
+             "nothing to store without own scales");
+        PASS([[two(1.0, 1.0, 1.25) layoutBySettingPrimary:@"B"]
+                 scaleFactorToStoreReplacing:1.25] == 0,
+             "equal scales are the scale applications restart into, not a primary change");
+    }
+    END_SET("GSScaleFactor follows a new primary")
+
     START_SET("the all equal rule")
     {
         DisplayLayout *l = two(0, 0, 1.5);

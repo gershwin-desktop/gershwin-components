@@ -592,7 +592,12 @@ static NSString * const DisplayOffItemTitle = @"Off";
 {
     DisplayLayout *wanted = [layout layoutBySettingPrimary:name];
     if (wanted == nil) return;
-    [self applyLayout:wanted confirm:NO];
+    if (![self applyLayout:wanted confirm:NO]) return;
+    /* Fonts, the window manager and applications with a single scale fall
+     * back to GSScaleFactor; with mixed scales it is the primary's, so it
+     * moves with the primary. */
+    double global = [wanted scaleFactorToStoreReplacing:[self effectiveScaleFactor]];
+    if (global > 0) [self storeGlobalScaleFactor:global];
 }
 
 /* Stores `factor` as GSScaleFactor for the user, and for LoginWindow and

@@ -522,6 +522,13 @@ static BOOL scaleIsIdentity(double s)
     return DisplayClampScaleFactor([self wantedScaleOfOutput:reference]);
 }
 
+- (double)scaleFactorToStoreReplacing:(double)current
+{
+    if (![self hasMixedScales]) return 0;
+    double wanted = [self preferredScaleFactor];
+    return fabs(wanted - current) < 0.001 ? 0 : wanted;
+}
+
 - (NSDictionary *)DPIByOutputName
 {
     NSMutableDictionary *d = [NSMutableDictionary dictionary];
