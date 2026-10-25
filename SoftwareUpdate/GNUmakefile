@@ -78,6 +78,11 @@ SUDO := $(shell if [ "$$(id -u)" = "0" ]; then echo ""; \
 	elif command -v sudo >/dev/null 2>&1; then echo "sudo"; \
 	else echo ""; fi)
 
+# Included before the install:: and after-install:: rules below: the first
+# rule make reads becomes the default goal, so with those first a plain gmake
+# installed over /System instead of building.
+include $(GNUSTEP_MAKEFILES)/application.make
+
 # Where a build from before SoftwareUpdate_INSTALL_DIR pinned this app to
 # Utilities used to land. make_services scans /System/Applications before it
 # descends into Utilities and keeps the *first* app of a given name, so a
@@ -116,7 +121,6 @@ after-install::
 		fi; \
 	fi
 
-include $(GNUSTEP_MAKEFILES)/application.make
 
 system-install: $(APP_NAME).app
 	$(SUDO) rm -rf /System/Applications/$(APP_NAME).app
