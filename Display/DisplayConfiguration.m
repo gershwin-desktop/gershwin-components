@@ -123,6 +123,7 @@ DisplayLayout *DisplayResolveSavedLayout(DisplayLayout *saved,
         [o setY:[match y]];
         [o setTransformScaleX:[match transformScaleX]];
         [o setTransformScaleY:[match transformScaleY]];
+        [o setScale:[match scale]];
         [o setRotation:[match rotation]];
         if (![match enabled]) continue;
         DisplayMode *m = DisplaySelectMode([o modes], [match modeWidth], [match modeHeight],

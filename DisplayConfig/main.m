@@ -104,8 +104,21 @@ static int apply(void)
         }
         say(@"applied the %@ layout for %@", saved ? @"saved" : @"default", key);
     } else {
-        say(@"unchanged: the server already runs the %@ layout for %@",
-            saved ? @"saved" : @"default", key);
+        /* The CRTCs agree; the scales may not, e.g. after a replug or on a
+         * fresh server, and they need no reconfiguration of their own. */
+        NSError *error = nil;
+        BOOL changed = NO;
+        if (![x11 applyScalesOfLayout:wanted changed:&changed error:&error]) {
+            complain(@"%@", [error localizedDescription]);
+            return ExitServerRefused;
+        }
+        if (changed) {
+            say(@"applied the display scales of the %@ layout for %@",
+                saved ? @"saved" : @"default", key);
+        } else {
+            say(@"unchanged: the server already runs the %@ layout for %@",
+                saved ? @"saved" : @"default", key);
+        }
     }
 
     /* NSScreen's first screen, and with it the menu bar, follows the RandR

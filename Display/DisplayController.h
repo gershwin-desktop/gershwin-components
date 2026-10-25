@@ -20,13 +20,9 @@
     NSBox *settingsBox;
     NSPopUpButton *outputPopup;
     NSPopUpButton *resolutionPopup;
-    NSSlider *scaleSlider;
-    NSTextField *scaleValueLabel;
+    NSPopUpButton *scalePopup;      /* scale of the selected output */
     NSTextField *statusLabel;
     NSButton *mirrorDisplaysCheckbox;
-    NSScrollView *looksLikeScrollView;
-    NSTableView *looksLikeTable;
-    NSArray *looksLikeOptions;      /* DisplayScaledResolution, selected output */
     X11DisplayManager *x11;
 }
 
@@ -48,7 +44,6 @@
 - (void)outputChanged:(id)sender;
 - (void)resolutionChanged:(id)sender;
 - (void)mirrorDisplaysChanged:(id)sender;
-- (void)scaleFactorChanged:(id)sender;
-- (void)looksLikeChanged:(id)sender;
+- (void)scaleChanged:(id)sender;
 
 @end

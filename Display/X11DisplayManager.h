@@ -37,7 +37,8 @@ extern NSString * const X11DisplayManagerErrorDomain;
  * NO with a description in *error when the server refused any step.
  * *touched (may be NULL) says whether the server was changed at all: a
  * request the checks refuse beforehand (no free CRTC, a mode the output
- * lacks, a screen too large) leaves it alone, so there is nothing to undo. */
+ * lacks, a screen too large) leaves it alone, so there is nothing to undo.
+ * Ends by publishing the outputs' scales (-applyScalesOfLayout:...). */
 - (BOOL)applyLayout:(DisplayLayout *)layout
       touchedServer:(BOOL *)touched
               error:(NSError **)error;
@@ -45,6 +46,15 @@ extern NSString * const X11DisplayManagerErrorDomain;
 /* YES when the server runs something `layout` does not describe although
  * every output agrees with it: a CRTC still lit for a monitor that was
  * unplugged, or a screen larger or smaller than the lit outputs. */
+/* Publishes each lit output's scale as its RandR "DPI" (96 per 1.0), on
+ * the outputs whose value differs only (see DisplayShouldWriteDPI), so an
+ * unchanged layout causes no events.  -applyLayout:... ends with this;
+ * a change of scales alone needs no CRTC reconfiguration.  *changed (may
+ * be NULL) says whether anything was written. */
+- (BOOL)applyScalesOfLayout:(DisplayLayout *)layout
+                    changed:(BOOL *)changed
+                      error:(NSError **)error;
+
 - (BOOL)hasStrayStateForLayout:(DisplayLayout *)layout;
 
 /* The lit output RandR names as primary, or nil when the server has none

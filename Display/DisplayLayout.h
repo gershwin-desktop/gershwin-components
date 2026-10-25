@@ -64,6 +64,7 @@
     unsigned long _crtc;
     int _widthMM;
     int _heightMM;
+    double _scale;
 }
 
 /* Connector name as RandR reports it, e.g. "eDP-1", "HDMI-1". */
@@ -98,6 +99,11 @@
 @property unsigned long crtc;
 @property int widthMM;
 @property int heightMM;
+/* The monitor's own user interface scale, published to clients as the
+ * RandR output property "DPI" (96 per 1.0); 0 when it has none and follows
+ * the layout's scaleFactor.  Read from the server it is the DPI the
+ * toolkit sees (see -[DisplayLayout completeServerScales]). */
+@property double scale;
 
 /* The mode from -modes that the wanted size and refresh resolve to. */
 - (DisplayMode *)currentMode;
@@ -130,8 +136,8 @@
 
 /* All connected outputs, enabled or not. */
 @property (copy) NSArray *outputs;
-/* The user interface scale (GSScaleFactor).  One value for all outputs as
- * long as the toolkit has a single factor per process. */
+/* The global user interface scale (GSScaleFactor).  The toolkit uses it
+ * on every monitor unless the lit outputs' scales differ. */
 @property double scaleFactor;
 
 - (DisplayOutput *)outputNamed:(NSString *)name;
@@ -169,6 +175,35 @@
 - (DisplayLayout *)mirroredLayout;
 - (DisplayLayout *)extendedLayout;
 
+/* Per-monitor scale.  The toolkit uses a monitor's own factor only when the
+ * lit monitors' factors differ ("mixed"); otherwise GSScaleFactor applies
+ * everywhere.  These follow the same rule, so the pane shows what
+ * applications really do. */
+/* Some lit output has its own scale. */
+- (BOOL)hasOutputScales;
+/* At least two lit outputs whose scales (own, else scaleFactor) differ. */
+- (BOOL)hasMixedScales;
+/* The scale `name` is drawn at: its own when mixed, else scaleFactor. */
+- (double)effectiveScaleForOutputNamed:(NSString *)name;
+/* The GSScaleFactor that belongs to this layout: the common scale when all
+ * lit outputs agree, else the primary's, because fonts, the window manager
+ * and applications with a single factor fall back to it, and the menu bar
+ * lives on the primary. */
+- (double)preferredScaleFactor;
+/* The "DPI" value for every lit output, keyed by output name. */
+- (NSDictionary *)DPIByOutputName;
+/* For a layout read from the server: when some lit output has a DPI, the
+ * lit ones without count as 1.0, as for the toolkit; with no DPI anywhere
+ * every output keeps following scaleFactor. */
+- (void)completeServerScales;
+/* `name` drawn at `scale` (snapped to an offered step).  Every other lit
+ * output keeps the scale it is drawn at now, made its own, so the change
+ * touches only `name`.  A "looks like" transform of `name` is reset, as it
+ * would scale the monitor a second time; a mirror shows one picture, so
+ * all its outputs get the scale.  nil for an unknown output or one that
+ * is off. */
+- (DisplayLayout *)layoutBySettingScale:(double)scale forOutput:(NSString *)name;
+
 /* Plist form for storing a layout; X server details (CRTCs, mode ids) are
  * left out because they are only valid for one server generation. */
 - (NSDictionary *)propertyList;
@@ -185,6 +220,16 @@
  * containing screen point 0,0, else the first lit one; nil when none is
  * lit. */
 DisplayOutput *DisplayFallbackPrimary(NSArray *enabledOutputs);
+
+/* RandR "DPI" of a scale, snapped to an offered step: 96 per 1.0. */
+long DisplayDPIForScale(double scale);
+/* The offered step nearest to a "DPI" value; 0 for none (dpi <= 0). */
+double DisplayScaleForDPI(long dpi);
+/* Whether an output's "DPI" must be written: `current` is the server's
+ * value (-1 when the output has none).  An equal value is left alone, so
+ * clients get no needless change events, and a server without DPI stays
+ * without as long as the layout has no own scales. */
+BOOL DisplayShouldWriteDPI(long current, long wanted, BOOL layoutHasOutputScales);
 
 /* "VVV-PPPP-SSSSSSSS" from a 128-byte EDID block; nil if it is not one. */
 NSString *DisplayEDIDIdentity(NSData *edid);

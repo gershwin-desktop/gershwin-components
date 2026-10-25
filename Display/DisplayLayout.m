@@ -63,7 +63,7 @@ static BOOL scaleIsIdentity(double s)
     x = _x, y = _y, transformScaleX = _transformScaleX,
     transformScaleY = _transformScaleY, rotation = _rotation, primary = _primary,
     possibleCrtcs = _possibleCrtcs, crtc = _crtc, widthMM = _widthMM,
-    heightMM = _heightMM;
+    heightMM = _heightMM, scale = _scale;
 
 - (id)init
 {
@@ -110,6 +110,7 @@ static BOOL scaleIsIdentity(double s)
     [o setCrtc:_crtc];
     [o setWidthMM:_widthMM];
     [o setHeightMM:_heightMM];
+    [o setScale:_scale];
     return o;
 }
 
@@ -197,6 +198,9 @@ static BOOL scaleIsIdentity(double s)
     [d setObject:[NSNumber numberWithInt:_rotation] forKey:@"rotation"];
     [d setObject:[NSNumber numberWithInt:_widthMM] forKey:@"widthMM"];
     [d setObject:[NSNumber numberWithInt:_heightMM] forKey:@"heightMM"];
+    /* Left out when unset, so layouts without own scales are stored exactly
+     * as before and older readers see nothing new. */
+    if (_scale > 0) [d setObject:[NSNumber numberWithDouble:_scale] forKey:@"scale"];
     return d;
 }
 
@@ -219,14 +223,16 @@ static BOOL scaleIsIdentity(double s)
     [o setRotation:[d objectForKey:@"rotation"] ? [[d objectForKey:@"rotation"] intValue] : 1];
     [o setWidthMM:[[d objectForKey:@"widthMM"] intValue]];
     [o setHeightMM:[[d objectForKey:@"heightMM"] intValue]];
+    [o setScale:[[d objectForKey:@"scale"] doubleValue]];
     return o;
 }
 
 - (NSString *)description
 {
-    return [NSString stringWithFormat:@"<%@ %s %dx%d@%.2f +%d+%d%s%s>", _name,
+    NSString *scale = _scale > 0 ? [NSString stringWithFormat:@" scale %g", _scale] : @"";
+    return [NSString stringWithFormat:@"<%@ %s %dx%d@%.2f +%d+%d%s%s%@>", _name,
             _enabled ? "on" : "off", _modeWidth, _modeHeight, _modeRefresh, _x, _y,
-            _primary ? " primary" : "", [self hasTransform] ? " transformed" : ""];
+            _primary ? " primary" : "", [self hasTransform] ? " transformed" : "", scale];
 }
 
 @end
@@ -471,6 +477,92 @@ static BOOL scaleIsIdentity(double s)
     return l;
 }
 
+#pragma mark - Per-monitor scale
+
+/* What `o` asks for: its own scale, else the global factor. */
+- (double)wantedScaleOfOutput:(DisplayOutput *)o
+{
+    return [o scale] > 0 ? [o scale] : _scaleFactor;
+}
+
+- (BOOL)hasOutputScales
+{
+    for (DisplayOutput *o in [self enabledOutputs]) {
+        if ([o scale] > 0) return YES;
+    }
+    return NO;
+}
+
+- (BOOL)hasMixedScales
+{
+    NSArray *lit = [self enabledOutputs];
+    if ([lit count] < 2) return NO;
+    double first = [self wantedScaleOfOutput:[lit objectAtIndex:0]];
+    for (DisplayOutput *o in lit) {
+        if (DisplayDPIForScale([self wantedScaleOfOutput:o]) != DisplayDPIForScale(first)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (double)effectiveScaleForOutputNamed:(NSString *)name
+{
+    DisplayOutput *o = [self outputNamed:name];
+    if (o == nil || ![self hasMixedScales]) return _scaleFactor;
+    return [self wantedScaleOfOutput:o];
+}
+
+- (double)preferredScaleFactor
+{
+    NSArray *lit = [self enabledOutputs];
+    if ([lit count] == 0) return _scaleFactor;
+    DisplayOutput *reference = [self hasMixedScales]
+        ? DisplayFallbackPrimary(lit) : [lit objectAtIndex:0];
+    return DisplayClampScaleFactor([self wantedScaleOfOutput:reference]);
+}
+
+- (NSDictionary *)DPIByOutputName
+{
+    NSMutableDictionary *d = [NSMutableDictionary dictionary];
+    for (DisplayOutput *o in [self enabledOutputs]) {
+        [d setObject:[NSNumber numberWithLong:DisplayDPIForScale([self wantedScaleOfOutput:o])]
+              forKey:[o name]];
+    }
+    return d;
+}
+
+- (void)completeServerScales
+{
+    if (![self hasOutputScales]) return;
+    for (DisplayOutput *o in [self enabledOutputs]) {
+        if ([o scale] <= 0) [o setScale:1.0];
+    }
+}
+
+- (DisplayLayout *)layoutBySettingScale:(double)scale forOutput:(NSString *)name
+{
+    DisplayOutput *target = [self outputNamed:name];
+    if (target == nil || ![target enabled] || scale <= 0) return nil;
+    scale = DisplayClampScaleFactor(scale);
+    BOOL mirrored = [self isMirrored];
+    DisplayLayout *l = [[self copy] autorelease];
+    if (!mirrored && [target hasTransform]) {
+        l = [l layoutBySettingTransformScaleX:1.0 y:1.0 forOutput:name];
+        if (l == nil) return nil;
+    }
+    for (DisplayOutput *o in [l enabledOutputs]) {
+        if (mirrored || [[o name] isEqualToString:name]) {
+            [o setScale:scale];
+        } else {
+            /* What it is drawn at now, not its own value: a stale uniform
+             * DPI the toolkit ignores must not suddenly take effect. */
+            [o setScale:[self effectiveScaleForOutputNamed:[o name]]];
+        }
+    }
+    return l;
+}
+
 - (DisplayLayout *)mirroredLayout
 {
     if ([_outputs count] < 2) return nil;
@@ -600,6 +692,29 @@ DisplayOutput *DisplayFallbackPrimary(NSArray *enabledOutputs)
         if (NSPointInRect(NSZeroPoint, [o frame])) return o;
     }
     return [enabledOutputs count] ? [enabledOutputs objectAtIndex:0] : nil;
+}
+
+#pragma mark - DPI
+
+/* XLibre's default output DPI and what the toolkit reads as 1.0. */
+static const double DisplayBaseDPI = 96.0;
+
+long DisplayDPIForScale(double scale)
+{
+    return lround(DisplayBaseDPI * DisplayClampScaleFactor(scale));
+}
+
+double DisplayScaleForDPI(long dpi)
+{
+    if (dpi <= 0) return 0.0;
+    return DisplayClampScaleFactor(dpi / DisplayBaseDPI);
+}
+
+BOOL DisplayShouldWriteDPI(long current, long wanted, BOOL layoutHasOutputScales)
+{
+    if (current == wanted) return NO;
+    if (current < 0 && !layoutHasOutputScales) return NO;
+    return YES;
 }
 
 #pragma mark - EDID

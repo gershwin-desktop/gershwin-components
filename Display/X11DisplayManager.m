@@ -155,6 +155,29 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     return result;
 }
 
+/* The output's "DPI" (INTEGER/32, as XLibre creates it and libs-back reads
+ * it), or -1 when it has none: Xorg does not create the property. */
+- (long)DPIOfOutput:(RROutput)output
+{
+    Display *dpy = (Display *)_display;
+    Atom dpiAtom = XInternAtom(dpy, "DPI", True);
+    if (dpiAtom == None) return -1;
+    Atom type;
+    int format;
+    unsigned long count, after;
+    unsigned char *data = NULL;
+    long dpi = -1;
+    if (XRRGetOutputProperty(dpy, output, dpiAtom, 0, 1, False, False,
+                             AnyPropertyType, &type, &format, &count, &after,
+                             &data) == Success) {
+        if (data && type == XA_INTEGER && format == 32 && count == 1) {
+            dpi = *(long *)data;
+        }
+    }
+    if (data) XFree(data);
+    return dpi;
+}
+
 - (DisplayLayout *)currentLayoutProbingOutputs:(BOOL)probe
 {
     if (![self connect]) return nil;
@@ -208,6 +231,7 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
                 XFree(attr);
             }
             [o setPrimary:(res->outputs[i] == primaryID)];
+            [o setScale:DisplayScaleForDPI([self DPIOfOutput:res->outputs[i]])];
         } else {
             /* Connected but dark (a monitor plugged in after X started):
              * offer its native mode until the user picks one. */
@@ -227,7 +251,61 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     /* Without a lit RandR primary, desktop components fall back to the same
      * rule; show it that way so applying makes it explicit. */
     [layout ensurePrimary];
+    [layout completeServerScales];
     return layout;
+}
+
+- (BOOL)applyScalesOfLayout:(DisplayLayout *)layout
+                    changed:(BOOL *)changed
+                      error:(NSError **)error
+{
+    if (changed) *changed = NO;
+    if (![self connect]) {
+        if (error) *error = [self errorWithText:@"The X display cannot be opened."];
+        return NO;
+    }
+    Display *dpy = (Display *)_display;
+    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
+    if (!res) {
+        if (error) *error = [self errorWithText:@"The display configuration cannot be read."];
+        return NO;
+    }
+    NSDictionary *wanted = [layout DPIByOutputName];
+    BOOL own = [layout hasOutputScales];
+    Atom dpiAtom = XInternAtom(dpy, "DPI", False);
+
+    trackedDisplay = dpy;
+    firstErrorCode = 0;
+    previousHandler = XSetErrorHandler(collectError);
+    for (int i = 0; i < res->noutput; i++) {
+        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
+        if (!oi) continue;
+        NSNumber *value = [wanted objectForKey:outputName(oi)];
+        XRRFreeOutputInfo(oi);
+        if (value == nil) continue;
+        long dpi = [value longValue];
+        if (!DisplayShouldWriteDPI([self DPIOfOutput:res->outputs[i]], dpi, own)) continue;
+        /* Every client hears of the change through RROutputPropertyNotify;
+         * libs-back re-reads its screens and rescales its windows then. */
+        XRRChangeOutputProperty(dpy, res->outputs[i], dpiAtom, XA_INTEGER, 32,
+                                PropModeReplace, (unsigned char *)&dpi, 1);
+        if (changed) *changed = YES;
+    }
+    XSync(dpy, False);
+    XSetErrorHandler(previousHandler);
+    trackedDisplay = NULL;
+    XRRFreeScreenResources(res);
+
+    if (firstErrorCode != 0) {
+        if (error) {
+            char text[128] = "";
+            XGetErrorText(dpy, firstErrorCode, text, sizeof(text));
+            *error = [self errorWithText:[NSString stringWithFormat:
+                @"The X server refused the display scale (%s).", text]];
+        }
+        return NO;
+    }
+    return YES;
 }
 
 - (BOOL)hasStrayStateForLayout:(DisplayLayout *)layout
@@ -556,7 +634,7 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
         }
         return NO;
     }
-    return YES;
+    return [self applyScalesOfLayout:layout changed:NULL error:error];
 }
 
 @end

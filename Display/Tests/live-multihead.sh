@@ -159,6 +159,9 @@ step() {
 }
 
 screen_is() { xrandr | grep -q "current $1,"; }
+dpi_is() {  # dpi_is OUTPUT VALUE: the output's RandR "DPI" property
+  [ "$(xrandr --prop | awk -v o="$1" '$1 == o { s = 1; next } /^[^ \t]/ { s = 0 } s && $1 == "DPI:" { print $2; exit }')" = "$2" ]
+}
 primary_is() { xrandr | grep -q "^$1 connected primary"; }
 
 run() {
@@ -209,6 +212,18 @@ run() {
   step off DUMMY2
   check "an output can be switched off" DUMMY2 ""
   check_true "the screen shrank after switching off" screen_is "4096 x 1536"
+
+  # -GSScaleFactor is what the pane would have stored after the step
+  # before (display-live prints it), so the user's own factor stays out.
+  step scale DUMMY0 2 -GSScaleFactor 1
+  check_true "scale: DUMMY0 publishes DPI 192" dpi_is DUMMY0 192
+  check_true "scale: DUMMY1 keeps 1.0 as DPI 96" dpi_is DUMMY1 96
+  check "scale: no CRTC change" DUMMY0 2048x1536+2048+0
+  step scale DUMMY1 2 -GSScaleFactor 1
+  check_true "scale: all equal, DUMMY1 192 too" dpi_is DUMMY1 192
+  step scale DUMMY1 1 -GSScaleFactor 2
+  check_true "scale: mixed again, DUMMY1 96" dpi_is DUMMY1 96
+  check_true "scale: DUMMY0 stays at 192" dpi_is DUMMY0 192
 
   echo "$passes passed, $fails failed"
   [ $fails -eq 0 ]

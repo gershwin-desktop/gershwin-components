@@ -11,7 +11,6 @@
 #import "DisplayLayout.h"
 #import "DisplayArrangement.h"
 #import "DisplayConfiguration.h"
-#import "DisplayScaledResolution.h"
 #import "AppearanceMetrics.h"
 #import <math.h>
 
@@ -68,12 +67,6 @@ static NSMutableDictionary *activeDialogsByID = nil;
                       toBox:(NSBox *)box
                           y:(CGFloat)y
                       width:(CGFloat)w;
-- (void)addSliderRowWithLabel:(NSString *)label
-                       slider:(NSSlider *)slider
-                        value:(NSTextField *)value
-                        toBox:(NSBox *)box
-                            y:(CGFloat)y
-                        width:(CGFloat)w;
 @end
 
 @implementation DisplayController
@@ -95,14 +88,9 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [mainView release];
     [outputPopup release];
     [resolutionPopup release];
-    [scaleSlider release];
-    [scaleValueLabel release];
+    [scalePopup release];
     [statusLabel release];
     [mirrorDisplaysCheckbox release];
-    [looksLikeTable setDataSource:nil];
-    [looksLikeTable release];
-    [looksLikeScrollView release];
-    [looksLikeOptions release];
     [x11 release];
     [super dealloc];
 }
@@ -172,10 +160,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
                                    frame:NSMakeRect(sideMargin, y - settingsBoxH, boxW, settingsBoxH)
                                   inView:mainView];
     {
-        /* The "looks like" list fills the right of the box next to the
-         * rows, so the arrangement keeps its height. */
-        const CGFloat listW = 180;
-        const CGFloat rowsW = boxW - listW - METRICS_SPACE_16;
+        const CGFloat rowsW = boxW;
         CGFloat top = settingsBoxH - boxTitleInset - METRICS_SPACE_16;
         CGFloat by = top - checkboxRowH;
         [self addCheckbox:mirrorDisplaysCheckbox =
@@ -205,28 +190,16 @@ static NSMutableDictionary *activeDialogsByID = nil;
         [resolutionPopup setAction:@selector(resolutionChanged:)];
 
         by -= METRICS_SPACE_8 + rowH;
-        [self addSliderRowWithLabel:@"Scale Factor:"
-                             slider:scaleSlider =
-                             [[NSSlider alloc] initWithFrame:NSZeroRect]
-                              value:scaleValueLabel =
-                             [[NSTextField alloc] initWithFrame:NSZeroRect]
-                              toBox:settingsBox y:by width:rowsW];
-        /* The offered factors are not evenly spaced, so the slider moves
-         * over their indexes, one tick each. */
-        [scaleSlider setMinValue:0];
-        [scaleSlider setMaxValue:DisplayScaleFactorStepCount - 1];
-        [scaleSlider setNumberOfTickMarks:DisplayScaleFactorStepCount];
-        [scaleSlider setAllowsTickMarkValuesOnly:YES];
-        [scaleSlider setContinuous:NO];
-        [scaleSlider setTarget:self];
-        [scaleSlider setAction:@selector(scaleFactorChanged:)];
-        double factor = [self effectiveScaleFactor];
-        [scaleSlider setDoubleValue:DisplayScaleFactorStepIndex(factor)];
-        [scaleValueLabel setStringValue:scaleFactorTitle(factor)];
-
-        [self addLooksLikeListToBox:settingsBox
-                              frame:NSMakeRect(boxW - METRICS_SPACE_16 - listW, by,
-                                               listW, top - by)];
+        [self addPopUpRowWithLabel:@"Scale:"
+                            popup:scalePopup =
+                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
+                            toBox:settingsBox y:by width:rowsW];
+        for (NSUInteger i = 0; i < DisplayScaleFactorStepCount; i++) {
+            [scalePopup addItemWithTitle:scaleTitle(DisplayScaleFactorAtStep(i))];
+        }
+        [scalePopup setTarget:self];
+        [scalePopup setAction:@selector(scaleChanged:)];
+        [scalePopup selectItemAtIndex:DisplayScaleFactorStepIndex([self effectiveScaleFactor])];
     }
     y -= settingsBoxH + boxGap;
 
@@ -354,79 +327,11 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [box addSubview:popup];
 }
 
-/* A label + slider + value row in a group box: label on the left (right
-   aligned), slider stretching, value label on the right. */
-- (void)addSliderRowWithLabel:(NSString *)label
-                       slider:(NSSlider *)slider
-                        value:(NSTextField *)value
-                        toBox:(NSBox *)box
-                            y:(CGFloat)y
-                        width:(CGFloat)w
-{
-    const CGFloat pad = METRICS_SPACE_16;
-    const CGFloat labelW = 110;
-    const CGFloat valueW = 50;
-    const CGFloat gap = METRICS_SPACE_8;
-    const CGFloat sliderW = w - 2 * pad - labelW - valueW - 2 * gap;
-
-    NSTextField *labelField = [self labelWithText:label
-                                            frame:NSMakeRect(pad, y + 1, labelW, 20)
-                                        alignment:NSTextAlignmentRight];
-    [labelField setFont:[NSFont systemFontOfSize:11]];
-    [labelField setAutoresizingMask:NSViewMaxXMargin];
-    [box addSubview:labelField];
-    [labelField release];
-
-    [slider setFrame:NSMakeRect(pad + labelW + gap, y, sliderW, 22)];
-    [slider setAutoresizingMask:NSViewWidthSizable];
-    [box addSubview:slider];
-
-    [value setFrame:NSMakeRect(pad + labelW + gap + sliderW + gap, y, valueW, 20)];
-    [value setAutoresizingMask:NSViewMinXMargin];
-    [value setBezeled:NO];
-    [value setEditable:NO];
-    [value setSelectable:NO];
-    [value setDrawsBackground:NO];
-    [value setFont:[NSFont systemFontOfSize:11]];
-    [value setAlignment:NSTextAlignmentRight];
-    [box addSubview:value];
-}
-
-/* The per-monitor "looks like" sizes: a one-column list, so every choice
- * and the default are visible at once. */
-- (void)addLooksLikeListToBox:(NSBox *)box frame:(NSRect)frame
-{
-    looksLikeScrollView = [[NSScrollView alloc] initWithFrame:frame];
-    [looksLikeScrollView setHasVerticalScroller:YES];
-    [looksLikeScrollView setHasHorizontalScroller:NO];
-    [looksLikeScrollView setBorderType:NSBezelBorder];
-    [looksLikeScrollView setAutoresizingMask:NSViewMinXMargin];
-
-    NSSize content = [looksLikeScrollView contentSize];
-    looksLikeTable = [[NSTableView alloc] initWithFrame:
-        NSMakeRect(0, 0, content.width, content.height)];
-    NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"looksLike"];
-    [[column headerCell] setStringValue:@"Looks Like"];
-    [column setWidth:content.width];
-    [column setEditable:NO];
-    [looksLikeTable addTableColumn:column];
-    [column release];
-    /* An empty selection stands for a transform none of the sizes has (a
-     * mirror); a table that forbids it selects a row on reloadData. */
-    [looksLikeTable setAllowsEmptySelection:YES];
-    [looksLikeTable setAllowsMultipleSelection:NO];
-    [looksLikeTable setDataSource:(id)self];
-    [looksLikeTable setTarget:self];
-    [looksLikeTable setAction:@selector(looksLikeChanged:)];
-    [looksLikeScrollView setDocumentView:looksLikeTable];
-    [box addSubview:looksLikeScrollView];
-}
-
 #pragma mark - Model
 
-static NSString *scaleFactorTitle(double factor)
+static NSString *scaleTitle(double factor)
 {
-    return [NSString stringWithFormat:@"%gx", factor];
+    return [NSString stringWithFormat:@"%ld%%", lround(factor * 100)];
 }
 
 /* The title of the resolution pop-up item that switches an output off. */
@@ -482,7 +387,7 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [mirrorDisplaysCheckbox setState:[layout isMirrored] ? NSOnState : NSOffState];
     [self updateOutputPopup];
     [self updateResolutionPopup];
-    [self updateLooksLikeList];
+    [self updateScalePopup];
 }
 
 - (void)updateOutputPopup
@@ -526,7 +431,7 @@ static NSString * const DisplayOffItemTitle = @"Off";
     }
     [self updateOutputPopup];
     [self updateResolutionPopup];
-    [self updateLooksLikeList];
+    [self updateScalePopup];
 }
 
 - (void)updateResolutionPopup
@@ -551,52 +456,14 @@ static NSString * const DisplayOffItemTitle = @"Off";
     }
 }
 
-/* The sizes depend on the global factor, the selected output's mode and
- * the server's maximum screen; a mirror's transforms are not the user's. */
-- (void)updateLooksLikeList
+/* Shows the scale applications really draw the selected output at, the
+ * same rule libs-gui follows (own scale only when the outputs differ). */
+- (void)updateScalePopup
 {
     DisplayOutput *o = [layout outputNamed:selectedOutputName];
-    NSArray *options = [NSArray array];
-    if (o && [o enabled] && ![layout isMirrored]) {
-        NSSize mode = [o rotatedModeSize];
-        NSSize max = [x11 maximumScreenSize];
-        options = DisplayScaledResolutions((int)mode.width, (int)mode.height,
-                                           [self effectiveScaleFactor],
-                                           (int)max.width, (int)max.height);
-    }
-    /* The periodic refresh calls this every few seconds; reloading only on
-     * a real change keeps the list from flickering under the pointer. */
-    if (![[options valueForKey:@"title"] isEqual:[looksLikeOptions valueForKey:@"title"]]) {
-        [looksLikeOptions release];
-        looksLikeOptions = [options retain];
-        [looksLikeTable reloadData];
-    }
-    DisplayScaledResolution *current = o
-        ? DisplayScaledResolutionForTransform(looksLikeOptions, [o transformScaleX],
-                                              [o transformScaleY])
-        : nil;
-    NSUInteger row = current ? [looksLikeOptions indexOfObject:current] : NSNotFound;
-    if (row == NSNotFound) {
-        [looksLikeTable deselectAll:nil];
-    } else if ([looksLikeTable selectedRow] != (NSInteger)row) {
-        [looksLikeTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
-                    byExtendingSelection:NO];
-        [looksLikeTable scrollRowToVisible:row];
-    }
-    [looksLikeTable setEnabled:[looksLikeOptions count] > 1];
-}
-
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
-{
-    return [looksLikeOptions count];
-}
-
-- (id)tableView:(NSTableView *)tableView
-    objectValueForTableColumn:(NSTableColumn *)column
-                          row:(NSInteger)row
-{
-    if (row < 0 || row >= (NSInteger)[looksLikeOptions count]) return nil;
-    return [[looksLikeOptions objectAtIndex:row] title];
+    double scale = o ? [layout effectiveScaleForOutputNamed:[o name]] : [self effectiveScaleFactor];
+    [scalePopup selectItemAtIndex:DisplayScaleFactorStepIndex(scale)];
+    [scalePopup setEnabled:o == nil || [o enabled]];
 }
 
 #pragma mark - Applying
@@ -695,31 +562,6 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [self applyLayout:wanted confirm:YES];
 }
 
-- (void)looksLikeChanged:(id)sender
-{
-    NSInteger row = [looksLikeTable selectedRow];
-    DisplayOutput *o = [layout outputNamed:selectedOutputName];
-    if (o == nil || row < 0 || row >= (NSInteger)[looksLikeOptions count]) {
-        [self updateLooksLikeList];
-        return;
-    }
-    DisplayScaledResolution *r = [looksLikeOptions objectAtIndex:row];
-    if (r == DisplayScaledResolutionForTransform(looksLikeOptions, [o transformScaleX],
-                                                 [o transformScaleY])) {
-        return;
-    }
-    DisplayLayout *wanted = [layout layoutBySettingTransformScaleX:[r transformScaleX]
-                                                                 y:[r transformScaleY]
-                                                         forOutput:[o name]];
-    if (wanted == nil) {
-        [self updateLooksLikeList];
-        return;
-    }
-    /* A scaled size can leave the panel unreadable; the confirmation
-     * reverts it on its own. */
-    [self applyLayout:wanted confirm:YES];
-}
-
 - (void)mirrorDisplaysChanged:(id)sender
 {
     BOOL mirror = [mirrorDisplaysCheckbox state] == NSOnState;
@@ -753,35 +595,82 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [self applyLayout:wanted confirm:NO];
 }
 
-- (void)scaleFactorChanged:(id)sender
+/* Stores `factor` as GSScaleFactor for the user, and for LoginWindow and
+ * users without an own factor in the system-wide file.  Returns NO, with
+ * the problem shown, when the system-wide file could not be written. */
+- (BOOL)storeGlobalScaleFactor:(double)factor
 {
-    NSUInteger index = (NSUInteger)lround([sender doubleValue]);
-    double factor = DisplayScaleFactorAtStep(index);
-    [sender setDoubleValue:index];
-    [scaleValueLabel setStringValue:scaleFactorTitle(factor)];
-    if (factor == [self effectiveScaleFactor]) return;
-
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSMutableDictionary *domain = [NSMutableDictionary dictionaryWithDictionary:
         [defaults persistentDomainForName:NSGlobalDomain]];
     [domain setObject:[NSNumber numberWithDouble:factor] forKey:@"GSScaleFactor"];
     [defaults setPersistentDomain:domain forName:NSGlobalDomain];
     [defaults synchronize];
-    [self saveCurrentLayout];
-    /* The points each size stands for follow the factor. */
-    [self updateLooksLikeList];
 
-    /* LoginWindow and users without an own factor read the system-wide
-     * file, which only root may write. */
     NSString *problem = nil;
     if (![self writeSystemScale:factor problem:&problem]) {
         [self showStatus:[NSString stringWithFormat:
             @"Scale saved for you, but not for the login window: %@", problem]
                  isError:YES];
+        return NO;
+    }
+    return YES;
+}
+
+- (void)scaleChanged:(id)sender
+{
+    double scale = DisplayScaleFactorAtStep((NSUInteger)[scalePopup indexOfSelectedItem]);
+    DisplayOutput *o = [layout outputNamed:selectedOutputName];
+    if (o == nil || ![o enabled]) return;
+
+    /* One lit monitor has no scale of its own to differ from: the global
+     * factor is the whole story, exactly as before per-monitor scale. */
+    if ([[layout enabledOutputs] count] < 2) {
+        if (scale == [self effectiveScaleFactor]) return;
+        BOOL stored = [self storeGlobalScaleFactor:scale];
+        [self saveCurrentLayout];
+        if (stored) {
+            [self showStatus:@"Changes will take effect for newly started applications"
+                     isError:NO];
+        }
         return;
     }
-    [self showStatus:@"Changes will take effect for newly started applications"
-             isError:NO];
+
+    if (scale == [layout effectiveScaleForOutputNamed:[o name]]) return;
+    DisplayLayout *wanted = [layout layoutBySettingScale:scale forOutput:[o name]];
+    if (wanted == nil) {
+        [self updateScalePopup];
+        return;
+    }
+    double global = [wanted preferredScaleFactor];
+    BOOL globalChanged = global != [self effectiveScaleFactor];
+    [wanted setScaleFactor:global];
+    BOOL stored = !globalChanged || [self storeGlobalScaleFactor:global];
+
+    /* Not destructive, so no confirmation: everything stays readable. */
+    if (DisplayLayoutsDiffer(wanted, layout)) {
+        if (![self applyLayout:wanted confirm:NO]) return;
+    } else {
+        NSError *error = nil;
+        BOOL ok = [x11 applyScalesOfLayout:wanted changed:NULL error:&error];
+        [self refreshDisplays:nil];
+        if (!ok) {
+            [self showError:[error localizedDescription]];
+            return;
+        }
+        [self saveCurrentLayout];
+    }
+    if (!stored) return;
+    /* Running applications switch live only while the monitors' scales
+     * differ; with all equal they draw at the GSScaleFactor they started
+     * with. */
+    if ([wanted hasMixedScales] || !globalChanged) {
+        [self showStatus:@"Applications follow the new scale at once." isError:NO];
+    } else {
+        [self showStatus:[NSString stringWithFormat:
+            @"All displays use %@; running applications pick it up when restarted.",
+            scaleTitle(global)] isError:NO];
+    }
 }
 
 /* Runs displayconfig, which asks for the password through SudoAskPass and

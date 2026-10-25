@@ -19,6 +19,10 @@
  *   display-live looks-like OUTPUT [WxH] [-GSScaleFactor F]
  *                 without WxH: list the "looks like" sizes, the current one
  *                 marked with "*"; with WxH: switch to that size
+ *   display-live scale OUTPUT S [-GSScaleFactor F]
+ *                 draw OUTPUT at S (1, 1.25, ... 3) through the RandR
+ *                 "DPI" of every lit output, as the pane's Scale pop-up;
+ *                 prints the GSScaleFactor the pane would store
  */
 
 #import <Foundation/Foundation.h>
@@ -120,6 +124,13 @@ int main(int argc, char **argv)
             }
         }
         if (wanted == nil) return fail([NSString stringWithFormat:@"%@ is no looks-like size of %@", size, arg1]);
+    } else if ([cmd isEqualToString:@"scale"] && [args count] > 3) {
+        double global = [[NSUserDefaults standardUserDefaults] doubleForKey:@"GSScaleFactor"];
+        [layout setScaleFactor:global > 0 ? global : 1.0];
+        wanted = [layout layoutBySettingScale:[[args objectAtIndex:3] doubleValue]
+                                    forOutput:arg1];
+        [wanted setScaleFactor:[wanted preferredScaleFactor]];
+        if (wanted) printf("GSScaleFactor %g\n", [wanted scaleFactor]);
     } else if ([cmd isEqualToString:@"mirror"]) {
         wanted = [layout mirroredLayout];
     } else if ([cmd isEqualToString:@"unmirror"]) {
