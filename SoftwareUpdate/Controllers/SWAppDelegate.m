@@ -14,13 +14,12 @@
 #import "SWUpdateChecker.h"
 #import "SWRepositoryUpdater.h"
 #import "SWSystemPackages.h"
+#import "SWSelectionRules.h"
+#import "SWCheckoutLayout.h"
 #import <PackageManager/ODLogWindowController.h>
 #import <PackageManager/GWSudoHelper.h>
 #import <PackageManager/GWOSDetector.h>
 
-// /Developer is the gershwin-developer clone; never hard-code anything about
-// its contents beyond these well-known, spec-defined paths.
-static NSString *const kGershwinDeveloperPath = @"/Developer";
 
 @interface SWAppDelegate () <SWCheckingWindowControllerDelegate, SWMainWindowControllerDelegate,
                               SWProgressWindowControllerDelegate, SWCompletionWindowControllerDelegate>
@@ -163,7 +162,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 
 - (void)checkNow:(id)sender
 {
-  NSString *csvPath = [kGershwinDeveloperPath stringByAppendingPathComponent:@"Library/Repositories.csv"];
+  NSString *csvPath = [[SWCheckoutLayout systemLayout] repositoriesCSVPath];
   NSError *error = nil;
   NSArray<SWRepository *> *repositories = [SWRepositoryList repositoriesFromCSVAtPath:csvPath error:&error];
   if (!repositories) {
@@ -192,12 +191,11 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     });
   };
 
-  _checker = [[SWUpdateChecker alloc] initWithSourcesDirectory:
-                [kGershwinDeveloperPath stringByAppendingPathComponent:@"Library/Sources"]
-                                                    useDevBranch:_useDevBranch
-                                                  gitToolFactory:nil
-                                               buildStatusClient:nil
-                                                      logHandler:logHandler];
+  _checker = [[SWUpdateChecker alloc] initWithCheckoutLayout:[SWCheckoutLayout systemLayout]
+                                                useDevBranch:_useDevBranch
+                                              gitToolFactory:nil
+                                           buildStatusClient:nil
+                                                  logHandler:logHandler];
 
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
     SWAppDelegate *strongSelf = weakSelf;
@@ -428,10 +426,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
 - (void)startPrivilegedRunWithRepositories:(NSArray<SWRepository *> *)repositories
                                    rebuild:(BOOL)rebuild
 {
-  NSString *sourcesDirectory = [kGershwinDeveloperPath stringByAppendingPathComponent:@"Library/Sources"];
-  NSString *installScriptPath = [kGershwinDeveloperPath
-    stringByAppendingPathComponent:@"Library/Scripts/install-system-domain.sh"];
-  NSString *osSupportDirectory = [kGershwinDeveloperPath stringByAppendingPathComponent:@"Library/OSSupport"];
+  SWCheckoutLayout *layout = [SWCheckoutLayout systemLayout];
 
   _updateRepositories = repositories;
   _updateIsRebuild = rebuild;
@@ -458,13 +453,16 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
     if ([repo targetBranch]) [dict setObject:[repo targetBranch] forKey:@"TargetBranch"];
     [repoDicts addObject:dict];
   }
-  NSDictionary *args = @{
+  NSMutableDictionary *args = [NSMutableDictionary dictionaryWithDictionary:@{
     @"Repositories": repoDicts,
-    @"SourcesDirectory": sourcesDirectory,
-    @"InstallScriptPath": installScriptPath,
-    @"OSSupportDirectory": osSupportDirectory,
+    @"DeveloperDirectory": [layout developerDirectory],
+    @"SourcesDirectory": [layout sourcesDirectory],
     @"SystemPackages": @(systemPackages),
-  };
+  }];
+  NSString *incomingDeveloperRef = rebuild ? nil
+    : [SWSelectionRules incomingDeveloperRefForRepositories:_allCheckedRepositories
+                                                   selected:gitRepositories];
+  if (incomingDeveloperRef) [args setObject:incomingDeveloperRef forKey:@"IncomingDeveloperRef"];
   NSString *argsPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
     [NSString stringWithFormat:@"SoftwareUpdate-run-%d.plist", getpid()]];
   [args writeToFile:argsPath atomically:YES];
@@ -749,8 +747,7 @@ static NSString *const kGershwinDeveloperPath = @"/Developer";
       if (outcome == SWRepositoryUpdateOutcomeStashKept) {
         SWStashConflict *conflict = [[SWStashConflict alloc] init];
         [conflict setRepositoryName:name];
-        [conflict setRepositoryPath:[[kGershwinDeveloperPath
-          stringByAppendingPathComponent:@"Library/Sources"] stringByAppendingPathComponent:name]];
+        [conflict setRepositoryPath:[[SWCheckoutLayout systemLayout] pathForRepositoryNamed:name]];
         [conflict setConflictedFiles:[conflictsJoined length] > 0
           ? [conflictsJoined componentsSeparatedByString:@";"] : @[]];
         [_updateStashConflicts addObject:conflict];

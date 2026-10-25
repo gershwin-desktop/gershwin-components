@@ -9,9 +9,8 @@
 
 @interface SWRepositoryUpdater ()
 {
-  NSString *_sourcesDirectory;
+  SWCheckoutLayout *_layout;
   NSString *_installScriptPath;
-  NSString *_developerRoot; // gershwin-developer's own checkout root (e.g. /Developer)
   void (^_logHandler)(NSString *);
   NSMutableDictionary<NSString *, NSArray<NSString *> *> *_conflictedPathsByRepo;
 }
@@ -19,18 +18,13 @@
 
 @implementation SWRepositoryUpdater
 
-- (instancetype)initWithSourcesDirectory:(NSString *)sourcesDirectory
-                       installScriptPath:(NSString *)installScriptPath
-                              logHandler:(void (^)(NSString *))logHandler
+- (instancetype)initWithCheckoutLayout:(SWCheckoutLayout *)layout
+                            logHandler:(void (^)(NSString *))logHandler
 {
   self = [super init];
   if (self) {
-    _sourcesDirectory = [sourcesDirectory copy];
-    _installScriptPath = [installScriptPath copy];
-    // installScriptPath is .../Library/Scripts/install-system-domain.sh;
-    // strip the filename, "Scripts" and "Library" to land on the checkout root.
-    _developerRoot = [[[installScriptPath stringByDeletingLastPathComponent]
-      stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
+    _layout = layout;
+    _installScriptPath = [layout installScriptPath];
     _logHandler = logHandler ? (void (^)(NSString *))[logHandler copy] : ^(NSString *line) {};
     _conflictedPathsByRepo = [NSMutableDictionary dictionary];
   }
@@ -116,7 +110,7 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
   // exactly as "make" has always run it. NSTask otherwise inherits whatever
   // cwd the privileged helper process happened to start with, which is not
   // guaranteed to be this at all.
-  [task setCurrentDirectoryPath:_developerRoot];
+  [task setCurrentDirectoryPath:[_layout developerDirectory]];
   if (extraEnv) {
     NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
     [env addEntriesFromDictionary:extraEnv];
@@ -168,7 +162,7 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
                                     stepHandler:(void (^)(NSString *))stepHandler
 {
   NSString *name = [repository name];
-  NSString *path = [_sourcesDirectory stringByAppendingPathComponent:name];
+  NSString *path = [_layout pathForRepositoryNamed:name];
   SWGitTool *git = [[SWGitTool alloc] initWithRepositoryPath:path];
   [git setLogHandler:^(NSString *line) { self->_logHandler(line); }];
 
@@ -334,8 +328,7 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
 // same test the update path has always used.
 - (NSString *)patchesDirectoryForRepositoryNamed:(NSString *)name
 {
-  NSString *patchesDir = [[[_sourcesDirectory stringByDeletingLastPathComponent]
-    stringByAppendingPathComponent:@"Patches"] stringByAppendingPathComponent:name];
+  NSString *patchesDir = [[_layout patchesDirectory] stringByAppendingPathComponent:name];
   if ([[NSFileManager defaultManager] fileExistsAtPath:patchesDir]) return patchesDir;
   return nil;
 }
@@ -352,8 +345,7 @@ static void SWDrainPipe(NSFileHandle *handle, void (^emit)(NSString *line))
   if (![self patchesDirectoryForRepositoryNamed:name]) return YES; // nothing to do
 
   if (stepHandler) stepHandler([NSString stringWithFormat:@"Patching %@", name]);
-  NSString *patchScript = [[_installScriptPath stringByDeletingLastPathComponent]
-    stringByAppendingPathComponent:@"patch.sh"];
+  NSString *patchScript = [[_layout scriptsDirectory] stringByAppendingPathComponent:@"patch.sh"];
   return [self runCommand:@"/bin/sh" arguments:@[patchScript, name] environment:nil] == 0;
 }
 

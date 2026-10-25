@@ -205,6 +205,12 @@ typedef void (^SWGitLogLine)(NSString *line);
 // Repositories.plist), without checking it out first.
 - (NSData *)showFileAtRef:(NSString *)ref path:(NSString *)path;
 
+// A text file as <ref> has it, following symlinks inside that tree, or nil
+// if the ref or the file does not exist there. git show on a symlink yields
+// the link's target name, and Library/OSSupport aliases OS variants onto
+// their family's list that way (ghostbsd.txt -> freebsd.txt).
+- (NSString *)textOfFileAtRef:(NSString *)ref path:(NSString *)path;
+
 // `git -C <path> rev-parse <ref>^{commit}` - resolves an abbreviated sha (or
 // any ref) to the full commit sha it names, or nil if the object is not
 // present locally (e.g. a pin that has not been fetched yet).

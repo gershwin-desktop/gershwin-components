@@ -13,18 +13,18 @@
 #import "SWRepository.h"
 #import "SWGitTool.h"
 #import "SWGitHubBuildStatus.h"
+#import "SWCheckoutLayout.h"
 
 @interface SWUpdateChecker : NSObject
 
-// sourcesDirectory is Library/Sources under the gershwin-developer checkout
-// (each repository's working copy is sourcesDirectory/<Name>).
+// layout says where each repository's working copy is.
 // gitToolFactory == nil uses real SWGitTool instances; buildStatusClient ==
 // nil creates a real SWGitHubBuildStatus. Both are injectable for testing.
-- (instancetype)initWithSourcesDirectory:(NSString *)sourcesDirectory
-                             useDevBranch:(BOOL)useDevBranch
-                           gitToolFactory:(SWGitTool * (^)(NSString *repositoryPath))gitToolFactory
-                        buildStatusClient:(SWGitHubBuildStatus *)buildStatusClient
-                               logHandler:(SWGitLogLine)logHandler;
+- (instancetype)initWithCheckoutLayout:(SWCheckoutLayout *)layout
+                          useDevBranch:(BOOL)useDevBranch
+                        gitToolFactory:(SWGitTool * (^)(NSString *repositoryPath))gitToolFactory
+                     buildStatusClient:(SWGitHubBuildStatus *)buildStatusClient
+                            logHandler:(SWGitLogLine)logHandler;
 
 // Checks each repository in order. progress is called before each repository
 // is fetched (for "Fetching <repo> from origin (n of N)"); stopRequested is

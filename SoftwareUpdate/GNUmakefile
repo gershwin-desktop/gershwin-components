@@ -16,6 +16,7 @@ SoftwareUpdate_OBJC_FILES = \
   Models/SWSelectionRules.m \
   Models/SWUpdateChecker.m \
   Models/SWRepositoryUpdater.m \
+  Models/SWCheckoutLayout.m \
   Models/SWCompletionSummary.m \
   Models/SWRunGuard.m \
   Models/SWPrerequisitesInstaller.m \

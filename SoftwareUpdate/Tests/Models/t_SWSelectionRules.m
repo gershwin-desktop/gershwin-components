@@ -99,6 +99,37 @@ int main(void)
     PASS(![unreachable selected], "an unreachable repository is not selected by default");
   }
 
+  /* --- which fetched gershwin-developer the prerequisites must also honor --- */
+  {
+    SWRepository *developer = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"gershwin-developer", @"URL": @"u"}];
+    [developer setTargetBranch:@"dev"];
+    [developer setCommits:@[@{@"sha": @"abc", @"subject": @"add alsa-lib"}]];
+    [developer setBuildStatus:SWBuildStatusRunning];
+    SWRepository *components = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"gershwin-components", @"URL": @"u"}];
+    NSArray *all = @[developer, components];
+
+    PASS_EQUAL([SWSelectionRules incomingDeveloperRefForRepositories:all selected:@[components]],
+               @"origin/dev",
+               "an incoming gershwin-developer left out of the run is read from its fetched branch");
+    // Outside PASS: the preprocessor would split the array literal at its comma.
+    NSArray *both = @[developer, components];
+    PASS([SWSelectionRules incomingDeveloperRefForRepositories:all selected:both] == nil,
+         "none when gershwin-developer is updated in this run: its checkout then has the new list");
+
+    SWRepository *current = [[SWRepository alloc] initWithPlistEntry:
+      @{@"Name": @"gershwin-developer", @"URL": @"u"}];
+    [current setTargetBranch:@"dev"];
+    NSArray *currentAll = @[current, components];
+    PASS([SWSelectionRules incomingDeveloperRefForRepositories:currentAll
+                                                      selected:@[components]] == nil,
+         "none when gershwin-developer has nothing incoming");
+    PASS([SWSelectionRules incomingDeveloperRefForRepositories:@[components]
+                                                      selected:@[components]] == nil,
+         "none when gershwin-developer was not checked at all");
+  }
+
   [arp release];
   return 0;
 }

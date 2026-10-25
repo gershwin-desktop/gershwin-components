@@ -14,6 +14,7 @@ ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
 ../../Models/SWGitHubBuildStatus.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Models/SWUpdateChecker.m_FILE_FLAGS += $(ARCFLAGS)
 ../../Models/SWRepositoryUpdater.m_FILE_FLAGS += $(ARCFLAGS)
+../../Models/SWCheckoutLayout.m_FILE_FLAGS += $(ARCFLAGS)
 
 t_SWRepositoryList_OBJC_FILES += \
   ../../Models/SWRepository.m \
@@ -25,7 +26,8 @@ t_SWGitTool_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 
 t_SWSelectionRules_OBJC_FILES += \
   ../../Models/SWRepository.m \
-  ../../Models/SWSelectionRules.m
+  ../../Models/SWSelectionRules.m \
+  ../../Models/SWCheckoutLayout.m
 
 t_SWGitHubBuildStatus_OBJC_FILES += \
   ../../Models/SWGitHubBuildStatus.m
@@ -37,7 +39,8 @@ t_SWUpdateChecker_OBJC_FILES += \
   ../../Models/SWGitTool.m \
   ../../Models/SWGitHubBuildStatus.m \
   ../../Models/SWSelectionRules.m \
-  ../../Models/SWUpdateChecker.m
+  ../../Models/SWUpdateChecker.m \
+  ../../Models/SWCheckoutLayout.m
 # The parallel check uses dispatch_group/dispatch_semaphore.
 t_SWUpdateChecker_TOOL_LIBS += -ldispatch
 t_SWUpdateChecker_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
@@ -45,7 +48,8 @@ t_SWUpdateChecker_TOOL_LIBS += $(PACKAGE_MANAGER_LIBS)
 t_SWRepositoryUpdater_OBJC_FILES += \
   ../../Models/SWRepository.m \
   ../../Models/SWGitTool.m \
-  ../../Models/SWRepositoryUpdater.m
+  ../../Models/SWRepositoryUpdater.m \
+  ../../Models/SWCheckoutLayout.m
 # The streaming-output case drives a real long-running child from a background
 # queue while the main thread watches the log.
 t_SWRepositoryUpdater_TOOL_LIBS += -ldispatch
@@ -82,4 +86,8 @@ t_SWRunGuard_OBJC_FILES += t_SWRunGuard.m \
 t_SWSystemPackages_OBJC_FILES += \
   ../../Models/SWSystemPackages.m \
   ../../Models/SWRepository.m \
-  ../../Models/SWSelectionRules.m
+  ../../Models/SWSelectionRules.m \
+  ../../Models/SWCheckoutLayout.m
+
+# Pure path arithmetic; Foundation only.
+t_SWCheckoutLayout_OBJC_FILES += ../../Models/SWCheckoutLayout.m

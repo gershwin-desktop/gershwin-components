@@ -33,4 +33,12 @@
 // not, because its pins belong to that version of gershwin-developer.
 + (BOOL)canToggleRepository:(SWRepository *)repository force:(BOOL)force;
 
+// The fetched ref ("origin/dev") of a gershwin-developer that has incoming
+// commits but is not among the selected repositories, else nil. Its CI build
+// may still be running while a repository that already needs its newer
+// package list is updated, so the prerequisites phase reads that list from
+// this ref as well.
++ (NSString *)incomingDeveloperRefForRepositories:(NSArray<SWRepository *> *)all
+                                         selected:(NSArray<SWRepository *> *)selected;
+
 @end
