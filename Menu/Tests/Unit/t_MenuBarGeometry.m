@@ -50,14 +50,35 @@ int main(void)
   }
 
   {
-    /* Primary placed lower than the root top (stacked layout): no strut,
-     * or the window manager would take 1102 px off the upper monitor. */
+    /* Primary placed lower than the root top (stacked layout): the strut
+     * reaches from the root top to the bar's bottom, over the primary's
+     * columns; the window manager applies it to the primary only. */
     MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(0, 1080, 1280, 800),
                                                   NSMakeSize(1920, 1880), 22, 1.0);
     PASS(g.windowFrame.origin.y == 778,
          "a primary below another monitor puts the bar at its own top");
-    PASS(g.strut[2] == 0 && g.strut[8] == 0 && g.strut[9] == 0,
-         "a bar below the root top reserves nothing");
+    PASS(g.strut[2] == 1102 && g.strut[8] == 0 && g.strut[9] == 1279,
+         "top strut is the primary's top plus the bar, over its columns");
+  }
+
+  {
+    /* Slide-in at 60 fps over 0.3 s from one 22 px bar height above the
+     * top of a primary whose top is at GNUstep y 800. */
+    BOOL whole = YES;
+    int i;
+
+    for (i = 0; i <= 20; i++)
+      {
+        CGFloat top = MenuBarSlideInTop(800, 22, i / 18.0);
+        if (top != floor(top))
+          whole = NO;
+      }
+    PASS(whole, "every slide-in step is a whole pixel");
+    PASS(MenuBarSlideInTop(800, 22, 0) == 822
+         && MenuBarSlideInTop(800, 22, 1) == 800,
+         "slide-in runs from one bar height above to the final top");
+    PASS(MenuBarSlideInTop(800, 22, 0.99) == 800,
+         "the step just before the end is the final top, not 800.0003");
   }
 
   [arp release];
