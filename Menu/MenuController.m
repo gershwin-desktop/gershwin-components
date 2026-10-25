@@ -18,6 +18,8 @@
 #import "MenuUtils.h"
 #import "MenuExtraManager.h"
 #import "MenuBarLayout.h"
+#import "MenuBarGeometry.h"
+#import "PrimaryMonitor.h"
 #import "MenuWindowWatchdog.h"
 #import "WindowMonitor.h"
 #import "AppMenuImporter.h"
@@ -78,6 +80,9 @@
     int _powerKeyFDCount;
     NSTimeInterval _lastMenuAtomsReassertTime;
     MenuWatchdogState _watchdogState;
+    /* Window frame, content size and strut of the bar on the primary
+     * monitor; refreshed together with screenFrame. */
+    MenuBarGeometry _barGeometry;
 }
 @end
 
@@ -92,22 +97,29 @@ static CGFloat MenuControllerScaleFactor(void)
   return (factor > 0.0) ? factor : 1.0;
 }
 
-/* True physical screen width queried directly from X11 - GSScaleFactor is
- * never applied to it, unlike the screen size GNUstep may report. */
-static CGFloat MenuControllerScreenWidth(void)
+/* The bar's geometry on the primary monitor, read from the X server rather
+ * than +[NSScreen screens]: right after a RandR change the screen list can
+ * still describe the old layout, and its index 0 is the primary only while
+ * a RandR primary is set.  primaryFrame receives the primary monitor's
+ * frame in GNUstep screen coordinates (device pixels). */
+static MenuBarGeometry MenuControllerBarGeometry(NSRect *primaryFrame)
 {
-  Display *display = XOpenDisplay(NULL);
-  if (display == NULL)
+  NSRect xRect;
+  NSSize rootSize;
+
+  if (!PrimaryMonitorQuery([MenuUtils sharedDisplay], &xRect, &rootSize))
     {
-      return [[[NSScreen screens] objectAtIndex:0] frame].size.width;
+      [NSException raise:NSInternalInconsistencyException
+                  format:@"MenuController: no X display to place the menu bar on"];
     }
-  int width = DisplayWidth(display, DefaultScreen(display));
-  XCloseDisplay(display);
-  return (CGFloat)width;
+  *primaryFrame = PrimaryMonitorFlipRect(xRect, rootSize.height);
+  return MenuBarGeometryForMonitor(xRect, rootSize,
+                                   [[GSTheme theme] menuBarHeight],
+                                   MenuControllerScaleFactor());
 }
 
-/* Menu bar height scaled by GSScaleFactor: the bar keeps its full screen
- * width but its height grows/shrinks with the scale factor. */
+/* Menu bar height scaled by GSScaleFactor: the bar keeps the primary
+ * monitor's width but its height grows/shrinks with the scale factor. */
 static CGFloat MenuControllerMenuBarHeight(void)
 {
   return [[GSTheme theme] menuBarHeight] * MenuControllerScaleFactor();
@@ -506,29 +518,16 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     }
 
     /* The strut must reserve the strip where the bar is SUPPOSED to be - the
-     * top of the primary screen - not where the window currently happens to
+     * top of the primary monitor - not where the window currently happens to
      * be.  Right after a resolution change the GNUstep backend can still
      * convert coordinates using the previous screen height, briefly placing
      * the bar at a wrong Y; deriving the strut from that transient position
-     * (as XTranslateCoordinates would) leaves a stale, oversized strut. */
-    unsigned int width = (unsigned int)MAX((CGFloat)1.0, (CGFloat)attrs.width);
-    unsigned int height = (unsigned int)MAX((CGFloat)1.0, (CGFloat)attrs.height);
-    unsigned long startX = (self.screenFrame.origin.x < 0)
-        ? 0 : (unsigned long)self.screenFrame.origin.x;
-    unsigned long endX = startX + (unsigned long)width - 1;
-    unsigned long topStrut = (self.screenFrame.origin.y < 0)
-        ? (unsigned long)height
-        : (unsigned long)(self.screenFrame.origin.y + (int)height);
-    const CGFloat menuBarHeight = MenuControllerMenuBarHeight();
-    unsigned int fallbackHeight = (unsigned int)MAX((CGFloat)1.0, menuBarHeight);
-    if (topStrut == 0) {
-        topStrut = fallbackHeight;
-    }
-
-    unsigned long strut[4] = {0, 0, topStrut, 0};
-    unsigned long strutPartial[12] = {0, 0, topStrut, 0,
-                                      0, 0, 0, 0,
-                                      startX, endX, 0, 0};
+     * (as XTranslateCoordinates would) leaves a stale, oversized strut.  Its
+     * x range stays on the primary, so other monitors keep their top strip. */
+    unsigned long strutPartial[12];
+    memcpy(strutPartial, _barGeometry.strut, sizeof(strutPartial));
+    unsigned long strut[4] = {strutPartial[0], strutPartial[1],
+                              strutPartial[2], strutPartial[3]};
 
     Atom strutAtom = XInternAtom(display, "_NET_WM_STRUT", False);
     Atom strutPartialAtom = XInternAtom(display, "_NET_WM_STRUT_PARTIAL", False);
@@ -555,9 +554,9 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     XSync(display, False);
 
     NSLog(@"MenuController: Applied strut properties to XID 0x%lx "
-          @"(size=%ux%u top=%lu x-range=%lu..%lu)",
-          (unsigned long)menuBarWindow, width, height,
-          topStrut, startX, endX);
+          @"(size=%dx%d top=%lu x-range=%lu..%lu)",
+          (unsigned long)menuBarWindow, attrs.width, attrs.height,
+          strutPartial[2], strutPartial[8], strutPartial[9]);
 }
 
 - (void)extrasEnabledSetDidChange:(NSNotification *)notification
@@ -714,24 +713,16 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
      * below.  The struts are re-applied at the end once the bar is in place. */
     [self removeMenuBarStruts];
 
-    // Re-read the primary screen geometry (screens[0] is the xrandr primary;
-    // mainScreen may return the menu's own window screen which is circular).
-    // Use the true X11 width so GSScaleFactor cannot change the bar's width.
-    NSRect sf = [[[NSScreen screens] objectAtIndex:0] frame];
-    sf.size.width = MenuControllerScreenWidth();
-    self.screenFrame = sf;
-    self.screenSize = sf.size;
-    NSDebugLLog(@"gwcomp", @"MenuController: New screen frame: %.0f,%.0f %.0fx%.0f (scale=%.1f)",
-          sf.origin.x, sf.origin.y,
-          sf.size.width, sf.size.height, MenuControllerScaleFactor());
+    // The primary monitor may have changed, moved or been resized: the bar
+    // follows it, global menu and extras together.
+    [self refreshScreenGeometry];
 
     /* Content views live in the window's user coordinate space, which GNUstep
      * scales by GSScaleFactor when rendering (device = user * sf).  Size them
      * in that space so they render to the device window size; the window frame
      * itself is set to the device size below. */
-    CGFloat scale = MenuControllerScaleFactor();
-    CGFloat contentW = MenuControllerScreenWidth() / scale;
-    CGFloat contentH = [[GSTheme theme] menuBarHeight];
+    CGFloat contentW = _barGeometry.contentSize.width;
+    CGFloat contentH = _barGeometry.contentSize.height;
 
     // Reposition and resize the menu bar window using the screen frame origin
     // (the origin may be non-zero if the virtual desktop geometry changed)
@@ -757,8 +748,8 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     [self.roundedCornersView setFrame:NSMakeRect(0, contentH - cornerHeight,
                                                   contentW, cornerHeight)];
 
-    // Update the MenuExtraManager's cached screen width
-    [self.menuExtraManager setScreenWidth:self.screenSize.width];
+    // Update the MenuExtraManager's cached bar width
+    [self.menuExtraManager setScreenWidth:contentW];
 
     // The dropdowns that were opened before keep the window size of the old
     // scale factor; they are measured again.
@@ -782,23 +773,32 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                afterDelay:0.5];
 }
 
+- (void)refreshScreenGeometry
+{
+    NSRect primary;
+
+    _barGeometry = MenuControllerBarGeometry(&primary);
+    self.screenFrame = primary;
+    self.screenSize = primary.size;
+    NSDebugLLog(@"gwcomp", @"MenuController: Primary monitor %.0f,%.0f %.0fx%.0f (scale=%.2f)",
+                primary.origin.x, primary.origin.y,
+                primary.size.width, primary.size.height, MenuControllerScaleFactor());
+}
+
 - (void)positionMenuBarWindow
 {
-    const CGFloat menuBarHeight = MenuControllerMenuBarHeight();
-    CGFloat originX = self.screenFrame.origin.x;
-    CGFloat originY = self.screenFrame.origin.y;
-    NSRect menuRect = NSMakeRect(originX,
-                                 originY + self.screenSize.height - menuBarHeight,
-                                 self.screenSize.width, menuBarHeight);
+    NSRect menuRect = _barGeometry.windowFrame;
     [self.menuBar setFrame:menuRect display:NO];
-    [self.menuBar setFrameTopLeftPoint:NSMakePoint(originX, originY + self.screenSize.height)];
+    [self.menuBar setFrameTopLeftPoint:NSMakePoint(NSMinX(menuRect), NSMaxY(menuRect))];
 }
 
 - (void)repositionMenuBarAfterScreenChange
 {
     /* Same ordering as in screenParametersChanged:: clear the struts first,
-       reposition, then re-apply them. */
+       reposition, then re-apply them.  The geometry is read again: a burst
+       of RandR changes can still have been settling at the first pass. */
     [self removeMenuBarStruts];
+    [self refreshScreenGeometry];
     [self positionMenuBarWindow];
     [self applyMenuBarDockAndStrutProperties];
 }
@@ -1281,11 +1281,9 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     attributes = [NSMutableDictionary new];
     [attributes setObject:menuFont forKey:NSFontAttributeName];
     
-    NSRect sf = [[[NSScreen screens] objectAtIndex:0] frame];
-    sf.size.width = MenuControllerScreenWidth();
-    sf.size.width /= MenuControllerScaleFactor();
-    self.screenFrame = sf;
-    self.screenSize = sf.size;
+    [self refreshScreenGeometry];
+    /* The bar's views are sized in points (the window's user space). */
+    const CGFloat contentW = _barGeometry.contentSize.width;
 
     color = [self backgroundColor];
     NSDebugLLog(@"gwcomp", @"MenuController: Background color: %@", color);
@@ -1293,9 +1291,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     // Creation of the menuBar at the TOP of the screen (GNUstep coordinates: bottom-left origin)
     // Use screenFrame.origin to handle multi-monitor setups where the primary screen
     // origin may be non-zero in the virtual desktop coordinate space.
-    rect = NSMakeRect(self.screenFrame.origin.x,
-                      self.screenFrame.origin.y + self.screenSize.height - menuBarHeight,
-                      self.screenSize.width, menuBarHeight);
+    // initWithContentRect: scales the size by GSScaleFactor but takes the
+    // origin in device pixels, so the size is given in points here.
+    rect = NSMakeRect(NSMinX(_barGeometry.windowFrame),
+                      NSMinY(_barGeometry.windowFrame),
+                      contentW, menuBarHeight);
     NSDebugLLog(@"gwcomp", @"MenuController: Menu bar rect: %.0f,%.0f %.0fx%.0f",
           rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
     
@@ -1326,14 +1326,14 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     NSDebugLLog(@"gwcomp", @"MenuController: Window positioned above screen for animation slide-in");
     
     // Create the main menu bar view that draws the background
-    self.menuBarView = [[MenuBarView alloc] initWithFrame:NSMakeRect(0, 0, self.screenSize.width, menuBarHeight)];
+    self.menuBarView = [[MenuBarView alloc] initWithFrame:NSMakeRect(0, 0, contentW, menuBarHeight)];
     NSDebugLLog(@"gwcomp", @"MenuController: Created MenuBarView: %@", self.menuBarView);
     
     // Create app menu widget for displaying menus - leave space for menu extras on right
     // Menu extra width is computed dynamically from loaded bundles below.
     // First, create and load the MenuExtraManager to know the total width.
     NSDebugLLog(@"gwcomp", @"MenuController: Creating MenuExtraManager");
-    self.menuExtraManager = [[MenuExtraManager alloc] initWithScreenWidth:self.screenSize.width
+    self.menuExtraManager = [[MenuExtraManager alloc] initWithScreenWidth:contentW
                                                              menuBarHeight:menuBarHeight];
     [self.menuExtraManager loadMenuExtras];
     NSDebugLLog(@"gwcomp", @"MenuController: MenuExtraManager items loaded");
@@ -1344,7 +1344,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     NSDebugLLog(@"gwcomp", @"MenuController: Extras menu view width: %.0f", extrasMenuWidth);
 
     // Position extras a margin in from the right edge of the menu bar
-    [extrasMenuView setFrame:NSMakeRect(self.screenSize.width - extrasMenuWidth
+    [extrasMenuView setFrame:NSMakeRect(contentW - extrasMenuWidth
                                         - GSExtrasEdgeMargin, 0,
                                         extrasMenuWidth, menuBarHeight)];
 
@@ -1368,7 +1368,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
                                                object:nil];
 
     // Give the app menu widget the remaining space
-    CGFloat menuWidgetWidth = self.screenSize.width - extrasMenuWidth - 8;
+    CGFloat menuWidgetWidth = contentW - extrasMenuWidth - 8;
     self.appMenuWidget = [[AppMenuWidget alloc] initWithFrame:NSMakeRect(0, 0, menuWidgetWidth, menuBarHeight)];
     NSDebugLLog(@"gwcomp", @"MenuController: AppMenuWidget created successfully");
     
@@ -1396,7 +1396,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     // probono: Create rounded corners view for black top corners like in old/src/mainwindow.cpp
     // Position it at the top of the menu bar, with height enough for the corner radius effect
     CGFloat cornerHeight = 10.0; // 2 * corner radius (5px)
-    self.roundedCornersView = [[RoundedCornersView alloc] initWithFrame:NSMakeRect(0, menuBarHeight - cornerHeight, self.screenSize.width, cornerHeight)];
+    self.roundedCornersView = [[RoundedCornersView alloc] initWithFrame:NSMakeRect(0, menuBarHeight - cornerHeight, contentW, cornerHeight)];
     
     // Add MenuBarView as the background (spans full width)
     [[self.menuBar contentView] addSubview:self.menuBarView];
@@ -2004,7 +2004,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     
     // Create the menu view at the right edge
     CGFloat timeMenuWidth = 60;
-    CGFloat timeMenuX = self.screenSize.width - timeMenuWidth - 7;  // Move clock 7px left
+    CGFloat timeMenuX = _barGeometry.contentSize.width - timeMenuWidth - 7;  // Move clock 7px left
     const CGFloat menuBarHeight = [[GSTheme theme] menuBarHeight];
     self.timeMenuView = [[TimeMenuView alloc] initWithFrame:NSMakeRect(timeMenuX, 0, timeMenuWidth, menuBarHeight)];
     [self.timeMenuView setMenu:self.timeMenu];

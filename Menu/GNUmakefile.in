@@ -44,6 +44,8 @@ Menu_OBJC_FILES = \
 	MenuUtils.m \
 	MenuInstanceTakeover.m \
 	MenuBarLayout.m \
+	MenuBarGeometry.m \
+	PrimaryMonitor.m \
 	MenuWindowWatchdog.m \
 	X11ShortcutManager.m \
 	RoundedCornersView.m \
@@ -164,7 +166,7 @@ Menu_RESOURCE_FILES = \
 
 # Libraries and frameworks - configured by configure script
 DBUS_LIBS = @DBUS_LIBS@
-Menu_TOOL_LIBS += $(DBUS_LIBS) -lX11
+Menu_TOOL_LIBS += $(DBUS_LIBS) -lXrandr -lX11
 Menu_GUI_LIBS += -L/System/Library/Libraries -lgnustep-gui -lgnustep-base -lobjc -ldispatch -lSoundBackend -lNetworkBackend
 Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/System/Library/Libraries -Wl,--no-as-needed
 
