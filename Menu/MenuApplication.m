@@ -8,8 +8,10 @@
 #import "MenuApplication.h"
 #import "MenuController.h"
 #import "X11ShortcutManager.h"
+#if MENU_HAVE_DBUS
 #import "DBusMenuParser.h"
 #import "DBusConnection.h"
+#endif
 #import "CustomMenuPanel.h"
 #import "ActionSearch.h"
 #import <signal.h>
@@ -26,7 +28,9 @@ static MenuController *g_controller = nil;
 static volatile sig_atomic_t cleanup_in_progress = 0;
 static volatile sig_atomic_t termination_requested = 0;
 static BOOL terminationSignalHandled = NO;
+#if MENU_HAVE_DBUS
 static BOOL existingInstanceHandled = NO;
+#endif
 static time_t signal_received_time = 0;
 
 // Direct signal handler (runs in signal context, must be async-signal-safe)
@@ -71,7 +75,9 @@ static void cleanup_on_exit(void)
     
     @try {
         [[X11ShortcutManager sharedManager] cleanup];
+#if MENU_HAVE_DBUS
         [DBusMenuParser cleanup];
+#endif
     } @catch (NSException *exception) {
         NSDebugLLog(@"gwcomp", @"Menu.app: Exception during atexit cleanup: %@", exception);
     }
@@ -188,6 +194,7 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
 
 - (void)checkForExistingMenuApplicationBackground
 {
+#if MENU_HAVE_DBUS
     @autoreleasepool {
         NSDebugLLog(@"gwcomp", @"MenuApplication: Checking for existing menu applications (async)...");
         
@@ -232,6 +239,11 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
             NSDebugLLog(@"gwcomp", @"MenuApplication: No conflicting menu applications found");
         }
     }
+#else
+    // Without D-Bus there is no AppMenu registrar to find; another Menu on
+    // this display is taken over through its X11 selection instead
+    NSDebugLLog(@"gwcomp", @"MenuApplication: Built without D-Bus, no registrar to check for");
+#endif
 }
 
 - (void)showMenuConflictAlert
@@ -531,7 +543,9 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
         // Ensure global shortcuts are cleaned up before termination
         NSDebugLLog(@"gwcomp", @"MenuApplication: Cleaning up global shortcuts...");
         [[X11ShortcutManager sharedManager] cleanup];
+#if MENU_HAVE_DBUS
         [DBusMenuParser cleanup];
+#endif
         
         NSDebugLLog(@"gwcomp", @"MenuApplication: Graceful cleanup completed");
     } @catch (NSException *exception) {

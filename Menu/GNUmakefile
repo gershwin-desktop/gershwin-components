@@ -26,21 +26,12 @@ Menu_OBJC_FILES = \
 	MenuProtocolManager.m \
 	CrashHandler.m \
 	GNUStepMenuImporter.m \
-	DBusMenuImporter.m \
-	GTKMenuImporter.m \
-	DBusMenuParser.m \
 	DBusMenuLayout.m \
 	MenuContentsMatch.m \
 	MenuItemSubmenuSwizzle.m \
-	GTKMenuParser.m \
 	DBusMenuShortcutParser.m \
 	MenuShortcutItems.m \
 	GNUStepMenuActionHandler.m \
-	DBusMenuActionHandler.m \
-	GTKActionHandler.m \
-	DBusSubmenuManager.m \
-	GTKSubmenuManager.m \
-	DBusConnection.m \
 	MenuUtils.m \
 	MenuInstanceTakeover.m \
 	MenuBarLayout.m \
@@ -62,14 +53,12 @@ Menu_OBJC_FILES = \
 	GSMenuExtraInstance.m \
 	MenuExtrasPrefPanel.m \
 	WindowMonitor.m \
-	AppMenuImporter.m \
 	WindowSwitchContext.m \
 	BacklightBackend.m \
 	SysfsBacklightBackend.m \
 	FreeBSDBacklightBackend.m \
 	WsconsBacklightBackend.m \
 	MediaKeyController.m \
-	MPRISMediaController.m \
 	MediaHub.m \
 	TintedMenuItemCell.m
 
@@ -85,19 +74,10 @@ Menu_HEADER_FILES = \
 	CrashHandler.h \
 	GNUStepMenuIPC.h \
 	GNUStepMenuImporter.h \
-	DBusMenuImporter.h \
-	GTKMenuImporter.h \
-	DBusMenuParser.h \
 	DBusMenuLayout.h \
 	MenuContentsMatch.h \
-	GTKMenuParser.h \
 	DBusMenuShortcutParser.h \
 	GNUStepMenuActionHandler.h \
-	DBusMenuActionHandler.h \
-	GTKActionHandler.h \
-	DBusSubmenuManager.h \
-	GTKSubmenuManager.h \
-	DBusConnection.h \
 	MenuUtils.h \
 	MenuInstanceTakeover.h \
 	MenuWindowWatchdog.h \
@@ -115,14 +95,12 @@ Menu_HEADER_FILES = \
 	MenuExtrasPrefPanel.h \
 	MenuExtraManager.h \
 	WindowMonitor.h \
-	AppMenuImporter.h \
 	WindowSwitchContext.h \
 	BacklightBackend.h \
 	SysfsBacklightBackend.h \
 	FreeBSDBacklightBackend.h \
 	WsconsBacklightBackend.h \
 	MediaKeyController.h \
-	MPRISMediaController.h \
 	MediaHub.h \
 	TintedMenuItemCell.h
 
@@ -163,8 +141,9 @@ Menu_RESOURCE_FILES = \
 	Resources/Icons/wlan-weak-locked.tiff
 
 # Libraries and frameworks - configured by configure script
+# (DBUS_LIBS is added below, only when D-Bus is built in)
 DBUS_LIBS = -ldbus-1
-Menu_TOOL_LIBS += $(DBUS_LIBS) -lX11
+Menu_TOOL_LIBS += -lX11
 Menu_GUI_LIBS += -L/System/Library/Libraries -lgnustep-gui -lgnustep-base -lobjc -ldispatch -lSoundBackend -lNetworkBackend
 Menu_LDFLAGS += -Wl,--export-dynamic -L/System/Library/Libraries -Wl,-rpath,/System/Library/Libraries -Wl,--no-as-needed
 
@@ -215,8 +194,8 @@ ADDITIONAL_LDFLAGS = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' &&
 AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && echo 'ADDITIONAL_LDFLAGS=-Wl,--as-needed' || echo '')
 
 # ── libdbus, and the menu extras that need it ─────────────────────────────
-# Menu's own bus connection needs libdbus, and configure will not write a
-# makefile without it.  The MediaExtra is a separate matter: it steers
+# Menu's own bus connection needs libdbus, and is left out without it (see
+# MENU_DBUS below).  The MediaExtra is a separate matter: it steers
 # media players over MPRIS2, so where libdbus is not there it has nothing
 # to steer anything with, and it is left out of the build and out of the
 # installation instead of failing either.
@@ -232,6 +211,66 @@ AS_NEEDED_FLAG = $(shell ld --help 2>/dev/null | grep -q -- '--as-needed' && ech
 # here, then looks for the header where it actually is.  Run it with -v to
 # hear which of those it settled on.
 HAVE_LIBDBUS := $(shell CC="$(CC)" sh has-libdbus.sh "$(DBUS_CFLAGS) $(DBUS_LIBS)" 2>/dev/null)
+
+# ── The D-Bus menu importers ───────────────────────────────────────────────
+# Qt and GTK programs export their menus over D-Bus (com.canonical.dbusmenu,
+# org.gtk.Menus), and the importers for those, with Menu's bus connection and
+# the MPRIS2 side of the media hub, are built only when D-Bus is.  GNUstep
+# programs hand their menus over by Distributed Objects, which needs no bus,
+# so without D-Bus Menu still shows theirs; the menus of Qt and GTK programs
+# simply stay in their windows.
+#
+# MENU_DBUS is yes, no, or auto.  configure writes what it found (run it with
+# --without-dbus to leave D-Bus out), and MENU_DBUS=no on the command line or
+# in the environment overrides that.  auto, which is what a makefile that
+# configure has not written says, builds D-Bus in where has-libdbus.sh finds
+# libdbus - except on NextBSD, which ships no D-Bus at all and is recognised
+# by is-nextbsd.sh, since uname says FreeBSD there.
+MENU_DBUS ?= auto
+ifeq ($(MENU_DBUS),auto)
+  ifeq ($(shell sh is-nextbsd.sh 2>/dev/null),yes)
+    MENU_HAVE_DBUS := no
+  else
+    MENU_HAVE_DBUS := $(HAVE_LIBDBUS)
+  endif
+else ifneq ($(filter yes no,$(MENU_DBUS)),)
+  MENU_HAVE_DBUS := $(MENU_DBUS)
+else
+  $(error MENU_DBUS must be yes, no or auto, not '$(MENU_DBUS)')
+endif
+
+ifeq ($(MENU_HAVE_DBUS),yes)
+Menu_OBJC_FILES += \
+	DBusMenuImporter.m \
+	GTKMenuImporter.m \
+	DBusMenuParser.m \
+	GTKMenuParser.m \
+	DBusMenuActionHandler.m \
+	GTKActionHandler.m \
+	DBusSubmenuManager.m \
+	GTKSubmenuManager.m \
+	DBusConnection.m \
+	AppMenuImporter.m \
+	MPRISMediaController.m
+Menu_HEADER_FILES += \
+	DBusMenuImporter.h \
+	GTKMenuImporter.h \
+	DBusMenuParser.h \
+	GTKMenuParser.h \
+	DBusMenuActionHandler.h \
+	GTKActionHandler.h \
+	DBusSubmenuManager.h \
+	GTKSubmenuManager.h \
+	DBusConnection.h \
+	AppMenuImporter.h \
+	MPRISMediaController.h
+Menu_TOOL_LIBS += $(DBUS_LIBS)
+ADDITIONAL_OBJCFLAGS += -DMENU_HAVE_DBUS=1
+else
+# Nothing is compiled or linked against libdbus, not even its include path.
+DBUS_CFLAGS :=
+ADDITIONAL_OBJCFLAGS += -DMENU_HAVE_DBUS=0
+endif
 
 # Every menu extra that Menu builds, and the bundle each one leaves behind,
 # in one place so that the two lists cannot disagree about what there is.

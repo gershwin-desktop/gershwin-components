@@ -22,7 +22,7 @@ This application provides a global menu bar that displays application menus at t
 ### Required Libraries for Building
 - GNUstep Base (`gnustep-base-dev`)
 - GNUstep GUI (`gnustep-gui-dev`) 
-- libdbus-1 (`libdbus-1-dev`)
+- libdbus-1 (`libdbus-1-dev`), optional - see [Building without D-Bus](#building-without-d-bus)
 - X11 libraries (`libx11-dev`)
 
 ### Build Tools
@@ -43,6 +43,20 @@ gmake
 # Install system-wide
 sudo gmake install
 ```
+
+### Building without D-Bus
+
+D-Bus only carries the menus of Qt and GTK programs (the Canonical and GTK
+protocols above); GNUstep programs hand their menus over by Distributed
+Objects and need no bus.  D-Bus is therefore built in only when libdbus is
+found and the system is not NextBSD, which ships no D-Bus.  Without it the
+D-Bus importers, Menu's bus connection and the MPRIS2 side of the media hub
+are not compiled and nothing links `-ldbus-1`: GNUstep menus work as before,
+and the menus of Qt and GTK programs stay in their windows.
+
+To leave D-Bus out anywhere, run `./configure --without-dbus`, or pass
+`MENU_DBUS=no` to `gmake` (`MENU_DBUS=yes` requires it, the default is
+`auto`).  The unit tests in `Tests/Unit` follow the same switch.
 
 ## Installation
 

@@ -13,9 +13,11 @@
 #import "WindowSwitchContext.h"
 #import "MenuUtils.h"
 #import "X11ShortcutManager.h"
+#if MENU_HAVE_DBUS
 #import "GTKActionHandler.h"
 #import "DBusMenuActionHandler.h"
 #import "DBusConnection.h"
+#endif
 #import "ActionSearch.h"
 #import "SystemActions.h"
 #import "ForceQuitPanel.h"
@@ -2627,6 +2629,7 @@ static NSImage *MenuSizedIcon(NSImage *icon)
 
     [NSThread detachNewThreadWithBlock: ^{
         NSURL *fileURL = [NSURL fileURLWithPath:path];
+#if MENU_HAVE_DBUS
         NSString *uri = [fileURL absoluteString];
 
         NSLog(@"AppMenuWidget: Opening folder in Workspace via D-Bus: %@", uri);
@@ -2640,6 +2643,14 @@ static NSImage *MenuSizedIcon(NSImage *icon)
           {
             NSLog(@"AppMenuWidget: D-Bus ShowFolders call returned nil (FileManager1 not running?)");
           }
+#else
+        /* No bus to ask FileManager1 on: NSWorkspace hands the folder to
+           the Workspace over Distributed Objects */
+        if (![[NSWorkspace sharedWorkspace] openURL:fileURL])
+          {
+            NSLog(@"AppMenuWidget: Workspace did not open %@", path);
+          }
+#endif
     }];
 }
 

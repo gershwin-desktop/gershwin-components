@@ -9,8 +9,10 @@
 #import "MenuBarView.h"
 #import "AppMenuWidget.h"
 #import "MenuProtocolManager.h"
+#if MENU_HAVE_DBUS
 #import "DBusMenuImporter.h"
 #import "GTKMenuImporter.h"
+#endif
 #import "GNUStepMenuImporter.h"
 #import "RoundedCornersView.h"
 #import "X11ShortcutManager.h"
@@ -20,7 +22,9 @@
 #import "MenuBarLayout.h"
 #import "MenuWindowWatchdog.h"
 #import "WindowMonitor.h"
+#if MENU_HAVE_DBUS
 #import "AppMenuImporter.h"
+#endif
 #import "MenuProfiler.h"
 #import "SystemActions.h"
 #import "ForceQuitPanel.h"
@@ -817,11 +821,13 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     [self startCPUUsageLogging];
 #endif
     
+#if MENU_HAVE_DBUS
     // Register D-Bus service immediately - run loop is active
     NSDebugLLog(@"gwcomp", @"MenuController: Registering D-Bus service now...");
     
     // Call directly instead of using dispatch_async - the main queue might not process async blocks reliably
     [self registerDBusServiceWhenReady];
+#endif
 
     // Deferred so the alert's modal loop does not hold up the rest of the launch
     [self performSelector:@selector(warnAboutWrongMenuInterfaceStyle)
@@ -1576,6 +1582,7 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         self.dbusFileDescriptor = -1;
     } else {
         NSDebugLLog(@"gwcomp", @"MenuController: Menu protocols initialized successfully");
+#if MENU_HAVE_DBUS
         
         // Get the DBus file descriptor for X11 event loop integration
         self.dbusFileDescriptor = [[MenuProtocolManager sharedManager] getDBusFileDescriptor];
@@ -1612,6 +1619,11 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
         } else {
             NSDebugLLog(@"gwcomp", @"MenuController: Using fd-based monitoring, no polling timer needed");
         }
+#else
+        // Without D-Bus there is no bus to watch: the GNUstep importer is
+        // reached over Distributed Objects, through the run loop
+        self.dbusFileDescriptor = -1;
+#endif
     }
     
     // Set the app menu widget reference
@@ -1636,14 +1648,21 @@ static NSTimeInterval MenuControllerTimevalToSeconds(struct timeval value)
     
     // Register both Canonical and GTK protocol handlers
     GNUStepMenuImporter *gnustepHandler = [[GNUStepMenuImporter alloc] init];
+#if MENU_HAVE_DBUS
     DBusMenuImporter *canonicalHandler = [[DBusMenuImporter alloc] init];
     GTKMenuImporter *gtkHandler = [[GTKMenuImporter alloc] init];
+#endif
     
     [self.protocolManager registerProtocolHandler:gnustepHandler forType:MenuProtocolTypeGNUstep];
+#if MENU_HAVE_DBUS
     [self.protocolManager registerProtocolHandler:canonicalHandler forType:MenuProtocolTypeCanonical];
     [self.protocolManager registerProtocolHandler:gtkHandler forType:MenuProtocolTypeGTK];
     
     NSDebugLLog(@"gwcomp", @"MenuController: Registered GNUstep, Canonical, and GTK protocol handlers");
+#else
+    // Built without D-Bus: the menus of Qt and GTK programs stay in their windows
+    NSDebugLLog(@"gwcomp", @"MenuController: Registered the GNUstep protocol handler (no D-Bus)");
+#endif
     NSDebugLLog(@"gwcomp", @"MenuController: createProtocolManager COMPLETED");
 }
 

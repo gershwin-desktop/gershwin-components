@@ -2,9 +2,27 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog t_ProcessHogMonitor
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog t_ProcessHogMonitor
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
+
+# D-Bus follows the same switch as Menu itself (see ../../GNUmakefile.in):
+# MENU_DBUS=yes, no, or auto, where auto means libdbus is there and this is
+# not NextBSD.  Without it the MPRIS controller is neither built nor tested,
+# and the hub is tested with the native player alone, as Menu runs it.
+MENU_DBUS ?= auto
+ifeq ($(MENU_DBUS),auto)
+  ifeq ($(shell sh ../../is-nextbsd.sh 2>/dev/null),yes)
+    MENU_HAVE_DBUS := no
+  else
+    MENU_HAVE_DBUS := $(shell CC="$(CC)" sh ../../has-libdbus.sh 2>/dev/null)
+  endif
+else
+  MENU_HAVE_DBUS := $(MENU_DBUS)
+endif
+ifeq ($(MENU_HAVE_DBUS),yes)
+TEST_TOOL_NAME += t_MPRISMediaController
+endif
 # Testing.h releases its own objects, so the tests are built without ARC.
 ADDITIONAL_OBJCFLAGS += -fobjc-runtime=gnustep-2.0 -Wno-unused-parameter
 ADDITIONAL_INCLUDE_DIRS += -I../.. -I../../MenuExtras/BatteryExtra
@@ -147,6 +165,7 @@ t_ExtrasMenuViewWidths_TOOL_LIBS += -lgnustep-gui
 # MediaRemote is where the interface the hub serves, and the one the native
 # player serves, are declared; libdispatch comes with the hub's poll queue,
 # and libdbus with the controller.
+ifeq ($(MENU_HAVE_DBUS),yes)
 t_MPRISMediaController_OBJC_FILES = t_MPRISMediaController.m ../../MPRISMediaController.m
 ../../MPRISMediaController.m_FILE_FLAGS += $(ARCFLAGS)
 t_MPRISMediaController_OBJCFLAGS += -I../../../MediaRemote
@@ -154,11 +173,17 @@ t_MPRISMediaController_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/nu
 t_MPRISMediaController_TOOL_LIBS += -ldbus-1
 
 t_MediaHub_OBJC_FILES = t_MediaHub.m ../../MediaHub.m ../../MPRISMediaController.m
-../../MediaHub.m_FILE_FLAGS += $(ARCFLAGS)
+../../MediaHub.m_FILE_FLAGS += $(ARCFLAGS) -DMENU_HAVE_DBUS=1
 ../../MPRISMediaController.m_FILE_FLAGS += $(ARCFLAGS)
 t_MediaHub_OBJCFLAGS += -I../../../MediaRemote
 t_MediaHub_OBJCFLAGS += $(shell pkg-config --cflags dbus-1 2>/dev/null || echo "-I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include")
 t_MediaHub_TOOL_LIBS += -ldbus-1 -ldispatch
+else
+t_MediaHub_OBJC_FILES = t_MediaHub.m ../../MediaHub.m
+../../MediaHub.m_FILE_FLAGS += $(ARCFLAGS) -DMENU_HAVE_DBUS=0
+t_MediaHub_OBJCFLAGS += -I../../../MediaRemote
+t_MediaHub_TOOL_LIBS += -ldispatch
+endif
 
 # The window scans in MenuUtils.m are ARC in Menu; the test tool itself stays
 # non-ARC.  Needs an X display to do anything (it says so when there is none).

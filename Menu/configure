@@ -2,8 +2,37 @@
 
 # Configure script for Menu application
 # Detects DBUS paths and generates GNUmakefile from GNUmakefile.in
+#
+# D-Bus is optional.  It carries the menus of Qt and GTK programs that
+# export them over com.canonical.dbusmenu or org.gtk.Menus; GNUstep programs
+# hand theirs over by Distributed Objects and need no bus at all.  So it is
+# built in where libdbus is found, and left out where it is not, and always
+# on NextBSD, which ships no D-Bus.
+#
+#   --without-dbus   leave D-Bus out (same as MENU_DBUS=no)
+#   --with-dbus      require it, and fail when libdbus is not found
+#                    (same as MENU_DBUS=yes)
 
 echo "Configuring Menu application..."
+
+MENU_DBUS=${MENU_DBUS:-auto}
+for arg in "$@"; do
+    case "$arg" in
+        --without-dbus|--disable-dbus|--with-dbus=no|--enable-dbus=no)
+            MENU_DBUS=no ;;
+        --with-dbus|--enable-dbus|--with-dbus=yes|--enable-dbus=yes)
+            MENU_DBUS=yes ;;
+        *)
+            echo "Warning: unknown option $arg ignored" ;;
+    esac
+done
+case "$MENU_DBUS" in
+    yes|no|auto) ;;
+    *)
+        echo "Error: MENU_DBUS must be yes, no or auto, not '$MENU_DBUS'"
+        exit 1
+        ;;
+esac
 
 # Function to check if a header file exists
 check_header() {
@@ -39,9 +68,17 @@ EOF
 OS=$(uname -s)
 echo "Detected OS: $OS"
 
+# NextBSD says FreeBSD to uname, so it is asked for separately
+if [ "$MENU_DBUS" = "auto" ] && [ "$(sh ./is-nextbsd.sh)" = "yes" ]; then
+    echo "NextBSD detected: building without D-Bus"
+    MENU_DBUS=no
+fi
+
 # Initialize variables
 DBUS_CFLAGS=""
 DBUS_LIBS="-ldbus-1"
+
+if [ "$MENU_DBUS" != "no" ]; then
 
 # Platform-specific library paths
 case "$OS" in
@@ -105,8 +142,14 @@ echo "DBUS_LIBS: $DBUS_LIBS"
 
 if test_compile "$DBUS_CFLAGS" "$DBUS_LIBS"; then
     echo "DBUS configuration test passed"
+    MENU_DBUS=yes
 else
-    echo "Error: DBUS is required but not found or not working"
+    if [ "$MENU_DBUS" = "yes" ]; then
+        echo "Error: DBUS is required but not found or not working"
+    else
+        echo "Warning: DBUS not found or not working; building without it"
+        echo "(Qt and GTK application menus will stay in their windows)"
+    fi
     echo ""
     case "$OS" in
         Linux)
@@ -128,7 +171,18 @@ else
             ;;
     esac
     echo ""
-    exit 1
+    if [ "$MENU_DBUS" = "yes" ]; then
+        exit 1
+    fi
+    MENU_DBUS=no
+fi
+
+fi
+
+# Without D-Bus nothing is linked against it
+if [ "$MENU_DBUS" = "no" ]; then
+    DBUS_CFLAGS=""
+    DBUS_LIBS=""
 fi
 
 # Generate GNUmakefile from GNUmakefile.in
@@ -142,10 +196,12 @@ fi
 # Use sed to substitute placeholders
 sed -e "s|@DBUS_CFLAGS@|$DBUS_CFLAGS|g" \
     -e "s|@DBUS_LIBS@|$DBUS_LIBS|g" \
+    -e "s|@MENU_DBUS@|$MENU_DBUS|g" \
     GNUmakefile.in > GNUmakefile
 
 echo "Configuration complete!"
 echo ""
 echo "DBUS_CFLAGS = $DBUS_CFLAGS"
 echo "DBUS_LIBS = $DBUS_LIBS"
+echo "MENU_DBUS = $MENU_DBUS"
 echo ""

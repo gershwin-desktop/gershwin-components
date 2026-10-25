@@ -7,6 +7,8 @@
 #import "MediaHub.h"
 
 #import "GSMediaPlayer2.h"
+/* Without D-Bus the controller is not built and _mpris stays nil, so the
+   hub steers the native player alone. */
 #import "MPRISMediaController.h"
 
 #import <dispatch/dispatch.h>
@@ -130,7 +132,9 @@ static NSString *MediaPlayersSignature(NSArray<MediaPlayerEntry *> *entries)
 {
     self = [super init];
     if (self) {
+#if MENU_HAVE_DBUS
         _mpris = [[MPRISMediaController alloc] init];
+#endif
         _mprisPlayers = @[];
         _knownPlayers = @[];
         _nativePlayerServiceName = GSMediaPlayer2PlayerServiceName;
@@ -196,10 +200,12 @@ static NSString *MediaPlayersSignature(NSArray<MediaPlayerEntry *> *entries)
     });
     dispatch_resume(_nativeTimer);
 
+#if MENU_HAVE_DBUS
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(mprisChanged:)
                                                  name:MPRISMediaControllerChangedNotification
                                                object:nil];
+#endif
 
     /* Made here, on the main thread, before the native queue exists: its
        receive port goes in the main run loop, and a run loop is not
@@ -351,6 +357,7 @@ static NSString *MediaPlayersSignature(NSArray<MediaPlayerEntry *> *entries)
 {
     NSMutableArray<MediaPlayerEntry *> *entries = [NSMutableArray array];
 
+#if MENU_HAVE_DBUS
     for (NSDictionary *player in _mprisPlayers) {
         MediaPlayerEntry *entry = [[MediaPlayerEntry alloc] init];
         entry.identifier = [player objectForKey:MPRISPlayerBusNameKey];
@@ -361,6 +368,7 @@ static NSString *MediaPlayersSignature(NSArray<MediaPlayerEntry *> *entries)
         entry.native = NO;
         [entries addObject:entry];
     }
+#endif
     if (_nativePlayer != nil) {
         [entries addObject:_nativePlayer];
     }

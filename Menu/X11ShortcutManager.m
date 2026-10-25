@@ -1205,7 +1205,12 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     NSString *actionName = [_menuItemToActionNameMap objectForKey:menuItemKey];
     
     // Check if this is a direct action (target/action pattern)
+#if MENU_HAVE_DBUS
     if (connectionOrTarget && ![connectionOrTarget isKindOfClass:[GNUDBusConnection class]]) {
+#else
+    // Without D-Bus every shortcut is registered with a direct target
+    if (connectionOrTarget) {
+#endif
         // This is a direct target/action call
         id target = connectionOrTarget;
         SEL action = NSSelectorFromString(objectPath); // objectPath stores the selector string
@@ -1230,6 +1235,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
         return;
     }
     
+#if MENU_HAVE_DBUS
     // Continue with DBus handling for regular menu items
     GNUDBusConnection *dbusConnection = (GNUDBusConnection *)connectionOrTarget;
     
@@ -1262,8 +1268,14 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     }
     
     NSLog(@"X11ShortcutManager: ERROR: Both GTK Actions and Unity DBus menu protocols failed");
+#else
+    (void)tagNumber;
+    (void)actionName;
+    NSLog(@"X11ShortcutManager: ERROR: No target for shortcut %@", menuItemKey);
+#endif
 }
 
+#if MENU_HAVE_DBUS
 - (BOOL)tryGTKAction:(NSString *)actionName
          serviceName:(NSString *)serviceName
           objectPath:(NSString *)objectPath
@@ -1364,6 +1376,7 @@ static int handleX11GrabError(Display *display, XErrorEvent *event)
     
     return result != nil;
 }
+#endif
 
 - (void)detectLockMasks
 {

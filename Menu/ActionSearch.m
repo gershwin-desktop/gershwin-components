@@ -11,7 +11,9 @@
 #import "MenuUtils.h"
 #import <X11/Xatom.h>
 #import "WindowMonitor.h"
+#if MENU_HAVE_DBUS
 #import "DBusConnection.h"
+#endif
 #import <GNUstepGUI/GSTheme.h>
 #import <objc/runtime.h>
 #import <pthread.h>
@@ -1267,6 +1269,7 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
 
     [NSThread detachNewThreadWithBlock: ^{
         NSURL *fileURL = [NSURL fileURLWithPath:expanded];
+#if MENU_HAVE_DBUS
         NSString *uri = [fileURL absoluteString];
         @try {
             /* Same call the Applications submenu uses (openFolderInWorkspace:). */
@@ -1281,6 +1284,11 @@ static const NSTimeInterval kAppNameCacheTTL = 30.0;
         } @catch (NSException *e) {
             [[NSWorkspace sharedWorkspace] openURL:fileURL];
         }
+#else
+        /* No bus to ask FileManager1 on: the Workspace, as the fallback
+           above does */
+        [[NSWorkspace sharedWorkspace] openURL:fileURL];
+#endif
     }];
 }
 
