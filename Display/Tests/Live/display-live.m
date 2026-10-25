@@ -94,7 +94,7 @@ int main(int argc, char **argv)
 
     if (wanted == nil) return fail(@"the model refused the request");
     NSError *error = nil;
-    if (![x11 applyLayout:wanted error:&error]) {
+    if (![x11 applyLayout:wanted touchedServer:NULL error:&error]) {
         return fail([error localizedDescription]);
     }
     DisplayLayout *after = [[[[X11DisplayManager alloc] init] autorelease]

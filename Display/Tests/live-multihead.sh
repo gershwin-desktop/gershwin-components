@@ -13,13 +13,17 @@
 # DUMMY0 is connected at start.  An output becomes "connected" once a mode
 # has been set on it, and stays connected after it is switched off again,
 # which is exactly a monitor that was plugged in after X started: connected,
-# no CRTC.  "plug" below does that.  The dummy CRTCs support no RandR
+# no CRTC.  "plug" below does that.  "unplug" sets the output's non-desktop
+# property: the server then reports it as disconnected to every client and
+# sends the same output change event as a real unplug, and like on real
+# hardware its CRTC keeps running until a client switches it off.  The dummy CRTCs support no RandR
 # transforms, so mirroring with a scale transform cannot run here (the unit
 # tests cover that plan); mirroring at a common mode does.
 #
 # Usage (DISPLAYNUM must be a free display you own, never :0):
 #   live-multihead.sh start DISPLAYNUM [CONFDIR]   start the dummy Xorg as root
 #   live-multihead.sh plug DISPLAYNUM OUTPUT        connect an output, no CRTC
+#   live-multihead.sh unplug DISPLAYNUM OUTPUT      disconnect it again
 #   live-multihead.sh run DISPLAYNUM                run the checks
 #   live-multihead.sh stop DISPLAYNUM               stop the server started here
 #
@@ -89,10 +93,21 @@ EOF
 
 plug() {
   out=$1
+  if xrandr --props | awk -v o="$out" '$1 == o { s = 1; next } /^[^ \t]/ { s = 0 } s && /non-desktop: 1/ { f = 1 } END { exit !f }'; then
+    xrandr --output "$out" --set non-desktop 0
+    xrandr | grep -q "^$out connected" || { echo "cannot plug $out" >&2; exit 1; }
+    return
+  fi
   xrandr --addmode "$out" 1024x768 2>/dev/null
   xrandr --output "$out" --mode 1024x768 --right-of DUMMY0 &&
   xrandr --output "$out" --off
   xrandr | grep -q "^$out connected" || { echo "cannot plug $out" >&2; exit 1; }
+}
+
+unplug() {
+  out=$1
+  xrandr --output "$out" --set non-desktop 1
+  xrandr | grep -q "^$out disconnected" || { echo "cannot unplug $out" >&2; exit 1; }
 }
 
 stop() {
@@ -192,6 +207,7 @@ run() {
 case $cmd in
   start) start "${3:-}" ;;
   plug) plug "${3:?output}" ;;
+  unplug) unplug "${3:?output}" ;;
   run) run ;;
   stop) stop ;;
   *) sed -n '3,30p' "$0"; exit 2 ;;

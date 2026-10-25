@@ -10,6 +10,7 @@
 #import "X11DisplayManager.h"
 #import "DisplayLayout.h"
 #import "DisplayArrangement.h"
+#import "DisplayConfiguration.h"
 #import "AppearanceMetrics.h"
 #import <math.h>
 
@@ -47,6 +48,11 @@
     _layoutOwner = owner;
 }
 @end
+
+/* Mirror, display, resolution and scale rows. */
+static const CGFloat DisplaySettingsBoxHeight = 156;
+static const int DisplayRevertSeconds = 15;
+static NSString * const DisplayConfigToolPath = @"/System/Library/Tools/displayconfig";
 
 static NSInteger dialogIDCounter = 0;
 static NSMutableDictionary *activeDialogsByID = nil;
@@ -86,10 +92,11 @@ static NSMutableDictionary *activeDialogsByID = nil;
     [selectedOutputName release];
     [displayView release];
     [mainView release];
+    [outputPopup release];
     [resolutionPopup release];
     [scaleSlider release];
     [scaleValueLabel release];
-    [scaleFactorHintLabel release];
+    [statusLabel release];
     [mirrorDisplaysCheckbox release];
     [x11 release];
     [super dealloc];
@@ -133,7 +140,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
     const CGFloat checkboxRowH = METRICS_RADIO_BUTTON_LINE_SPACING; /* 20 */
     const CGFloat boxTitleInset = 14.0;
     const CGFloat arrangeBoxH = 230;      /* arrangement view */
-    const CGFloat settingsBoxH = 126;     /* mirror, resolution, scale */
+    const CGFloat settingsBoxH = DisplaySettingsBoxHeight;
 
     mainView = [[DisplayMainView alloc] initWithFrame:NSMakeRect(0, 0, winW, winH)];
     [(DisplayMainView *)mainView setLayoutOwner:self];
@@ -162,7 +169,7 @@ static NSMutableDictionary *activeDialogsByID = nil;
     {
         CGFloat by = settingsBoxH - boxTitleInset - METRICS_SPACE_16 - checkboxRowH;
         [self addCheckbox:mirrorDisplaysCheckbox =
-                   [[[NSButton alloc] initWithFrame:NSZeroRect] autorelease]
+                   [[NSButton alloc] initWithFrame:NSZeroRect]
                     toBox:settingsBox y:by width:boxW];
         [mirrorDisplaysCheckbox setButtonType:NSSwitchButton];
         [mirrorDisplaysCheckbox setTitle:@"Mirror Displays"];
@@ -170,9 +177,19 @@ static NSMutableDictionary *activeDialogsByID = nil;
         [mirrorDisplaysCheckbox setAction:@selector(mirrorDisplaysChanged:)];
         by -= METRICS_SPACE_8 + rowH;
 
+        /* Mirrored outputs lie on top of each other in the arrangement, so
+         * the hidden one could not be picked there. */
+        [self addPopUpRowWithLabel:@"Display:"
+                            popup:outputPopup =
+                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
+                            toBox:settingsBox y:by width:boxW];
+        [outputPopup setTarget:self];
+        [outputPopup setAction:@selector(outputChanged:)];
+        by -= METRICS_SPACE_8 + rowH;
+
         [self addPopUpRowWithLabel:@"Resolution:"
                             popup:resolutionPopup =
-                            [[[NSPopUpButton alloc] initWithFrame:NSZeroRect] autorelease]
+                            [[NSPopUpButton alloc] initWithFrame:NSZeroRect]
                             toBox:settingsBox y:by width:boxW];
         [resolutionPopup setTarget:self];
         [resolutionPopup setAction:@selector(resolutionChanged:)];
@@ -180,44 +197,33 @@ static NSMutableDictionary *activeDialogsByID = nil;
         by -= METRICS_SPACE_8 + rowH;
         [self addSliderRowWithLabel:@"Scale Factor:"
                              slider:scaleSlider =
-                             [[[NSSlider alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSSlider alloc] initWithFrame:NSZeroRect]
                               value:scaleValueLabel =
-                             [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease]
+                             [[NSTextField alloc] initWithFrame:NSZeroRect]
                               toBox:settingsBox y:by width:boxW];
-        [scaleSlider setMinValue:DisplayScaleFactorMinimum];
-        [scaleSlider setMaxValue:DisplayScaleFactorMaximum];
-        /* A tick every 0.2 (0.8 ... 3.0) stays readable at this width; the
-         * action rounds to 0.1, so in-between values remain possible. */
-        [scaleSlider setNumberOfTickMarks:
-            (NSInteger)lround((DisplayScaleFactorMaximum - DisplayScaleFactorMinimum) / 0.2) + 1];
-        [scaleSlider setAllowsTickMarkValuesOnly:NO];
-        [scaleSlider setContinuous:YES];
+        /* The offered factors are not evenly spaced, so the slider moves
+         * over their indexes, one tick each. */
+        [scaleSlider setMinValue:0];
+        [scaleSlider setMaxValue:DisplayScaleFactorStepCount - 1];
+        [scaleSlider setNumberOfTickMarks:DisplayScaleFactorStepCount];
+        [scaleSlider setAllowsTickMarkValuesOnly:YES];
+        [scaleSlider setContinuous:NO];
         [scaleSlider setTarget:self];
         [scaleSlider setAction:@selector(scaleFactorChanged:)];
-        [scaleValueLabel setStringValue:@"1.0x"];
-
-        double currentScaleFactor = 1.0;
-        NSDictionary *domain = [[NSUserDefaults standardUserDefaults] persistentDomainForName:NSGlobalDomain];
-        NSNumber *storedFactor = [domain objectForKey:@"GSScaleFactor"];
-        if (storedFactor) {
-            currentScaleFactor = [storedFactor doubleValue];
-        }
-        currentScaleFactor = DisplayClampScaleFactor(currentScaleFactor);
-        [scaleSlider setDoubleValue:currentScaleFactor];
-        [scaleValueLabel setStringValue:[NSString stringWithFormat:@"%.1fx", currentScaleFactor]];
+        double factor = [self effectiveScaleFactor];
+        [scaleSlider setDoubleValue:DisplayScaleFactorStepIndex(factor)];
+        [scaleValueLabel setStringValue:scaleFactorTitle(factor)];
     }
     y -= settingsBoxH + boxGap;
 
-    /* ---- Bottom hint (settings apply automatically) ---- */
-    scaleFactorHintLabel = [self labelWithText:@"Changes will take effect for newly started applications"
-                                         frame:NSMakeRect(sideMargin, bottomMargin,
-                                                         contentW, 20)
-                                      alignment:NSTextAlignmentLeft];
-    [scaleFactorHintLabel setFont:[NSFont systemFontOfSize:11]];
-    [scaleFactorHintLabel setTextColor:[NSColor grayColor]];
-    [scaleFactorHintLabel setHidden:YES];
-    [scaleFactorHintLabel setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
-    [mainView addSubview:scaleFactorHintLabel];
+    /* ---- Status line (hints, and what could not be saved) ---- */
+    statusLabel = [self labelWithText:@""
+                                frame:NSMakeRect(sideMargin, bottomMargin, contentW, 20)
+                            alignment:NSTextAlignmentLeft];
+    [statusLabel setFont:[NSFont systemFontOfSize:11]];
+    [statusLabel setTextColor:[NSColor grayColor]];
+    [statusLabel setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
+    [mainView addSubview:statusLabel];
 
     // Do not call refreshDisplays: here - the DisplayPane's didSelect
     // will trigger it once the view is in the window hierarchy.
@@ -236,17 +242,17 @@ static NSMutableDictionary *activeDialogsByID = nil;
     const CGFloat bottomMargin = METRICS_SPACE_12;
     const CGFloat boxGap = METRICS_SPACE_8;
     const CGFloat hintH = 20;
-    const CGFloat settingsBoxH = 126;
+    const CGFloat settingsBoxH = DisplaySettingsBoxHeight;
     CGFloat height = [mainView bounds].size.height;
     NSRect f;
 
-    if (scaleFactorHintLabel) {
-        f = [scaleFactorHintLabel frame];
+    if (statusLabel) {
+        f = [statusLabel frame];
         f.origin.x = sideMargin;
         f.size.width = width - 2 * sideMargin;
         f.origin.y = bottomMargin;
         f.size.height = hintH;
-        [scaleFactorHintLabel setFrame:f];
+        [statusLabel setFrame:f];
     }
 
     if (settingsBox) {
@@ -374,17 +380,27 @@ static NSMutableDictionary *activeDialogsByID = nil;
 
 #pragma mark - Model
 
+static NSString *scaleFactorTitle(double factor)
+{
+    return [NSString stringWithFormat:@"%gx", factor];
+}
+
 /* The title of the resolution pop-up item that switches an output off. */
 static NSString * const DisplayOffItemTitle = @"Off";
+
+/* The factor applications start with: the user's own GSScaleFactor, else
+ * the system-wide one from GlobalDefaults/Display.plist (what LoginWindow
+ * recommended), which NSUserDefaults merges below it. */
+- (double)effectiveScaleFactor
+{
+    id stored = [[NSUserDefaults standardUserDefaults] objectForKey:@"GSScaleFactor"];
+    return stored ? DisplayClampScaleFactor([stored doubleValue]) : 1.0;
+}
 
 - (DisplayLayout *)readLayoutProbing:(BOOL)probe
 {
     DisplayLayout *current = [x11 currentLayoutProbingOutputs:probe];
-    double factor = 1.0;
-    NSNumber *stored = [[[NSUserDefaults standardUserDefaults]
-        persistentDomainForName:NSGlobalDomain] objectForKey:@"GSScaleFactor"];
-    if (stored) factor = [stored doubleValue];
-    [current setScaleFactor:factor];
+    [current setScaleFactor:[self effectiveScaleFactor]];
     return current;
 }
 
@@ -420,7 +436,28 @@ static NSString * const DisplayOffItemTitle = @"Off";
 
     [mirrorDisplaysCheckbox setEnabled:[[layout outputs] count] > 1];
     [mirrorDisplaysCheckbox setState:[layout isMirrored] ? NSOnState : NSOffState];
+    [self updateOutputPopup];
     [self updateResolutionPopup];
+}
+
+- (void)updateOutputPopup
+{
+    [outputPopup removeAllItems];
+    for (DisplayOutput *o in [layout outputs]) {
+        NSString *title = [o monitorName]
+            ? [NSString stringWithFormat:@"%@ (%@)", [o monitorName], [o name]]
+            : [o name];
+        [outputPopup addItemWithTitle:title];
+        [[outputPopup lastItem] setRepresentedObject:[o name]];
+    }
+    NSInteger index = [[layout outputNames] indexOfObject:selectedOutputName];
+    if (index != NSNotFound) [outputPopup selectItemAtIndex:index];
+    [outputPopup setEnabled:[[layout outputs] count] > 1];
+}
+
+- (void)outputChanged:(id)sender
+{
+    [self selectOutput:[[outputPopup selectedItem] representedObject]];
 }
 
 - (DisplayLayout *)layout
@@ -442,6 +479,7 @@ static NSString * const DisplayOffItemTitle = @"Off";
         [rectView setIsSelected:[[[rectView output] name] isEqualToString:name]];
         [rectView setNeedsDisplay:YES];
     }
+    [self updateOutputPopup];
     [self updateResolutionPopup];
 }
 
@@ -479,17 +517,45 @@ static NSString * const DisplayOffItemTitle = @"Off";
     [alert release];
 }
 
+- (void)showStatus:(NSString *)text isError:(BOOL)isError
+{
+    [statusLabel setTextColor:isError ? [NSColor redColor] : [NSColor grayColor]];
+    [statusLabel setStringValue:text ?: @""];
+    if (isError) NSLog(@"DisplayController: %@", text);
+}
+
+/* Remembers what the server runs now as the layout for the monitors that
+ * are connected, so displayconfig brings it back at the next login and
+ * whenever these monitors are plugged in again. */
+- (void)saveCurrentLayout
+{
+    DisplayLayout *current = [self readLayoutProbing:NO];
+    if (current == nil || ![[DisplayLayoutStore userStore] saveLayout:current]) {
+        [self showStatus:@"The display arrangement could not be saved for the next login."
+                 isError:YES];
+    }
+}
+
+- (BOOL)confirmationPending
+{
+    return [activeDialogsByID count] > 0;
+}
+
 /* Applies `wanted`.  If the server refuses, the previous layout is restored
  * and the error shown; the confirmation with its automatic revert only
- * appears when the change really took effect. */
+ * appears when the change really took effect.  Changes that need no
+ * confirmation are saved at once, the others when the user keeps them. */
 - (BOOL)applyLayout:(DisplayLayout *)wanted confirm:(BOOL)confirm
 {
     DisplayLayout *previous = [[layout retain] autorelease];
     NSError *error = nil;
-    BOOL ok = [x11 applyLayout:wanted error:&error];
-    if (!ok) {
+    BOOL touched = NO;
+    BOOL ok = [x11 applyLayout:wanted touchedServer:&touched error:&error];
+    /* A request refused before the server was touched left nothing to undo;
+     * re-applying would only make every screen flicker. */
+    if (!ok && touched) {
         NSError *restoreError = nil;
-        if (previous && ![x11 applyLayout:previous error:&restoreError]) {
+        if (previous && ![x11 applyLayout:previous touchedServer:NULL error:&restoreError]) {
             NSLog(@"DisplayController: restoring the previous layout failed: %@",
                   [restoreError localizedDescription]);
         }
@@ -499,7 +565,15 @@ static NSString * const DisplayOffItemTitle = @"Off";
         [self showError:[error localizedDescription]];
         return NO;
     }
-    if (confirm && previous) [self showConfirmationDialogWithPreviousLayout:previous];
+    if ([self confirmationPending]) {
+        /* One question at a time: the pending one keeps the layout the user
+         * last kept as what Revert returns to, and starts counting again. */
+        [self restartPendingConfirmation];
+    } else if (confirm && previous) {
+        [self showConfirmationDialogWithPreviousLayout:previous];
+    } else {
+        [self saveCurrentLayout];
+    }
     return YES;
 }
 
@@ -562,21 +636,66 @@ static NSString * const DisplayOffItemTitle = @"Off";
 
 - (void)scaleFactorChanged:(id)sender
 {
-    double factor = DisplayClampScaleFactor([sender doubleValue]);
-    [sender setDoubleValue:factor];
+    NSUInteger index = (NSUInteger)lround([sender doubleValue]);
+    double factor = DisplayScaleFactorAtStep(index);
+    [sender setDoubleValue:index];
+    [scaleValueLabel setStringValue:scaleFactorTitle(factor)];
+    if (factor == [self effectiveScaleFactor]) return;
+
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSMutableDictionary *domain = [NSMutableDictionary dictionaryWithDictionary:
         [defaults persistentDomainForName:NSGlobalDomain]];
     [domain setObject:[NSNumber numberWithDouble:factor] forKey:@"GSScaleFactor"];
     [defaults setPersistentDomain:domain forName:NSGlobalDomain];
     [defaults synchronize];
-    [scaleValueLabel setStringValue:[NSString stringWithFormat:@"%.1fx", factor]];
-    [scaleFactorHintLabel setHidden:NO];
+    [self saveCurrentLayout];
+
+    /* LoginWindow and users without an own factor read the system-wide
+     * file, which only root may write. */
+    NSString *problem = nil;
+    if (![self writeSystemScale:factor problem:&problem]) {
+        [self showStatus:[NSString stringWithFormat:
+            @"Scale saved for you, but not for the login window: %@", problem]
+                 isError:YES];
+        return;
+    }
+    [self showStatus:@"Changes will take effect for newly started applications"
+             isError:NO];
+}
+
+/* Runs displayconfig, which asks for the password through SudoAskPass and
+ * writes the file as root. */
+- (BOOL)writeSystemScale:(double)factor problem:(NSString **)problem
+{
+    NSString *tool = DisplayConfigToolPath;
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:tool]) {
+        *problem = [NSString stringWithFormat:@"%@ is not installed.", tool];
+        return NO;
+    }
+    NSTask *task = [[[NSTask alloc] init] autorelease];
+    NSPipe *errPipe = [NSPipe pipe];
+    [task setLaunchPath:tool];
+    [task setArguments:[NSArray arrayWithObjects:@"write-system-scale",
+        [NSString stringWithFormat:@"%g", factor], nil]];
+    [task setStandardError:errPipe];
+    @try {
+        [task launch];
+    } @catch (NSException *e) {
+        *problem = [e reason];
+        return NO;
+    }
+    /* Read before waiting: a child blocked on a full pipe never exits. */
+    NSData *err = [[errPipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+    if ([task terminationStatus] == 0) return YES;
+    NSString *text = [[[NSString alloc] initWithData:err encoding:NSUTF8StringEncoding] autorelease];
+    text = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    *problem = [text length] ? text
+        : [NSString stringWithFormat:@"displayconfig failed (status %d).", [task terminationStatus]];
+    return NO;
 }
 
 #pragma mark - Confirmation with automatic revert
-
-static const int DisplayRevertSeconds = 15;
 
 - (void)showConfirmationDialogWithPreviousLayout:(DisplayLayout *)previous
 {
@@ -656,6 +775,15 @@ static const int DisplayRevertSeconds = 15;
     [confirmWindow release];
 }
 
+- (void)restartPendingConfirmation
+{
+    for (NSMutableDictionary *dialogData in [activeDialogsByID allValues]) {
+        [dialogData setObject:[NSNumber numberWithInt:DisplayRevertSeconds] forKey:@"countdown"];
+        [[dialogData objectForKey:@"countdownLabel"] setStringValue:
+            [NSString stringWithFormat:@"%d", DisplayRevertSeconds]];
+    }
+}
+
 /* Ends dialog `dialogID`, restoring its previous layout when `revert`. */
 - (void)finishDialog:(NSNumber *)dialogID revert:(BOOL)revert
 {
@@ -666,6 +794,8 @@ static const int DisplayRevertSeconds = 15;
     [[dialogData objectForKey:@"window"] close];
     if (revert) {
         [self applyLayout:[dialogData objectForKey:@"previousLayout"] confirm:NO];
+    } else {
+        [self saveCurrentLayout];
     }
 }
 

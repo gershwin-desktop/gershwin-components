@@ -224,12 +224,102 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     XRRFreeScreenResources(res);
 
     DisplayLayout *layout = [DisplayLayout layoutWithOutputs:outputs];
-    if ([layout primaryOutput] == nil && [[layout enabledOutputs] count] > 0) {
-        /* Without a RandR primary, X clients take the first enabled output
-         * as the main one; show it that way so applying makes it explicit. */
-        [[[layout enabledOutputs] objectAtIndex:0] setPrimary:YES];
-    }
+    /* Without a lit RandR primary, desktop components fall back to the same
+     * rule; show it that way so applying makes it explicit. */
+    [layout ensurePrimary];
     return layout;
+}
+
+- (BOOL)hasStrayStateForLayout:(DisplayLayout *)layout
+{
+    if (![self connect]) return NO;
+    Display *dpy = (Display *)_display;
+    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
+    if (!res) return NO;
+    NSMutableSet *lit = [NSMutableSet set];
+    for (DisplayOutput *o in [layout enabledOutputs]) [lit addObject:[o name]];
+    BOOL stray = NO;
+    for (int c = 0; c < res->ncrtc && !stray; c++) {
+        XRRCrtcInfo *ci = XRRGetCrtcInfo(dpy, res, res->crtcs[c]);
+        if (ci && ci->mode != None) {
+            /* A monitor that was unplugged leaves its CRTC running: the
+             * server does not switch it off by itself. */
+            BOOL drivesLitOutput = NO;
+            for (int k = 0; k < ci->noutput; k++) {
+                XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, ci->outputs[k]);
+                if (oi && oi->connection == RR_Connected
+                    && [lit containsObject:outputName(oi)]) drivesLitOutput = YES;
+                if (oi) XRRFreeOutputInfo(oi);
+            }
+            if (!drivesLitOutput) stray = YES;
+        }
+        if (ci) XRRFreeCrtcInfo(ci);
+    }
+    XRRFreeScreenResources(res);
+    if (stray) return YES;
+    NSRect bounds = [layout boundingRect];
+    NSSize screen = [self screenSize];
+    return screen.width != NSMaxX(bounds) || screen.height != NSMaxY(bounds);
+}
+
+- (NSString *)primaryOutputName
+{
+    if (![self connect]) return nil;
+    Display *dpy = (Display *)_display;
+    RROutput primaryID = XRRGetOutputPrimary(dpy, _root);
+    if (primaryID == None) return nil;
+    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
+    if (!res) return nil;
+    NSString *name = nil;
+    XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, primaryID);
+    if (oi) {
+        /* A primary that is dark does not tell clients where the main
+         * screen is. */
+        if (oi->crtc != None) name = outputName(oi);
+        XRRFreeOutputInfo(oi);
+    }
+    XRRFreeScreenResources(res);
+    return name;
+}
+
+- (BOOL)setPrimaryOutputNamed:(NSString *)name error:(NSError **)error
+{
+    if (![self connect]) {
+        if (error) *error = [self errorWithText:@"The X display cannot be opened."];
+        return NO;
+    }
+    Display *dpy = (Display *)_display;
+    XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy, _root);
+    if (!res) {
+        if (error) *error = [self errorWithText:@"The display configuration cannot be read."];
+        return NO;
+    }
+    RROutput found = None;
+    for (int i = 0; i < res->noutput && found == None; i++) {
+        XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
+        if (oi && [outputName(oi) isEqualToString:name]) found = res->outputs[i];
+        if (oi) XRRFreeOutputInfo(oi);
+    }
+    XRRFreeScreenResources(res);
+    if (found == None) {
+        if (error) *error = [self errorWithText:
+            [NSString stringWithFormat:@"Display %@ is not connected.", name]];
+        return NO;
+    }
+    XSync(dpy, False);
+    trackedDisplay = dpy;
+    firstErrorCode = 0;
+    previousHandler = XSetErrorHandler(collectError);
+    XRRSetOutputPrimary(dpy, _root, found);
+    XSync(dpy, False);
+    XSetErrorHandler(previousHandler);
+    trackedDisplay = NULL;
+    if (firstErrorCode != 0) {
+        if (error) *error = [self errorWithText:
+            [NSString stringWithFormat:@"The X server refused to make %@ the primary display.", name]];
+        return NO;
+    }
+    return YES;
 }
 
 #pragma mark - Apply
@@ -274,8 +364,11 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     return scaled;
 }
 
-- (BOOL)applyLayout:(DisplayLayout *)layout error:(NSError **)error
+- (BOOL)applyLayout:(DisplayLayout *)layout
+      touchedServer:(BOOL *)touched
+              error:(NSError **)error
 {
+    if (touched) *touched = NO;
     if (![self connect]) {
         if (error) *error = [self errorWithText:@"The X display cannot be opened."];
         return NO;
@@ -370,6 +463,7 @@ static NSArray *modesOfOutput(XRRScreenResources *res, XRROutputInfo *oi)
     BOOL refused = NO;
 
     /* Nobody may see, or act on, the half-configured screen in between. */
+    if (touched) *touched = YES;
     XGrabServer(dpy);
     XSync(dpy, False);
     trackedDisplay = dpy;

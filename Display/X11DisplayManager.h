@@ -34,7 +34,23 @@ extern NSString * const X11DisplayManagerErrorDomain;
  * CRTC, modes come from each output's own list, the screen grows before
  * and shrinks after the CRTCs change, and the primary is set.  CRTCs of
  * outputs that are off, or no longer connected, are switched off.  Returns
- * NO with a description in *error when the server refused any step. */
-- (BOOL)applyLayout:(DisplayLayout *)layout error:(NSError **)error;
+ * NO with a description in *error when the server refused any step.
+ * *touched (may be NULL) says whether the server was changed at all: a
+ * request the checks refuse beforehand (no free CRTC, a mode the output
+ * lacks, a screen too large) leaves it alone, so there is nothing to undo. */
+- (BOOL)applyLayout:(DisplayLayout *)layout
+      touchedServer:(BOOL *)touched
+              error:(NSError **)error;
+
+/* YES when the server runs something `layout` does not describe although
+ * every output agrees with it: a CRTC still lit for a monitor that was
+ * unplugged, or a screen larger or smaller than the lit outputs. */
+- (BOOL)hasStrayStateForLayout:(DisplayLayout *)layout;
+
+/* The lit output RandR names as primary, or nil when the server has none
+ * (a bare server until a client sets one) or it is dark. */
+- (NSString *)primaryOutputName;
+/* Makes `name` the RandR primary without touching any CRTC. */
+- (BOOL)setPrimaryOutputNamed:(NSString *)name error:(NSError **)error;
 
 @end

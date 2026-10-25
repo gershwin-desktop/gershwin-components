@@ -18,10 +18,11 @@
     DisplayView *displayView;
     NSView *mainView;
     NSBox *settingsBox;
+    NSPopUpButton *outputPopup;
     NSPopUpButton *resolutionPopup;
     NSSlider *scaleSlider;
     NSTextField *scaleValueLabel;
-    NSTextField *scaleFactorHintLabel;
+    NSTextField *statusLabel;
     NSButton *mirrorDisplaysCheckbox;
     X11DisplayManager *x11;
 }
@@ -41,6 +42,7 @@
 - (void)moveOutput:(NSString *)name toViewRect:(NSRect)viewRect;
 - (void)setPrimaryOutput:(NSString *)name;
 
+- (void)outputChanged:(id)sender;
 - (void)resolutionChanged:(id)sender;
 - (void)mirrorDisplaysChanged:(id)sender;
 - (void)scaleFactorChanged:(id)sender;

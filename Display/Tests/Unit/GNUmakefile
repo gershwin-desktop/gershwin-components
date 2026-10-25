@@ -5,15 +5,16 @@
 #
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_DisplayArrangement t_DisplayLayout
+TEST_TOOL_NAME = t_DisplayArrangement t_DisplayLayout t_DisplayConfiguration
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 ADDITIONAL_INCLUDE_DIRS += -I../..
 ADDITIONAL_OBJCFLAGS += -Wall
 
-MODEL_FILES = ../../DisplayLayout.m ../../DisplayArrangement.m
+MODEL_FILES = ../../DisplayLayout.m ../../DisplayArrangement.m ../../DisplayConfiguration.m
 
 t_DisplayArrangement_OBJC_FILES = t_DisplayArrangement.m $(MODEL_FILES)
 t_DisplayLayout_OBJC_FILES = t_DisplayLayout.m $(MODEL_FILES)
+t_DisplayConfiguration_OBJC_FILES = t_DisplayConfiguration.m $(MODEL_FILES)
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make
