@@ -50,13 +50,14 @@ int main(void)
   }
 
   {
-    /* Primary placed lower than the root top (stacked layout): the strut
-     * reaches from the root top down to the bar's bottom. */
+    /* Primary placed lower than the root top (stacked layout): no strut,
+     * or the window manager would take 1102 px off the upper monitor. */
     MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(0, 1080, 1280, 800),
                                                   NSMakeSize(1920, 1880), 22, 1.0);
     PASS(g.windowFrame.origin.y == 778,
          "a primary below another monitor puts the bar at its own top");
-    PASS(g.strut[2] == 1102, "top strut counts from the root top");
+    PASS(g.strut[2] == 0 && g.strut[8] == 0 && g.strut[9] == 0,
+         "a bar below the root top reserves nothing");
   }
 
   [arp release];

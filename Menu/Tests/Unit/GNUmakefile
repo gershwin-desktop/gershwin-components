@@ -2,7 +2,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog t_ProcessHogMonitor t_PrimaryMonitor t_MenuBarGeometry
+TEST_TOOL_NAME = t_TintedMenuItemCell t_ShortcutReregistration t_BatteryRefresh t_CPUGovernorBackend t_WorldClockList t_ClockMenu t_WLANMenuListPolicy t_DBusMenuLayout t_MenuContentsMatch t_LidCloseOnce t_BatteryLidMenuItem t_MenuBarLayout t_ExtrasBarLayout t_ExtrasMenuViewWidths t_MPRISMediaController t_MediaHub t_MenuUtilsWindows t_CaptivePortalBlock t_CaptivePortalWISPr t_JackSupport t_JackSupportLive t_SoundJackSettingsModel t_ALSABackendJack t_SoundJackAlertPolicy t_JackSupervisor t_JackSupervisorLive t_MenuInstanceTakeover t_MenuWindowWatchdog t_ProcessHogMonitor t_PrimaryMonitor t_PrimaryMonitorLive t_MenuBarGeometry
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework -I../..
 # Testing.h releases its own objects, so the tests are built without ARC.
@@ -129,6 +129,8 @@ t_MenuBarLayout_OBJC_FILES = t_MenuBarLayout.m ../../MenuBarLayout.m
 # RandR query, so it links libX11 and libXrandr without opening a display.
 t_PrimaryMonitor_OBJC_FILES = t_PrimaryMonitor.m ../../PrimaryMonitor.m
 t_PrimaryMonitor_TOOL_LIBS += -lXrandr -lX11
+t_PrimaryMonitorLive_OBJC_FILES = t_PrimaryMonitorLive.m ../../PrimaryMonitor.m
+t_PrimaryMonitorLive_TOOL_LIBS += -lXrandr -lX11
 t_MenuBarGeometry_OBJC_FILES = t_MenuBarGeometry.m ../../MenuBarGeometry.m \
 	../../PrimaryMonitor.m
 t_MenuBarGeometry_TOOL_LIBS += -lXrandr -lX11
