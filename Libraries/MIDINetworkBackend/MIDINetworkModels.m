@@ -5,6 +5,7 @@
  */
 
 #import "MIDINetworkModels.h"
+#import "MIDINetworkBackend.h"
 #include <sys/utsname.h>
 
 NSString * const MIDINetworkKeyIdentifier = @"identifier";
@@ -483,3 +484,149 @@ NSArray *MIDINetworkPropertyListsFromModels(NSArray *models)
     }
     return plists;
 }
+
+#pragma mark - MIDI system
+
+NSString * const MIDINetworkKeyAvailable = @"available";
+NSString * const MIDINetworkKeyProblem = @"problem";
+NSString * const MIDINetworkKeyDevice = @"device";
+NSString * const MIDINetworkKeyDetail = @"detail";
+
+NSString * const MIDINetworkMIDIProblemSequencerModuleMissing = @"sequencerModuleMissing";
+NSString * const MIDINetworkMIDIProblemSequencerServerNotRunning = @"sequencerServerNotRunning";
+NSString * const MIDINetworkMIDIProblemKernelLacksCUSE = @"kernelLacksCUSE";
+NSString * const MIDINetworkMIDIProblemPermissionDenied = @"permissionDenied";
+NSString * const MIDINetworkMIDIProblemOpenFailed = @"openFailed";
+NSString * const MIDINetworkMIDIProblemNoPortLayer = @"noPortLayer";
+
+NSString * const MIDINetworkMIDISystemErrorKey = @"MIDINetworkMIDISystem";
+
+@implementation MIDINetworkMIDISystem
+
++ (instancetype)availableSystem
+{
+    MIDINetworkMIDISystem *s = [[self alloc] init];
+    s->_available = YES;
+    return s;
+}
+
++ (instancetype)unavailableSystemWithProblem:(NSString *)problem
+                                      device:(NSString *)device
+                                      detail:(NSString *)detail
+{
+    if ([problem length] == 0) {
+        return nil;
+    }
+    MIDINetworkMIDISystem *s = [[self alloc] init];
+    s->_problem = [problem copy];
+    s->_device = [device copy];
+    s->_detail = [detail copy];
+    return s;
+}
+
++ (instancetype)midiSystemWithPropertyList:(id)plist
+{
+    if (![plist isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSNumber *available = PLNumber(plist, MIDINetworkKeyAvailable);
+    if (available == nil) {
+        return nil;
+    }
+    if ([available boolValue]) {
+        return [self availableSystem];
+    }
+    /* Optional keys of the wrong type still make the list malformed. */
+    id device = [plist objectForKey:MIDINetworkKeyDevice];
+    id detail = [plist objectForKey:MIDINetworkKeyDetail];
+    if ((device != nil && ![device isKindOfClass:[NSString class]])
+        || (detail != nil && ![detail isKindOfClass:[NSString class]])) {
+        return nil;
+    }
+    return [self unavailableSystemWithProblem:PLString(plist, MIDINetworkKeyProblem)
+                                       device:device detail:detail];
+}
+
+- (NSDictionary *)propertyList
+{
+    if (_available) {
+        return @{ MIDINetworkKeyAvailable: @YES };
+    }
+    NSMutableDictionary *d = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+        @NO, MIDINetworkKeyAvailable, _problem, MIDINetworkKeyProblem, nil];
+    if (_device != nil) {
+        [d setObject:_device forKey:MIDINetworkKeyDevice];
+    }
+    if (_detail != nil) {
+        [d setObject:_detail forKey:MIDINetworkKeyDetail];
+    }
+    return d;
+}
+
+- (NSString *)descriptionWithTranslator:(NSString *(^)(NSString *format))translate
+{
+    /* The formats are the strings-table keys, so every client translates
+       the same fixed sentences; only the device path and the system's own
+       reason are inserted. */
+    NSString *format;
+    NSUInteger arguments = 1;   /* the device, then the detail */
+    if (_available) {
+        return nil;
+    } else if ([_problem isEqual:MIDINetworkMIDIProblemSequencerModuleMissing]) {
+        format = @"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. The snd-seq kernel module is not loaded.";
+    } else if ([_problem isEqual:MIDINetworkMIDIProblemSequencerServerNotRunning]) {
+        format = @"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server is not running.";
+    } else if ([_problem isEqual:MIDINetworkMIDIProblemKernelLacksCUSE]) {
+        format = @"Network MIDI is unavailable: the ALSA sequencer (%@) is missing. alsa-seq-server cannot run because this kernel has no cuse support.";
+    } else if ([_problem isEqual:MIDINetworkMIDIProblemPermissionDenied]) {
+        format = @"Network MIDI is unavailable: there is no permission to open the ALSA sequencer (%@).";
+    } else if ([_problem isEqual:MIDINetworkMIDIProblemOpenFailed]) {
+        format = @"Network MIDI is unavailable: the ALSA sequencer (%@) cannot be opened (%@).";
+        arguments = 2;
+    } else if ([_problem isEqual:MIDINetworkMIDIProblemNoPortLayer]) {
+        format = @"Network MIDI is unavailable: this system has no MIDI port layer for it yet.";
+        arguments = 0;
+    } else {
+        format = @"Network MIDI is unavailable: the computer's MIDI system cannot be used.";
+        arguments = 0;
+    }
+    NSString *translated = translate ? translate(format) : format;
+    if (arguments == 0) {
+        return translated;
+    }
+    return [NSString stringWithFormat:translated, _device ?: @"?", _detail ?: @"?"];
+}
+
+- (NSError *)error
+{
+    if (_available) {
+        return nil;
+    }
+    return [NSError errorWithDomain:MIDINetworkErrorDomain
+                               code:MIDINetworkErrorMIDISystemUnavailable
+                           userInfo:@{ NSLocalizedDescriptionKey: [self descriptionWithTranslator:nil],
+                                       MIDINetworkMIDISystemErrorKey: self }];
+}
+
+- (BOOL)isEqual:(id)other
+{
+    return [other isKindOfClass:[MIDINetworkMIDISystem class]]
+        && [[self propertyList] isEqual:[other propertyList]];
+}
+
+- (NSUInteger)hash
+{
+    return [[self propertyList] hash];
+}
+
+- (id)copyWithZone:(NSZone *)zone
+{
+    return self;   /* immutable */
+}
+
+- (NSString *)description
+{
+    return _available ? @"available" : [self descriptionWithTranslator:nil];
+}
+
+@end

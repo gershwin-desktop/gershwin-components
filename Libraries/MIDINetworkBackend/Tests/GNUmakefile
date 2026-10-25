@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_MIDINetworkDaemonBackend t_MIDINetworkFakeBackend t_MIDINetworkModels t_MIDINetworkState
+TEST_TOOL_NAME =  t_MIDINetworkDaemonBackend t_MIDINetworkFakeBackend t_MIDINetworkMIDISystem t_MIDINetworkModels t_MIDINetworkState
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -23,6 +23,7 @@ ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 
 t_MIDINetworkDaemonBackend_OBJC_FILES=t_MIDINetworkDaemonBackend.m
 t_MIDINetworkFakeBackend_OBJC_FILES=t_MIDINetworkFakeBackend.m
+t_MIDINetworkMIDISystem_OBJC_FILES=t_MIDINetworkMIDISystem.m
 t_MIDINetworkModels_OBJC_FILES=t_MIDINetworkModels.m
 t_MIDINetworkState_OBJC_FILES=t_MIDINetworkState.m
 

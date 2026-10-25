@@ -180,8 +180,21 @@ static const NSTimeInterval kDaemonCallTimeout = 5.0;
     __weak MIDINetworkDaemonBackend *weakSelf = self;
     [_connector watchControl:control lost:^{ [weakSelf controlLost]; }];
     self.state = state;
-    [self setStatus:MIDINetworkBackendStatusRunning error:nil];
+    [self adoptMIDISystemStatus];
     [self notifyEverythingChanged];
+}
+
+/* Connected is not enough: without the computer's MIDI system the daemon
+   cannot open session ports, and the pane must say why instead of offering
+   controls that every change would fail. */
+- (void)adoptMIDISystemStatus
+{
+    MIDINetworkMIDISystem *midi = self.state.midiSystem;
+    if ([midi isAvailable]) {
+        [self setStatus:MIDINetworkBackendStatusRunning error:nil];
+    } else {
+        [self setStatus:MIDINetworkBackendStatusUnavailable error:[midi error]];
+    }
 }
 
 - (void)controlLost
@@ -258,6 +271,9 @@ static const NSTimeInterval kDaemonCallTimeout = 5.0;
     if ([changes objectForKey:MIDINetworkStateKeyLocalPorts]) {
         [self notifyLocalPortsChanged];
     }
+    if ([changes objectForKey:MIDINetworkStateKeyMIDISystem]) {
+        [self adoptMIDISystemStatus];
+    }
 }
 
 - (oneway void)daemonDidChange:(bycopy NSDictionary *)changes
@@ -275,7 +291,7 @@ static const NSTimeInterval kDaemonCallTimeout = 5.0;
    errors and applies the changes a successful reply carries. */
 - (BOOL)call:(NSDictionary *(^)(id<MIDINetworkDaemonControl> control))block error:(NSError **)error
 {
-    if (_control == nil) {
+    if (_control == nil || [self status] != MIDINetworkBackendStatusRunning) {
         return [self refuse:error];
     }
     NSDictionary *reply = nil;

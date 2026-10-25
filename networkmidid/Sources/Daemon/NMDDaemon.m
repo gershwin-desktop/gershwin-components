@@ -12,6 +12,7 @@
 #import "NMDUDPEndpoint.h"
 #import "NMDMIDIPorts.h"
 #import "NMDServiceDirectory.h"
+#import "NMDPortLayerWatcher.h"
 #import "MIDINetworkState.h"
 #import "MIDINetworkBackend.h"
 #import "MIDINetworkControl.h"
@@ -93,7 +94,8 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 {
   MIDINetworkState *_state;
   NSMutableDictionary *_running;      /* session identifier -> NMDRunningSession */
-  id<NMDMIDIPorts> _ports;
+  id<NMDMIDIPorts> _ports;            /* nil while the MIDI system is unavailable */
+  NMDPortLayerWatcher *_watcher;
   NMDServiceDirectory *_directory;
   NSConnection *_connection;
   NSMutableArray *_clients;           /* proxies of MIDINetworkDaemonClient */
@@ -121,8 +123,6 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (BOOL) startWithError: (NSString **)error
 {
-  NSError *err = nil;
-
   /* The name doubles as the single-instance lock per user. */
   _connection = [NSConnection connectionWithReceivePort: [NSMessagePort port]
                                                sendPort: nil];
@@ -139,12 +139,41 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
     selector: @selector(connectionDidDie:)
         name: NSConnectionDidDieNotification object: nil];
 
-  _ports = NMDMIDIPortsOpen(NMDClientName, &err);
-  if (_ports == nil)
+  /* Without the MIDI system the daemon still runs and answers its clients,
+   * so the MIDI pane can say what is missing, and the session's supervisor
+   * does not restart it over and over. */
+  _watcher = [[NMDPortLayerWatcher alloc]
+    initWithOpener: ^id<NMDMIDIPorts>(MIDINetworkMIDISystem **problem) {
+      return NMDMIDIPortsOpen(NMDClientName, problem);
+    } timers: YES];
+  __weak NMDDaemon *weakSelf = self;
+  _watcher.changeHandler = ^{ [weakSelf midiSystemDidChange]; };
+  [_watcher start];
+  return YES;
+}
+
+- (void) midiSystemDidChange
+{
+  MIDINetworkMIDISystem *midi = _watcher.midiSystem;
+
+  _state.midiSystem = midi;
+  if (_watcher.ports == nil)
     {
-      if (error) *error = [err localizedDescription];
-      return NO;
+      NSLog(@"networkmidid: %@%@", [midi descriptionWithTranslator: nil],
+        _watcher.pendingRetryDelay > 0
+          ? @" Sessions start once it can be opened." : @"");
+      [self push: @[ MIDINetworkStateKeyMIDISystem ]];
+      return;
     }
+  [self startWithPorts: _watcher.ports];
+  [self push: [[_state propertyList] allKeys]];
+}
+
+/* Sessions are only restored once their MIDI ports can be created, so a
+ * missing sequencer never disables the sessions the user stored. */
+- (void) startWithPorts: (id<NMDMIDIPorts>)ports
+{
+  _ports = ports;
   _ports.delegate = self;
   NSLog(@"networkmidid: MIDI ports on %@", [_ports portLayerDescription]);
   [self refreshLocalPorts];
@@ -155,7 +184,11 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
   [self loadConfiguration];
   [self reschedule];
-  return YES;
+}
+
+- (NSDictionary *) refusalWhileUnavailable
+{
+  return MIDINetworkReplyWithError([_state.midiSystem error]);
 }
 
 - (void) loadConfiguration
@@ -229,6 +262,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
   [_running removeAllObjects];
   [_directory withdrawAll];
   [_directory stopBrowsing];
+  [_watcher stop];
   [_ports close];
   [_timer invalidate];
   _timer = nil;
@@ -636,6 +670,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (bycopy NSDictionary *) addSession: (bycopy NSDictionary *)plist
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   MIDINetworkSession *s = [MIDINetworkSession sessionWithPropertyList: plist];
   BOOL wanted = s.enabled, ok;
@@ -655,6 +690,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (bycopy NSDictionary *) removeSession: (bycopy NSString *)identifier
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   BOOL ok;
   if ([_state sessionWithIdentifier: identifier] != nil)
@@ -667,6 +703,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (bycopy NSDictionary *) updateSession: (bycopy NSDictionary *)plist
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   MIDINetworkSession *s = [MIDINetworkSession sessionWithPropertyList: plist];
   MIDINetworkSession *old;
@@ -719,6 +756,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 - (bycopy NSDictionary *) setEnabled: (BOOL)enabled
                           forSession: (bycopy NSString *)identifier
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   BOOL ok;
   if (enabled)
@@ -735,6 +773,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (bycopy NSDictionary *) addManualHost: (bycopy NSDictionary *)plist
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   MIDINetworkHost *h = [MIDINetworkHost hostWithPropertyList: plist];
   BOOL ok;
@@ -753,6 +792,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (bycopy NSDictionary *) removeHost: (bycopy NSString *)identifier
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   BOOL ok = [_state removeHostWithIdentifier: identifier error: &e];
   return [self reply: ok error: e sections: @[ MIDINetworkStateKeyDirectory ]];
@@ -761,6 +801,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 - (bycopy NSDictionary *) connectSession: (bycopy NSString *)sessionIdentifier
                                   toHost: (bycopy NSString *)hostIdentifier
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   MIDINetworkHost *h;
   NMDRunningSession *rs;
@@ -790,6 +831,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 - (bycopy NSDictionary *) disconnectParticipant: (bycopy NSString *)participantIdentifier
                                     fromSession: (bycopy NSString *)sessionIdentifier
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NMDRunningSession *rs = [_running objectForKey: sessionIdentifier];
   for (NMDPeerConnection *p in rs.session.peers)
     {
@@ -807,6 +849,7 @@ static NSString *NMDParticipantIdentifier(NMDPeerConnection *p)
 
 - (bycopy NSDictionary *) setRoute: (bycopy NSDictionary *)plist
 {
+  if (_ports == nil) return [self refusalWhileUnavailable];
   NSError *e = nil;
   MIDINetworkRoute *r = [MIDINetworkRoute routeWithPropertyList: plist];
   BOOL ok;

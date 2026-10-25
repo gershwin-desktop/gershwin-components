@@ -31,7 +31,9 @@ networkmidid_OBJC_FILES = \
 	Sources/Transport/NMDDescriptorWatcher.m \
 	Sources/Transport/NMDUDPEndpoint.m \
 	Sources/Ports/NMDALSASequencer.m \
+	Sources/Ports/NMDMIDISystemProblem.m \
 	Sources/Discovery/NMDServiceDirectory.m \
+	Sources/Daemon/NMDPortLayerWatcher.m \
 	Sources/Daemon/NMDDaemon.m \
 	Sources/Daemon/main.m
 
@@ -43,14 +45,18 @@ networkmidictl_OBJC_FILES = Sources/Control/networkmidictl.m
 # the library is installed; otherwise the installed one.
 MNB_DIR = $(CURDIR)/../Libraries/MIDINetworkBackend
 MNB_LIB := $(wildcard $(MNB_DIR)/obj/libMIDINetworkBackend.so)
+# By path rather than -L: the SYSTEM library directory comes first in the
+# search order, so -l would pick an installed library that lacks what this
+# tree added.
 ifneq ($(MNB_LIB),)
 ADDITIONAL_INCLUDE_DIRS += -I$(MNB_DIR)
-ADDITIONAL_LIB_DIRS += -L$(MNB_DIR)/obj
+MNB_LINK = $(MNB_LIB)
 else
 ADDITIONAL_INCLUDE_DIRS += -I$(GNUSTEP_SYSTEM_HEADERS)/MIDINetworkBackend
+MNB_LINK = -lMIDINetworkBackend
 endif
-networkmidid_TOOL_LIBS += -lMIDINetworkBackend
-networkmidictl_TOOL_LIBS += -lMIDINetworkBackend
+networkmidid_TOOL_LIBS += $(MNB_LINK)
+networkmidictl_TOOL_LIBS += $(MNB_LINK)
 
 ADDITIONAL_INCLUDE_DIRS += -ISources/Protocol -ISources/Transport \
 	-ISources/Ports -ISources/Discovery -ISources/Daemon

@@ -28,7 +28,7 @@
 #import <Foundation/Foundation.h>
 
 /* Bumped on every incompatible change; the client refuses other versions. */
-#define MIDINETWORK_CONTROL_PROTOCOL_VERSION 1
+#define MIDINETWORK_CONTROL_PROTOCOL_VERSION 2
 
 /* Name of the daemon executable, installed in the SYSTEM Tools directory. */
 extern NSString * const MIDINetworkDaemonToolName;

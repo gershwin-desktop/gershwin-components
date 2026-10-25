@@ -33,7 +33,8 @@ typedef NS_ENUM(NSInteger, MIDINetworkErrorCode) {
     MIDINetworkErrorPortInUse = 3,        /* another session or program owns the UDP port */
     MIDINetworkErrorPeerRejected = 4,     /* the remote side declined the invitation */
     MIDINetworkErrorTimeout = 5,          /* the daemon or the peer did not answer in time */
-    MIDINetworkErrorInvalidArgument = 6   /* unknown identifier, empty name, bad port, ... */
+    MIDINetworkErrorInvalidArgument = 6,  /* unknown identifier, empty name, bad port, ... */
+    MIDINetworkErrorMIDISystemUnavailable = 7 /* the daemon runs, the computer's MIDI system does not */
 };
 
 /* An NSError in MIDINetworkErrorDomain with a localized description. */

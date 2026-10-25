@@ -33,11 +33,25 @@ NSError *MIDINetworkMakeStandardError(MIDINetworkErrorCode code)
     case MIDINetworkErrorTimeout:
         text = @"The network MIDI service did not answer in time.";
         break;
+    case MIDINetworkErrorMIDISystemUnavailable:
+        text = @"Network MIDI is unavailable: the computer's MIDI system cannot be used.";
+        break;
     default:
         text = @"The request was not valid.";
         break;
     }
     return MIDINetworkMakeError(code, text);
+}
+
+/* NSError has no value equality of its own, and a daemon that pushes the
+   same reason again must not make every client redraw. */
+static BOOL SameError(NSError *a, NSError *b)
+{
+    if (a == b) {
+        return YES;
+    }
+    return a != nil && b != nil && [a code] == [b code] && [[a domain] isEqual:[b domain]]
+        && [[a userInfo] isEqual:[b userInfo]];
 }
 
 @implementation MIDINetworkBaseBackend
@@ -73,7 +87,7 @@ NSError *MIDINetworkMakeStandardError(MIDINetworkErrorCode code)
 
 - (void)setStatus:(MIDINetworkBackendStatus)status error:(NSError *)error
 {
-    BOOL changed = (status != _status) || !((error == _statusError) || [error isEqual:_statusError]);
+    BOOL changed = (status != _status) || !SameError(error, _statusError);
     _status = status;
     _statusError = error;
     if (changed && [_delegate respondsToSelector:@selector(midiNetworkBackendStatusDidChange:)]) {
