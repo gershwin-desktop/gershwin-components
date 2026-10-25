@@ -63,7 +63,17 @@ The system-wide copy is a property list that every GNUstep process reads on its
 own, because libs-base merges each plist in `GlobalDefaults` beside the system
 `GNUstep.conf` (`/System/Library/Preferences/GlobalDefaults/Display.plist`)
 into the config domain, which ranks below a user's own defaults. Format:
-`{ GSScaleFactor = <real>; }`, owner root, mode 0644 (libs-base ignores files
-that group or others can write). When no scale is configured, LoginWindow writes
-this file once with the recommended value, so a new user's first session starts
-with the same scale; it logs and goes on when the directory is read-only.
+`{ GSScaleFactor = <real>; GSScaleFactorSource = recommended | user; }`, owner
+root, mode 0644 (libs-base ignores files that group or others can write).
+
+- `recommended`: LoginWindow wrote it. It recomputes the scale from the primary
+  output on every start and rewrites the file (also when it is absent or does
+  not parse), so a first boot in a VM or on a projector does not pin the scale.
+  With several monitors only the primary one counts; there is one scale for the
+  whole desktop.
+- `user`: the Display pane writes it through the privileged helper when the
+  user picks a scale. LoginWindow never touches it. A file with a scale and no
+  source is treated the same way.
+
+The write goes through a temporary file and a rename. If the directory is
+read-only, LoginWindow logs it and still uses the recommended scale itself.

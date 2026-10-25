@@ -6,9 +6,8 @@
 
 #import "LWDisplayScale.h"
 #import "GSDisplayScaleHeuristic.h"
+#import "LWSystemScale.h"
 #include <X11/extensions/Xrandr.h>
-
-NSString * const LWSystemDisplayDefaultsFileName = @"Display.plist";
 
 // The primary output, or the first connected one when no primary is set
 // (a bare X server has none until a client sets it).
@@ -70,55 +69,32 @@ static double scaleFromRandR(Display *display)
     return scale;
 }
 
-double LWRegisterRecommendedScale(Display *display)
+double LWRegisterRecommendedScale(Display *display, BOOL updateSystemFile)
 {
+    NSString *directory = LWSystemDefaultsDirectory();
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if ([defaults objectForKey:@"GSScaleFactor"] != nil) {
+    LWSystemScaleState state = LWSystemScaleStateInDirectory(directory);
+    if (state == LWSystemScaleConfigured) {
+        return 0.0;
+    }
+    // Without our own file, a scale that is set anywhere else is the user's.
+    if (state == LWSystemScaleAbsent &&
+        [defaults objectForKey:@"GSScaleFactor"] != nil) {
         return 0.0;
     }
     double scale = scaleFromRandR(display);
     if (scale <= 0.0) {
         return 0.0;
     }
-    [defaults registerDefaults:
-        [NSDictionary dictionaryWithObject:[NSNumber numberWithDouble:scale]
-                                    forKey:@"GSScaleFactor"]];
+    // The argument domain outranks the config domain, where the previous
+    // start's recommendation (read at process start) would otherwise win.
+    NSMutableDictionary *args = [NSMutableDictionary dictionaryWithDictionary:
+        [defaults volatileDomainForName:NSArgumentDomain]];
+    [args setObject:[NSNumber numberWithDouble:scale] forKey:@"GSScaleFactor"];
+    [defaults removeVolatileDomainForName:NSArgumentDomain];
+    [defaults setVolatileDomain:args forName:NSArgumentDomain];
+    if (updateSystemFile && directory != nil) {
+        LWWriteRecommendedScale(directory, scale);
+    }
     return scale;
-}
-
-BOOL LWSeedSystemScale(double scale)
-{
-    // libs-base looks for GlobalDefaults beside the GNUstep.conf it loaded,
-    // which GNUSTEP_CONFIG_FILE may relocate (the isolated test sessions do).
-    NSString *confFile = [[[NSProcessInfo processInfo] environment]
-        objectForKey:@"GNUSTEP_CONFIG_FILE"];
-    NSString *prefs = [confFile length] > 0
-        ? [confFile stringByDeletingLastPathComponent] : nil;
-    if (prefs == nil) {
-        NSArray *libs = NSSearchPathForDirectoriesInDomains(
-            NSLibraryDirectory, NSSystemDomainMask, YES);
-        if ([libs count] == 0) {
-            NSLog(@"[LoginWindow] Cannot seed the system scale: no system library directory");
-            return NO;
-        }
-        prefs = [[libs objectAtIndex:0] stringByAppendingPathComponent:@"Preferences"];
-    }
-    NSString *dir = [prefs stringByAppendingPathComponent:@"GlobalDefaults"];
-    NSString *path = [dir stringByAppendingPathComponent:LWSystemDisplayDefaultsFileName];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if ([fm fileExistsAtPath:path]) {
-        return YES;
-    }
-    // 0644: libs-base ignores a defaults file that group or others can write.
-    NSDictionary *content = [NSDictionary dictionaryWithObject:
-        [NSNumber numberWithDouble:scale] forKey:@"GSScaleFactor"];
-    NSData *data = [NSPropertyListSerialization dataFromPropertyList:content
-        format:NSPropertyListXMLFormat_v1_0 errorDescription:NULL];
-    BOOL ok = data != nil && [fm createFileAtPath:path contents:data
-        attributes:[NSDictionary dictionaryWithObject:
-            [NSNumber numberWithUnsignedLong:0644] forKey:NSFilePosixPermissions]];
-    if (!ok) {
-        NSLog(@"[LoginWindow] Cannot write the system scale to %@ (read-only or no permission)", path);
-    }
-    return ok;
 }

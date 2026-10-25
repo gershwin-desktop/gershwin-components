@@ -16,6 +16,7 @@ LoginWindow_OBJC_FILES = \
     LWCJKFont.m \
     LWCJKFontInstaller.m \
     LWDisplayScale.m \
+    LWSystemScale.m \
     GSDisplayScaleHeuristic.m
 
 LoginWindow_RESOURCE_FILES = \

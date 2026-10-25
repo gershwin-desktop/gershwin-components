@@ -631,11 +631,8 @@ static void registerDisplayScale(BOOL seedSystemWide)
                 "scale: no connection to :0\n");
         return;
     }
-    double scale = LWRegisterRecommendedScale(display);
+    LWRegisterRecommendedScale(display, seedSystemWide);
     XCloseDisplay(display);
-    if (scale > 0.0 && seedSystemWide) {
-        LWSeedSystemScale(scale);
-    }
 }
 
 int main(int argc, const char *argv[])
