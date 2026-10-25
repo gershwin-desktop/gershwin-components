@@ -50,3 +50,20 @@ fetched again after every reboot.
 ## Logs
 
 Logs are written to `/var/log/LoginWindow.log` if invoked from the rc script.
+
+## Display scale
+
+Before the first NSApplication call, LoginWindow asks RandR for the primary
+output (or the first connected one) and registers the scale that
+`GSDisplayScaleHeuristic` recommends for its pixel and millimeter size as
+`GSScaleFactor`. Nothing is registered when a `GSScaleFactor` is configured
+anywhere (user defaults or the system-wide file below).
+
+The system-wide copy is a property list that every GNUstep process reads on its
+own, because libs-base merges each plist in `GlobalDefaults` beside the system
+`GNUstep.conf` (`/System/Library/Preferences/GlobalDefaults/Display.plist`)
+into the config domain, which ranks below a user's own defaults. Format:
+`{ GSScaleFactor = <real>; }`, owner root, mode 0644 (libs-base ignores files
+that group or others can write). When no scale is configured, LoginWindow writes
+this file once with the recommended value, so a new user's first session starts
+with the same scale; it logs and goes on when the directory is read-only.

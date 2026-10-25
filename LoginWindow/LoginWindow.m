@@ -1030,8 +1030,11 @@ static NSDictionary *parseStringsFile(NSString *path)
     NSScreen *mainScreen = [NSScreen mainScreen];
     NSRect screenFrame = [mainScreen frame];
     CGFloat goldenRatio = 0.618;
-    CGFloat windowX = (screenFrame.size.width - windowFrame.size.width) / 2.0;
-    CGFloat windowY = screenFrame.origin.y + (screenFrame.size.height - windowFrame.size.height) * goldenRatio;
+    // The screen frame and the window frame are device pixels, while windowFrame
+    // is the content size in points, so the centering must use the window frame.
+    NSSize windowSize = [loginWindow frame].size;
+    CGFloat windowX = (screenFrame.size.width - windowSize.width) / 2.0;
+    CGFloat windowY = screenFrame.origin.y + (screenFrame.size.height - windowSize.height) * goldenRatio;
     [loginWindow setFrameOrigin:NSMakePoint(windowX, windowY)];
 
     [loginWindow makeKeyAndOrderFront:self];
@@ -3612,11 +3615,14 @@ static bool isDetachedDaemon(const char *comm)
 
 - (void)createLogWindow
 {
-    NSRect screenFrame = [[NSScreen mainScreen] frame];
-    CGFloat logHeight = screenFrame.size.height / 3.0;
-    NSRect logFrame = NSMakeRect(screenFrame.origin.x + 40,
-                                  screenFrame.origin.y + 40,
-                                  screenFrame.size.width - 80,
+    // The content rect is in points, the screen frame in device pixels.
+    NSScreen *screen = [NSScreen mainScreen];
+    CGFloat scale = [screen userSpaceScaleFactor];
+    NSRect screenFrame = [screen frame];
+    CGFloat logHeight = screenFrame.size.height / 3.0 / scale;
+    NSRect logFrame = NSMakeRect(screenFrame.origin.x / scale + 40,
+                                  screenFrame.origin.y / scale + 40,
+                                  screenFrame.size.width / scale - 80,
                                   logHeight);
 
     _logWindow = [[NSWindow alloc]

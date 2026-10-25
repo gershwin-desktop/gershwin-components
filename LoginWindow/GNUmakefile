@@ -14,7 +14,9 @@ LoginWindow_OBJC_FILES = \
     KeyboardManager.m \
     LWLanguageNames.m \
     LWCJKFont.m \
-    LWCJKFontInstaller.m
+    LWCJKFontInstaller.m \
+    LWDisplayScale.m \
+    GSDisplayScaleHeuristic.m
 
 LoginWindow_RESOURCE_FILES = \
     Resources/English.lproj \
@@ -27,7 +29,7 @@ LoginWindow_PRINCIPAL_CLASS = LoginWindow
 
 # Additional libraries
 # Ensure we search /usr/local/lib (FreeBSD ports) for libXau
-LoginWindow_LDFLAGS += -L/usr/local/lib -lpam -lutil -lX11 -lXau
+LoginWindow_LDFLAGS += -L/usr/local/lib -lpam -lutil -lX11 -lXrandr -lXau
 
 # Installation directories
 INSTALL_APPS_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/CoreServices/Applications
