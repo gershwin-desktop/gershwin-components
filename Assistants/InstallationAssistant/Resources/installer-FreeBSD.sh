@@ -472,11 +472,8 @@ EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
 
 # For non-image installations, also exclude /Local (it will be initialized with dscli init
 # because DirectoryServices requires specific permissions and ownership that are hard to preserve during copying)
-# NextBSD sets up /Local itself at boot, so there it is copied as is.
 if [ "$IMAGE_MODE" = "0" ]; then
-    if [ "$OS_NAME" != "NextBSD" ]; then
-        EXCLUDES="$EXCLUDES Local"
-    fi
+    EXCLUDES="$EXCLUDES Local"
     if [ -n "$MP" ]; then
         EXCLUDES="$EXCLUDES boot"
     fi

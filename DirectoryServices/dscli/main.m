@@ -16,9 +16,10 @@
 
 // NextBSD ships its own NSS module for these plists (nss_directory_services),
 // owns /etc/nsswitch.conf, and sets up /Local, the plists, /Volumes and sudo
-// at boot, so init leaves it alone. Detected at runtime, not by #ifdef: NextBSD compiles as FreeBSD. The marker
-// is nextbsd-version, which both image builders write before anything else is
-// built, so it is on every NextBSD image and on no other system.
+// at boot, so init leaves it alone. Detected at runtime, not by #ifdef:
+// NextBSD compiles as FreeBSD. The marker is nextbsd-version, which both
+// image builders write before anything else is built, so it is on every
+// NextBSD image and on no other system.
 // (/usr/lib/system would be wrong: macOS has that too.)
 static BOOL isNextBSD(void) {
     return [[NSFileManager defaultManager]
