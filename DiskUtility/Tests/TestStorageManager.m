@@ -10,6 +10,7 @@
 #import "DUErrors.h"
 #import "DUMockStorageBackend.h"
 #import "DUOperationManager.h"
+#import "DUPartition.h"
 #import "DUStorageManager.h"
 #import "DUStorageDevice.h"
 #import "DUStorageObject.h"
@@ -214,6 +215,77 @@ int main(void)
         PASS([lockManager acquireLock:lockId error:NULL] == YES,
              "it can be locked again once released");
         [lockManager releaseLock:lockId];
+
+        // --- an ejected disk is started, refreshed and re-resolved ---
+        {
+            DUControllableBackend *backend =
+                [[DUControllableBackend alloc] init];
+            DUStorageDevice *asleep =
+                [[DUStorageDevice alloc] initWithIdentifier:@"linux-disk-sdb"];
+            asleep.mediumEjected = YES;
+            DUStorageDevice *awake =
+                [[DUStorageDevice alloc] initWithIdentifier:@"linux-disk-sdb"];
+            [awake addChild:[[DUPartition alloc]
+                                initWithIdentifier:@"linux-part-sdb1"]];
+            backend.nextDiscovery = @[ asleep ];
+            backend.discoveryAfterStart = @[ awake ];
+            DUStorageManager *manager = ManagerFor(backend);
+            [manager refreshWithError:NULL];
+            DUStorageObject *selected =
+                [manager objectForIdentifier:@"linux-disk-sdb"];
+            PASS([manager objectNeedsWake:selected],
+                 "an ejected disk needs waking");
+            PASS(![manager objectNeedsWake:awake],
+                 "a disk with its medium does not");
+
+            NSError *error = nil;
+            DUStorageObject *fresh = [manager wakeObject:selected error:&error];
+            PASS(backend.startCount == 1 &&
+                 backend.lastStartedObject == selected,
+                 "the backend starts the medium once, for that disk");
+            PASS(fresh == awake && fresh.children.count == 1,
+                 "the command gets the disk as discovered afterwards");
+            PASS([manager objectForIdentifier:@"linux-disk-sdb"] == awake,
+                 "the snapshot was refreshed");
+            PASS([manager wakeObject:fresh error:NULL] == fresh &&
+                 backend.startCount == 1,
+                 "a disk with its medium is handed back untouched");
+
+            backend.nextDiscovery = @[ asleep ];
+            [manager refreshWithError:NULL];
+            backend.failStart = YES;
+            error = nil;
+            PASS([manager wakeObject:asleep error:&error] == nil &&
+                 [error.localizedDescription isEqualToString:@"no medium"],
+                 "a disk that does not start reports why");
+
+            backend.failStart = NO;
+            backend.nextDiscovery = @[ asleep ];
+            backend.discoveryAfterStart = @[ asleep ];
+            [manager refreshWithError:NULL];
+            error = nil;
+            PASS([manager wakeObject:asleep error:&error] == nil &&
+                 error != nil,
+                 "a disk still without medium after starting is an error");
+
+            backend.discoveryAfterStart = @[ awake ];
+            backend.nextDiscovery = @[ asleep ];
+            [manager refreshWithError:NULL];
+            __block DUStorageObject *delivered = nil;
+            __block BOOL onMain = NO;
+            [manager wakeObject:asleep
+                     completion:^(DUStorageObject *object, NSError *e) {
+                (void)e;
+                delivered = object;
+                onMain = [NSThread isMainThread];
+            }];
+            for (int i = 0; i < 50 && delivered == nil; i++) {
+                PumpRunLoop(0.1);
+            }
+            PASS(delivered == awake && onMain,
+                 "the main-thread form delivers the fresh disk on the main "
+                 "thread");
+        }
 
         // --- the monitor starts and stops without wedging ---
         DUControllableBackend *monitorBackend =

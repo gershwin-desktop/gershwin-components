@@ -34,6 +34,23 @@
 - (BOOL)refreshWithError:(NSError **)error;
 
 - (DUStorageObject *)objectForIdentifier:(NSString *)identifier;
+
+// YES when object sits on a removable disk that was ejected but is still
+// attached, so its medium has to be started before anything can use it.
+- (BOOL)objectNeedsWake:(DUStorageObject *)object;
+
+// The one way every command reaches an ejected disk: starts the medium
+// through the backend, refreshes the snapshot and re-resolves object by
+// identifier (the old instance has no partitions and a size of zero).
+// Hands object back unchanged when nothing had to be woken. Blocks; call
+// from a worker thread.
+- (DUStorageObject *)wakeObject:(DUStorageObject *)object
+                          error:(NSError **)error;
+
+// Main-thread form for controllers: completion runs on the main thread
+// with the object to act on, or nil and the error.
+- (void)wakeObject:(DUStorageObject *)object
+        completion:(void (^)(DUStorageObject *object, NSError *error))completion;
 - (DUStorageCapabilities *)capabilitiesForObject:(DUStorageObject *)object;
 
 // Backend-wide feature report for diagnostics/degradation UI.

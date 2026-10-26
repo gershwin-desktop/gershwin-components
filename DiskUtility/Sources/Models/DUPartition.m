@@ -38,6 +38,8 @@
     copy.sizeBytes = _sizeBytes;
     copy.partitionType = _partitionType;
     copy.name = _name;
+    copy.tableTypeCode = _tableTypeCode;
+    copy.partitionUUID = _partitionUUID;
     copy.filesystemType = _filesystemType;
     copy.bootable = _bootable;
     copy.readOnly = _readOnly;

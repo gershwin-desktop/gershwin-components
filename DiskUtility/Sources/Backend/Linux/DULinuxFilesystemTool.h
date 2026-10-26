@@ -8,6 +8,8 @@
 
 #import <Foundation/Foundation.h>
 
+@class DUProcessResult;
+
 // Raw tool output attached to errors alongside the generic localized
 // description, so the operation log can show diagnostics without leaking
 // them into the primary user-facing message (ARCHITECTURE.md section 46).
@@ -85,6 +87,14 @@ extern NSString * const kDUBackendDetailKey;
 // of its partitions (e.g. /dev/sda and /dev/sda1, /dev/nvme0n1p2). Returns
 // nil when nothing remains mounted, otherwise a DUErrorDeviceBusy error.
 + (NSError *)unmountAllMountsOfDevicePath:(NSString *)devicePath;
+
+// The one unmount every Disk Utility path goes through: announces the
+// unmount to the desktop, unmounts through udevil as the user when udevil
+// is given (the counterpart of a user mount) or umount(8) as root
+// otherwise, and announces the completed unmount on success.
++ (DUProcessResult *)unmountMountPoint:(NSString *)mountPoint
+                                udevil:(NSString *)udevil
+                                 error:(NSError **)error;
 
 + (NSError *)wipeSignaturesAtDevicePath:(NSString *)devicePath;
 

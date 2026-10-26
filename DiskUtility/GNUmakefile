@@ -137,8 +137,10 @@ DiskUtility_OBJC_FILES = \
 	Sources/Backend/Parsers/DUOpenBSDDisklabelParser.m \
 	Sources/Backend/Parsers/DUNetBKSDisklabelParser.m \
 	Sources/Backend/Parsers/DUPartitionTableParser.m \
+	Sources/Backend/Parsers/DUPartitionTypeNames.m \
 	Sources/Backend/Linux/DULinuxStorageBackend.m \
 	Sources/Backend/Linux/DULinuxDeviceDiscovery.m \
+	Sources/Backend/Linux/DULinuxUserMount.m \
 	Sources/Backend/Linux/DULinuxPartitionTool.m \
 	Sources/Backend/Linux/DULinuxFilesystemTool.m \
 	Sources/Backend/Linux/DULinuxImageTool.m \

@@ -12,6 +12,7 @@
 #import "DUOpticalMedia.h"
 #import "DUPartition.h"
 #import "DUPartitionTableParser.h"
+#import "DUPartitionTypeNames.h"
 #import "DUParsing.h"
 #import "DUStorageDevice.h"
 #import "DUStorageObject.h"
@@ -113,13 +114,13 @@ static NSString * const kUnknownValue = @"-";
                                      device.capacityBytes]
                 ]];
                 [rows addObject:@[
-                    NSLocalizedString(@"Partition Scheme:", nil),
-                    // The display name, not the internal token: the panel
-                    // read "gpt" while the Partition tab next to it spelled
-                    // out "GUID Partition Table" for the same scheme.
-                    [DUPartitionTableParser
-                        displayNameForScheme:device.partitionScheme]
-                        ?: kUnknownValue
+                    NSLocalizedString(@"Partition Map Scheme:", nil),
+                    // A table the backend could not read is not the same
+                    // as no table; "None" would be a false statement.
+                    device.partitionTableUnreadable
+                        ? kUnknownValue
+                        : [DUPartitionTypeNames
+                              schemeDisplayName:device.partitionScheme]
                 ]];
                 [rows addObject:@[
                     NSLocalizedString(@"Read Status:", nil),
@@ -146,15 +147,21 @@ static NSString * const kUnknownValue = @"-";
         case DUStorageObjectTypePartition: {
             iconName = @"volume";
             DUStorageVolume *volume = nil;
+            DUPartition *partition = nil;
             if ([object isKindOfClass:[DUStorageVolume class]]) {
                 volume = (DUStorageVolume *)object;
+                if ([volume.parent isKindOfClass:[DUPartition class]]) {
+                    partition = (DUPartition *)volume.parent;
+                }
             } else {
-                volume = ((DUPartition *)object).volume;
+                partition = (DUPartition *)object;
+                volume = partition.volume;
             }
             if (volume == nil) {
                 [rows addObject:@[
                     NSLocalizedString(@"Filesystem:", nil), kUnknownValue
                 ]];
+                [self addPartitionRows:partition into:rows];
                 break;
             }
             [rows addObject:@[
@@ -208,6 +215,7 @@ static NSString * const kUnknownValue = @"-";
                            (unsigned long)volume.folderCount]
                     : kUnknownValue
             ]];
+            [self addPartitionRows:partition into:rows];
             break;
         }
         case DUStorageObjectTypeOpticalMedia: {
@@ -343,7 +351,7 @@ static NSString * const kUnknownValue = @"-";
     /* More rows than one column can hold MUST flow into a second column
      * rather than growing downwards. The old code squeezed rowsPerColumn up
      * until they fitted, which put the last row at a negative y and cut it
-     * off against the bottom of the window: a disk's "Partition Scheme" row
+     * off against the bottom of the window: a disk's "Partition Map Scheme" row
      * was permanently half invisible, and the rows a user most wants (the
      * capacity, the scheme, the health) are the ones at the end. */
     if (columnCount == 1 && totalRows > heightCapacity) {
@@ -392,6 +400,29 @@ static NSString * const kUnknownValue = @"-";
             NSMakeRect(x + columnWidth * 0.45, y,
                        columnWidth * 0.55, rowHeight);
         [_view addSubview:value];
+    }
+}
+
+// Table-level facts about a partition; a row whose value the table does not
+// carry is left out rather than shown as unknown.
+- (void)addPartitionRows:(DUPartition *)partition
+                    into:(NSMutableArray<NSArray<NSString *> *> *)rows
+{
+    NSString *type =
+        [DUPartitionTypeNames typeDisplayForCode:partition.tableTypeCode];
+    if (type != nil) {
+        [rows addObject:@[ NSLocalizedString(@"Partition Type:", nil), type ]];
+    }
+    if (partition.partitionUUID.length > 0) {
+        [rows addObject:@[
+            NSLocalizedString(@"Partition UUID:", nil),
+            partition.partitionUUID
+        ]];
+    }
+    if (partition.name.length > 0) {
+        [rows addObject:@[
+            NSLocalizedString(@"Partition Label:", nil), partition.name
+        ]];
     }
 }
 

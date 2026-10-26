@@ -19,4 +19,12 @@
 // When YES, the next discovery fails, as a wedged geom would.
 @property (nonatomic) BOOL failNextDiscovery;
 
+// Models an ejected disk: -startMediumOfObject:error: counts the call and
+// makes this the next discovery (the disk with its medium back), or fails
+// when failStart is set.
+@property (nonatomic, copy) NSArray<DUStorageObject *> *discoveryAfterStart;
+@property (nonatomic) BOOL failStart;
+@property (nonatomic) NSInteger startCount;
+@property (nonatomic, strong) DUStorageObject *lastStartedObject;
+
 @end

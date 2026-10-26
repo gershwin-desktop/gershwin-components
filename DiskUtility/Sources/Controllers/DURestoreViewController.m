@@ -600,6 +600,27 @@ typedef struct {
     if (source == nil || destination == nil || self.operationRunning) {
         return;
     }
+    // An ejected disk on either side is started first, one at a time, so
+    // the size checks and the confirmation see the real disk.
+    BOOL sourceAsleep = [self.storageManager objectNeedsWake:source];
+    if (sourceAsleep || [self.storageManager objectNeedsWake:destination]) {
+        [self.logView appendLine:NSLocalizedString(@"Starting the disk...", nil)];
+        [self.storageManager wakeObject:sourceAsleep ? source : destination
+                             completion:^(DUStorageObject *fresh,
+                                          NSError *error) {
+            if (fresh == nil) {
+                [self.logView appendLine:error.localizedDescription ?: @""];
+                return;
+            }
+            if (sourceAsleep) {
+                self.resolvedSource = fresh;
+            } else {
+                self.resolvedDestination = fresh;
+            }
+            [self restoreClicked:sender];
+        }];
+        return;
+    }
 
     if ([[NSUserDefaults standardUserDefaults]
             boolForKey:kDefaultsConfirmDestructive]) {

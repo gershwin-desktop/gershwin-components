@@ -59,6 +59,12 @@ typedef NS_ENUM(NSInteger, DUStorageSmartStatus) {
 // Only meaningful when optical is YES.
 @property (nonatomic) BOOL mediaPresent;
 
+// YES for a removable disk that was ejected but is still attached: the
+// kernel keeps the device without a medium (no size, no partitions) until
+// it is started again. Every command that needs the medium wakes it first
+// through -[DUStorageManager wakeObject:completion:].
+@property (nonatomic) BOOL mediumEjected;
+
 - (instancetype)initWithIdentifier:(NSString *)identifier;
 
 @end

@@ -8,12 +8,30 @@ include $(GNUSTEP_MAKEFILES)/common.make
 # node, asserting the result by reading the disk back with gpart/newfs/
 # geom/mount/sha256. It is never part of ../run.sh, which stays hermetic.
 
+# t_LiveBackend drives the BSD backends (its RAID probe is FreeBSD only and
+# does not compile on Linux); t_LiveMount drives the Linux one.
+ifeq ($(findstring linux,$(GNUSTEP_TARGET_OS)),linux)
+TEST_TOOL_NAME = t_LiveMount
+else
 TEST_TOOL_NAME = t_LiveBackend
+endif
 
 SOURCES = ../../Sources
 
 t_LiveBackend_OBJC_FILES = \
     ../TestLiveBackend.m \
+    $(BACKEND_SOURCES)
+
+# t_LiveMount (Linux) mounts, unmounts and ejects the partitions of a loop
+# device the caller set up; it refuses any other node and is run as the
+# user, the way the app runs:
+#
+#     cd Tests/Live && gmake && ./obj/t_LiveMount /dev/loopN
+t_LiveMount_OBJC_FILES = \
+    ../TestLiveMount.m \
+    $(BACKEND_SOURCES)
+
+BACKEND_SOURCES = \
     $(SOURCES)/Backend/DUBackendFactory.m \
     $(SOURCES)/Backend/DUStorageBackend.m \
     $(SOURCES)/Backend/DUFATFormat.m \
@@ -29,6 +47,12 @@ t_LiveBackend_OBJC_FILES = \
     $(SOURCES)/Backend/Parsers/DUNetBKSDisklabelParser.m \
     $(SOURCES)/Backend/Parsers/DUOpenBSDDisklabelParser.m \
     $(SOURCES)/Backend/Parsers/DUPartitionTableParser.m \
+    $(SOURCES)/Backend/Linux/DULinuxStorageBackend.m \
+    $(SOURCES)/Backend/Linux/DULinuxDeviceDiscovery.m \
+    $(SOURCES)/Backend/Linux/DULinuxUserMount.m \
+    $(SOURCES)/Backend/Linux/DULinuxPartitionTool.m \
+    $(SOURCES)/Backend/Linux/DULinuxFilesystemTool.m \
+    $(SOURCES)/Backend/Linux/DULinuxImageTool.m \
     $(SOURCES)/Backend/FreeBSD/DUFreeBSDStorageBackend.m \
     $(SOURCES)/Backend/FreeBSD/DUFreeBSDDeviceDiscovery.m \
     $(SOURCES)/Backend/FreeBSD/DUFreeBSDGEOMAdapter.m \
@@ -73,11 +97,12 @@ t_LiveBackend_OBJC_FILES = \
     $(SOURCES)/Utilities/DURepairPermissionsTool.m \
     $(SOURCES)/Utilities/DUSHA256.m
 
-t_LiveBackend_OBJCFLAGS = \
+LIVE_FLAGS = \
     -fobjc-arc -fobjc-arc-exceptions -fobjc-runtime=gnustep-2.0 -fblocks \
     -Wall -Wextra
 
 t_LiveBackend_TOOL_LIBS = -lgnustep-base
+t_LiveMount_TOOL_LIBS = -lgnustep-base
 
 # Mirror the main GNUmakefile's library detection so the wrappers compile
 # against the real headers when present; without a header the stub build
@@ -89,25 +114,28 @@ HAVE_LIBFDISK := $(shell test -f /usr/include/libfdisk/libfdisk.h && echo yes)
 HAVE_LIBARCHIVE := $(shell pkg-config --exists libarchive 2>/dev/null && echo yes)
 
 ifneq ($(HAVE_LIBBLKID),)
-t_LiveBackend_OBJCFLAGS += -DHAVE_LIBBLKID
+LIVE_FLAGS += -DHAVE_LIBBLKID
 ADDITIONAL_LDFLAGS += -lblkid
 endif
 ifneq ($(HAVE_LIBMOUNT),)
-t_LiveBackend_OBJCFLAGS += -DHAVE_LIBMOUNT
+LIVE_FLAGS += -DHAVE_LIBMOUNT
 ADDITIONAL_LDFLAGS += -lmount
 endif
 ifneq ($(HAVE_LIBEXT2FS),)
-t_LiveBackend_OBJCFLAGS += -DHAVE_LIBEXT2FS
+LIVE_FLAGS += -DHAVE_LIBEXT2FS
 ADDITIONAL_LDFLAGS += -lext2fs -lcom_err
 endif
 ifneq ($(HAVE_LIBFDISK),)
-t_LiveBackend_OBJCFLAGS += -DHAVE_LIBFDISK
+LIVE_FLAGS += -DHAVE_LIBFDISK
 ADDITIONAL_LDFLAGS += -lfdisk
 endif
 ifneq ($(HAVE_LIBARCHIVE),)
-t_LiveBackend_OBJCFLAGS += -DHAVE_LIBARCHIVE
+LIVE_FLAGS += -DHAVE_LIBARCHIVE
 ADDITIONAL_LDFLAGS += -larchive
 endif
+
+t_LiveBackend_OBJCFLAGS = $(LIVE_FLAGS)
+t_LiveMount_OBJCFLAGS = $(LIVE_FLAGS)
 
 ADDITIONAL_INCLUDE_DIRS += \
     -I$(SOURCES) \
@@ -117,6 +145,7 @@ ADDITIONAL_INCLUDE_DIRS += \
     -I$(SOURCES)/Utilities \
     -I$(SOURCES)/Backend \
     -I$(SOURCES)/Backend/Libraries \
-    -I$(SOURCES)/Backend/Parsers
+    -I$(SOURCES)/Backend/Parsers \
+    -I$(SOURCES)/Backend/Linux
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

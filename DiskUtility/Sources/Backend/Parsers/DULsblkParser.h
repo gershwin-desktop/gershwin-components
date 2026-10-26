@@ -41,6 +41,11 @@
 //   kLsblkKeyHotplug     Hotplug flag from HOTPLUG (NSNumber bool).
 //   kLsblkKeyMajorMinor  Raw "major:minor" pair from MAJ:MIN (NSString),
 //                        e.g. "8:1".
+//   kLsblkKeyPartTableType Partition table type from PTTYPE (NSString),
+//                        e.g. "gpt", "dos"; absent when there is no table.
+//   kLsblkKeyPartType    Partition type from PARTTYPE (NSString): "0xc"
+//                        for MBR, a GUID for GPT.
+//   kLsblkKeyPartLabel   Partition name from PARTLABEL (NSString), GPT only.
 // Stable dictionary keys emitted by parsePairsOutput: (see mapping table
 // above); exported so backend code can consume rows without re-declaring.
 extern NSString * const kLsblkKeyName;
@@ -58,6 +63,9 @@ extern NSString * const kLsblkKeyReadOnly;
 extern NSString * const kLsblkKeyRemovable;
 extern NSString * const kLsblkKeyHotplug;
 extern NSString * const kLsblkKeyMajorMinor;
+extern NSString * const kLsblkKeyPartTableType;
+extern NSString * const kLsblkKeyPartType;
+extern NSString * const kLsblkKeyPartLabel;
 
 @interface DULsblkParser : NSObject
 

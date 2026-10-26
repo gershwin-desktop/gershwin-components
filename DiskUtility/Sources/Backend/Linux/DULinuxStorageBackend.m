@@ -22,6 +22,7 @@
 #import "DULinuxFilesystemTool.h"
 #import "DULinuxImageTool.h"
 #import "DULinuxPartitionTool.h"
+#import "DULinuxUserMount.h"
 #import "DUMountLibrary.h"
 #import "DUOperation.h"
 #import "DUParsing.h"
@@ -668,78 +669,277 @@
     }
     NSString *directory = [@"/media" stringByAppendingPathComponent:base];
     if (![fileManager fileExistsAtPath:directory]) {
-        NSError *createError = nil;
-        if (![fileManager createDirectoryAtPath:directory
-                    withIntermediateDirectories:YES
-                                     attributes:nil
-                                          error:&createError]) {
+        // /media belongs to root, so an ordinary user cannot create the
+        // mount point; it is made with the same privileges as the mount.
+        DUProcessResult *result =
+            [[DUAuthorizationManager sharedManager]
+                runPrivileged:[DUProcessRunner executablePathForName:@"mkdir"]
+                         args:@[ @"-p", directory ]
+                      timeout:300.0
+                        error:NULL];
+        if (result == nil || !result.exitedNormally ||
+            result.terminationStatus != 0) {
             return nil;
         }
     }
     return directory;
 }
 
+// One tool run that either succeeded or yields the error the user sees;
+// "busy" in its output turns into DUErrorDeviceBusy.
+static NSError *DUToolError(DUProcessResult *result, NSError *runError,
+                            DUStorageErrorCode code, NSString *description)
+{
+    if (result != nil && result.exitedNormally &&
+        result.terminationStatus == 0) {
+        return nil;
+    }
+    NSString *detail = result.standardError.length > 0
+        ? result.standardError
+        : runError.localizedDescription;
+    BOOL busy = [detail rangeOfString:@"already mounted"].location != NSNotFound
+        || [detail rangeOfString:@"busy"].location != NSNotFound
+        || [detail rangeOfString:@"in use"].location != NSNotFound;
+    return [NSError errorWithDomain:DUStorageErrorDomain
+                               code:busy ? DUErrorDeviceBusy : code
+                           userInfo:@{
+        NSLocalizedDescriptionKey : description,
+        kDUBackendDetailKey : detail ?: @"",
+    }];
+}
+
+// Mounts one volume (or the partition carrying it). Blocks; worker only.
+- (NSError *)mountNodeOfObject:(DUStorageObject *)object
+                    mountPoint:(NSString **)mountPoint
+{
+    NSString *devicePath = object.backendPath;
+    if (devicePath.length == 0) {
+        return DUErrorMake(DUErrorInvalidArgument,
+                           NSLocalizedString(@"No device to mount.", nil));
+    }
+    NSString *failure =
+        NSLocalizedString(@"The volume could not be mounted.", nil);
+    NSError *runError = nil;
+
+    NSString *udevil = [DULinuxUserMount udevilPath];
+    if (udevil != nil && [DULinuxUserMount isUserMountable:object]) {
+        // udevil mounts as the user, so it needs neither a password nor a
+        // mount point prepared here; see DULinuxUserMount.h.
+        DUProcessResult *result =
+            [DUProcessRunner runExecutable:udevil
+                                 arguments:@[ @"mount", devicePath ]
+                                     error:&runError];
+        NSError *error =
+            DUToolError(result, runError, DUErrorMountError, failure);
+        if (error == nil && mountPoint != NULL) {
+            *mountPoint = [DULinuxUserMount
+                mountPointFromOutput:result.standardOutput
+                              device:devicePath];
+        }
+        return error;
+    }
+
+    NSString *directory =
+        [self mountDirectoryForLabel:object.displayName device:devicePath];
+    if (directory == nil) {
+        return DUErrorMake(DUErrorMountError,
+                           NSLocalizedString(@"The mount directory could not be created.", nil));
+    }
+    NSString *fstype = @"";
+    if ([object isKindOfClass:[DUStorageVolume class]]) {
+        fstype = ((DUStorageVolume *)object).filesystemType ?: @"";
+    } else if ([object isKindOfClass:[DUPartition class]]) {
+        fstype = ((DUPartition *)object).filesystemType ?: @"";
+    }
+    // mount(8) writes kernel state and needs root; the backend talks to
+    // OS facilities directly, with no UDisks layer in between
+    // (LIBRARIES.md section 0).
+    DUProcessResult *result =
+        [[DUAuthorizationManager sharedManager]
+            runPrivileged:[DUProcessRunner executablePathForName:@"mount"]
+                     args:(fstype.length > 0
+                               ? @[ @"-t", fstype, devicePath, directory ]
+                               : @[ devicePath, directory ])
+                  timeout:300.0
+                    error:&runError];
+    NSError *error = DUToolError(result, runError, DUErrorMountError, failure);
+    if (error == nil && mountPoint != NULL) {
+        *mountPoint = directory;
+    }
+    return error;
+}
+
+// Unmounts one mounted volume. Blocks; worker only.
+- (NSError *)unmountVolume:(DUStorageVolume *)volume
+{
+    NSString *target = volume.mountPoint;
+    NSString *name = volume.displayName;
+    NSString *failure = [NSString stringWithFormat:
+        NSLocalizedString(@"The volume \"%@\" could not be unmounted.", nil),
+        name];
+    NSError *runError = nil;
+    // udevil is the counterpart of the user mount: no password, and it
+    // removes the mount point it created. Others need umount(8) as root;
+    // there is no UDisks layer in between (LIBRARIES.md section 0).
+    NSString *udevil = [DULinuxUserMount udevilPath];
+    DUProcessResult *result = [DULinuxFilesystemTool
+        unmountMountPoint:target
+                   udevil:([DULinuxUserMount isUserMountable:volume] ? udevil
+                                                                    : nil)
+                    error:&runError];
+    NSError *error =
+        DUToolError(result, runError, DUErrorUnmountError, failure);
+    if (error.code == DUErrorDeviceBusy) {
+        return [NSError errorWithDomain:DUStorageErrorDomain
+                                   code:DUErrorDeviceBusy
+                               userInfo:@{
+            NSLocalizedDescriptionKey : [NSString stringWithFormat:
+                NSLocalizedString(@"The volume \"%@\" is in use. Close the "
+                                  @"files and applications using it and try "
+                                  @"again.", nil),
+                name],
+            kDUBackendDetailKey : error.userInfo[kDUBackendDetailKey] ?: @"",
+        }];
+    }
+    return error;
+}
+
+// Unmounts every mounted volume under object and stops at the first one
+// that refuses, so the user learns which volume holds the disk.
+- (NSError *)unmountVolumesOfObject:(DUStorageObject *)object
+{
+    for (DUStorageVolume *volume in
+             [DULinuxUserMount volumesOfObject:object]) {
+        if (!volume.mounted) {
+            continue;
+        }
+        NSError *error = [self unmountVolume:volume];
+        if (error != nil) {
+            return error;
+        }
+    }
+    return nil;
+}
+
+// Brings back a removable disk that was ejected while still plugged in,
+// and returns once its partitions are usable. Blocks; worker only.
+- (BOOL)startMediumOfObject:(DUStorageObject *)object error:(NSError **)error
+{
+    DUStorageObject *root = object;
+    while (root.parent != nil) {
+        root = root.parent;
+    }
+    if (![root isKindOfClass:[DUStorageDevice class]] ||
+        !((DUStorageDevice *)root).mediumEjected) {
+        return YES;
+    }
+    DUStorageDevice *device = (DUStorageDevice *)root;
+    NSString *devicePath = device.backendPath;
+    NSString *failure = NSLocalizedString(
+        @"The disk could not be started again. Unplug it and plug it in "
+        @"again.", nil);
+    // eject -t sends SCSI START STOP UNIT with Load and Start set, the
+    // counterpart of the stop eject sent; the kernel accepts it for disks
+    // as well as for optical drives. Both act on root:disk nodes.
+    NSError *runError = nil;
+    DUProcessResult *result =
+        [[DUAuthorizationManager sharedManager]
+            runPrivileged:[DUProcessRunner executablePathForName:@"eject"]
+                     args:@[ @"-t", devicePath ]
+                  timeout:60.0
+                    error:&runError];
+    NSError *loadError =
+        DUToolError(result, runError, DUErrorDeviceNotFound, failure);
+    if (loadError == nil) {
+        // Opening the node makes the kernel notice the medium change and
+        // read the capacity and the partition table again on its own; an
+        // explicit BLKRRPART would race udev, which probes the partitions
+        // the kernel has just announced, and fail with EBUSY.
+        result = [[DUAuthorizationManager sharedManager]
+            runPrivileged:[DUProcessRunner executablePathForName:@"blockdev"]
+                     args:@[ @"--getsize64", devicePath ]
+                  timeout:60.0
+                    error:&runError];
+        loadError =
+            DUToolError(result, runError, DUErrorDeviceNotFound, failure);
+    }
+    if (loadError != nil) {
+        if (error != NULL) {
+            *error = loadError;
+        }
+        return NO;
+    }
+
+    // udev creates the partition nodes shortly after the kernel lists the
+    // partitions; mounting has to wait for both.
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
+    while ([deadline timeIntervalSinceNow] > 0) {
+        DUStorageObject *fresh = nil;
+        for (DUStorageObject *root in
+                 [[[DULinuxDeviceDiscovery alloc] init] discoverObjects:NULL]) {
+            if ([root.identifier isEqualToString:device.identifier]) {
+                fresh = root;
+            }
+        }
+        BOOL ready = [fresh isKindOfClass:[DUStorageDevice class]] &&
+            !((DUStorageDevice *)fresh).mediumEjected;
+        for (DUStorageObject *partition in fresh.children) {
+            ready = ready && [[NSFileManager defaultManager]
+                                 fileExistsAtPath:partition.backendPath];
+        }
+        if (ready) {
+            // lsblk reads filesystem types from the udev database, which
+            // fills in only after udev has probed the new partitions;
+            // until then they would look empty and nothing would mount.
+            // Systems without udev have no such database to wait for.
+            NSString *udevadm =
+                [DUProcessRunner executablePathForName:@"udevadm"];
+            if (udevadm != nil) {
+                [DUProcessRunner runExecutable:udevadm
+                                     arguments:@[ @"settle", @"--timeout=10" ]
+                                         error:NULL];
+            }
+            return YES;
+        }
+        [NSThread sleepForTimeInterval:0.5];
+    }
+    if (error != NULL) {
+        *error = DUErrorMake(DUErrorDeviceNotFound, failure);
+    }
+    return NO;
+}
+
 - (void)mountObject:(DUStorageObject *)object
           completion:(void (^)(NSError *, NSString *))completion
 {
     dispatch_worker(^{
-        NSString *devicePath = object.backendPath;
-        if (devicePath.length == 0) {
-            completion(DUErrorMake(DUErrorInvalidArgument,
-                                   NSLocalizedString(@"No device to mount.", nil)),
-                      nil);
+        if (![object isKindOfClass:[DUStorageDevice class]]) {
+            NSString *mountPoint = nil;
+            NSError *error =
+                [self mountNodeOfObject:object mountPoint:&mountPoint];
+            completion(error, error == nil ? mountPoint : nil);
             return;
         }
-
-        NSString *label = object.displayName;
-        NSString *directory =
-            [self mountDirectoryForLabel:label device:devicePath];
-        if (directory == nil) {
-            completion(DUErrorMake(DUErrorMountError,
-                                   NSLocalizedString(@"The mount directory could not be created.", nil)),
-                      nil);
-            return;
+        // Mount on a whole disk mounts each of its volumes that can be,
+        // the way plugging the disk in would.
+        NSString *firstMountPoint = nil;
+        NSError *firstError = nil;
+        for (DUStorageVolume *volume in
+                 [DULinuxUserMount volumesOfObject:object]) {
+            if (!volume.capabilities.canMount) {
+                continue;
+            }
+            NSString *mountPoint = nil;
+            NSError *error =
+                [self mountNodeOfObject:volume mountPoint:&mountPoint];
+            if (error != nil && firstError == nil) {
+                firstError = error;
+            }
+            if (error == nil && firstMountPoint == nil) {
+                firstMountPoint = mountPoint;
+            }
         }
-
-        NSString *fstype = @"";
-        if ([object isKindOfClass:[DUStorageVolume class]]) {
-            fstype = ((DUStorageVolume *)object).filesystemType ?: @"";
-        } else if ([object isKindOfClass:[DUPartition class]]) {
-            fstype = ((DUPartition *)object).filesystemType ?: @"";
-        }
-
-        // mount(8) writes kernel state and needs root; the backend talks to
-        // OS facilities directly, with no UDisks layer in between
-        // (LIBRARIES.md section 0).
-        NSError *runError = nil;
-        DUProcessResult *result =
-            [[DUAuthorizationManager sharedManager]
-                runPrivileged:[DUProcessRunner executablePathForName:@"mount"]
-                         args:(fstype.length > 0
-                                   ? @[ @"-t", fstype, devicePath, directory ]
-                                   : @[ devicePath, directory ])
-                      timeout:300.0
-                        error:&runError];
-        if (result == nil || !result.exitedNormally ||
-            result.terminationStatus != 0) {
-            NSString *detail =
-                result.standardError.length > 0 ? result.standardError
-                                                : runError.localizedDescription;
-            BOOL busy = [detail rangeOfString:@"already mounted"].location != NSNotFound
-                || [detail rangeOfString:@"busy"].location != NSNotFound;
-            completion([NSError errorWithDomain:DUStorageErrorDomain
-                                           code:busy ? DUErrorDeviceBusy
-                                                     : DUErrorMountError
-                                      userInfo:@{
-                NSLocalizedDescriptionKey :
-                    NSLocalizedString(@"The volume could not be mounted.", nil),
-                kDUBackendDetailKey : detail ?: @"",
-            }],
-                      nil);
-            return;
-        }
-
-        completion(nil, directory);
+        completion(firstError, firstMountPoint);
     });
 }
 
@@ -747,39 +947,13 @@
             completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
-        NSString *target = nil;
-        if ([object isKindOfClass:[DUStorageVolume class]]) {
-            target = ((DUStorageVolume *)object).mountPoint;
-        }
-        if (target.length == 0) {
-            target = object.backendPath;
-        }
-        // umount(8) needs root; there is no UDisks layer in between
-        // (LIBRARIES.md section 0).
-        NSError *runError = nil;
-        DUProcessResult *result =
-            [[DUAuthorizationManager sharedManager]
-                runPrivileged:[DUProcessRunner executablePathForName:@"umount"]
-                           args:@[ target ]
-                        timeout:300.0
-                          error:&runError];
-        if (result == nil || !result.exitedNormally ||
-            result.terminationStatus != 0) {
-            NSString *detail =
-                result.standardError.length > 0 ? result.standardError : @"";
-            BOOL busy = [detail rangeOfString:@"busy"].location != NSNotFound
-                || [detail rangeOfString:@"in use"].location != NSNotFound;
-            completion([NSError errorWithDomain:DUStorageErrorDomain
-                                           code:busy ? DUErrorDeviceBusy
-                                                     : DUErrorUnmountError
-                                       userInfo:@{
-                NSLocalizedDescriptionKey :
-                    NSLocalizedString(@"The volume could not be unmounted.", nil),
-                kDUBackendDetailKey : detail ?: @"",
-            }]);
+        if (![object isKindOfClass:[DUStorageDevice class]] &&
+            [DULinuxUserMount volumesOfObject:object].count == 0) {
+            completion(DUErrorMake(DUErrorInvalidArgument,
+                                   NSLocalizedString(@"Nothing to unmount.", nil)));
             return;
         }
-        completion(nil);
+        completion([self unmountVolumesOfObject:object]);
     });
 }
 
@@ -787,27 +961,25 @@
           completion:(void (^)(NSError *))completion
 {
     dispatch_worker(^{
-        // Eject the containing drive, not a partition on the media.
+        // Eject acts on the whole disk from any of its rows: every volume
+        // on it is unmounted first, so nothing is lost when it is pulled.
         DUStorageObject *root = object;
         while (root.parent != nil) {
             root = root.parent;
         }
         NSString *devicePath = root.backendPath ?: object.backendPath;
 
-        // Unmount first so the tray does not pop with open files.
-        if ([object isKindOfClass:[DUStorageVolume class]] &&
-            ((DUStorageVolume *)object).mounted) {
-            DUStorageVolume *volume = (DUStorageVolume *)object;
-            [[DUAuthorizationManager sharedManager]
-                runPrivileged:[DUProcessRunner executablePathForName:@"umount"]
-                           args:@[ volume.mountPoint ]
-                        timeout:300.0
-                          error:NULL];
+        NSError *unmountError = [self unmountVolumesOfObject:root];
+        if (unmountError != nil) {
+            completion(unmountError);
+            return;
         }
 
+        // eject(8) flushes the drive's cache and stops it (or opens the
+        // tray); the node belongs to root:disk, so it needs root - the same
+        // tool devmon ejects with.
         NSString *eject = [DUProcessRunner executablePathForName:@"eject"];
         NSError *runError = nil;
-        // eject opens the drive tray via the device node; needs root.
         DUProcessResult *result = eject != nil
             ? [[DUAuthorizationManager sharedManager]
                   runPrivileged:eject
@@ -815,14 +987,8 @@
                         timeout:300.0
                           error:&runError]
             : nil;
-        if (result == nil || !result.exitedNormally ||
-            result.terminationStatus != 0) {
-            completion(DUErrorMake(
-                DUErrorUnknown,
-                NSLocalizedString(@"The media could not be ejected.", nil)));
-            return;
-        }
-        completion(nil);
+        completion(DUToolError(result, runError, DUErrorUnknown,
+                               NSLocalizedString(@"The media could not be ejected.", nil)));
     });
 }
 

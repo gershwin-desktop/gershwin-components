@@ -349,6 +349,20 @@ static NSString * const kDefaultsConfirmDestructive =
     if (object == nil || self.operationRunning) {
         return;
     }
+    if ([self.storageManager objectNeedsWake:object]) {
+        [self.logView appendLine:NSLocalizedString(@"Starting the disk...", nil)];
+        [self.storageManager wakeObject:object
+                             completion:^(DUStorageObject *fresh,
+                                          NSError *error) {
+            if (fresh == nil) {
+                [self.logView appendLine:error.localizedDescription ?: @""];
+                return;
+            }
+            self.currentObject = fresh;
+            [self runStarter:starter started:startedMessage failed:failedTitle];
+        }];
+        return;
+    }
 
     __weak typeof(self) weakSelf = self;
     void (^progressBlock)(double, NSString *) =

@@ -24,4 +24,22 @@
     return self.nextDiscovery ?: [super discoverStorageObjects:NULL];
 }
 
+- (BOOL)startMediumOfObject:(DUStorageObject *)object error:(NSError **)error
+{
+    self.startCount++;
+    self.lastStartedObject = object;
+    if (self.failStart) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:DUStorageErrorDomain
+                                         code:DUErrorDeviceNotFound
+                                     userInfo:@{
+                NSLocalizedDescriptionKey : @"no medium",
+            }];
+        }
+        return NO;
+    }
+    self.nextDiscovery = self.discoveryAfterStart;
+    return YES;
+}
+
 @end

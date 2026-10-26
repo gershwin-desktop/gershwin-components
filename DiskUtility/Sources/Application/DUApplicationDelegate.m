@@ -13,6 +13,9 @@
 #import "DUOperationManager.h"
 #import "DUStorageManager.h"
 #import "DUProcessRunner.h"
+#if defined(__linux__)
+#import "DULinuxUserMount.h"
+#endif
 
 @interface DUApplicationDelegate ()
 @property (nonatomic, strong, readwrite) DUStorageManager *storageManager;
@@ -39,6 +42,14 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     (void)notification;
+#if defined(__linux__)
+    // The desktop learns about Disk Utility's unmounts the public way, so
+    // it does not take an eject from here for a stick pulled out unawares.
+    NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
+    [DULinuxUserMount
+        setWorkspaceNotificationCenter:[workspace notificationCenter]
+                                sender:workspace];
+#endif
     self.windowController =
         [[DUMainWindowController alloc]
             initWithStorageManager:self.storageManager];

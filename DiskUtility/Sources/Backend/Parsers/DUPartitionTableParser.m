@@ -72,6 +72,10 @@ static NSDictionary<NSString *, NSString *> *sFilesystemTable = nil;
         [lower isEqualToString:@"msdos"]) {
         return @"mbr";
     }
+    if ([lower isEqualToString:@"mac"] || [lower isEqualToString:@"apm"]) {
+        // lsblk says "mac", gpart says "APM".
+        return @"apm";
+    }
     if ([lower containsString:@"disklabel"] || [lower isEqualToString:@"bsd"]) {
         return @"bsd";
     }

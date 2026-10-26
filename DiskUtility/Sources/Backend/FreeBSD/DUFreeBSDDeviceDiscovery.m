@@ -17,6 +17,7 @@
 #import "DUPartition.h"
 #import "DUPartitionTableParser.h"
 #import "DUProcessRunner.h"
+#import "DUPartitionTypeNames.h"
 #import "DUStorageCapabilities.h"
 #import "DUStorageDevice.h"
 #import "DUStorageVolume.h"
@@ -348,6 +349,10 @@ static BOOL IsSliceShapedChildName(NSString *childName, NSString *parentName)
     partition.index = (NSInteger)[DUParsing
         unsignedLongLongFromString:[DUParsing trimmedString:info[@"index"]]];
     partition.name = [DUParsing trimmedString:info[@"label"]];
+    partition.tableTypeCode = [DUPartitionTypeNames
+        typeCodeFromGeomRawType:[DUParsing trimmedString:info[@"rawtype"]]
+                           type:partition.partitionType];
+    partition.partitionUUID = [DUParsing trimmedString:info[@"rawuuid"]];
     partition.bootable =
         [DUParsing boolFromToken:[DUParsing trimmedString:info[@"active"]]];
     partition.readOnly = readOnly;

@@ -417,6 +417,21 @@ static NSString * const kDefaultsConfirmDestructive =
     if (object == nil || formatIdentifier == nil || self.operationRunning) {
         return;
     }
+    // Started before the confirmation, so it names the disk as it really is.
+    if ([self.storageManager objectNeedsWake:object]) {
+        [self.logView appendLine:NSLocalizedString(@"Starting the disk...", nil)];
+        [self.storageManager wakeObject:object
+                             completion:^(DUStorageObject *fresh,
+                                          NSError *error) {
+            if (fresh == nil) {
+                [self.logView appendLine:error.localizedDescription ?: @""];
+                return;
+            }
+            self.currentObject = fresh;
+            [self eraseClicked:sender];
+        }];
+        return;
+    }
 
     // Destructive confirmation identifying exactly what will be destroyed
     // (SPEC section 14.4); Cancel is the default button.

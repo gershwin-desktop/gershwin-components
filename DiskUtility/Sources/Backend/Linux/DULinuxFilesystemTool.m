@@ -18,6 +18,7 @@
 #import "DUParsing.h"
 #import "DUProcessRunner.h"
 #import "DUAuthorizationManager.h"
+#import "DULinuxUserMount.h"
 
 NSString * const kDUBackendDetailKey = @"DUBackendDetail";
 
@@ -511,11 +512,7 @@ static NSString *UnescapeMountField(NSString *field)
         NSString *mountPoint = UnescapeMountField(fields[1]);
         NSError *runError = nil;
         DUProcessResult *result = umount == nil ? nil
-            : [[DUAuthorizationManager sharedManager]
-                  runPrivileged:umount
-                           args:@[ mountPoint ]
-                        timeout:300.0
-                          error:&runError];
+            : [self unmountMountPoint:mountPoint udevil:nil error:&runError];
         if (result == nil || ![result exitedWithStatus:0]) {
             return [NSError errorWithDomain:DUStorageErrorDomain
                                        code:DUErrorDeviceBusy
@@ -528,6 +525,34 @@ static NSString *UnescapeMountField(NSString *field)
         }
     }
     return nil;
+}
+
++ (DUProcessResult *)unmountMountPoint:(NSString *)mountPoint
+                                udevil:(NSString *)udevil
+                                 error:(NSError **)error
+{
+    // Announced before, so the desktop knows the volume is going away on
+    // purpose when its mount watcher sees it vanish.
+    [DULinuxUserMount postUnmountNotification:@"NSWorkspaceWillUnmountNotification"
+                                   mountPoint:mountPoint];
+    DUProcessResult *result = nil;
+    if (udevil != nil) {
+        result = [DUProcessRunner runExecutable:udevil
+                                      arguments:@[ @"umount", mountPoint ]
+                                          error:error];
+    } else {
+        result = [[DUAuthorizationManager sharedManager]
+            runPrivileged:[DUProcessRunner executablePathForName:@"umount"]
+                     args:@[ mountPoint ]
+                  timeout:300.0
+                    error:error];
+    }
+    if ([result exitedWithStatus:0]) {
+        [DULinuxUserMount
+            postUnmountNotification:@"NSWorkspaceDidUnmountNotification"
+                         mountPoint:mountPoint];
+    }
+    return result;
 }
 
 + (NSError *)wipeSignaturesAtDevicePath:(NSString *)devicePath

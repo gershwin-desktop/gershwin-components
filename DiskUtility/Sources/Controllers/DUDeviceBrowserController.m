@@ -88,11 +88,13 @@ static NSString * const kColumnIdentifier = @"devices";
 
 - (void)reloadWithPreferredSelection:(NSString *)preferredIdentifier
 {
-    // Preserve expansion + selection across topology refreshes.
+    // Preserve expansion + selection across topology refreshes. Every
+    // level counts: a volume is only on screen while its partition is
+    // expanded, and a rescan hands over new objects for all of them.
     NSMutableSet<NSString *> *expanded = [NSMutableSet set];
-    for (DUStorageObject *root in self.storageManager.currentObjects) {
-        if ([self.outlineView isItemExpanded:root]) {
-            [expanded addObject:root.identifier];
+    for (DUStorageObject *object in self.visibleObjects) {
+        if ([self.outlineView isItemExpanded:object]) {
+            [expanded addObject:object.identifier];
         }
     }
     NSString *selectedIdentifier = self.selectedObject.identifier;
@@ -101,9 +103,11 @@ static NSString * const kColumnIdentifier = @"devices";
     [self rebuildVisibleRows];
 
     [self.outlineView reloadData];
-    for (DUStorageObject *root in self.storageManager.currentObjects) {
-        if ([expanded containsObject:root.identifier]) {
-            [self.outlineView expandItem:root];
+    // visibleObjects is in pre-order, so a parent is expanded before its
+    // children are asked to.
+    for (DUStorageObject *object in self.visibleObjects) {
+        if ([expanded containsObject:object.identifier]) {
+            [self.outlineView expandItem:object];
         }
     }
     _reloading = NO;
@@ -117,8 +121,12 @@ static NSString * const kColumnIdentifier = @"devices";
         resolved = self.visibleObjects.firstObject;
     }
     if (resolved != nil) {
-        NSUInteger row = [self.outlineView rowForItem:resolved];
-        if (row != NSNotFound) {
+        // A selection the user could not see would still be the target of
+        // every toolbar command, so reveal it rather than drop it.
+        [self expandAncestorsOfObject:resolved];
+        // -rowForItem: answers -1, not NSNotFound, for an item without a row.
+        NSInteger row = [self.outlineView rowForItem:resolved];
+        if (row >= 0) {
             [self.outlineView selectRowIndexes:
                                   [NSIndexSet indexSetWithIndex:row]
                              byExtendingSelection:NO];
@@ -126,6 +134,18 @@ static NSString * const kColumnIdentifier = @"devices";
         }
     }
     [self notifySelection:nil];
+}
+
+- (void)expandAncestorsOfObject:(DUStorageObject *)object
+{
+    NSMutableArray<DUStorageObject *> *ancestors = [NSMutableArray array];
+    for (DUStorageObject *parent = object.parent; parent != nil;
+         parent = parent.parent) {
+        [ancestors insertObject:parent atIndex:0];
+    }
+    for (DUStorageObject *ancestor in ancestors) {
+        [self.outlineView expandItem:ancestor];
+    }
 }
 
 - (void)rebuildVisibleRows

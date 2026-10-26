@@ -7,10 +7,14 @@ include $(GNUSTEP_MAKEFILES)/common.make
 #
 #     cd Tests/Panes && gmake && DISPLAY=:<private Xvfb> ./obj/t_PaneChoices
 #
+# t_DeviceBrowser checks that the sidebar keeps a volume selected across a
+# rescan, and t_WakeFlows that First Aid and Erase start an ejected disk
+# before they act on it; both need the same display.
+#
 # The panes are ARC, the test is not (the ObjectTesting macros send explicit
 # retain/release), so ARC is switched on per source file below.
 
-TEST_TOOL_NAME = t_PaneChoices
+TEST_TOOL_NAME = t_PaneChoices t_DeviceBrowser t_WakeFlows
 
 SOURCES = ../../Sources
 
@@ -18,6 +22,10 @@ PANE_SOURCES = \
     $(SOURCES)/Controllers/DUEraseViewController.m \
     $(SOURCES)/Controllers/DUPartitionViewController.m \
     $(SOURCES)/Views/DUDiskMapView.m \
+    $(SOURCES)/Views/DUDeviceOutlineView.m \
+    $(SOURCES)/Views/DUIcons.m \
+    $(SOURCES)/Controllers/DUDeviceBrowserController.m \
+    $(SOURCES)/Controllers/DUFirstAidViewController.m \
     $(SOURCES)/Views/DUOperationLogView.m \
     $(SOURCES)/Views/DUPaneView.m \
     $(SOURCES)/Backend/DUBackendFactory.m \
@@ -66,13 +74,21 @@ PANE_SOURCES = \
     $(SOURCES)/Utilities/DUSHA256.m
 
 t_PaneChoices_OBJC_FILES = ../TestPaneChoices.m $(PANE_SOURCES)
+t_DeviceBrowser_OBJC_FILES = ../TestDeviceBrowser.m $(PANE_SOURCES)
+t_WakeFlows_OBJC_FILES = ../TestWakeFlows.m ../TestControllableBackend.m \
+    $(PANE_SOURCES)
+../TestControllableBackend.m_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
 
 # gnustep-make keys per-file flags by the path exactly as listed above.
 $(foreach f,$(PANE_SOURCES),$(eval $(f)_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions))
 
 t_PaneChoices_OBJCFLAGS = -fobjc-runtime=gnustep-2.0 -fblocks -Wall -Wextra
+t_DeviceBrowser_OBJCFLAGS = $(t_PaneChoices_OBJCFLAGS)
+t_WakeFlows_OBJCFLAGS = $(t_PaneChoices_OBJCFLAGS)
 
 t_PaneChoices_TOOL_LIBS = -lgnustep-gui -lgnustep-base
+t_DeviceBrowser_TOOL_LIBS = $(t_PaneChoices_TOOL_LIBS)
+t_WakeFlows_TOOL_LIBS = $(t_PaneChoices_TOOL_LIBS)
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -86,6 +102,7 @@ ADDITIONAL_INCLUDE_DIRS += \
     -I$(SOURCES)/Operations \
     -I$(SOURCES)/Utilities \
     -I$(SOURCES)/Backend \
-    -I$(SOURCES)/Backend/Parsers
+    -I$(SOURCES)/Backend/Parsers \
+    -I..
 
 include $(GNUSTEP_MAKEFILES)/test-tool.make

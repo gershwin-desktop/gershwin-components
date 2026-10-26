@@ -457,8 +457,15 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
 
 - (void)toolbarClicked:(NSButton *)sender
 {
-    [self runCommand:objc_getAssociatedObject(sender, "duToken")
-           forObject:self.selectedObject];
+    NSString *token = objc_getAssociatedObject(sender, "duToken");
+    DUStorageCapabilities *caps = self.selectedObject.capabilities;
+    // One button serves both directions (it is enabled for either): with
+    // nothing left to mount it unmounts.
+    if ([token isEqualToString:@"mount"] && !caps.canMount &&
+        caps.canUnmount) {
+        token = @"unmount";
+    }
+    [self runCommand:token forObject:self.selectedObject];
 }
 
 #pragma mark - Commands
@@ -468,6 +475,28 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
 - (void)runCommand:(NSString *)token forObject:(DUStorageObject *)object
 {
     if (object == nil) {
+        return;
+    }
+
+    // Commands that read the medium start an ejected disk first and then
+    // run on the disk as it is afterwards, partitions included.
+    NSSet<NSString *> *needsMedium = [NSSet setWithArray:@[
+        @"verify", @"repair", @"mount", @"info", @"newimage", @"journaling",
+    ]];
+    if ([needsMedium containsObject:token] &&
+        [self.storageManager objectNeedsWake:object]) {
+        [self.storageManager wakeObject:object
+                             completion:^(DUStorageObject *fresh,
+                                          NSError *error) {
+            if (fresh == nil) {
+                NSRunAlertPanel(
+                    NSLocalizedString(@"Disk Utility", nil),
+                    error.localizedDescription ?: @"",
+                    NSLocalizedString(@"OK", nil), nil, nil);
+                return;
+            }
+            [self runCommand:token forObject:fresh];
+        }];
         return;
     }
 
@@ -1078,6 +1107,8 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
                 ?: NSLocalizedString(@"Could not eject.", nil),
             NSLocalizedString(@"OK", nil), nil, nil);
     }
+    // Volumes unmounted before a failure stay unmounted.
+    [self refreshMountState];
 }
 
 - (void)mountFinishedWithResult:(NSDictionary *)result
@@ -1092,8 +1123,13 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
             error.localizedDescription
                 ?: NSLocalizedString(@"The operation failed.", nil),
             NSLocalizedString(@"OK", nil), nil, nil);
-        return;
     }
+    // A whole disk can fail on one volume after mounting the others.
+    [self refreshMountState];
+}
+
+- (void)refreshMountState
+{
     // Model refresh picks up the new mount state asynchronously; the
     // topology notification comes back on the main thread.
     DUStorageManager *manager = self.storageManager;

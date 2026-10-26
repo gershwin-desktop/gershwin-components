@@ -314,6 +314,9 @@ static NSString * const kWholeDiskLetter = @"c";
     device.capabilities = [DUStorageCapabilities capabilitiesWithAll:NO];
     device.capabilities.canRepairPermissions = YES;
 
+    // The partitions listed here are the disklabel's own entries; the
+    // MBR or GPT that may enclose the label is not read by this backend.
+    device.partitionScheme = @"bsd";
     for (NSDictionary<NSString *, id> *row in
              label[kDisklabelKeyPartitions]) {
         [self attachPartitionWithRow:row toDisk:device capacity:capacity];
@@ -370,6 +373,7 @@ static NSString * const kWholeDiskLetter = @"c";
     partition.sizeBytes = sizeBytes;
     partition.index = [letter characterAtIndex:0] - 'a';
     partition.partitionType = row[kDisklabelKeyFstype];
+    partition.tableTypeCode = partition.partitionType;
     partition.filesystemType =
         [self filesystemTokenForLabelType:partition.partitionType];
     partition.name = row[kDisklabelKeyMountPoint];

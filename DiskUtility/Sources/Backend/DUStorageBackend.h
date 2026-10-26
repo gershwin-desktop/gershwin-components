@@ -98,6 +98,14 @@ extern NSString *const kDUDiscBlankAllKey;    // e.g. "all" (full blank)
 
 @optional
 
+// Starts the medium of a removable disk that was ejected but is still
+// attached (DUStorageDevice.mediumEjected on object's disk) and returns
+// once its partitions are usable; YES without doing anything otherwise.
+// Blocks, so call it from a worker thread. Callers go through
+// -[DUStorageManager wakeObject:completion:], which also re-resolves the
+// object afterwards.
+- (BOOL)startMediumOfObject:(DUStorageObject *)object error:(NSError **)error;
+
 // Format descriptors offered for this object, empty array when none. Callers
 // must treat absence of the method as an empty result.
 - (NSArray<NSDictionary *> *)supportedFormatsForObject:(DUStorageObject *)object;

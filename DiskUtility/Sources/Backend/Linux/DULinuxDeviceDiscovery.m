@@ -8,6 +8,7 @@
 
 #import "DUFATFormat.h"
 #import "DULinuxDeviceDiscovery.h"
+#import "DULinuxUserMount.h"
 
 #import <sys/statvfs.h>
 
@@ -22,6 +23,7 @@
 #import "DUParsing.h"
 #import "DUPartition.h"
 #import "DUPartitionTableParser.h"
+#import "DUPartitionTypeNames.h"
 #import "DUProcessRunner.h"
 #import "DUStorageCapabilities.h"
 #import "DUStorageDevice.h"
@@ -92,7 +94,7 @@ extern NSString * const kLsblkKeyFstype;
 
 @implementation DULinuxDeviceDiscovery
 
-- (NSArray<DUStorageObject *> *)discoverObjects:(NSError **)error
+- (void)resetSnapshot
 {
     self.rowsByName = [NSMutableDictionary dictionary];
     self.orderedRows = @[];
@@ -100,6 +102,11 @@ extern NSString * const kLsblkKeyFstype;
     self.probedByPath = @{};
     self.mountPointsByDevice = @{};
     self.fdiskInspectionByPath = @{};
+}
+
+- (NSArray<DUStorageObject *> *)discoverObjects:(NSError **)error
+{
+    [self resetSnapshot];
 
     if (![self loadRowsViaLsblk] && ![self loadRowsViaSysfs]) {
         if (error != NULL) {
@@ -118,6 +125,16 @@ extern NSString * const kLsblkKeyFstype;
     return [self buildTree];
 }
 
+- (NSArray<DUStorageObject *> *)
+    discoverObjectsFromLsblkPairs:(NSString *)lsblkOutput
+                      blkidOutput:(NSString *)blkidOutput
+{
+    [self resetSnapshot];
+    [self loadRowsFromLsblkPairs:lsblkOutput];
+    [self loadBlkidMapFromOutput:blkidOutput];
+    return [self buildTree];
+}
+
 #pragma mark - Row sources
 
 - (BOOL)loadRowsViaLsblk
@@ -130,7 +147,7 @@ extern NSString * const kLsblkKeyFstype;
     DUProcessResult *result = [DUProcessRunner
         runExecutable:lsblk
             arguments:@[ @"-P", @"-b", @"-o",
-                         @"NAME,PKNAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,LABEL,PARTUUID,UUID,MODEL,RO,RM,HOTPLUG,MAJ:MIN" ]
+                         @"NAME,PKNAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,LABEL,PARTUUID,UUID,MODEL,RO,RM,HOTPLUG,MAJ:MIN,PTTYPE,PARTTYPE,PARTLABEL" ]
                  error:&runError];
     if (result == nil || !result.exitedNormally ||
         result.terminationStatus > 1) {
@@ -142,12 +159,16 @@ extern NSString * const kLsblkKeyFstype;
         return NO;
     }
 
-    NSArray<NSDictionary *> *rows =
-        [DULsblkParser parsePairsOutput:result.standardOutput];
-    if (rows.count == 0 && result.standardOutput.length == 0 &&
-        ![result exitedWithStatus:0]) {
+    if (result.standardOutput.length == 0 && ![result exitedWithStatus:0]) {
         return NO;
     }
+    [self loadRowsFromLsblkPairs:result.standardOutput];
+    return YES;
+}
+
+- (void)loadRowsFromLsblkPairs:(NSString *)output
+{
+    NSArray<NSDictionary *> *rows = [DULsblkParser parsePairsOutput:output];
     for (NSDictionary *row in rows) {
         NSString *name = row[kLsblkKeyName];
         if (name.length == 0) {
@@ -156,7 +177,6 @@ extern NSString * const kLsblkKeyFstype;
         self.rowsByName[name] = row;
     }
     self.orderedRows = rows;
-    return YES;
 }
 
 // Minimal inventory straight from sysfs when lsblk is unavailable. Sizes
@@ -300,15 +320,20 @@ extern NSString * const kLsblkKeyFstype;
     }
     DUProcessResult *result =
         [DUProcessRunner runExecutable:blkid arguments:@[] error:NULL];
-    if (result == nil || result.standardOutput.length == 0) {
+    if (result == nil) {
         return;
     }
+    [self loadBlkidMapFromOutput:result.standardOutput];
+}
+
+- (void)loadBlkidMapFromOutput:(NSString *)output
+{
     // Enrichment is opportunistic: lsblk already supplied most fields, so a
     // failing or partial blkid never fails discovery itself.
     NSMutableDictionary<NSString *, NSDictionary *> *map =
         [NSMutableDictionary dictionary];
     for (NSDictionary *entry in
-             [DUBlkidParser parseFullOutput:result.standardOutput]) {
+             [DUBlkidParser parseFullOutput:output]) {
         NSString *device = entry[kBkidKeyDevice];
         if (device.length > 0) {
             map[device] = entry;
@@ -475,11 +500,15 @@ extern NSString * const kLsblkKeyFstype;
     DUStorageDevice *device =
         [[DUStorageDevice alloc]
             initWithIdentifier:[@"linux-disk-" stringByAppendingString:name]];
+    // A removable disk the kernel keeps with no medium (size 0) was
+    // ejected while still plugged in; its size would only read "0 B".
+    BOOL ejected = capacity == 0 && [self boolValue:row[kLsblkKeyRemovable]];
     device.displayName =
         [NSString stringWithFormat:@"%@ (%@)",
              model.length > 0 ? model
                               : NSLocalizedString(@"Storage Device", nil),
-             [DUParsing humanReadableSizeFromBytes:capacity]];
+             ejected ? NSLocalizedString(@"Ejected", nil)
+                     : [DUParsing humanReadableSizeFromBytes:capacity]];
     device.backendPath = row[kLsblkKeyPath] ?: device.devicePath;
     device.devicePath = row[kLsblkKeyPath];
     device.capacityBytes = capacity;
@@ -493,6 +522,7 @@ extern NSString * const kLsblkKeyFstype;
         device.removable ? @"USB" : nil;
     device.optical = NO;
     device.mediaPresent = NO;
+    device.mediumEjected = ejected;
     device.partitionScheme = [self partitionSchemeForDeviceRow:row];
 
     // SMART is a whole-disk attribute; query it during discovery so the
@@ -514,6 +544,9 @@ extern NSString * const kLsblkKeyFstype;
         self.fdiskInspectionByPath[row[kLsblkKeyPath]];
     NSString *scheme =
         [DUParsing trimmedString:inspection[kDUFdiskScheme]];
+    if (scheme.length == 0) {
+        scheme = [DUParsing trimmedString:row[kLsblkKeyPartTableType]];
+    }
     if (scheme.length == 0) {
         NSDictionary *entry = [self blkidEntryForPath:row[kLsblkKeyPath]];
         scheme = [DUParsing trimmedString:entry[@"pttype"]];
@@ -652,6 +685,14 @@ extern NSString * const kLsblkKeyFstype;
             [DUParsing trimmedString:row[kLsblkKeyFstype]];
         partition.partitionType =
             [self blkidEntryForPath:row[kLsblkKeyPath]][@"parttype"];
+        partition.tableTypeCode = [DUPartitionTypeNames
+            typeCodeFromLsblkPartType:row[kLsblkKeyPartType]];
+        partition.partitionUUID =
+            [DUParsing trimmedString:row[kLsblkKeyPartUUID]];
+        if (partition.name.length == 0) {
+            partition.name =
+                [DUParsing trimmedString:row[kLsblkKeyPartLabel]];
+        }
         partition.readOnly = device.readOnly;
 
         NSString *fstype = partition.filesystemType;
@@ -660,6 +701,9 @@ extern NSString * const kLsblkKeyFstype;
                 [[DUStorageVolume alloc]
                     initWithIdentifier:[@"linux-vol-" stringByAppendingString:
                                                  partName]];
+            // Mount, unmount and the superblock readout below act on the
+            // volume row's own node.
+            volume.backendPath = partition.backendPath;
             volume.filesystemType = fstype;
             if ([fstype isEqualToString:@"vfat"]) {
                 // lsblk calls all three FAT widths vfat; the boot sector
@@ -715,6 +759,11 @@ extern NSString * const kLsblkKeyFstype;
             NSDictionary *entry =
                 [self blkidEntryForPath:row[kLsblkKeyPath]];
             NSString *label = [DUParsing trimmedString:entry[@"label"]];
+            if (label.length == 0) {
+                // blkid run as an ordinary user cannot read the node;
+                // lsblk has the label from udev all the same.
+                label = [DUParsing trimmedString:row[kLsblkKeyLabel]];
+            }
             NSString *uuid = [DUParsing trimmedString:entry[@"uuid"]];
             NSString *display =
                 label.length > 0 ? label
@@ -732,7 +781,8 @@ extern NSString * const kLsblkKeyFstype;
                 [DULinuxToolCache haveTool:
                        [@"fsck." stringByAppendingString:fstype]];
             volume.capabilities.canRepair = volume.capabilities.canVerify;
-            volume.capabilities.canMount = !volume.mounted;
+            volume.capabilities.canMount = !volume.mounted &&
+                [DULinuxUserMount isMountableFilesystemType:fstype];
             volume.capabilities.canUnmount = volume.mounted;
             volume.capabilities.canErase =
                 [DULinuxToolCache haveTool:
@@ -795,6 +845,48 @@ extern NSString * const kLsblkKeyFstype;
     return @([nodeName substringFromIndex:location].integerValue);
 }
 
+// A disk the user plugs in is handled as a whole, like a stick in a
+// desktop file manager: Mount on the disk row mounts each volume that can
+// be, Unmount unmounts them all, and Eject on any of its rows unmounts
+// everything and then ejects the disk.
+- (void)applyRemovableDiskCapabilities:(DUStorageDevice *)device
+                              canEject:(BOOL)canEject
+{
+    device.ejectable = YES;
+    if (device.mediumEjected) {
+        // Ejected but still plugged in: the commands that need the medium
+        // stay available and start it again first (with the same tool that
+        // ejected it). Partitioning needs the disk's geometry, which an
+        // ejected disk does not report, and there is nothing to unmount or
+        // eject.
+        device.capabilities.canMount = canEject;
+        device.capabilities.canUnmount = NO;
+        device.capabilities.canEject = NO;
+        device.capabilities.canPartition = NO;
+        if (!canEject) {
+            device.capabilities = [DUStorageCapabilities capabilitiesWithAll:NO];
+        }
+        return;
+    }
+    BOOL anyMountable = NO;
+    BOOL anyMounted = NO;
+    for (DUStorageVolume *volume in
+             [DULinuxUserMount volumesOfObject:device]) {
+        anyMountable = anyMountable || volume.capabilities.canMount;
+        anyMounted = anyMounted || volume.mounted;
+    }
+    device.capabilities.canMount = anyMountable;
+    device.capabilities.canUnmount = anyMounted;
+    NSMutableArray<DUStorageObject *> *work =
+        [NSMutableArray arrayWithObject:device];
+    while (work.count > 0) {
+        DUStorageObject *row = work.lastObject;
+        [work removeLastObject];
+        row.capabilities.canEject = canEject;
+        [work addObjectsFromArray:row.children];
+    }
+}
+
 // Device/drive-level capabilities depend on which helper tools are present;
 // per-volume flags were already filled during tree construction.
 - (void)applyDerivedCapabilitiesToRoots:(NSArray<DUStorageObject *> *)roots
@@ -846,6 +938,9 @@ extern NSString * const kLsblkKeyFstype;
                 child.capabilities.canRepairPermissions = YES;
                 [queue addObject:child];
             }
+        }
+        if (!device.optical && !device.connectionIsInternal) {
+            [self applyRemovableDiskCapabilities:device canEject:canEject];
         }
     }
 }

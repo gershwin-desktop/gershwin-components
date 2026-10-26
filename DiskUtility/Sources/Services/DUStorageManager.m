@@ -127,6 +127,73 @@
     return nil;
 }
 
+- (BOOL)objectNeedsWake:(DUStorageObject *)object
+{
+    DUStorageObject *root = object;
+    while (root.parent != nil) {
+        root = root.parent;
+    }
+    return [root isKindOfClass:[DUStorageDevice class]] &&
+        ((DUStorageDevice *)root).mediumEjected;
+}
+
+- (DUStorageObject *)wakeObject:(DUStorageObject *)object
+                          error:(NSError **)error
+{
+    if (![self objectNeedsWake:object]) {
+        return object;
+    }
+    NSError *wakeError = nil;
+    if (![_backend respondsToSelector:@selector(startMediumOfObject:error:)]) {
+        wakeError = DUErrorMake(DUErrorUnsupportedOperation,
+                                NSLocalizedString(@"This disk was ejected. "
+                                                  @"Unplug it and plug it in "
+                                                  @"again.", nil));
+    } else if ([_backend startMediumOfObject:object error:&wakeError] &&
+               [self refreshWithError:&wakeError]) {
+        DUStorageObject *fresh = [self objectForIdentifier:object.identifier];
+        if (fresh != nil && ![self objectNeedsWake:fresh]) {
+            return fresh;
+        }
+        wakeError = DUErrorMake(DUErrorDeviceNotFound,
+                                NSLocalizedString(@"The disk did not come "
+                                                  @"back after it was "
+                                                  @"started.", nil));
+    }
+    if (error != NULL) {
+        *error = wakeError;
+    }
+    return nil;
+}
+
+- (void)wakeObject:(DUStorageObject *)object
+        completion:(void (^)(DUStorageObject *object, NSError *error))completion
+{
+    if (![self objectNeedsWake:object]) {
+        completion(object, nil);
+        return;
+    }
+    NSThread *worker = [[NSThread alloc] initWithBlock:^{
+        @autoreleasepool {
+            NSError *error = nil;
+            DUStorageObject *fresh = [self wakeObject:object error:&error];
+            void (^deliver)(void) = ^{
+                completion(fresh, error);
+            };
+            [self performSelectorOnMainThread:@selector(runBlock:)
+                                   withObject:deliver
+                                waitUntilDone:NO];
+        }
+    }];
+    worker.name = @"DU-Wake";
+    [worker start];
+}
+
+- (void)runBlock:(void (^)(void))block
+{
+    block();
+}
+
 - (DUStorageCapabilities *)capabilitiesForObject:(DUStorageObject *)object
 {
     // The model carries per-object capabilities; the platform-wide backend
