@@ -472,8 +472,7 @@ EXCLUDES="dev proc sys tmp mnt media efi run var/run var/tmp var/cache compat"
 
 # For non-image installations, also exclude /Local (it will be initialized with dscli init
 # because DirectoryServices requires specific permissions and ownership that are hard to preserve during copying)
-# NextBSD seeds its own Users.plist and Groups.plist, which dscli init does not
-# recreate there, so /Local is copied as is.
+# NextBSD sets up /Local itself at boot, so there it is copied as is.
 if [ "$IMAGE_MODE" = "0" ]; then
     if [ "$OS_NAME" != "NextBSD" ]; then
         EXCLUDES="$EXCLUDES Local"
@@ -577,9 +576,10 @@ fi
 
 # For non-image installations, initialize /Local with dscli init in chroot
 # This creates the default user "admin" with password "admin" and sets up DirectoryServices properly
-if [ "$IMAGE_MODE" = "0" ]; then
+# NextBSD does all of this itself at boot.
+if [ "$IMAGE_MODE" = "0" ] && [ "$OS_NAME" != "NextBSD" ]; then
     report_progress "Finalizing" 84 "Initializing system with dscli init..."
-    if [ -d "$MNT/Local" ] && [ "$OS_NAME" != "NextBSD" ]; then
+    if [ -d "$MNT/Local" ]; then
         echo "Wiping existing /Local in chroot before dscli init..."
         rm -rf "$MNT/Local"
     fi
