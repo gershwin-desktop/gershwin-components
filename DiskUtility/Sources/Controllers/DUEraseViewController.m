@@ -39,7 +39,14 @@ static NSString * const kDefaultsConfirmDestructive =
 @property (nonatomic, strong) NSButton *eraseButton;
 
 @property (nonatomic, weak) DUStorageObject *currentObject;
-@property (nonatomic, assign) NSString *selectedSecurityMethod;
+// Every rescan replaces the model objects, so the weak reference above goes
+// nil while the user still looks at the same disk; the identifier tells a
+// refresh of that disk apart from a selection of another one.
+@property (nonatomic, copy) NSString *currentIdentifier;
+// The name this pane filled in itself; anything else in the field was typed
+// by the user and must survive a refresh.
+@property (nonatomic, copy) NSString *prefilledName;
+@property (nonatomic, copy) NSString *selectedSecurityMethod;
 @property (nonatomic, assign) BOOL operationRunning;
 @property (nonatomic, strong) NSArray<NSButton *> *pendingSecurityRadios;
 @end
@@ -146,7 +153,9 @@ static NSString * const kDefaultsConfirmDestructive =
 - (void)operationDidUpdate:(NSNotification *)note
 {
     DUStorageObject *target = note.userInfo[kDUUserInfoObjectKey];
-    if (target != nil && target == self.currentObject) {
+    // By identifier: a rescan during the erase replaces the instance.
+    if (target != nil &&
+        [target.identifier isEqualToString:self.currentIdentifier]) {
         NSString *message = [note.userInfo[kDUUserInfoOperationKey] message];
         [self.logView appendLine:message ?: @""];
     }
@@ -155,7 +164,9 @@ static NSString * const kDefaultsConfirmDestructive =
 - (void)operationDidFinish:(NSNotification *)note
 {
     DUStorageObject *target = note.userInfo[kDUUserInfoObjectKey];
-    if (target != nil && target == self.currentObject) {
+    // By identifier: a rescan during the erase replaces the instance.
+    if (target != nil &&
+        [target.identifier isEqualToString:self.currentIdentifier]) {
         [self operationFinished:note.userInfo[kDUUserInfoErrorKey]];
     }
 }
@@ -216,7 +227,15 @@ static NSString * const kDefaultsConfirmDestructive =
 - (void)refreshForObject:(DUStorageObject *)object
             capabilities:(DUStorageCapabilities *)capabilities
 {
+    BOOL sameObject = object != nil &&
+        [object.identifier isEqualToString:self.currentIdentifier];
+    NSString *chosenFormat =
+        sameObject ? _formatPopup.selectedItem.representedObject : nil;
+    BOOL nameEdited = sameObject &&
+        ![_nameField.stringValue isEqualToString:self.prefilledName ?: @""];
+
     self.currentObject = object;
+    self.currentIdentifier = object.identifier;
 
     [_formatPopup removeAllItems];
     if (object != nil) {
@@ -239,13 +258,24 @@ static NSString * const kDefaultsConfirmDestructive =
                 firstEnabled = (NSInteger)_formatPopup.itemArray.count - 1;
             }
         }
-        if (firstEnabled >= 0) {
+        // The default applies only when the user's choice is gone, e.g.
+        // because the tool for that filesystem disappeared.
+        NSInteger chosen = chosenFormat != nil
+            ? [_formatPopup indexOfItemWithRepresentedObject:chosenFormat]
+            : -1;
+        if (chosen >= 0 && [[_formatPopup itemAtIndex:chosen] isEnabled]) {
+            [_formatPopup selectItemAtIndex:chosen];
+        } else if (firstEnabled >= 0) {
             [_formatPopup selectItemAtIndex:firstEnabled];
         }
 
         // Prefill with the current display name; users usually keep it.
-        _nameField.stringValue = object.displayName ?: @"";
+        if (!nameEdited) {
+            self.prefilledName = object.displayName ?: @"";
+            _nameField.stringValue = self.prefilledName;
+        }
     } else {
+        self.prefilledName = @"";
         _nameField.stringValue = @"";
     }
 

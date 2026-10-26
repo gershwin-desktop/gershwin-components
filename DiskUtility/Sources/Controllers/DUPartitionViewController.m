@@ -63,6 +63,10 @@ static NSString *const kDefaultsConfirmDestructive =
 @property (nonatomic, strong) NSButton *applyButton;
 
 @property (nonatomic, weak) DUStorageDevice *device;
+// A rescan replaces the model objects and the weak device above goes nil
+// with the old snapshot; the identifier still tells a refresh of the shown
+// disk apart from the selection of another one.
+@property (nonatomic, copy) NSString *deviceIdentifier;
 @property (nonatomic, strong) DUPartitionLayout *layout;
 
 // Baseline snapshot taken at refresh time. The layout cannot restore its
@@ -375,12 +379,17 @@ static NSString *const kDefaultsConfirmDestructive =
     DUStorageDevice *device = (object != nil &&
         object.type == DUStorageObjectTypeDevice)
         ? (DUStorageDevice *)object : nil;
-    if (_layout != nil && _layout.hasPendingChanges && device != nil &&
-            _device != nil &&
-            [device.identifier isEqualToString:_device.identifier]) {
+    BOOL sameDevice = device != nil &&
+        [device.identifier isEqualToString:_deviceIdentifier];
+    if (_layout != nil && _layout.hasPendingChanges && sameDevice) {
         _device = device;
         return;
     }
+    // The partition the user was looking at stays chosen across a refresh
+    // of the same disk; syncAllViews falls back to the first one if it is
+    // gone.
+    NSInteger keptIndex = sameDevice ? _selectedIndex : -1;
+    _deviceIdentifier = [device.identifier copy];
 
     if (device != nil && device.capacityBytes > 0) {
         _device = device;
@@ -417,7 +426,7 @@ static NSString *const kDefaultsConfirmDestructive =
         _committedPartitions = @[];
     }
 
-    _selectedIndex = -1;
+    _selectedIndex = keptIndex;
     [self syncAllViews];
 }
 
