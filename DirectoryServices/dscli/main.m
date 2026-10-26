@@ -1136,8 +1136,11 @@ static int cmdInit(void) {
         printf("Created: /Volumes (sticky bit)\n");
     }
 
-    // Create empty plists if they don't exist
-    if (![fm fileExistsAtPath:DS_LOCAL_USERS_PLIST]) {
+    // Create empty plists if they don't exist. NextBSD seeds its own
+    // Users.plist and Groups.plist; leave them to it.
+    if (isNextBSD()) {
+        printf("Users.plist, Groups.plist: managed by NextBSD; not created\n");
+    } else if (![fm fileExistsAtPath:DS_LOCAL_USERS_PLIST]) {
         // Create with default admin user (UID 5000, no password required)
         NSDictionary *users = @{
             @"admin": @{
@@ -1169,7 +1172,7 @@ static int cmdInit(void) {
         }
     }
 
-    if (![fm fileExistsAtPath:DS_LOCAL_GROUPS_PLIST]) {
+    if (!isNextBSD() && ![fm fileExistsAtPath:DS_LOCAL_GROUPS_PLIST]) {
         // Create with admin group (GID 5000) including admin user as member
         NSDictionary *groups = @{
             @"admin": @{
