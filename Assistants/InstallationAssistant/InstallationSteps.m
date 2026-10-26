@@ -25,10 +25,34 @@
 // other system has. It installs with its own engine (nextbsd-userland
 // nextbsd-installer) instead of installer-FreeBSD.sh.
 #define IA_NEXTBSD_INSTALL_ENGINE @"/usr/libexec/nextbsd-installer/do-install.sh"
+#define IA_NEXTBSD_PROBE_DISKS    @"/usr/libexec/nextbsd-installer/probe-disks.sh"
 
 static BOOL IAIsNextBSD(void)
 {
     return access("/bin/nextbsd-version", F_OK) == 0;
+}
+
+// ============================================================================
+// Helper: Convert NextBSD probe-disks.sh output to the --list-disks JSON
+// ============================================================================
+// probe-disks.sh prints DISK<TAB>dev<TAB>size<TAB>model<TAB>is_media lines.
+// The booted medium (is_media 1) is left out so it cannot be picked as target.
+static NSData *IANextBSDDisksJSON(NSString *probeOutput)
+{
+    NSMutableArray *disks = [NSMutableArray array];
+    for (NSString *line in [probeOutput componentsSeparatedByString:@"\n"]) {
+        NSArray *f = [line componentsSeparatedByString:@"\t"];
+        if ([f count] < 5 || ![f[0] isEqualToString:@"DISK"]) continue;
+        if ([f[4] isEqualToString:@"1"]) continue;
+        [disks addObject:@{
+            @"devicePath": [@"/dev/" stringByAppendingString:f[1]],
+            @"name": f[1],
+            @"description": f[3],
+            @"sizeBytes": @0,
+            @"formattedSize": f[2]
+        }];
+    }
+    return [NSJSONSerialization dataWithJSONObject:disks options:0 error:NULL];
 }
 
 // ============================================================================
@@ -663,11 +687,12 @@ NSString *IACheckImageSourceAvailable(void)
     [_spinner startAnimation:nil];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *scriptPath = IAInstallerScriptPath();
+        BOOL nextBSD = IAIsNextBSD();
+        NSString *scriptPath = nextBSD ? IA_NEXTBSD_PROBE_DISKS : IAInstallerScriptPath();
         NSDebugLLog(@"gwcomp", @"IADiskSelectionStep: using script %@", scriptPath);
         NSTask *task = [[NSTask alloc] init];
         [task setLaunchPath:scriptPath];
-        [task setArguments:@[@"--list-disks", @"--debug"]];
+        [task setArguments:nextBSD ? @[] : @[@"--list-disks", @"--debug"]];
 
         NSPipe *outPipe = [NSPipe pipe];
         NSPipe *errPipe = [NSPipe pipe];
@@ -690,6 +715,9 @@ NSString *IACheckImageSourceAvailable(void)
 
         NSString *outStr = outData ? [[[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] autorelease] : @"";
         NSString *errStr = errData ? [[[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding] autorelease] : @"";
+        if (nextBSD && outStr) {
+            outData = IANextBSDDisksJSON(outStr);
+        }
 
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
         [result setObject:(outStr ?: @"") forKey:@"stdout"];
