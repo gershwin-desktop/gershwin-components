@@ -17,6 +17,7 @@
 #import "DUExt2Library.h"
 #import "DUOpticalMedia.h"
 #import "DUErrors.h"
+#import "DUFATFormat.h"
 #import "DULinuxDeviceDiscovery.h"
 #import "DULinuxFilesystemTool.h"
 #import "DULinuxImageTool.h"
@@ -176,6 +177,19 @@
     (void)object; // the Linux tool set is host-wide, not per-object
     NSMutableArray<NSDictionary *> *formats = [NSMutableArray array];
     for (NSString *type in [DULinuxFilesystemTool formattableFilesystemTypes]) {
+        if ([DUFATFormat isFATIdentifier:type]) {
+            // The size bounds travel with the descriptor; the pane applies
+            // them to whatever it is about to format.
+            for (NSDictionary *descriptor in [DUFATFormat
+                     formatDescriptorsToolAvailable:
+                         [DULinuxFilesystemTool canFormatFilesystemType:type]]) {
+                if ([descriptor[kDUFormatIdentifierKey]
+                        isEqualToString:type]) {
+                    [formats addObject:descriptor];
+                }
+            }
+            continue;
+        }
         [formats addObject:@{
             kDUFormatIdentifierKey : type,
             kDUFormatDisplayNameKey :
@@ -448,7 +462,8 @@
     dispatch_worker(^{
         [DULinuxFilesystemTool setCancelCheck:options[@"duCancelCheck"]];
         NSString *devicePath = object.backendPath;
-        NSString *fstype = options[kDUFormatIdentifierKey];
+        NSString *fstype =
+            [DUFATFormat canonicalIdentifier:options[kDUFormatIdentifierKey]];
         NSString *name = options[@"name"];
         NSString *method = options[kDUEraseSecurityMethodKey];
 
@@ -465,6 +480,14 @@
             sizeBytes = ((DUPartition *)object).sizeBytes;
         } else if ([object isKindOfClass:[DUStorageVolume class]]) {
             sizeBytes = ((DUStorageVolume *)object).capacityBytes;
+        }
+
+        // Refuse before anything is unmounted or wiped.
+        NSString *sizeProblem =
+            [DUFATFormat sizeProblemForIdentifier:fstype bytes:sizeBytes];
+        if (sizeProblem != nil) {
+            completion(DUErrorMake(DUErrorInvalidArgument, sizeProblem));
+            return;
         }
 
         NSError *result =
@@ -549,7 +572,12 @@
 {
     dispatch_worker(^{
         [DULinuxFilesystemTool setCancelCheck:plan.cancelCheck];
-        NSError *result = [DULinuxFilesystemTool
+        NSError *result = [plan formatSizeError];
+        if (result != nil) {
+            completion(result);
+            return;
+        }
+        result = [DULinuxFilesystemTool
             unmountAllMountsOfDevicePath:device.backendPath];
         if (result != nil) {
             completion(result);

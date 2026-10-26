@@ -6,6 +6,7 @@
 
 #import "DUPartitionPlan.h"
 
+#import "DUFATFormat.h"
 #import "DUPartition.h"
 #import "DUPartitionLayout.h"
 #import "DUErrors.h"
@@ -39,9 +40,9 @@
         }
         return nil;
     }
-    NSString *scheme =
-        [filesystemType isEqualToString:@"vfat"] ||
-        [filesystemType isEqualToString:@"fat32"] ? @"mbr" : @"gpt";
+    // FAT volumes are made for removable media that expects an MBR.
+    NSString *scheme = [DUFATFormat isFATIdentifier:filesystemType]
+        ? @"mbr" : @"gpt";
     DUPartitionLayout *layout =
         [[DUPartitionLayout alloc] initWithCapacity:capacity scheme:scheme];
     if (![layout addPartitionWithSize:capacity - kMargin
@@ -50,7 +51,16 @@
         return nil;
     }
     [layout setFormat:filesystemType forPartition:layout.partitions[0]];
-    return [self planFromLayout:layout forDevice:disk destructive:YES];
+    DUPartitionPlan *plan =
+        [self planFromLayout:layout forDevice:disk destructive:YES];
+    NSError *sizeError = [plan formatSizeError];
+    if (sizeError != nil) {
+        if (error != NULL) {
+            *error = sizeError;
+        }
+        return nil;
+    }
+    return plan;
 }
 
 + (instancetype)planFromLayout:(DUPartitionLayout *)layout
@@ -103,6 +113,19 @@
 - (BOOL)requiresPrivilege
 {
     return YES;
+}
+
+- (NSError *)formatSizeError
+{
+    for (DUPartition *entry in _entries) {
+        NSString *problem =
+            [DUFATFormat sizeProblemForIdentifier:entry.filesystemType
+                                            bytes:entry.sizeBytes];
+        if (problem != nil) {
+            return DUErrorMake(DUErrorInvalidArgument, problem);
+        }
+    }
+    return nil;
 }
 
 @end

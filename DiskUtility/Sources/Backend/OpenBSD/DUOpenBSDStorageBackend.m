@@ -15,6 +15,7 @@
 #import <unistd.h>
 
 #import "DUErrors.h"
+#import "DUFATFormat.h"
 #import "DUAuthorizationManager.h"
 #import "DUOpenBSDDeviceDiscovery.h"
 #import "DUOpenBSDDisklabelParser.h"
@@ -169,12 +170,8 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
             [DUPartitionTableParser filesystemDisplayName:@"ufs"],
         kDUFormatCanFormatKey : @(ufsPossible),
     }];
-    [formats addObject:@{
-        kDUFormatIdentifierKey : @"vfat",
-        kDUFormatDisplayNameKey :
-            [DUPartitionTableParser filesystemDisplayName:@"vfat"],
-        kDUFormatCanFormatKey : @(fatPossible),
-    }];
+    [formats addObjectsFromArray:
+        [DUFATFormat formatDescriptorsToolAvailable:fatPossible]];
     // Swap partitions are marked in the label, not formatted by a tool, so
     // the entry exists for planning but honestly reports cannot-format.
     [formats addObject:@{
@@ -847,9 +844,16 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
                              node:(NSString *)node
                             label:(NSString *)label
                        takesLabel:(BOOL)takesLabel
+                       identifier:(NSString *)identifier
 {
     NSMutableArray<NSString *> *arguments = [NSMutableArray array];
-    if (label.length > 0 && takesLabel) {
+    if ([DUFATFormat isFATIdentifier:identifier]) {
+        // newfs_msdos always takes the label and needs the FAT type spelled
+        // out, or it picks one from the size.
+        [arguments addObjectsFromArray:
+            [DUFATFormat newfsMsdosArgumentsForIdentifier:identifier
+                                                    label:label]];
+    } else if (label.length > 0 && takesLabel) {
         [arguments addObjectsFromArray:@[ @"-L", label ]];
     }
     [arguments addObject:node];
@@ -907,6 +911,15 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
                                    @"installed.",
                                    nil),
              formatter]);
+    }
+
+    if (gate == nil) {
+        NSString *sizeProblem = [DUFATFormat
+            sizeProblemForIdentifier:formatIdentifier
+                               bytes:[self sizeOfObject:object]];
+        if (sizeProblem != nil) {
+            gate = DUErrorMake(DUErrorInvalidArgument, sizeProblem);
+        }
     }
 
     NSString *securityMethod =
@@ -1071,7 +1084,8 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
         DUProcessResult *created = [self runFormatter:formatterPath
                                                  node:rawNode
                                                 label:label
-                                            takesLabel:ufsTakesLabel];
+                                            takesLabel:ufsTakesLabel
+                                            identifier:formatIdentifier];
         if (![self runSucceeded:created]) {
             if (completion != NULL) {
                 completion([self
@@ -1427,7 +1441,8 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
                     node:partitionNode
                    label:[self sanitizedLabel:entries[i].name ?: @""
                                         limit:labelLimit]
-              takesLabel:takesLabel];
+              takesLabel:takesLabel
+              identifier:entries[i].filesystemType];
         if (![self runSucceeded:formatted]) {
             return [self
                     toolFailure:DUErrorPartitionError
@@ -1471,6 +1486,9 @@ static const NSTimeInterval kToolTimeoutSeconds = 300.0;
                                    @"be applied.",
                                    nil),
              plan.scheme ?: @""]);
+    }
+    if (gate == nil) {
+        gate = [plan formatSizeError];
     }
     if (gate != nil) {
         if (completion != NULL) {

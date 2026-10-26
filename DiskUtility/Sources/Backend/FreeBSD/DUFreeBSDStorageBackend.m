@@ -14,6 +14,7 @@
 
 #import "DUBackendCapabilities.h"
 #import "DUErrors.h"
+#import "DUFATFormat.h"
 #import "DUFreeBSDDeviceDiscovery.h"
 #import "DUFreeBSDGEOMAdapter.h"
 #import "DUDiskImage.h"
@@ -238,12 +239,8 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
             [DUPartitionTableParser filesystemDisplayName:@"ufs"],
         kDUFormatCanFormatKey : @(ufsPossible),
     }];
-    [formats addObject:@{
-        kDUFormatIdentifierKey : @"fat32",
-        kDUFormatDisplayNameKey :
-            [DUPartitionTableParser filesystemDisplayName:@"vfat"],
-        kDUFormatCanFormatKey : @(fatPossible),
-    }];
+    [formats addObjectsFromArray:
+        [DUFATFormat formatDescriptorsToolAvailable:fatPossible]];
     // Swap partitions are marked in the table, not formatted by a tool, so
     // the entry exists for planning but honestly reports cannot-format.
     [formats addObject:@{
@@ -1189,9 +1186,15 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
 - (DUProcessResult *)runFormatter:(NSString *)formatterPath
                              node:(NSString *)node
                             label:(NSString *)label
+                       identifier:(NSString *)identifier
 {
     NSMutableArray<NSString *> *arguments = [NSMutableArray array];
-    if (label.length > 0) {
+    if ([DUFATFormat isFATIdentifier:identifier]) {
+        // Without -F newfs_msdos picks the FAT type from the size.
+        [arguments addObjectsFromArray:
+            [DUFATFormat newfsMsdosArgumentsForIdentifier:identifier
+                                                    label:label]];
+    } else if (label.length > 0) {
         [arguments addObjectsFromArray:@[ @"-L", label ]];
     }
     [arguments addObject:node];
@@ -1244,6 +1247,15 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
                  NSLocalizedString(@"The %@ formatting tool is not "
                                    @"installed.", nil),
              formatter]);
+    }
+
+    if (gate == nil) {
+        NSString *sizeProblem = [DUFATFormat
+            sizeProblemForIdentifier:formatIdentifier
+                               bytes:[self sizeOfObject:object]];
+        if (sizeProblem != nil) {
+            gate = DUErrorMake(DUErrorInvalidArgument, sizeProblem);
+        }
     }
 
     NSString *securityMethod =
@@ -1443,7 +1455,8 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
         }
         DUProcessResult *created = [self runFormatter:formatterPath
                                                  node:node
-                                                label:label];
+                                                label:label
+                                           identifier:formatIdentifier];
         if (![self runSucceeded:created]) {
             if (completion != NULL) {
                 completion([self toolFailure:DUErrorEraseFailed
@@ -1766,7 +1779,8 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
             runFormatter:formatterPath
                     node:newNodes[i]
                    label:[self sanitizedLabel:entry.name ?: @""
-                                        limit:labelLimit]];
+                                        limit:labelLimit]
+              identifier:entry.filesystemType];
         if (![self runSucceeded:formatted]) {
             return [self toolFailure:DUErrorPartitionError
                                      message:NSLocalizedString(
@@ -1790,6 +1804,13 @@ static BOOL IsNodeOnDisk(NSString *nodeName, NSString *diskName)
                progress:(void (^)(double progress, NSString *message))progress
              completion:(void (^)(NSError *error))completion
 {
+    NSError *sizeError = [plan formatSizeError];
+    if (sizeError != nil) {
+        if (completion != NULL) {
+            completion(sizeError);
+        }
+        return;
+    }
     [self spawnWork:^{
         NSError *error =
             [self writePartitionPlan:plan toDevice:device progress:progress];

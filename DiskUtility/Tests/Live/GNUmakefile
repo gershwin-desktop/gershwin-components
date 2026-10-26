@@ -16,6 +16,7 @@ t_LiveBackend_OBJC_FILES = \
     ../TestLiveBackend.m \
     $(SOURCES)/Backend/DUBackendFactory.m \
     $(SOURCES)/Backend/DUStorageBackend.m \
+    $(SOURCES)/Backend/DUFATFormat.m \
     $(SOURCES)/Backend/DUMockStorageBackend.m \
     $(SOURCES)/Backend/Libraries/DUArchiveLibrary.m \
     $(SOURCES)/Backend/Libraries/DUBlkidLibrary.m \

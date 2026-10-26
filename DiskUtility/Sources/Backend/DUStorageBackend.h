@@ -30,6 +30,11 @@ extern NSString *const kDUOperationToggleJournaling;
 extern NSString *const kDUFormatIdentifierKey;    // e.g. "ext4"
 extern NSString *const kDUFormatDisplayNameKey;   // e.g. "Extended filesystem"
 extern NSString *const kDUFormatCanFormatKey;     // NSNumber bool
+// Optional target size bounds in bytes (NSNumber). The backend does not know
+// the size of every target a pane will use the descriptor for (a partition
+// of a device), so the pane applies these to the size it is formatting.
+extern NSString *const kDUFormatMinBytesKey;
+extern NSString *const kDUFormatMaxBytesKey;
 
 // Security-option values for eraseObject:options:. The options dictionary
 // carries the chosen method under kDUEraseSecurityMethodKey; when absent

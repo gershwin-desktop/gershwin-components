@@ -43,7 +43,7 @@ int main(void)
 
         // supportedFormats
         NSArray *formats = [backend supportedFormatsForObject:sysVol];
-        PASS(formats.count == 7, "7 formats offered");
+        PASS(formats.count == 8, "8 formats offered (FAT32 and FAT16 in place of vfat)");
         PASS([[formats.firstObject objectForKey:kDUFormatIdentifierKey] isEqualToString:@"ext4"],
              "format identifier key");
 

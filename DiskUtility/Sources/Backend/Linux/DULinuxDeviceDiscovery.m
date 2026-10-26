@@ -6,6 +6,7 @@
 
 #if defined(__linux__)
 
+#import "DUFATFormat.h"
 #import "DULinuxDeviceDiscovery.h"
 
 #import <sys/statvfs.h>
@@ -660,6 +661,15 @@ extern NSString * const kLsblkKeyFstype;
                     initWithIdentifier:[@"linux-vol-" stringByAppendingString:
                                                  partName]];
             volume.filesystemType = fstype;
+            if ([fstype isEqualToString:@"vfat"]) {
+                // lsblk calls all three FAT widths vfat; the boot sector
+                // knows. An unreadable device just stays "vfat".
+                NSFileHandle *reader = [NSFileHandle
+                    fileHandleForReadingAtPath:row[kLsblkKeyPath]];
+                volume.filesystemVariant = [DUFATFormat
+                    variantFromBootSector:[reader readDataOfLength:512]];
+                [reader closeFile];
+            }
             volume.capacityBytes = partSize;
             NSString *mountPoint = [self mountPointForRow:row];
             if (mountPoint.length > 0) {
@@ -709,7 +719,8 @@ extern NSString * const kLsblkKeyFstype;
             NSString *display =
                 label.length > 0 ? label
                                  : [DUPartitionTableParser
-                                       filesystemDisplayName:fstype];
+                                       filesystemDisplayName:
+                                           volume.filesystemVariant ?: fstype];
             volume.displayName =
                 [NSString stringWithFormat:@"%@ (%@)",
                      display,

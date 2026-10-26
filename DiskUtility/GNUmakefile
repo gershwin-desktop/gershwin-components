@@ -123,6 +123,7 @@ DiskUtility_OBJC_FILES = \
 	Sources/Utilities/DUSHA256.m \
 	Sources/Utilities/DURepairPermissionsTool.m \
 	Sources/Backend/DUStorageBackend.m \
+	Sources/Backend/DUFATFormat.m \
 	Sources/Backend/DUMockStorageBackend.m \
 	Sources/Backend/DUBackendFactory.m \
 	Sources/Backend/Libraries/DUBlkidLibrary.m \

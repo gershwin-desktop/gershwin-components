@@ -14,6 +14,7 @@
 #import <unistd.h>
 
 #import "DUErrors.h"
+#import "DUFATFormat.h"
 #import "DUParsing.h"
 #import "DUProcessRunner.h"
 #import "DUAuthorizationManager.h"
@@ -297,8 +298,8 @@ static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
 
 + (NSArray<NSString *> *)formattableFilesystemTypes
 {
-    return @[ @"ext2", @"ext3", @"ext4", @"vfat", @"exfat", @"ntfs",
-              @"xfs", @"f2fs", @"swap" ];
+    return @[ @"ext2", @"ext3", @"ext4", @"fat32", @"fat16", @"exfat",
+              @"ntfs", @"xfs", @"f2fs", @"swap" ];
 }
 
 // The -F/-f/-I/-Q flags keep mkfs non-interactive: our process runner never
@@ -306,11 +307,14 @@ static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
 + (NSArray<NSString *> *)formatArgumentsForFilesystemType:(NSString *)fstype
                                                     label:(NSString *)label
 {
+    if ([DUFATFormat isFATIdentifier:fstype]) {
+        return [DUFATFormat linuxMkfsArgumentsForIdentifier:fstype
+                                                      label:label];
+    }
     NSDictionary<NSString *, NSArray<NSString *> *> *table =
         @{ @"ext2" : @[ @"mkfs.ext2", @"-F" ],
            @"ext3" : @[ @"mkfs.ext3", @"-F" ],
            @"ext4" : @[ @"mkfs.ext4", @"-F" ],
-           @"vfat" : @[ @"mkfs.vfat", @"-I" ],
            @"exfat" : @[ @"mkfs.exfat" ],
            @"ntfs" : @[ @"mkfs.ntfs", @"-Q" ],
            @"xfs" : @[ @"mkfs.xfs", @"-f" ],
@@ -326,7 +330,6 @@ static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
         @{ @"ext2" : @"-L",
            @"ext3" : @"-L",
            @"ext4" : @"-L",
-           @"vfat" : @"-n",
            @"exfat" : @"-n",
            @"ntfs" : @"--label",
            @"xfs" : @"-L",
@@ -335,14 +338,11 @@ static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
     // mkfs.vfat and friends refuse an over-long label outright instead of
     // truncating, so the default volume name of a stick would fail the erase.
     NSDictionary<NSString *, NSNumber *> *limitTable =
-        @{ @"ext2" : @16, @"ext3" : @16, @"ext4" : @16, @"vfat" : @11,
+        @{ @"ext2" : @16, @"ext3" : @16, @"ext4" : @16,
            @"exfat" : @11, @"ntfs" : @128, @"xfs" : @12, @"f2fs" : @512,
            @"swap" : @15 };
     NSString *fitted = label;
     NSUInteger limit = limitTable[fstype].unsignedIntegerValue;
-    if ([fstype isEqualToString:@"vfat"]) {
-        fitted = [fitted uppercaseString];
-    }
     if (limit > 0 && fitted.length > limit) {
         fitted = [fitted substringToIndex:limit];
     }
@@ -359,9 +359,17 @@ static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
         [DUProcessRunner executablePathForName:prefix.firstObject] != nil;
 }
 
+// The FAT32/FAT16 format identifiers are both checked by the one vfat checker.
++ (NSString *)checkerKeyForFilesystemType:(NSString *)fstype
+{
+    return [fstype isEqualToString:@"fat32"] ||
+        [fstype isEqualToString:@"fat16"] ? @"vfat" : fstype;
+}
+
 + (NSString *)checkToolNameForFilesystemType:(NSString *)fstype
 {
     // Swap has no checker; iso9660/udf media is verified by reading it.
+    fstype = [self checkerKeyForFilesystemType:fstype];
     NSDictionary<NSString *, NSString *> *table =
         @{ @"ext2" : @"fsck.ext2",
            @"ext3" : @"fsck.ext3",
@@ -377,6 +385,7 @@ static NSString *const kCancelCheckKey = @"DULinuxCancelCheck";
 
 + (NSArray<NSString *> *)checkToolAliasesForFilesystemType:(NSString *)fstype
 {
+    fstype = [self checkerKeyForFilesystemType:fstype];
     // vfat checkers ship under both names depending on the distribution.
     NSDictionary<NSString *, NSArray<NSString *> *> *aliases =
         @{ @"vfat" : @[ @"fsck.vfat", @"fsck.fat" ],

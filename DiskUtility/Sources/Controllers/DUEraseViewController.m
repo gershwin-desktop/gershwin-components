@@ -21,6 +21,9 @@
 #import "DUStorageManager.h"
 #import "DUStorageObject.h"
 #import "DUNotifications.h"
+#import "DUFATFormat.h"
+#import "DUPartition.h"
+#import "DUStorageVolume.h"
 #import "DUStorageDevice.h"
 
 static NSString * const kDefaultsConfirmDestructive =
@@ -246,13 +249,24 @@ static NSString * const kDefaultsConfirmDestructive =
         // auto-enable them.
         _formatPopup.menu.autoenablesItems = NO;
         NSInteger firstEnabled = -1;
+        unsigned long long targetBytes = 0;
+        if ([object isKindOfClass:[DUStorageDevice class]]) {
+            targetBytes = ((DUStorageDevice *)object).capacityBytes;
+        } else if ([object isKindOfClass:[DUPartition class]]) {
+            targetBytes = ((DUPartition *)object).sizeBytes;
+        } else if ([object isKindOfClass:[DUStorageVolume class]]) {
+            targetBytes = ((DUStorageVolume *)object).capacityBytes;
+        }
         for (NSDictionary *format in formats) {
             NSMenuItem *item = [[NSMenuItem alloc]
                 initWithTitle:format[kDUFormatDisplayNameKey]
                        action:nil
                 keyEquivalent:@""];
             item.representedObject = format[kDUFormatIdentifierKey];
-            item.enabled = [format[kDUFormatCanFormatKey] boolValue];
+            // FAT16 is greyed out for a target it cannot hold, like a
+            // filesystem whose tool is missing.
+            item.enabled = [format[kDUFormatCanFormatKey] boolValue] &&
+                [DUFATFormat descriptor:format allowsBytes:targetBytes];
             [_formatPopup.menu addItem:item];
             if ([item isEnabled] && firstEnabled < 0) {
                 firstEnabled = (NSInteger)_formatPopup.itemArray.count - 1;
@@ -260,6 +274,8 @@ static NSString * const kDefaultsConfirmDestructive =
         }
         // The default applies only when the user's choice is gone, e.g.
         // because the tool for that filesystem disappeared.
+        // A choice made as "vfat" before FAT32 and FAT16 were told apart.
+        chosenFormat = [DUFATFormat canonicalIdentifier:chosenFormat];
         NSInteger chosen = chosenFormat != nil
             ? [_formatPopup indexOfItemWithRepresentedObject:chosenFormat]
             : -1;

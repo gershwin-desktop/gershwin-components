@@ -24,6 +24,7 @@
 #import "DUPartitionTableParser.h"
 #import "DUStorageBackend.h"
 #import "DUStorageCapabilities.h"
+#import "DUFATFormat.h"
 #import "DUStorageDevice.h"
 #import "DUStorageManager.h"
 #import "DUStorageObject.h"
@@ -557,8 +558,6 @@ static NSString *const kDefaultsConfirmDestructive =
         ? selected.name
         : (selected.displayName ?: @"");
 
-    [self rebuildFormatPopupForFilesystem:selected.filesystemType];
-
     unsigned long long shownSize = selected.sizeBytes;
     if (_mapView.layout != nil && _mapView.selectedPartitionIndex ==
             _selectedIndex) {
@@ -572,12 +571,17 @@ static NSString *const kDefaultsConfirmDestructive =
     }
     _sizeValue.stringValue =
         [DUParsing humanReadableSizeFromBytes:shownSize];
+    [self rebuildFormatPopupForFilesystem:selected.filesystemType
+                                sizeBytes:shownSize];
 }
 
 // Format choices come from the backend for the whole device; the matching
 // entry is preselected for the chosen filesystem (SPEC section 17).
 - (void)rebuildFormatPopupForFilesystem:(NSString *)filesystemType
+                             sizeBytes:(unsigned long long)sizeBytes
 {
+    // A partition read from disk says "vfat"; the popup offers FAT32.
+    filesystemType = [DUFATFormat canonicalIdentifier:filesystemType];
     [_formatPopup removeAllItems];
     if (_device == nil) {
         return;
@@ -595,7 +599,10 @@ static NSString *const kDefaultsConfirmDestructive =
                    action:nil
             keyEquivalent:@""];
         item.representedObject = format[kDUFormatIdentifierKey];
-        item.enabled = [format[kDUFormatCanFormatKey] boolValue];
+        // The bounds apply to this partition, not to the whole device the
+        // backend described the formats for.
+        item.enabled = [format[kDUFormatCanFormatKey] boolValue] &&
+            [DUFATFormat descriptor:format allowsBytes:sizeBytes];
         [_formatPopup.menu addItem:item];
         NSInteger position = (NSInteger)_formatPopup.itemArray.count - 1;
         if ([item isEnabled] && firstEnabled < 0) {

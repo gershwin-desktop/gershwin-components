@@ -164,7 +164,10 @@ static NSString * const kUnknownValue = @"-";
             ]];
             [rows addObject:@[
                 NSLocalizedString(@"Filesystem:", nil),
-                volume.filesystemType ?: kUnknownValue
+                volume.filesystemVariant != nil
+                    ? [DUPartitionTableParser
+                          filesystemDisplayName:volume.filesystemVariant]
+                    : volume.filesystemType ?: kUnknownValue
             ]];
             [rows addObject:@[
                 NSLocalizedString(@"Ownership:", nil),

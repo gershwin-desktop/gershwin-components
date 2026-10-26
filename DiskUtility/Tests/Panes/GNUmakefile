@@ -22,6 +22,7 @@ PANE_SOURCES = \
     $(SOURCES)/Views/DUPaneView.m \
     $(SOURCES)/Backend/DUBackendFactory.m \
     $(SOURCES)/Backend/DUStorageBackend.m \
+    $(SOURCES)/Backend/DUFATFormat.m \
     $(SOURCES)/Backend/DUMockStorageBackend.m \
     $(SOURCES)/Backend/Parsers/DUFreeBSDGEOMParser.m \
     $(SOURCES)/Backend/Parsers/DUNetBKSDisklabelParser.m \

@@ -43,4 +43,9 @@
                    destructive:(BOOL)destructive;
 
 
+// Nil when every FAT partition of the plan is a size its type can hold,
+// otherwise the error naming the first that is not. Checked before anything
+// is written, because a refusal after the table was replaced loses the data.
+- (NSError *)formatSizeError;
+
 @end
