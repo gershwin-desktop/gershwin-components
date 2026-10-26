@@ -573,8 +573,7 @@ fi
 
 # For non-image installations, initialize /Local with dscli init in chroot
 # This creates the default user "admin" with password "admin" and sets up DirectoryServices properly
-# NextBSD does all of this itself at boot.
-if [ "$IMAGE_MODE" = "0" ] && [ "$OS_NAME" != "NextBSD" ]; then
+if [ "$IMAGE_MODE" = "0" ]; then
     report_progress "Finalizing" 84 "Initializing system with dscli init..."
     if [ -d "$MNT/Local" ]; then
         echo "Wiping existing /Local in chroot before dscli init..."
