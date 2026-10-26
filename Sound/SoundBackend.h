@@ -11,6 +11,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import "SoundJackAlertPolicy.h"
 
 // Audio device types
 typedef NS_ENUM(NSInteger, AudioDeviceType) {
@@ -286,6 +287,11 @@ typedef NS_ENUM(NSInteger, AudioDeviceState) {
 
 // MIDI (for future expansion)
 - (NSArray *)midiDevices;
+
+// JACK mode (ALSA backend on Linux)
+- (BOOL)jackModeEnabled;
+- (SoundJackAlertAction)jackAlertActionForElapsed:(NSTimeInterval)elapsed
+                                          timeout:(NSTimeInterval)timeout;
 
 @end
 

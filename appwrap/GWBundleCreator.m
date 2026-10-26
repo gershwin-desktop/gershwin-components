@@ -239,6 +239,16 @@
       [infoPlist setObject:iconNameWithExtension forKey:@"NSIcon"];
     }
 
+  /* Workspace and the Dock find a wrapped program's windows by their class,
+   * never by title, so a program whose class differs from its name (Claude
+   * Desktop: com.anthropic.Claude) would otherwise get no running dot and
+   * could not be raised from the Dock after a Workspace restart. */
+  NSString *wmClass = [parser stringForKey:@"StartupWMClass"];
+  if ([wmClass length] > 0)
+    {
+      [infoPlist setObject:wmClass forKey:@"GSX11WindowClass"];
+    }
+
   // Add document types from desktop MimeType key, if present
   NSArray *mimeTypes = [parser arrayForKey:@"MimeType"];
   if (mimeTypes && [mimeTypes count] > 0)

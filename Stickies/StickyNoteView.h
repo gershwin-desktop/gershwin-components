@@ -14,6 +14,7 @@
     BOOL resizing;
     NSPoint resizeStartPoint;
     NSRect resizeStartFrame;
+    NSTrackingRectTag resizeCursorTag;
 }
 
 @property (nonatomic, retain) NSColor *backgroundColor;
@@ -21,5 +22,9 @@
 
 - (void)setNoteColor:(NSColor *)color;
 - (BOOL)isInTitleBar:(NSPoint)point;
+- (BOOL)isInResizeHandle:(NSPoint)point;
+// Shared by -isInResizeHandle: (hit testing) and the cursor tracking rect,
+// so the grip's geometry is defined in exactly one place.
+- (NSRect)resizeHandleRect;
 
 @end

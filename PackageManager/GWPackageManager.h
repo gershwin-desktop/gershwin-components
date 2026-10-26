@@ -36,6 +36,9 @@ typedef NS_ENUM(NSInteger, GWPackageManagerError) {
 /// Called for each line of stderr output produced by the underlying package
 /// manager tool.  Lines are delivered as the command runs.  Implementors
 /// should dispatch to the main queue before updating UI.
+/// The AppImage downloader sends curl's own diagnostics the same way (the
+/// meter is not lines and never arrives here), so a handler hears a refusal
+/// from either path.
 - (void)installDidOutputLine:(NSString *)line;
 @end
 
@@ -64,6 +67,10 @@ typedef NS_ENUM(NSInteger, GWPackageManagerError) {
                 progress:(nullable id<GWInstallProgressHandler>)progressHandler
                    error:(NSError **)error;
 
+// --- Installed queries ---
+- (BOOL)isPackageInstalled:(NSString *)packageName;
+- (NSArray<NSString *> *)missingPackagesFrom:(NSArray<NSString *> *)packageNames;
+
 // --- Files / ownership queries ---
 - (NSArray<NSString *> *)filesForPackage:(NSString *)packageName error:(NSError **)error;
 - (NSString *)packageOwningFile:(NSString *)filePath error:(NSError **)error;
@@ -82,7 +89,7 @@ typedef NS_ENUM(NSInteger, GWPackageManagerError) {
 @property (readonly, strong) id<GWPackageManagerBackend> backend;
 
 // --- AppImage download (Linux only) ---
-// Downloads an AppImage into ~/Library/Applications.  No package
+// Downloads an AppImage into ~/Applications.  No package
 // manager or root privileges are involved; the app lands under the user's home.
 - (BOOL)downloadAppImageFromURL:(NSString *)url
                          appName:(NSString *)appName

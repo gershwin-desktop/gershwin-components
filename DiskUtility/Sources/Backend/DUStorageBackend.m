@@ -23,6 +23,8 @@ NSString *const kDUOperationToggleJournaling = @"toggleJournaling";
 NSString *const kDUFormatIdentifierKey = @"DUFormatIdentifier";
 NSString *const kDUFormatDisplayNameKey = @"DUFormatDisplayName";
 NSString *const kDUFormatCanFormatKey = @"DUFormatCanFormat";
+NSString *const kDUFormatMinBytesKey = @"DUFormatMinBytes";
+NSString *const kDUFormatMaxBytesKey = @"DUFormatMaxBytes";
 
 NSString *const kDUEraseSecurityMethodKey = @"DUEraseSecurityMethod";
 NSString *const kDUEraseMethodStandardKey = @"standard";

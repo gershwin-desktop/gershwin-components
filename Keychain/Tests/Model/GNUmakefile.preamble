@@ -1,0 +1,24 @@
+# The model and the marshalling code are Foundation/libdbus only, so every
+# test tool links them directly and runs without a display or a bus.
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+KC_SOURCES = \
+	../../Model/KCCrypto.m \
+	../../Model/KCSecretSession.m \
+	../../Model/KCItem.m \
+	../../Model/KCCollection.m \
+	../../Model/KCKeyring.m \
+	../../DBus/KCDBusMarshal.m
+
+# Test tools stay MRC (the ObjectTesting macros retain and release by hand);
+# only the code under test is ARC, keyed by the path it is listed with.
+KC_ARCFLAGS = -fobjc-arc -fobjc-arc-exceptions
+$(foreach t,$(TEST_TOOL_NAME),$(eval $(t)_OBJC_FILES += $(KC_SOURCES)))
+$(foreach f,$(KC_SOURCES),$(eval $(f)_FILE_FLAGS += $(KC_ARCFLAGS)))
+
+ADDITIONAL_INCLUDE_DIRS += -I../../Model -I../../DBus
+# One call per module: a missing module must not drop the other's flags too.
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags dbus-1)
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags libcrypto)
+ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs dbus-1)
+ADDITIONAL_TOOL_LIBS += $(shell pkg-config --libs libcrypto)

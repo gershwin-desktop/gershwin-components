@@ -6,6 +6,7 @@
 
 #import "StickyNoteView.h"
 #import "StickyNoteController.h"
+#import "StickyNoteWindow.h"
 
 #define TITLE_BAR_HEIGHT 22.0
 #define BUTTON_SIZE 12.0
@@ -85,17 +86,19 @@
         [xPath lineToPoint:NSMakePoint(NSMinX(closeRect) + 3.5, NSMaxY(closeRect) - 3.5)];
         [xPath stroke];
 
+        if ([(StickyNoteWindow *)[self window] isCollapsed]) return;
+
         NSColor *resizeColor = [darker blendedColorWithFraction:0.3 ofColor:[NSColor blackColor]];
         if (!resizeColor) resizeColor = [NSColor darkGrayColor];
         [resizeColor set];
         CGFloat rx = bounds.size.width - RESIZE_HANDLE_SIZE;
         CGFloat ry = bounds.size.height - RESIZE_HANDLE_SIZE;
+        // The view is flipped: the grip fills the lower right half of the
+        // handle square, with its hypotenuse facing the note's text.
         NSBezierPath *grip = [NSBezierPath bezierPath];
-        [grip moveToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE, ry + RESIZE_HANDLE_SIZE)];
-        [grip lineToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE, ry)];
-        [grip lineToPoint:NSMakePoint(rx, ry)];
-        [grip lineToPoint:NSMakePoint(rx + 2, ry + 1)];
-        [grip lineToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE - 2, ry + RESIZE_HANDLE_SIZE - 1)];
+        [grip moveToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE, ry)];
+        [grip lineToPoint:NSMakePoint(rx + RESIZE_HANDLE_SIZE, ry + RESIZE_HANDLE_SIZE)];
+        [grip lineToPoint:NSMakePoint(rx, ry + RESIZE_HANDLE_SIZE)];
         [grip closePath];
         [grip fill];
     }
@@ -111,13 +114,72 @@
     return (point.y >= 0 && point.y < TITLE_BAR_HEIGHT);
 }
 
-- (BOOL)isInResizeHandle:(NSPoint)point
+- (NSRect)resizeHandleRect
 {
     NSRect bounds = [self bounds];
-    NSRect handle = NSMakeRect(bounds.size.width - RESIZE_HANDLE_SIZE,
-                               bounds.size.height - RESIZE_HANDLE_SIZE,
-                               RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
-    return NSPointInRect(point, handle);
+    return NSMakeRect(bounds.size.width - RESIZE_HANDLE_SIZE,
+                       bounds.size.height - RESIZE_HANDLE_SIZE,
+                       RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE);
+}
+
+- (BOOL)isInResizeHandle:(NSPoint)point
+{
+    // A rolled-up note is only its title bar; the corner there belongs to it.
+    if ([(StickyNoteWindow *)[self window] isCollapsed]) return NO;
+    return NSPointInRect(point, [self resizeHandleRect]);
+}
+
+// The scroll view's text view fills the same corner and establishes its own
+// I-beam cursor rect there (-[NSTextView resetCursorRects] covers its whole
+// visible rect); because it is the deepest view, its rect always wins over
+// one added here. A tracking rect fires -mouseEntered:/-mouseExited:
+// independently of that resolution order and even while the window is not
+// key (unlike cursor rects, gated to the key window), so it reliably shows
+// the arrow over the grip.
+- (void)updateResizeCursorTracking
+{
+    if (resizeCursorTag != 0) {
+        [self removeTrackingRect:resizeCursorTag];
+        resizeCursorTag = 0;
+    }
+    if ([self window] != nil && ![(StickyNoteWindow *)[self window] isCollapsed]) {
+        resizeCursorTag = [self addTrackingRect:[self resizeHandleRect]
+                                           owner:self
+                                        userData:NULL
+                                    assumeInside:NO];
+    }
+}
+
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    [self updateResizeCursorTracking];
+}
+
+- (void)setFrameSize:(NSSize)size
+{
+    [super setFrameSize:size];
+    [self updateResizeCursorTracking];
+}
+
+- (void)mouseEntered:(NSEvent *)event
+{
+    [[NSCursor arrowCursor] set];
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    [[NSCursor IBeamCursor] set];
+}
+
+- (NSView *)hitTest:(NSPoint)aPoint
+{
+    // The text scroll view reaches into the grip corner; the grip must win.
+    if (NSPointInRect(aPoint, [self frame]) &&
+        [self isInResizeHandle:[self convertPoint:aPoint fromView:[self superview]]]) {
+        return self;
+    }
+    return [super hitTest:aPoint];
 }
 
 - (void)mouseDown:(NSEvent *)event
@@ -126,7 +188,9 @@
 
     if ([self isInResizeHandle:point]) {
         resizing = YES;
-        resizeStartPoint = [event locationInWindow];
+        // Screen coordinates, because the window moves under the pointer
+        // while its top edge stays put.
+        resizeStartPoint = [NSEvent mouseLocation];
         resizeStartFrame = [[self window] frame];
         return;
     }
@@ -153,7 +217,7 @@
 - (void)mouseDragged:(NSEvent *)event
 {
     if (resizing) {
-        NSPoint current = [event locationInWindow];
+        NSPoint current = [NSEvent mouseLocation];
         NSSize newSize = resizeStartFrame.size;
         newSize.width += current.x - resizeStartPoint.x;
         newSize.height -= current.y - resizeStartPoint.y;
@@ -204,6 +268,12 @@
 
 - (void)dealloc
 {
+    // -addTrackingRect:owner:userData:assumeInside: does not retain its
+    // owner; a rect left registered past this point would reference a
+    // freed view.
+    if (resizeCursorTag != 0) {
+        [self removeTrackingRect:resizeCursorTag];
+    }
     [backgroundColor release];
     [super dealloc];
 }

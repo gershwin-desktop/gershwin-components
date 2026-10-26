@@ -16,3 +16,11 @@ static inline NSError* DUErrorMake(DUStorageErrorCode code, NSString *msg)
                                code:code
                            userInfo:@{ NSLocalizedDescriptionKey : msg ?: @"" }];
 }
+
+// Raw tool output the backends attach to an error next to the generic
+// description; the controllers show it so a failure explains itself.
+static inline NSString *DUErrorBackendDetail(NSError *error)
+{
+    NSString *detail = error.userInfo[@"DUBackendDetail"];
+    return [detail isKindOfClass:[NSString class]] ? detail : @"";
+}

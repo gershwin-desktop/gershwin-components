@@ -1,0 +1,8 @@
+Device 'Logitech USB Receiver Consumer Control':
+	Device Enabled (190):	1
+	Coordinate Transformation Matrix (192):	1.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 1.000000
+	libinput Send Events Modes Available (360):	1, 0
+	libinput Send Events Mode Enabled (361):	0, 0
+	libinput Send Events Mode Enabled Default (362):	0, 0
+	Device Node (363):	"/dev/input/event4"
+	Device Product ID (364):	0, 0

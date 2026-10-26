@@ -14,7 +14,8 @@ Stickies_OBJC_FILES = \
 	StickyNoteView.m \
 	StickyNoteDocument.m \
 	StickyNoteDatabase.m \
-	StickyNoteColors.m
+	StickyNoteColors.m \
+	StickyWorkArea.m
 
 Stickies_HEADER_FILES = \
 	StickiesAppDelegate.h \
@@ -23,12 +24,13 @@ Stickies_HEADER_FILES = \
 	StickyNoteView.h \
 	StickyNoteDocument.h \
 	StickyNoteDatabase.h \
-	StickyNoteColors.h
+	StickyNoteColors.h \
+	StickyWorkArea.h
 
 Stickies_RESOURCE_FILES = \
 	Stickies.png
 
-ADDITIONAL_GUI_LIBS += -ldispatch
+ADDITIONAL_GUI_LIBS += -lX11
 
 include $(GNUSTEP_MAKEFILES)/application.make
 

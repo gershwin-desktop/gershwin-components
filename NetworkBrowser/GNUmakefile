@@ -3,10 +3,6 @@ include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_SYSTEM_APPS := $(GNUSTEP_SYSTEM_APPS)/Utilities
 GNUSTEP_LOCAL_APPS := $(GNUSTEP_LOCAL_APPS)/Utilities
 
-# Disable desktop file generation early (pl2link tool not available)
-ADDITIONAL_TOOL_LIBS = 
-GNUSTEP_TOOL_LIBS = 
-
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 APP_NAME = NetworkBrowser
@@ -19,16 +15,17 @@ NetworkBrowser_APPLICATION_ICON =
 NetworkBrowser_HEADER_FILES = \
 	NetworkBrowser.h \
 	ServiceListView.h \
-	ServiceDetailsView.h
+	ServiceDetailsView.h \
+	TXTRecordFormatter.h
 
 NetworkBrowser_OBJC_FILES = \
 	Main.m \
 	NetworkBrowser.m \
 	ServiceListView.m \
-	ServiceDetailsView.m
+	ServiceDetailsView.m \
+	TXTRecordFormatter.m
 
-NetworkBrowser_RESOURCE_FILES = \
-	NetworkBrowser.desktop
+NetworkBrowser_RESOURCE_FILES =
 
 NetworkBrowser_LOCALIZED_RESOURCE_FILES =
 
@@ -112,8 +109,3 @@ include $(GNUSTEP_MAKEFILES)/tool.make
 
 before-install::
 	mkdir -p $(GNUSTEP_APPS)
-
-# Override desktop file generation to avoid pl2link requirement
-NetworkBrowser.app/Resources/NetworkBrowser.desktop: NetworkBrowser.desktop
-	@mkdir -p NetworkBrowser.app/Resources
-	@cp NetworkBrowser.desktop NetworkBrowser.app/Resources/NetworkBrowser.desktop

@@ -1557,9 +1557,32 @@
   [_annoStore saveAnnotations:_annotations];
 }
 
-// A drag over the page selected a run of text: turn it into a highlight
+// The chapter (spine document) containing reading-text offset `index`.
+- (NSRange)chapterRangeAtIndex:(NSUInteger)index
+{
+  NSString *docKey = [self docKeyForCharOffset:index];
+  if (docKey == nil)
+    return NSMakeRange(NSNotFound, 0);
+  NSUInteger start = [_docStart[docKey] unsignedIntegerValue];
+  NSUInteger end = [_fullText length];
+  for (NSNumber *n in [_docStart allValues])
+    {
+      NSUInteger o = [n unsignedIntegerValue];
+      if (o > start && o < end)
+        end = o;
+    }
+  return NSMakeRange(start, end - start);
+}
+
+// Select All selects the chapter being read, the unit a reader thinks in.
+- (NSRange)pageView:(BookPageView *)view selectAllRangeAtIndex:(NSUInteger)index
+{
+  return [self chapterRangeAtIndex:index];
+}
+
+// The user chose Highlight for the selection: turn it into a highlight
 // annotation anchored with the standard TextQuote + TextPosition selectors.
-- (void)pageView:(BookPageView *)view didSelectRange:(NSRange)range
+- (void)pageView:(BookPageView *)view highlightRange:(NSRange)range
 {
   if (range.length == 0)
     return;
@@ -1567,15 +1590,11 @@
   NSString *docKey = [self docKeyForCharOffset:range.location];
   if (docKey == nil)
     return;
-  NSUInteger base = [_docStart[docKey] unsignedIntegerValue];
-  // Keep the selection inside the document it starts in.
-  NSUInteger docLen = [text length] - base;
-  for (NSNumber *n in [_docStart allValues])
-    {
-      NSUInteger o = [n unsignedIntegerValue];
-      if (o > base && (o - base) < docLen)
-        docLen = o - base;
-    }
+  // Keep the highlight inside the document it starts in: an annotation is
+  // anchored to one spine resource.
+  NSRange chapter = [self chapterRangeAtIndex:range.location];
+  NSUInteger base = chapter.location;
+  NSUInteger docLen = chapter.length;
   NSUInteger relStart = range.location - base;
   NSUInteger relEnd = MIN(range.location + range.length, base + docLen) - base;
   if (relEnd <= relStart)
@@ -1594,8 +1613,8 @@
   [self saveAnnotations];
   [self updateHighlights];
   [_annoTable reloadData];
-  [self updateAnnoStatus];
-  [self showAnnotations:nil];
+  // Open, not toggle: a drawer already showing must stay open for the new row.
+  [self openAnnotations];
 }
 
 // Bookmark the current spread's reading position (Cmd-D).

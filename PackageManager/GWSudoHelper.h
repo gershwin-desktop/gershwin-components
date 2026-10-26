@@ -24,3 +24,15 @@ NSString *GWSudoPath(void);
 // GWSudoPath() with these flags followed by the package-manager command.
 // Returns @[ @"-A", @"-E" ] when escalation is needed, else @[].
 NSArray<NSString *> *GWSudoArgPrefix(void);
+
+// Builds the launch path and full argument list for running toolPath with
+// toolArgs, escalating through sudo when needed. Every backend needs this:
+// when already root, GWSudoArgPrefix() is empty and toolPath IS the launch
+// path, so toolPath must NOT also appear in the argument list (NSTask sets
+// argv[0] to the launch path on its own) - getting this wrong makes the
+// launched tool receive its own path as its first real argument (apt-get
+// read that as an unknown "operation" and failed outright, and every
+// pacman/pkg/pkg_add call had the identical bug). Returns the launch path;
+// *outArguments is set to the full argument array to pass to NSTask.
+NSString *GWSudoCommand(NSString *toolPath, NSArray<NSString *> *toolArgs,
+                         NSArray<NSString *> **outArguments);

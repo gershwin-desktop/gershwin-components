@@ -8,8 +8,10 @@
 	<string>Profiler</string>
 	<key>ApplicationName</key>
 	<string>Profiler</string>
+	<key>ApplicationIcon</key>
+	<string>Profiler</string>
 	<key>ApplicationDescription</key>
-	<string>Performance profiler for GNUstep applications</string>
+	<string>Shows where a program spends its time and its memory</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.gershwin-desktop.Profiler</string>
 	<key>CFBundleExecutable</key>

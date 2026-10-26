@@ -18,6 +18,15 @@
 // Raw table-level type string as reported by the backend.
 @property (nonatomic, copy) NSString *partitionType;
 
+// Normalized table-level type, as DUPartitionTypeNames spells it: "0x0C"
+// (MBR), a lower-case GUID (GPT) or a type word (BSD disklabel). nil when
+// the backend cannot tell. partitionType above is not reliable for this:
+// some backends keep a filesystem token in it.
+@property (nonatomic, copy) NSString *tableTypeCode;
+
+// Partition GUID (GPT) or table-assigned id (MBR); nil when none.
+@property (nonatomic, copy) NSString *partitionUUID;
+
 // Label/name from the partition table ("partitionName" in section 12);
 // not localized, may be nil.
 @property (nonatomic, copy) NSString *name;

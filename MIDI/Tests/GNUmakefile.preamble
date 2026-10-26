@@ -1,0 +1,16 @@
+# The view state is Foundation only, so it is tested headless against the
+# simulation backend of the library built in this tree (not an installed
+# copy: --disable-new-dtags makes the rpath beat GNUstep.sh's
+# LD_LIBRARY_PATH). Test tools stay MRC; the unit under test is ARC.
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+MIDINET_DIR := $(CURDIR)/../../Libraries/MIDINetworkBackend
+MIDINET_LIB := $(wildcard $(MIDINET_DIR)/obj/libMIDINetworkBackend.so)
+MIDI_UNIT = ../MIDIPaneViewState.m
+
+$(foreach t,$(TEST_TOOL_NAME),$(eval $(t)_OBJC_FILES += $(MIDI_UNIT)))
+$(MIDI_UNIT)_FILE_FLAGS += -fobjc-arc -fobjc-arc-exceptions
+
+ADDITIONAL_INCLUDE_DIRS += -I.. -I$(MIDINET_DIR)
+ADDITIONAL_TOOL_LIBS += $(if $(MIDINET_LIB),$(MIDINET_LIB),-lMIDINetworkBackend)
+ADDITIONAL_LDFLAGS += -Wl,--disable-new-dtags -Wl,-rpath,$(MIDINET_DIR)/obj

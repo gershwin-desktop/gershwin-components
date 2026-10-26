@@ -13,26 +13,20 @@ NSS module and helper daemon for managing users and groups via plist files.
 ### Devuan (sysvinit)
 
 ```sh
-# Required (gdomap service discovery)
-apt install rpcbind
-
 # Optional (client/server mode only)
-apt install nfs-kernel-server nfs-common
+apt install rpcbind nfs-kernel-server nfs-common
 ```
 
 ### Arch Linux (systemd)
 
 ```sh
-# Required (gdomap service discovery)
-pacman -S rpcbind
-
 # Optional (client/server mode only)
-pacman -S nfs-utils
+pacman -S rpcbind nfs-utils
 ```
 
 ### Notes
 
-- `rpcbind` is required for gdomap service discovery
+- `rpcbind` is not needed by dshelper or gdomap; it is only needed for NFS, i.e. client/server mode (`dscli promote`, `dscli join`), which fails if it is missing
 - NFS packages are only needed for client/server mode (`dscli promote`, `dscli join`). Local-only accounts (`dscli init`, `dscli user add`, etc.) work without them
 - On Arch, `nfs-utils` provides both server and client functionality (no separate `nfs-common`)
 - On Devuan, `nfs-kernel-server` pulls in `nfs-common` automatically
@@ -245,7 +239,7 @@ NSSocketPort *port = [NSSocketPort portWithNumber:4721
 [ns registerPort:port forName:@"GershwinDirectory"];
 ```
 
-- **NSSocketPortNameServer** provides network-wide name registration via the system's `rpcbind` service
+- **NSSocketPortNameServer** provides network-wide name registration via gdomap
 - **NSSocketPort** creates a TCP listener socket on port 4721
 - `registerPort:forName:` binds the name "GershwinDirectory" to this port across the network
 

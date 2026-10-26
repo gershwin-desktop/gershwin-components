@@ -10,6 +10,7 @@
 #import <string.h>
 #import <dirent.h>
 #import <unistd.h>
+#import <errno.h>
 
 #ifdef __linux__
 
@@ -27,13 +28,20 @@
     self = [super init];
     if (self) {
         _devicePath = [self findBestDevice];
-        if (_devicePath) {
-            _maxBrightness = [self readIntFromPath:[_devicePath stringByAppendingPathComponent:@"max_brightness"]];
-            NSDebugLLog(@"gwcomp", @"SysfsBacklightBackend: using device %@ (max=%d)",
-                  _devicePath, _maxBrightness);
-        } else {
+        if (!_devicePath) {
             NSDebugLLog(@"gwcomp", @"SysfsBacklightBackend: no backlight device found");
+            return nil;
         }
+        /* Writing needs membership in the group the device's udev rule
+           grants (usually "video"); without it the keys could never work. */
+        NSString *brightnessPath = [_devicePath stringByAppendingPathComponent:@"brightness"];
+        if (access([brightnessPath fileSystemRepresentation], W_OK) != 0) {
+            NSLog(@"SysfsBacklightBackend: Cannot write %@: %s", brightnessPath, strerror(errno));
+            return nil;
+        }
+        _maxBrightness = [self readIntFromPath:[_devicePath stringByAppendingPathComponent:@"max_brightness"]];
+        NSDebugLLog(@"gwcomp", @"SysfsBacklightBackend: using device %@ (max=%d)",
+              _devicePath, _maxBrightness);
     }
     return self;
 }
@@ -87,10 +95,6 @@
 
 - (int)current
 {
-    if (!_devicePath) {
-        return 0;
-    }
-
     return [self readIntFromPath:[_devicePath stringByAppendingPathComponent:@"brightness"]];
 }
 
@@ -101,10 +105,6 @@
 
 - (void)set:(int)value
 {
-    if (!_devicePath) {
-        return;
-    }
-
     int clamped = value;
     if (clamped < 0) clamped = 0;
     if (clamped > _maxBrightness) clamped = _maxBrightness;
@@ -112,7 +112,7 @@
     NSString *path = [_devicePath stringByAppendingPathComponent:@"brightness"];
     FILE *f = fopen([path UTF8String], "w");
     if (!f) {
-        NSDebugLLog(@"gwcomp", @"SysfsBacklightBackend: failed to open %@ for writing", path);
+        NSLog(@"SysfsBacklightBackend: Cannot write %@: %s", path, strerror(errno));
         return;
     }
 
@@ -121,33 +121,6 @@
 
     NSDebugLLog(@"gwcomp", @"SysfsBacklightBackend: set brightness to %d (raw=%d, max=%d)",
           clamped, value, _maxBrightness);
-}
-
-@end
-
-#else
-
-@implementation SysfsBacklightBackend
-
-- (instancetype)init
-{
-    self = [super init];
-    return self;
-}
-
-- (int)current
-{
-    return 0;
-}
-
-- (int)maximum
-{
-    return 0;
-}
-
-- (void)set:(int)value
-{
-    (void)value;
 }
 
 @end

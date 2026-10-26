@@ -13,6 +13,9 @@
 
 @property (nonatomic, copy) NSString *mountPoint; // nil when unmounted
 @property (nonatomic, copy) NSString *filesystemType;
+// "fat12", "fat16" or "fat32" when the backend could tell a volume it
+// reports as the undifferentiated FAT family apart; nil otherwise.
+@property (nonatomic, copy) NSString *filesystemVariant;
 @property (nonatomic) unsigned long long capacityBytes;
 @property (nonatomic) unsigned long long availableBytes;
 @property (nonatomic) unsigned long long usedBytes;

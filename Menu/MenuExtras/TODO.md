@@ -46,7 +46,7 @@ weak pointers that later crashes in `objc_msgSend_fpret`.
 
 | Guard | Where |
 |-------|-------|
-| `@try/@catch` | `menuExtraDidLoad`, `menu`, `tick`, `refreshBrightnessPresentation`, `updateBattery`, `pollGitHub`, `updateCPUUsage`, `updateRAMUsage`, `refreshTimerFired:` |
+| `@try/@catch` | `menuExtraDidLoad`, `menu`, `tick`, `refreshBrightnessPresentation`, `updateBattery`, `pollGitHub`, `updateCPUUsage`, `updateRAMUsage`, `refreshAsync` |
 | `BOOL _running` | All timer callbacks exit early if `_running == NO` |
 | `@try/@catch` in manager | `applyEnabledSet:`, `refreshExtraWithIdentifier:`, `updateTimerFired:`, `menuNeedsUpdate:`, `proposedTitleWidth:forMenuView:` |
 

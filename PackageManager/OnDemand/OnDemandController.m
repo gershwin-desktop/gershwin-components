@@ -17,6 +17,7 @@
 #import "OnDemandController.h"
 #import <PackageManager/GWSystemCommandExecutor.h>
 #import <PackageManager/GWAppImageDownloader.h>
+#import <PackageManager/ODLogWindowController.h>
 
 #pragma mark - Constants (derived from AppearanceMetrics.h)
 
@@ -36,96 +37,12 @@ static const CGFloat kTextLeft = 104.0;           // METRICS_TEXT_LEFT = 24 + 64
 static const CGFloat kSpace8 = 8.0;               // METRICS_SPACE_8
 static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
 
-#pragma mark - ODLogWindowController
-
-@interface ODLogWindowController : NSWindowController
-{
-  NSScrollView *_scrollView;
-  NSTextView *_logView;
-}
-- (void)appendLog:(NSString *)text;
-- (void)clearLog;
-@end
-
-@implementation ODLogWindowController
-
-- (instancetype)init
-{
-  NSRect screenFrame = [[NSScreen mainScreen] frame];
-  CGFloat logHeight = screenFrame.size.height / 4.0;
-  NSRect logFrame = NSMakeRect(screenFrame.origin.x,
-                                screenFrame.origin.y,
-                                screenFrame.size.width,
-                                logHeight);
-  NSWindow *logWindow = [[NSWindow alloc]
-    initWithContentRect:logFrame
-              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-                       | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
-                backing:NSBackingStoreBuffered
-                  defer:YES];
-  [logWindow setTitle:@"Installer Log"];
-  [logWindow setMinSize:NSMakeSize(400, 100)];
-
-  self = [super initWithWindow:logWindow];
-  if (self)
-    {
-      NSView *contentView = [logWindow contentView];
-      NSRect frame = [contentView bounds];
-
-      _scrollView = [[NSScrollView alloc] initWithFrame:frame];
-      [_scrollView setHasVerticalScroller:YES];
-      [_scrollView setHasHorizontalScroller:NO];
-      [_scrollView setBorderType:NSNoBorder];
-      [_scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-
-      NSSize contentSize = [_scrollView contentSize];
-      _logView = [[NSTextView alloc]
-        initWithFrame:NSMakeRect(0, 0, contentSize.width, contentSize.height)];
-      [_logView setMinSize:NSMakeSize(0.0, contentSize.height)];
-      [_logView setMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
-      [_logView setVerticallyResizable:YES];
-      [_logView setHorizontallyResizable:NO];
-      [_logView setEditable:NO];
-      [_logView setSelectable:YES];
-      [_logView setFont:[NSFont userFixedPitchFontOfSize:10]];
-      [_logView setTextColor:[NSColor darkGrayColor]];
-      [_logView setBackgroundColor:[NSColor whiteColor]];
-      [[_logView textContainer] setContainerSize:NSMakeSize(contentSize.width, FLT_MAX)];
-      [[_logView textContainer] setWidthTracksTextView:YES];
-
-      [_scrollView setDocumentView:_logView];
-      [contentView addSubview:_scrollView];
-    }
-  return self;
-}
-
-- (void)appendLog:(NSString *)text
-{
-  if (!text || !_logView) return;
-  NSDictionary *attrs = @{
-    NSFontAttributeName: [NSFont userFixedPitchFontOfSize:10],
-    NSForegroundColorAttributeName: [NSColor darkGrayColor]
-  };
-  NSAttributedString *astr = [[NSAttributedString alloc] initWithString:text
-                                                             attributes:attrs];
-  [[_logView textStorage] appendAttributedString:astr];
-  [_logView scrollRangeToVisible:NSMakeRange([[_logView string] length], 0)];
-}
-
-- (void)clearLog
-{
-  if (!_logView) return;
-  [[_logView textStorage] replaceCharactersInRange:
-    NSMakeRange(0, [[_logView string] length]) withString:@""];
-}
-
-@end
-
 #pragma mark - OnDemandController
 
 @implementation OnDemandController
 {
   BOOL _isTerminating;
+  BOOL _directInstallRunning;
   double _totalDownloadBytes;
   double _downloadedBytes;
   CGFloat _lastFetchPct;
@@ -216,12 +133,14 @@ static const CGFloat kSpace16 = 16.0;              // METRICS_SPACE_16
   _appImageURL = [_spec appImageDirectURL];
   _appImageGitHubRepo = [_spec appImageGitHubRepo];
 
-  // Determine what to run after install: for an AppImage we launch the wrapper
-  // bundle we install into ~/Library/Applications; otherwise the plist's
+  // Determine what to run after install: for an AppImage we launch the
+  // AppImage we install into ~/Applications; otherwise the plist's
   // post-install command (if any).
   if (_isAppImageInstall)
     {
-      _launchCommand = [GWAppImageDownloader launcherPathForAppName:_appName];
+      // existingLauncherPathForAppName: keeps an install made before the
+      // download folder moved findable where it still is.
+      _launchCommand = [GWAppImageDownloader existingLauncherPathForAppName:_appName];
       _launchArgs = @[];
     }
   else
@@ -370,10 +289,13 @@ static BOOL _confirmInstall(NSString *pkgName, NSString *filePath, NSString *fmt
 
   if ([fmt isEqualToString:@"deb"])
     {
-      /* Debian/Ubuntu: apt-get --simulate install ./<file> shows the local
-         package plus any dependencies that would be downloaded */
+      /* Debian/Ubuntu: apt-get --simulate install <file> shows the local
+         package plus any dependencies that would be downloaded.  filePath
+         is absolute; a "./"-prefix would turn it into ".//Local/..." which
+         is neither a package name nor a file apt can read, and the detail
+         lines silently never appeared. */
       NSString *out = _runCmd(@"/usr/bin/apt-get",
-        @[@"--simulate", @"install", [@"./" stringByAppendingPathComponent:filePath]]);
+        @[@"--simulate", @"install", filePath]);
       if (out)
         {
           NSString *summary = @"";
@@ -441,9 +363,37 @@ static BOOL _confirmInstall(NSString *pkgName, NSString *filePath, NSString *fmt
   return result;
 }
 
+/* appwrap ships in /System/Library/Tools, not /Local; site-local overrides
+   may still place it under /Local, so try that first.  A hard-coded
+   /Local/Library/Tools/appwrap made NSTask raise "task has invalid launch
+   path" on the first package that ships a .desktop file, and because the
+   launch had no guard the exception killed OnDemand right after dpkg had
+   succeeded - a completed install looked like a failure. */
+static NSString *_appwrapPath(void)
+{
+  for (NSString *path in @[@"/Local/Library/Tools/appwrap",
+                            @"/System/Library/Tools/appwrap"])
+    {
+      if ([[NSFileManager defaultManager] isExecutableFileAtPath:path])
+        return path;
+    }
+  return nil;
+}
+
 /* Query the just-installed package's file list for .desktop entries and wrap them */
 static void _wrapPackageDesktopFiles(NSString *pkgName, NSString *fmt)
 {
+  NSString *appwrap = _appwrapPath();
+  if (!appwrap)
+    {
+      /* Wrapping only makes the entries easier to launch; the package is
+         installed either way, so a missing tool must not be read as a
+         failed install. Workspace still finds the entries in their
+         desktop directories. */
+      NSLog(@"OnDemand -> _wrapPackageDesktopFiles: appwrap not found, skipping");
+      return;
+    }
+
   NSString *listCmd = nil;
   if ([fmt isEqualToString:@"deb"])
     listCmd = [NSString stringWithFormat:@"dpkg -L %@ 2>/dev/null | grep '\\.desktop$'", pkgName];
@@ -475,10 +425,21 @@ static void _wrapPackageDesktopFiles(NSString *pkgName, NSString *fmt)
         {
           NSLog(@"OnDemand: wrapping %@", [df lastPathComponent]);
           NSTask *w = [[NSTask alloc] init];
-          [w setLaunchPath:@"/Local/Library/Tools/appwrap"];
+          [w setLaunchPath:appwrap];
           [w setArguments:@[@"-f", df]];
-          [w launch];
-          [w waitUntilExit];
+          @try
+            {
+              [w launch];
+              [w waitUntilExit];
+            }
+          @catch (NSException *exception)
+            {
+              /* One entry that cannot be wrapped must not take the
+                 installer down: the package is already installed at this
+                 point, and the unguarded launch used to raise
+                 "task has invalid launch path" out of main(). */
+              NSLog(@"OnDemand [FAIL] wrapping %@: %@", df, exception);
+            }
         }
     }
 }
@@ -518,6 +479,12 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 - (void)performDirectInstall
 {
   if (!_directFilePath || !_directFormat) return;
+  if (_directInstallRunning)
+    {
+      NSLog(@"OnDemand: install already running - ignoring repeat direct install");
+      return;
+    }
+  _directInstallRunning = YES;
 
   /* Ask for confirmation first. Only show the progress window after the
      user confirms. Runs on a background thread; _confirmInstall shows the
@@ -591,6 +558,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_finishWithCancel
 {
+  _directInstallRunning = NO;
   [NSApp terminate:nil];
 }
 
@@ -605,16 +573,27 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
       NSString *candidate = [parts count] > 0 ? parts[0] : binName;
       _launchPath = [self _which:candidate];
       if (!_launchPath)
-        _launchPath = [self _which:[candidate stringByAppendingString:@"-stable"]];
+        _launchPath = [self _which:[candidate lowercaseString]];
+      if (!_launchPath)
+        _launchPath = [self _which:
+          [candidate stringByAppendingString:@"-stable"]];
       if (_launchPath)
         {
+          /* The direct-install branch hid this button (with its Return key
+             equivalent); reveal it as the default Launch button. */
+          [_installButton setHidden:NO];
           [_installButton setTitle:@"Launch"];
+          [_installButton setKeyEquivalent:@"\r"];
           [_installButton setAction:@selector(launchFoundApp)];
           [_installButton setTarget:self];
         }
       else
         {
+          /* Keep it hidden; the cancel button is already "Close" and a
+             second, hidden Close button would only be another key-
+             equivalent trap. Drop the stale "\r". */
           [_installButton setTitle:@"Close"];
+          [_installButton setKeyEquivalent:@""];
           [_installButton setAction:@selector(closeWindow:)];
           [_installButton setTarget:self];
         }
@@ -628,6 +607,7 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
   [_cancelButton setTitle:@"Close"];
   [_cancelButton setAction:@selector(closeWindow:)];
   [_cancelButton setTarget:self];
+  _directInstallRunning = NO;
 }
 
 - (IBAction)launchFoundApp
@@ -675,10 +655,14 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_finishWithError:(NSString *)errorDetail
 {
+  /* The Install button is hidden in direct-install mode; do not reveal a
+     second Close button and drop its key equivalent. */
+  [_installButton setKeyEquivalent:@""];
   [_installButton setTitle:@"Close"];
   [_installButton setAction:@selector(closeWindow:)];
   [_installButton setTarget:self];
   [_cancelButton setEnabled:NO];
+  _directInstallRunning = NO;
   [self showError:errorDetail];
 }
 
@@ -733,6 +717,9 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
                                         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
                                           backing:NSBackingStoreBuffered
                                             defer:NO];
+  /* Owned by ARC through this reference; if it were also released on
+   * close, -close would release it a second time. */
+  [_window setReleasedWhenClosed:NO];
 
   CGFloat y = kBottomMargin;
 
@@ -797,6 +784,12 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
       // Direct install: auto-start, hide confirmation UI, show progress
       [_descriptionField setHidden:YES];
       [_installButton setHidden:YES];
+      /* A hidden but enabled button keeps its "\r" key equivalent, and
+         NSWindow's key-equivalent traversal (unlike macOS) reaches hidden
+         buttons - pressing Return in this window fired installClicked again
+         on top of a running install.  Also drop the equivalent here; it is
+         restored when the button is revealed as Launch below. */
+      [_installButton setKeyEquivalent:@""];
       [self _showProgressBar];
     }
   else
@@ -855,6 +848,11 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 
 - (void)_showProgressBar
 {
+  /* showWindow runs the direct-install branch again after the confirmation,
+     and a second installClicked re-enters it - recreate the bar once. */
+  if (_progressBar)
+    return;
+
   CGFloat cx = kSideMargin;
   CGFloat contentW = kWinWidth - 2 * kSideMargin;
   CGFloat progY  = kBottomMargin + kBtnHeight + kSpace16;
@@ -882,9 +880,18 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 {
   if (_isDirectInstall)
     {
+      /* One install at a time. This action fires from the hidden Install
+         button's "\r" key equivalent whenever the window is key, even while
+         an install is already running. */
+      if (_directInstallRunning)
+        {
+          NSLog(@"OnDemand: install already running - ignoring repeat install click");
+          return;
+        }
       NSLog(@"OnDemand -> installClicked: direct install");
       [_descriptionField setHidden:YES];
       [_installButton setHidden:YES];
+      [_installButton setKeyEquivalent:@""];
       [self _showProgressBar];
       [self performDirectInstall];
       return;
@@ -1055,10 +1062,11 @@ static NSString *_packageNameFromFile(NSString *path, NSString *fmt)
 {
   if (_isAppImageInstall)
     {
-      // An already-installed AppImage is launched via its wrapper bundle in
-      // ~/Library/Applications.
+      // An already-installed AppImage is launched from its path in
+      // ~/Applications, or from the pre-move directory for an install that
+      // was never moved there.
       BOOL exists = [[NSFileManager defaultManager] isExecutableFileAtPath:_launchCommand];
-      NSLog(@"OnDemand -> commandIsAvailable: appimage wrapper %@ -> %s",
+      NSLog(@"OnDemand -> commandIsAvailable: appimage %@ -> %s",
             _launchCommand, exists ? "YES" : "NO");
       return exists;
     }

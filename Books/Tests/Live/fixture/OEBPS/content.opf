@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Copy Test</dc:title><dc:creator>Test</dc:creator><dc:identifier id="bookid">urn:uuid:copytest-1</dc:identifier><dc:language>en</dc:language></metadata>
+  <manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>

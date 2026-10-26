@@ -57,7 +57,7 @@ static id<UIBridgeProtocol> ConnectToApp(int pid) {
     // Try to connect to per-PID theme UIBridge service using Distributed Objects (DO)
     // This is the preferred method - works directly with Eau theme
     if (pid > 0) {
-      NSString *themeServiceName = [NSString stringWithFormat:@"org.gershwin.Gershwin.Theme.UIBridge.%d", pid];
+      NSString *themeServiceName = [NSString stringWithFormat:@"io.github.gershwin-desktop.Theme.UIBridge.%d", pid];
       NSDebugLLog(@"gwcomp", @"[Server] Connecting to per-PID theme UIBridge service via DO: %@", themeServiceName);
       proxy = [NSConnection rootProxyForConnectionWithRegisteredName:themeServiceName host:nil];
       if (proxy) {
@@ -110,7 +110,7 @@ static id<UIBridgeProtocol> ConnectToApp(int pid) {
       if ([entry rangeOfCharacterFromSet:[digits invertedSet]].location != NSNotFound) continue;
       
       // Try per-PID theme service via DO
-      NSString *themeServiceName = [NSString stringWithFormat:@"org.gershwin.Gershwin.Theme.UIBridge.%@", entry];
+      NSString *themeServiceName = [NSString stringWithFormat:@"io.github.gershwin-desktop.Theme.UIBridge.%@", entry];
       proxy = [NSConnection rootProxyForConnectionWithRegisteredName:themeServiceName host:nil];
       if (proxy) {
         NSDebugLLog(@"gwcomp", @"[Server] Found per-PID theme service via fallback: %@", themeServiceName);
@@ -721,7 +721,7 @@ static void RedirectLogs(void) {
                 NSCharacterSet *digits = [NSCharacterSet decimalDigitCharacterSet];
                 if ([entry rangeOfCharacterFromSet:[digits invertedSet]].location != NSNotFound) continue;
 
-                NSString *themeServiceName = [NSString stringWithFormat:@"org.gershwin.Gershwin.Theme.UIBridge.%@", entry];
+                NSString *themeServiceName = [NSString stringWithFormat:@"io.github.gershwin-desktop.Theme.UIBridge.%@", entry];
                 id proxy = [NSConnection rootProxyForConnectionWithRegisteredName:themeServiceName host:nil];
                 if (proxy) {
                     [(NSDistantObject *)proxy setProtocolForProxy:@protocol(UIBridgeProtocol)];
@@ -788,7 +788,7 @@ static void RedirectLogs(void) {
             }
             if (proxy) {
                 self.currentPID = pid;
-                result = @{@"status": @"attached", @"pid": @(self.currentPID), @"service": service ?: [NSString stringWithFormat:@"org.gershwin.Gershwin.Theme.UIBridge.%d", self.currentPID]};
+                result = @{@"status": @"attached", @"pid": @(self.currentPID), @"service": service ?: [NSString stringWithFormat:@"io.github.gershwin-desktop.Theme.UIBridge.%d", self.currentPID]};
             } else {
                 errorMsg = @"Failed to attach to service/pid";
             }

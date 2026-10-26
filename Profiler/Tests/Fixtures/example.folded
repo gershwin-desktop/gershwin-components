@@ -1,0 +1,9 @@
+# Folded stacks of a short GNUstep recording, used by the UI test.
+# One line per call path: the frames separated by semicolons, then the
+# number of samples that were taken in it.
+_start;main;_i_NSApplication__run;_i_NSRunLoop__runMode_beforeDate_;_i_GSRunLoopCtxt__pollUntil_within_;poll 180
+_start;main;_i_NSApplication__run;_i_NSRunLoop__runMode_beforeDate_;_i_NSRunLoop__acceptInputForMode_beforeDate_;objc_msgSend 40
+_start;main;_i_NSApplication__run;_i_NSApplication__sendEvent_;_i_NSWindow__sendEvent_;_i_NSView__displayIfNeeded;_i_GameBoard__drawRect_;_i_NSBezierPath__fill 260
+_start;main;_i_NSApplication__run;_i_NSApplication__sendEvent_;_i_NSWindow__sendEvent_;_i_NSView__displayIfNeeded;_i_GameBoard__drawRect_;_c_NSString__stringWithFormat_ 70
+_start;main;_i_NSApplication__run;_i_NSApplication__sendEvent_;_i_NSWindow__sendEvent_;_i_GameBoard__mouseDown_;_i_GameBoard_Solver_solveFrom_depth_ 420
+_start;main;_i_NSApplication__run;_i_NSApplication__sendEvent_;_i_NSWindow__sendEvent_;_i_GameBoard__mouseDown_;_i_GameBoard_Solver_solveFrom_depth_;memcpy 30

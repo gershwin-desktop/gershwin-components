@@ -9,6 +9,7 @@
 #import <netinet/in.h>
 #import <arpa/inet.h>
 #import "ServiceDetailsView.h"
+#import "TXTRecordFormatter.h"
 
 @implementation ServiceDetailsView
 
@@ -99,25 +100,13 @@
   
   /* Properties */
   NSDictionary *dict = [NSNetService dictionaryFromTXTRecordData: [service TXTRecordData]];
-  if (dict && [dict count] > 0)
+  NSString *propertyLines = [TXTRecordFormatter linesForTXTDictionary: dict];
+  if (propertyLines)
     {
       [details appendString: @"Properties:\n"];
-      for (NSString *key in [dict allKeys])
-        {
-          NSData *value = [dict objectForKey: key];
-          NSString *valueStr = [[NSString alloc] 
-            initWithData: value encoding: NSUTF8StringEncoding];
-          if (valueStr == nil)
-            {
-              valueStr = [[NSString alloc] 
-                initWithFormat: @"<binary data: %lu bytes>", 
-                (unsigned long)[value length]];
-            }
-          [details appendFormat: @"  %@: %@\n", key, valueStr];
-          RELEASE(valueStr);
-        }
+      [details appendString: propertyLines];
     }
-  
+
   [textView setString: details];
 }
 

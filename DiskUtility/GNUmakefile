@@ -98,6 +98,7 @@ DiskUtility_OBJC_FILES = \
 	Sources/Models/DUPartitionPlan.m \
 	Sources/Services/DUStorageManager.m \
 	Sources/Services/DUOperationManager.m \
+	Sources/Services/DUDeviceEventSource.m \
 	Sources/Services/DUDeviceMonitor.m \
 	Sources/Services/DUAuthorizationManager.m \
 	Sources/Services/DUImageService.m \
@@ -122,6 +123,7 @@ DiskUtility_OBJC_FILES = \
 	Sources/Utilities/DUSHA256.m \
 	Sources/Utilities/DURepairPermissionsTool.m \
 	Sources/Backend/DUStorageBackend.m \
+	Sources/Backend/DUFATFormat.m \
 	Sources/Backend/DUMockStorageBackend.m \
 	Sources/Backend/DUBackendFactory.m \
 	Sources/Backend/Libraries/DUBlkidLibrary.m \
@@ -135,8 +137,10 @@ DiskUtility_OBJC_FILES = \
 	Sources/Backend/Parsers/DUOpenBSDDisklabelParser.m \
 	Sources/Backend/Parsers/DUNetBKSDisklabelParser.m \
 	Sources/Backend/Parsers/DUPartitionTableParser.m \
+	Sources/Backend/Parsers/DUPartitionTypeNames.m \
 	Sources/Backend/Linux/DULinuxStorageBackend.m \
 	Sources/Backend/Linux/DULinuxDeviceDiscovery.m \
+	Sources/Backend/Linux/DULinuxUserMount.m \
 	Sources/Backend/Linux/DULinuxPartitionTool.m \
 	Sources/Backend/Linux/DULinuxFilesystemTool.m \
 	Sources/Backend/Linux/DULinuxImageTool.m \

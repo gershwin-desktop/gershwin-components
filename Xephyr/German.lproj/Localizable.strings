@@ -1,0 +1,37 @@
+/* Xephyr launcher */
+
+"About Xephyr" = "Über Xephyr";
+"Hide Xephyr" = "Xephyr ausblenden";
+"Hide Others" = "Andere ausblenden";
+"Show All" = "Alle einblenden";
+"Quit Xephyr" = "Xephyr beenden";
+"Edit" = "Bearbeiten";
+"Cut" = "Ausschneiden";
+"Copy" = "Kopieren";
+"Paste" = "Einsetzen";
+"Select All" = "Alles auswählen";
+"Window" = "Fenster";
+"Minimize" = "Im Dock ablegen";
+"Close" = "Schließen";
+"Screen size:" = "Bildschirmgröße:";
+"Custom" = "Benutzerdefiniert";
+"Screens:" = "Bildschirme:";
+"Command:" = "Befehl:";
+"Started on the new display, for example xterm. Leave empty for an empty display." = "Wird auf dem neuen Display gestartet, zum Beispiel xterm. Leer lassen für ein leeres Display.";
+"Not running." = "Läuft nicht.";
+"Start" = "Starten";
+"Stop" = "Stoppen";
+"Xephyr is not installed. Install the Xephyr package of your system and try again." = "Xephyr ist nicht installiert. Installieren Sie das Xephyr-Paket Ihres Systems und versuchen Sie es erneut.";
+"No free display number is left." = "Es ist keine freie Displaynummer mehr übrig.";
+"Could not create a temporary file for the Xephyr messages." = "Für die Meldungen von Xephyr konnte keine temporäre Datei angelegt werden.";
+"Could not create a temporary file for the command messages." = "Für die Meldungen des Befehls konnte keine temporäre Datei angelegt werden.";
+"Could not start %@: %@" = "%@ konnte nicht gestartet werden: %@";
+"Starting Xephyr on display %@..." = "Xephyr wird auf Display %@ gestartet...";
+"Xephyr is running on display %@." = "Xephyr läuft auf Display %@.";
+"Xephyr on display %@ was closed." = "Xephyr auf Display %@ wurde geschlossen.";
+"Xephyr exited with status %d." = "Xephyr wurde mit Status %d beendet.";
+"Xephyr did not open display %@ within %d seconds." = "Xephyr hat Display %@ nicht innerhalb von %d Sekunden geöffnet.";
+"The command exited with status %d." = "Der Befehl wurde mit Status %d beendet.";
+"The width must be a number between %ld and %ld." = "Die Breite muss eine Zahl zwischen %ld und %ld sein.";
+"The height must be a number between %ld and %ld." = "Die Höhe muss eine Zahl zwischen %ld und %ld sein.";
+"The number of screens must be between 1 and %ld." = "Die Anzahl der Bildschirme muss zwischen 1 und %ld liegen.";

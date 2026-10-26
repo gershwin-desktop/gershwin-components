@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+<!-- Copyright (c) 2026 Simon Peter. SPDX-License-Identifier: BSD-2-Clause -->
+<g fill="none" stroke="#3c3c3c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M1.5 8 C3.5 4.5 6 3 8 3 C10 3 12.5 4.5 14.5 8 C12.5 11.5 10 13 8 13 C6 13 3.5 11.5 1.5 8 Z"/><circle cx="8" cy="8" r="2.25"/>
+</g>
+</svg>

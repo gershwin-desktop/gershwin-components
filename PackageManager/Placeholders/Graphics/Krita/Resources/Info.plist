@@ -9,7 +9,7 @@
   <key>CFBundleIconFile</key>
   <string>Krita.png</string>
   <key>CFBundleIdentifier</key>
-  <string>org.gershwin.Krita</string>
+  <string>io.github.gershwin-desktop.Krita</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
