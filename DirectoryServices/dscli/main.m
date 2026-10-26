@@ -15,10 +15,11 @@
 #define DS_DOMAIN_PLIST @"/Local/Library/DirectoryServices/Domain.plist"
 
 // NextBSD ships its own NSS module for these plists (nss_directory_services),
-// owns /etc/nsswitch.conf, and has sudo in base reading only /etc/sudoers.d.
-// Detected at runtime, not by #ifdef: NextBSD compiles as FreeBSD. The marker
-// is nextbsd-version, which both image builders write before anything else is
-// built, so it is on every NextBSD image and on no other system.
+// owns /etc/nsswitch.conf, and sets up /Local, the plists, /Volumes and sudo
+// at boot, so init leaves it alone. Detected at runtime, not by #ifdef:
+// NextBSD compiles as FreeBSD. The marker is nextbsd-version, which both
+// image builders write before anything else is built, so it is on every
+// NextBSD image and on no other system.
 // (/usr/lib/system would be wrong: macOS has that too.)
 static BOOL isNextBSD(void) {
     return [[NSFileManager defaultManager]
@@ -942,16 +943,8 @@ static BOOL configureSudoers(void) {
     NSString *sudoersFile = nil;
 
 #if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__GhostBSD__)
-    // NextBSD's sudo is in base and reads only /etc/sudoers.d; the ports
-    // sudo on FreeBSD reads /usr/local/etc/sudoers.d. NextBSD compiles as
-    // FreeBSD, so this is decided at runtime.
-    if (isNextBSD()) {
-        sudoersDir = @"/etc/sudoers.d";
-        sudoersFile = @"/etc/sudoers.d/gershwin";
-    } else {
-        sudoersDir = @"/usr/local/etc/sudoers.d";
-        sudoersFile = @"/usr/local/etc/sudoers.d/gershwin";
-    }
+    sudoersDir = @"/usr/local/etc/sudoers.d";
+    sudoersFile = @"/usr/local/etc/sudoers.d/gershwin";
 #elif defined(__linux__)
     sudoersDir = @"/etc/sudoers.d";
     sudoersFile = @"/etc/sudoers.d/gershwin";
@@ -1013,11 +1006,8 @@ static BOOL configureSudoers(void) {
 
     [content appendString:@"\n"];
 
-    // Allow admin group to use sudo. NextBSD's base /etc/sudoers already
-    // grants %admin, so there the drop-in carries only the Defaults lines.
-    if (!isNextBSD()) {
-        [content appendString:@"%admin ALL = (ALL) ALL\n"];
-    }
+    // Allow admin group to use sudo
+    [content appendString:@"%admin ALL = (ALL) ALL\n"];
 
     // Write the sudoers file
     [content writeToFile:sudoersFile
@@ -1094,6 +1084,11 @@ static void configureNsswitch(void) {
 }
 
 static int cmdInit(void) {
+    if (isNextBSD()) {
+        printf("Directory Services: set up by NextBSD at boot; nothing to do.\n");
+        return 0;
+    }
+
     NSFileManager *fm = [NSFileManager defaultManager];
     NSError *error = nil;
 
@@ -1182,13 +1177,8 @@ static int cmdInit(void) {
         printf("Created: %s\n", [DS_LOCAL_GROUPS_PLIST UTF8String]);
     }
 
-    // Configure nsswitch.conf. On NextBSD the switch names
-    // nss_directory_services and is seeded from nextbsd-overlays; leave it.
-    if (isNextBSD()) {
-        printf("nsswitch.conf: managed by NextBSD (directory_services); not modified\n");
-    } else {
-        configureNsswitch();
-    }
+    // Configure nsswitch.conf
+    configureNsswitch();
 
     // Configure sudoers for admin group with GNUstep environment
     printf("\nConfiguring sudo environment...\n");
