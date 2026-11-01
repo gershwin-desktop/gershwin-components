@@ -13,8 +13,6 @@
 @property (nonatomic, strong) NSMutableArray<NSValue *> *ranges;
 @end
 
-NSString *EPUBPageBreakAttributeName = @"EPUBPageBreak";
-
 @implementation EPUBPaginator
 
 - (instancetype)initWithAttributedString:(NSAttributedString *)attrString

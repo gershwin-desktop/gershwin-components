@@ -1,151 +1,43 @@
-include $(GNUSTEP_MAKEFILES)/common.make
-GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+# minibus is plain C and needs neither Foundation nor any GNUstep library, so it
+# is built with ordinary rules instead of gnustep-make (which always links
+# gnustep-base). It still installs into the SYSTEM domain's tool directory.
 
-# Tools
-TOOL_NAME = minibus minibus-test simple-test simple-format-test byte-analyzer test-real-dbus test-hello-only hello-field-analyzer compare-hello-format test-hello-destination test-hello-reply-only test-alignment hello-length-analysis debug-listnames debug-message-format debug-listnames-serialization test-array-parsing test-requestname debug-hello-reply test-gdbus-proxy test-start-service test-message-parsing debug-message-parsing test-dict-roundtrip test-empty-string-issue test-variant-format test-complex-signature test-gimp-objects test-gimp-menus test-a-struct-roundtrip test-gtkmenus-body
+CC ?= cc
+CFLAGS ?= -O2
+CFLAGS += -std=gnu11 -Wall -Wextra -D_GNU_SOURCE
+OBJDIR = obj
+SRCS = src/minibus_main.c src/mb_main.c src/mb_bus.c src/mb_conn.c \
+	src/mb_driver.c src/mb_match.c src/mb_msg.c
+OBJS = $(SRCS:src/%.c=$(OBJDIR)/%.o)
+DEPS = $(OBJS:.o=.d)
 
-minibus_OBJC_FILES = main-daemon.m MBDaemon.m MBConnection.m MBMessage.m MBVariant.m MBTransport.m MBClient.m MBServiceManager.m MBServiceFile.m
-minibus-test_OBJC_FILES = main-test.m MBClient.m MBConnection.m MBMessage.m MBVariant.m MBTransport.m
-simple-test_OBJC_FILES = simple-test.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-simple-format-test_OBJC_FILES = simple-format-test.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-byte-analyzer_OBJC_FILES = byte-analyzer.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-real-dbus_OBJC_FILES = test-real-dbus.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-hello-only_OBJC_FILES = test-hello-only.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-hello-field-analyzer_OBJC_FILES = hello-field-analyzer.m MBMessage.m MBTransport.m MBVariant.m
-compare-hello-format_OBJC_FILES = compare-hello-format.m MBMessage.m MBTransport.m MBConnection.m MBDaemon.m MBServiceManager.m MBServiceFile.m MBVariant.m
-test-hello-destination_OBJC_FILES = test-hello-destination.m MBMessage.m MBTransport.m MBVariant.m
-test-hello-reply-only_OBJC_FILES = test-hello-reply-only.m MBMessage.m MBTransport.m MBVariant.m
-test-alignment_OBJC_FILES = test-alignment.m MBMessage.m MBTransport.m MBVariant.m
-hello-length-analysis_OBJC_FILES = hello-length-analysis.m MBMessage.m MBTransport.m MBVariant.m
-debug-listnames_OBJC_FILES = debug-listnames.m MBMessage.m MBTransport.m MBVariant.m
-debug-message-format_OBJC_FILES = debug-message-format.m MBMessage.m MBTransport.m MBVariant.m
-debug-listnames-serialization_OBJC_FILES = debug-listnames-serialization.m MBMessage.m MBTransport.m MBVariant.m
-test-array-parsing_OBJC_FILES = test-array-parsing.m MBMessage.m MBVariant.m
-test-requestname_OBJC_FILES = test-requestname.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-debug-hello-reply_OBJC_FILES = debug-hello-reply.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-gdbus-proxy_OBJC_FILES = test-gdbus-proxy.m
-test-start-service_OBJC_FILES = test-start-service.m
-test-message-parsing_OBJC_FILES = test-message-parsing.m MBMessage.m MBTransport.m MBVariant.m
-debug-message-parsing_OBJC_FILES = debug-message-parsing.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-debug-parsing-issue_OBJC_FILES = debug-parsing-issue.m MBMessage.m MBTransport.m MBVariant.m
-test-service_OBJC_FILES = test-service.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-activation-client_OBJC_FILES = test-activation-client.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-auto-activation_OBJC_FILES = test-auto-activation.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-debug-nameowner-signal_OBJC_FILES = debug-nameowner-signal.m MBMessage.m MBTransport.m MBVariant.m
-test-glib-simple_C_FILES = test-glib-simple.c
-debug-parsing-detailed_OBJC_FILES = debug-parsing-detailed.m MBMessage.m MBTransport.m MBVariant.m
-test-second-message_OBJC_FILES = test-second-message.m MBMessage.m MBTransport.m MBVariant.m
-test-full-buffer_OBJC_FILES = test-full-buffer.m MBMessage.m MBTransport.m MBVariant.m
-test-startservice_OBJC_FILES = test-startservice.m MBMessage.m MBTransport.m MBVariant.m
-test-startservice-direct_OBJC_FILES = test-startservice-direct.m
-debug-offset-469_OBJC_FILES = debug-offset-469.m MBMessage.m MBTransport.m MBVariant.m
-test-comprehensive-types_OBJC_FILES = test-comprehensive-types.m MBMessage.m MBTransport.m MBVariant.m
-test-struct-types_OBJC_FILES = test-struct-types.m MBMessage.m MBTransport.m MBVariant.m
-debug-struct-serialization_OBJC_FILES = debug-struct-serialization.m MBMessage.m MBTransport.m MBVariant.m
-debug-struct-signature_OBJC_FILES = debug-struct-signature.m MBMessage.m MBTransport.m MBVariant.m
-debug-struct-parsing_OBJC_FILES = debug-struct-parsing.m MBMessage.m MBTransport.m MBVariant.m
-test-enhanced-introspection_OBJC_FILES = test-enhanced-introspection.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-real-introspection_OBJC_FILES = test-real-introspection.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-debug-uint32_OBJC_FILES = debug-uint32.m
-debug-uint32-detailed_OBJC_FILES = debug-uint32-detailed.m
-test-signature-fix_OBJC_FILES = test-signature-fix.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-requestname-signature_OBJC_FILES = test-requestname-signature.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-variant-fix_OBJC_FILES = test-variant-fix.m MBMessage.m MBTransport.m MBVariant.m
-test-xfce-compatibility_OBJC_FILES = test-xfce-compatibility.m MBClient.m MBConnection.m MBMessage.m MBTransport.m MBVariant.m
-test-dict-roundtrip_OBJC_FILES = test-dict-roundtrip.m MBMessage.m MBVariant.m
-test-empty-string-issue_OBJC_FILES = test-empty-string-issue.m MBMessage.m MBVariant.m
-test-variant-format_OBJC_FILES = test-variant-format.m MBMessage.m MBVariant.m
-test-complex-signature_OBJC_FILES = test-complex-signature.m MBMessage.m MBVariant.m
-test-gimp-objects_OBJC_FILES = test-gimp-objects.m MBMessage.m MBVariant.m
-test-gimp-menus_OBJC_FILES = test-gimp-menus.m MBMessage.m MBVariant.m MBConnection.m MBClient.m MBTransport.m
-test-a-struct-roundtrip_OBJC_FILES = test-a-struct-roundtrip.m MBMessage.m MBVariant.m
-test-gtkmenus-body_OBJC_FILES = test-gtkmenus-body.m MBMessage.m MBVariant.m
+# Where the SYSTEM domain keeps tools
+TOOLS_DIR ?= /System/Library/Tools
 
-# Compiler flags for production builds
-minibus_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-minibus-test_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-simple-test_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-simple-format-test_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-byte-analyzer_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-real-dbus_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-hello-only_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-hello-field-analyzer_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-compare-hello-format_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-hello-destination_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-hello-reply-only_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-alignment_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-array-parsing_OBJCFLAGS += -Wall -Wextra -O2 -fblocks
-test-gdbus-proxy_OBJCFLAGS += -Wall -Wextra -O2 -fblocks $(shell pkg-config --cflags glib-2.0 gio-2.0)
-test-start-service_OBJCFLAGS += -Wall -Wextra -O2 -fblocks $(shell pkg-config --cflags glib-2.0 gio-2.0)
-debug-message-parsing_OBJCFLAGS += -Wall -Wextra -O2 -fblocks $(shell pkg-config --cflags glib-2.0 gio-2.0)
-test-glib-simple_CFLAGS += -Wall -Wextra -O2 $(shell pkg-config --cflags glib-2.0 gio-2.0)
+.PHONY: all clean install check bench
+all: $(OBJDIR)/minibus
 
-# Include paths
-minibus_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags dbus-1)
-minibus-test_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags dbus-1)
-simple-test_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags dbus-1)
-simple-format-test_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags dbus-1)
-byte-analyzer_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags dbus-1)
-test-real-dbus_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags dbus-1)
-hello-field-analyzer_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-compare-hello-format_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-test-hello-destination_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-test-hello-reply-only_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-test-alignment_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-hello-length-analysis_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-test-array-parsing_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-test-requestname_CPPFLAGS += -DGNUSTEP -I/usr/local/include
-test-gdbus-proxy_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags glib-2.0 gio-2.0)
-test-start-service_CPPFLAGS += -DGNUSTEP -I/usr/local/include $(shell pkg-config --cflags glib-2.0 gio-2.0)
+$(OBJDIR)/minibus: $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS)
 
-# Library paths and links
-minibus_LDFLAGS += -L/usr/local/lib $(shell pkg-config --libs dbus-1)
-minibus-test_LDFLAGS += -L/usr/local/lib $(shell pkg-config --libs dbus-1)
-simple-test_LDFLAGS += -L/usr/local/lib $(shell pkg-config --libs dbus-1)
-simple-format-test_LDFLAGS += -L/usr/local/lib $(shell pkg-config --libs dbus-1)
-byte-analyzer_LDFLAGS += -L/usr/local/lib
-test-real-dbus_LDFLAGS += -L/usr/local/lib
-hello-field-analyzer_LDFLAGS += -L/usr/local/lib
-compare-hello-format_LDFLAGS += -L/usr/local/lib
-test-hello-destination_LDFLAGS += -L/usr/local/lib
-test-hello-reply-only_LDFLAGS += -L/usr/local/lib
-test-alignment_LDFLAGS += -L/usr/local/lib
-hello-length-analysis_LDFLAGS += -L/usr/local/lib
-test-array-parsing_LDFLAGS += -L/usr/local/lib
-test-requestname_LDFLAGS = -lgnustep-base -lobjc
+$(OBJDIR)/%.o: src/%.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
-minibus_TOOL_LIBS += -lobjc -lBlocksRuntime
-minibus-test_TOOL_LIBS += -lobjc -lBlocksRuntime
-simple-test_TOOL_LIBS += -lobjc -lBlocksRuntime
-simple-format-test_TOOL_LIBS += -lobjc -lBlocksRuntime
-byte-analyzer_TOOL_LIBS += -lobjc -lBlocksRuntime
-test-real-dbus_TOOL_LIBS += -lobjc -lBlocksRuntime
-hello-field-analyzer_TOOL_LIBS += -lobjc -lBlocksRuntime
-compare-hello-format_TOOL_LIBS += -lobjc -lBlocksRuntime
-test-hello-destination_TOOL_LIBS += -lobjc -lBlocksRuntime
-test-hello-reply-only_TOOL_LIBS += -lobjc -lBlocksRuntime
-test-alignment_TOOL_LIBS += -lobjc -lBlocksRuntime
-hello-length-analysis_TOOL_LIBS += -lobjc -lBlocksRuntime
-debug-listnames-serialization_TOOL_LIBS += -lobjc -lBlocksRuntime
-test-array-parsing_TOOL_LIBS += -lobjc -lBlocksRuntime
-test-gdbus-proxy_TOOL_LIBS += -lobjc -lBlocksRuntime $(shell pkg-config --libs glib-2.0 gio-2.0)
-test-start-service_TOOL_LIBS += -lobjc -lBlocksRuntime $(shell pkg-config --libs glib-2.0 gio-2.0)
-debug-message-parsing_TOOL_LIBS += -lobjc -lBlocksRuntime $(shell pkg-config --libs glib-2.0 gio-2.0)
+clean:
+	rm -rf $(OBJDIR)
 
-test-glib-simple_TOOL_LIBS += -lobjc -lBlocksRuntime $(shell pkg-config --libs glib-2.0 gio-2.0)
+install: all
+	mkdir -p $(DESTDIR)$(TOOLS_DIR)
+	install -m 755 $(OBJDIR)/minibus $(DESTDIR)$(TOOLS_DIR)/minibus
 
-debug-listnames-serialization_CPPFLAGS += -DGNUSTEP -I/usr/local/include
+check: all
+	cd Tests && ./run.sh
 
-include $(GNUSTEP_MAKEFILES)/tool.make
+# Throughput and footprint measurement, not part of the build
+bench: $(OBJDIR)/bench
+$(OBJDIR)/bench: bench/bench.c Tests/wire.c Tests/wire.h
+	@mkdir -p $(OBJDIR)
+	$(CC) -O2 -std=gnu11 -o $@ bench/bench.c Tests/wire.c
 
-# Test targets
-test: all
-	@echo "Starting minibus daemon in background..."
-	./$(GNUSTEP_OBJ_DIR)/minibus &
-	@sleep 2
-	@echo "Running simple test..."
-	./$(GNUSTEP_OBJ_DIR)/simple-test
-	@echo "Stopping daemon..."
-	pkill -f minibus || true
-
-.PHONY: test
+-include $(DEPS)

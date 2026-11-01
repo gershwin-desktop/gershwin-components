@@ -295,6 +295,24 @@ main(int argc, char** argv, char **env_c)
     }
 
   /*
+   *	Also scan the user's Library/Applications directory: that is where
+   *	the PackageManager framework downloaded AppImages before the download
+   *	folder moved to ~/Applications (which NSAllApplicationsDirectory
+   *	covers), so an install made before the folder moved still
+   *	registers.
+   */
+  enumerator = [NSSearchPathForDirectoriesInDomains(
+    NSLibraryDirectory, NSUserDomainMask, YES) objectEnumerator];
+  while ((path = [enumerator nextObject]) != nil)
+    {
+      if ([path hasPrefix: @"."] == NO)
+	{
+	  scanApplications(services,
+	    [path stringByAppendingPathComponent: @"Applications"]);
+	}
+    }
+
+  /*
    *	Scan for service information in all standard locations.
    */
   enumerator = [NSSearchPathForDirectoriesInDomains(

@@ -18,10 +18,51 @@
 #include <string.h>
 
 // ============================================================================
+// Helper: Detect NextBSD
+// ============================================================================
+// NextBSD compiles as FreeBSD and can report itself as FreeBSD, so it is
+// detected by nextbsd-version, which both NextBSD image builders write and no
+// other system has. It installs with its own engine (nextbsd-userland
+// nextbsd-installer) instead of installer-FreeBSD.sh.
+#define IA_NEXTBSD_INSTALL_ENGINE @"/usr/libexec/nextbsd-installer/do-install.sh"
+#define IA_NEXTBSD_PROBE_DISKS    @"/usr/libexec/nextbsd-installer/probe-disks.sh"
+
+static BOOL IAIsNextBSD(void)
+{
+    return access("/bin/nextbsd-version", F_OK) == 0;
+}
+
+// ============================================================================
+// Helper: Convert NextBSD probe-disks.sh output to the --list-disks JSON
+// ============================================================================
+// probe-disks.sh prints DISK<TAB>dev<TAB>size<TAB>model<TAB>is_media lines.
+// The booted medium (is_media 1) is left out so it cannot be picked as target.
+static NSData *IANextBSDDisksJSON(NSString *probeOutput)
+{
+    NSMutableArray *disks = [NSMutableArray array];
+    for (NSString *line in [probeOutput componentsSeparatedByString:@"\n"]) {
+        NSArray *f = [line componentsSeparatedByString:@"\t"];
+        if ([f count] < 5 || ![f[0] isEqualToString:@"DISK"]) continue;
+        if ([f[4] isEqualToString:@"1"]) continue;
+        [disks addObject:@{
+            @"devicePath": [@"/dev/" stringByAppendingString:f[1]],
+            @"name": f[1],
+            @"description": f[3],
+            @"sizeBytes": @0,
+            @"formattedSize": f[2]
+        }];
+    }
+    return [NSJSONSerialization dataWithJSONObject:disks options:0 error:NULL];
+}
+
+// ============================================================================
 // Helper: Detect whether the real kernel is FreeBSD (even under Linux compat)
 // ============================================================================
 static BOOL IAIsFreeBSD(void)
 {
+    if (IAIsNextBSD()) {
+        return YES;
+    }
     struct utsname u;
     if (uname(&u) == 0 && strcmp(u.sysname, "FreeBSD") == 0) {
         return YES;
@@ -79,6 +120,12 @@ NSString *IAInstallerScriptPath(void)
 // ============================================================================
 NSString *IACheckImageSourceAvailable(void)
 {
+    /* The NextBSD engine always clones the running system */
+    if (IAIsNextBSD()) {
+        NSDebugLLog(@"gwcomp", @"IACheckImageSourceAvailable: NextBSD, no image install");
+        return nil;
+    }
+
     NSString *scriptPath = IAInstallerScriptPath();
     NSDebugLLog(@"gwcomp", @"IACheckImageSourceAvailable: running %@ --check-image-source", scriptPath);
 
@@ -640,11 +687,12 @@ NSString *IACheckImageSourceAvailable(void)
     [_spinner startAnimation:nil];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *scriptPath = IAInstallerScriptPath();
+        BOOL nextBSD = IAIsNextBSD();
+        NSString *scriptPath = nextBSD ? IA_NEXTBSD_PROBE_DISKS : IAInstallerScriptPath();
         NSDebugLLog(@"gwcomp", @"IADiskSelectionStep: using script %@", scriptPath);
         NSTask *task = [[NSTask alloc] init];
         [task setLaunchPath:scriptPath];
-        [task setArguments:@[@"--list-disks", @"--debug"]];
+        [task setArguments:nextBSD ? @[] : @[@"--list-disks", @"--debug"]];
 
         NSPipe *outPipe = [NSPipe pipe];
         NSPipe *errPipe = [NSPipe pipe];
@@ -667,6 +715,9 @@ NSString *IACheckImageSourceAvailable(void)
 
         NSString *outStr = outData ? [[[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] autorelease] : @"";
         NSString *errStr = errData ? [[[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding] autorelease] : @"";
+        if (nextBSD && outStr) {
+            outData = IANextBSDDisksJSON(outStr);
+        }
 
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
         [result setObject:(outStr ?: @"") forKey:@"stdout"];
@@ -1088,7 +1139,8 @@ NSString *IACheckImageSourceAvailable(void)
                                                userInfo:nil
                                                 repeats:YES] retain];
 
-    NSString *scriptPath = IAInstallerScriptPath();
+    BOOL nextBSD = IAIsNextBSD();
+    NSString *scriptPath = nextBSD ? IA_NEXTBSD_INSTALL_ENGINE : IAInstallerScriptPath();
     NSDebugLLog(@"gwcomp", @"IAInstallProgressStep: launching installer %@", scriptPath);
 
     NSMutableArray *taskArgs = [NSMutableArray array];
@@ -1109,9 +1161,18 @@ NSString *IACheckImageSourceAvailable(void)
         NSDebugLLog(@"gwcomp", @"IAInstallProgressStep: running as root");
     }
 
-    [taskArgs addObjectsFromArray:@[@"--noninteractive", @"--disk", disk.devicePath, @"--debug"]];
+    if (nextBSD) {
+        /* do-install.sh -d takes the bare disk name (ada0), not /dev/ada0 */
+        NSString *diskName = disk.devicePath;
+        if ([diskName hasPrefix:@"/dev/"]) {
+            diskName = [diskName substringFromIndex:[@"/dev/" length]];
+        }
+        [taskArgs addObjectsFromArray:@[@"-d", diskName]];
+    } else {
+        [taskArgs addObjectsFromArray:@[@"--noninteractive", @"--disk", disk.devicePath, @"--debug"]];
+    }
 
-    if (sourcePathOrNil && [sourcePathOrNil length] > 0) {
+    if (!nextBSD && sourcePathOrNil && [sourcePathOrNil length] > 0) {
         [taskArgs addObject:@"--source"];
         [taskArgs addObject:sourcePathOrNil];
         NSDebugLLog(@"gwcomp", @"IAInstallProgressStep: using image source %@", sourcePathOrNil);
@@ -1245,6 +1306,15 @@ NSString *IACheckImageSourceAvailable(void)
             _currentPercent = pct;
             [self _updateETA:nil];
         }
+    }
+    /* NextBSD engine lines - format: PROGRESS<TAB>percent, STATUS<TAB>message */
+    else if ([line hasPrefix:@"PROGRESS\t"]) {
+        double pct = [[line substringFromIndex:[@"PROGRESS\t" length]] doubleValue];
+        [_progressBar setDoubleValue:pct];
+        _currentPercent = pct;
+        [self _updateETA:nil];
+    } else if ([line hasPrefix:@"STATUS\t"]) {
+        [_detailLabel setStringValue:[line substringFromIndex:[@"STATUS\t" length]]];
     }
 }
 

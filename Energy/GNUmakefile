@@ -1,12 +1,22 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
-Energy_OBJCFLAGS += -Wall -Wextra -Werror -O2
+Energy_OBJCFLAGS += -Wall -Wextra -Werror -O2 -I/System/Library/Headers/CPUGovernorBackend
 
 BUNDLE_NAME = Energy
 Energy_OBJC_FILES = EnergyPane.m EnergyController.m
 Energy_RESOURCE_FILES = Energy.png
-Energy_BUNDLE_LIBS = -lPreferencePanes
+# The governor list/read/write logic lives in libCPUGovernorBackend (built
+# from Libraries/CPUGovernorBackend, sources in this directory), shared with
+# the Battery menu extra the same way Sound shares -lSoundBackend with the
+# Sound menu extra - one backend, not two copies of the governor logic.
+Energy_BUNDLE_LIBS = -lPreferencePanes -lCPUGovernorBackend -lEnergyBackend
+# Backlight, blanking and the disk/network power settings live in
+# libEnergyBackend (Libraries/EnergyBackend, sources in this directory),
+# shared with gershwin-apply-settings, which applies them again at login.
+# The build-tree directories come first so an uninstalled build links the
+# libraries it was built with.
+ADDITIONAL_LIB_DIRS += -L../Libraries/EnergyBackend/obj -L../Libraries/CPUGovernorBackend/obj
 Energy_PRINCIPAL_CLASS = EnergyPane
 PREF_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Bundles
 BUNDLE_EXTENSION = .prefPane

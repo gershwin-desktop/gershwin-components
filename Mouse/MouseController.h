@@ -5,43 +5,33 @@
  */
 
 #import <AppKit/AppKit.h>
+#import "PointerSection.h"
 
-@interface MouseController : NSObject
+@class MouseBackend;
+
+/* The Mouse pane: one group box whose tabs are the pointer classes this
+ * machine has (a desktop with a mouse sees only the mouse, a laptop sees
+ * trackpad and whatever else is plugged in), the system-wide double-click
+ * speed below it and a status line. */
+@interface MouseController : NSObject <PointerSectionDelegate>
 {
     NSView *mainView;
-    NSBox *mouseBox;
-    NSBox *trackpadBox;
-    NSBox *trackpointBox;
-
-    NSSlider *mouseSpeedSlider;
-    NSTextField *mouseSpeedLabel;
-
-    NSSlider *trackpadSpeedSlider;
-    NSTextField *trackpadSpeedLabel;
-
-    NSSlider *trackpointSpeedSlider;
-    NSTextField *trackpointSpeedLabel;
-
-    NSButton *naturalScrollingCheckbox;
-    NSButton *tapToClickCheckbox;
-    NSButton *twoFingerRightClickCheckbox;
-    NSButton *threeFingerMiddleClickCheckbox;
-    NSButton *disableWhileTypingCheckbox;
-    NSButton *leftHandedCheckbox;
-
+    NSBox *devicesBox;
+    NSTabView *devicesTabView;
+    NSTextField *noDeviceLabel;
+    NSSlider *doubleClickSlider;
+    NSTextField *doubleClickValue;
     NSTextField *statusLabel;
 
-    NSString *xinputPath;
-    NSString *touchpadName;
-    NSString *mouseName;
-    NSString *trackpointName;
-
-    BOOL isRefreshing;
+    MouseBackend *backend;
+    /* One per class, in the order their tabs appear. */
+    NSArray *sections;
+    NSMutableDictionary *tabItems;
+    BOOL refreshing;
 }
 
 - (NSView *)createMainView;
 - (void)relayoutWithWidth:(CGFloat)width;
 - (void)refreshFromSystem;
-- (IBAction)settingChanged:(id)sender;
 
 @end

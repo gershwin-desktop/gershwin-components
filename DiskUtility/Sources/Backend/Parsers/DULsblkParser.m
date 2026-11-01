@@ -22,6 +22,9 @@ NSString * const kLsblkKeyReadOnly = @"readOnly";
 NSString * const kLsblkKeyRemovable = @"removable";
 NSString * const kLsblkKeyHotplug = @"hotplug";
 NSString * const kLsblkKeyMajorMinor = @"majorMinor";
+NSString * const kLsblkKeyPartTableType = @"partTableType";
+NSString * const kLsblkKeyPartType = @"partType";
+NSString * const kLsblkKeyPartLabel = @"partLabel";
 
 // lsblk -P encodes characters that would break the pair format (spaces,
 // quotes, non-printables) as \xHH byte escapes, so values are reassembled at
@@ -123,6 +126,9 @@ static NSString *StringFromValueData(NSData *data)
             @"RM":        kLsblkKeyRemovable,
             @"HOTPLUG":   kLsblkKeyHotplug,
             @"MAJ:MIN":   kLsblkKeyMajorMinor,
+            @"PTTYPE":    kLsblkKeyPartTableType,
+            @"PARTTYPE":  kLsblkKeyPartType,
+            @"PARTLABEL": kLsblkKeyPartLabel,
         };
     }
 

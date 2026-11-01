@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Modes Test Show</title>
+    <description>A podcast that lives in a file, for Player's tests</description>
+    <item>
+      <title>Modes Episode Two</title>
+      <guid>modes-episode-2</guid>
+      <pubDate>Wed, 02 Oct 2024 12:00:00 +0000</pubDate>
+      <itunes:duration>20</itunes:duration>
+      <enclosure url="file://@DIR@/episode.mp3" type="audio/mpeg" length="0"/>
+    </item>
+    <item>
+      <title>Modes Episode One</title>
+      <guid>modes-episode-1</guid>
+      <pubDate>Tue, 01 Oct 2024 12:00:00 +0000</pubDate>
+      <itunes:duration>20</itunes:duration>
+      <enclosure url="file://@DIR@/episode.mp3" type="audio/mpeg" length="0"/>
+    </item>
+  </channel>
+</rss>

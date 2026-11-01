@@ -7,6 +7,26 @@
 
 #import "GSAssistantFramework.h"
 
+// The framework ships its own localized tables, but a consuming application may
+// want to override any of them, so the application is asked first and this
+// framework's bundle is only the fallback.  Plain NSLocalizedString() consults
+// the main bundle alone, which is why the framework's own Go Back / Continue /
+// Finish titles stayed English inside an otherwise localized assistant.
+static NSString *GSAssistantLocalized(NSString *key, NSString *comment) {
+    NSString *value = NSLocalizedString(key, comment);
+    if (value && ![value isEqualToString:key]) {
+        return value;
+    }
+    NSBundle *frameworkBundle = [NSBundle bundleForClass:[GSAssistantWindow class]];
+    if (frameworkBundle && frameworkBundle != [NSBundle mainBundle]) {
+        NSString *fromFramework = NSLocalizedStringFromTableInBundle(key, nil, frameworkBundle, comment);
+        if (fromFramework && ![fromFramework isEqualToString:key]) {
+            return fromFramework;
+        }
+    }
+    return value ?: key;
+}
+
 // Layout constants implementation
 const CGFloat GSAssistantDefaultWindowWidth = 700.0;
 const CGFloat GSAssistantDefaultWindowHeight = 500.0;
@@ -132,7 +152,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
                                                    action: nil
                                             keyEquivalent: @""];
   NSMenu *appMenu = [[NSMenu alloc] initWithTitle: appName];
-  [appMenu addItemWithTitle: NSLocalizedString(@"About", @"About menu item")
+  [appMenu addItemWithTitle: GSAssistantLocalized(@"About", @"About menu item")
                      action: @selector(orderFrontStandardAboutPanel:)
               keyEquivalent: @""];
   [appItem setSubmenu: appMenu];
@@ -140,31 +160,31 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
 
   /* File menu: Quit (Cmd+Q). */
   NSMenuItem *fileItem = [[NSMenuItem alloc] initWithTitle:
-    NSLocalizedString(@"File", @"File menu title") action: nil keyEquivalent: @""];
+    GSAssistantLocalized(@"File", @"File menu title") action: nil keyEquivalent: @""];
   NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:
-    NSLocalizedString(@"File", @"File menu title")];
-  [fileMenu addItemWithTitle: NSLocalizedString(@"Quit", @"Quit menu item")
+    GSAssistantLocalized(@"File", @"File menu title")];
+  [fileMenu addItemWithTitle: GSAssistantLocalized(@"Quit", @"Quit menu item")
                       action: @selector(terminate:)
                keyEquivalent: @"q"];
   [fileItem setSubmenu: fileMenu];
   [mainMenu addItem: fileItem];
 
   NSMenuItem *editItem = [[NSMenuItem alloc] initWithTitle:
-    NSLocalizedString(@"Edit", @"Edit menu title") action: nil keyEquivalent: @""];
+    GSAssistantLocalized(@"Edit", @"Edit menu title") action: nil keyEquivalent: @""];
   NSMenu *editMenu = [[NSMenu alloc] initWithTitle:
-    NSLocalizedString(@"Edit", @"Edit menu title")];
-  [editMenu addItemWithTitle: NSLocalizedString(@"Undo", @"Undo menu item")
+    GSAssistantLocalized(@"Edit", @"Edit menu title")];
+  [editMenu addItemWithTitle: GSAssistantLocalized(@"Undo", @"Undo menu item")
                       action: @selector(undo:) keyEquivalent: @"z"];
-  [editMenu addItemWithTitle: NSLocalizedString(@"Redo", @"Redo menu item")
+  [editMenu addItemWithTitle: GSAssistantLocalized(@"Redo", @"Redo menu item")
                       action: @selector(redo:) keyEquivalent: @"Z"];
   [editMenu addItem: [NSMenuItem separatorItem]];
-  [editMenu addItemWithTitle: NSLocalizedString(@"Cut", @"Cut menu item")
+  [editMenu addItemWithTitle: GSAssistantLocalized(@"Cut", @"Cut menu item")
                       action: @selector(cut:) keyEquivalent: @"x"];
-  [editMenu addItemWithTitle: NSLocalizedString(@"Copy", @"Copy menu item")
+  [editMenu addItemWithTitle: GSAssistantLocalized(@"Copy", @"Copy menu item")
                       action: @selector(copy:) keyEquivalent: @"c"];
-  [editMenu addItemWithTitle: NSLocalizedString(@"Paste", @"Paste menu item")
+  [editMenu addItemWithTitle: GSAssistantLocalized(@"Paste", @"Paste menu item")
                       action: @selector(paste:) keyEquivalent: @"v"];
-  [editMenu addItemWithTitle: NSLocalizedString(@"Select All", @"Select All menu item")
+  [editMenu addItemWithTitle: GSAssistantLocalized(@"Select All", @"Select All menu item")
                       action: @selector(selectAll:) keyEquivalent: @"a"];
   [editItem setSubmenu: editMenu];
   [mainMenu addItem: editItem];
@@ -264,6 +284,11 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
             if ([step isKindOfClass:[GSAssistantStep class]]) {
                 GSAssistantStep *assistantStep = (GSAssistantStep *)step;
                 assistantStep.assistantWindow = self;
+            } else if ([step respondsToSelector:@selector(setAssistantWindow:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                [step performSelector:@selector(setAssistantWindow:) withObject:self];
+#pragma clang diagnostic pop
             }
         }
 
@@ -281,14 +306,24 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
 
 - (void)setupWindow {
     NSWindow *window = self.window;
-    window.title = _assistantTitle ?: NSLocalizedString(@"Setup Assistant", @"Default assistant window title");
+    window.title = _assistantTitle ?: GSAssistantLocalized(@"Setup Assistant", @"Default assistant window title");
     
-    // Set window size constraints based on layout style
+    /* Window size constraints are in the window's base coordinate system,
+     * which is device pixels, while GSAssistantInstallerWindowWidth/Height are
+     * point constants.  Handing the point constants to minSize/maxSize clamps
+     * the window down to those pixel dimensions once it is mapped: at
+     * GSScaleFactor 1.2 the 620x460 point window became a 620x460 *pixel*
+     * window, every subview laid out for 620 points overflowed it and the
+     * Continue button ended up outside the window altogether. */
     if (_layoutStyle == GSAssistantLayoutStyleInstaller) {
-        window.minSize = NSMakeSize(_windowWidth, _windowHeight);
-        window.maxSize = NSMakeSize(_windowWidth, _windowHeight);
+        NSSize frameSize = [window frame].size;
+        window.minSize = frameSize;
+        window.maxSize = frameSize;
     } else {
-        window.minSize = NSMakeSize(GSAssistantWindowMinWidth, GSAssistantWindowMinHeight);
+        CGFloat scale = [window userSpaceScaleFactor];
+        if (scale <= 0.0) scale = 1.0;
+        window.minSize = NSMakeSize(GSAssistantWindowMinWidth * scale,
+                                    GSAssistantWindowMinHeight * scale);
     }
     
     [window center];
@@ -396,7 +431,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     _titleLabel.drawsBackground = NO;
     _titleLabel.backgroundColor = [NSColor clearColor];
     _titleLabel.font = [NSFont boldSystemFontOfSize:20.0];
-    _titleLabel.stringValue = _assistantTitle ?: NSLocalizedString(@"Setup Assistant", @"Default assistant window title");
+    _titleLabel.stringValue = _assistantTitle ?: GSAssistantLocalized(@"Setup Assistant", @"Default assistant window title");
     [_mainContentView addSubview:_titleLabel];
     
     // Step title
@@ -444,7 +479,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     
     // Cancel button with standard margins and height (20px from bottom)
     _cancelButton = [[NSButton alloc] initWithFrame:NSMakeRect(24, 20, 85, 24)];
-    _cancelButton.title = NSLocalizedString(@"Cancel", @"Cancel button title");
+    _cancelButton.title = GSAssistantLocalized(@"Cancel", @"Cancel button title");
     _cancelButton.bezelStyle = NSRoundedBezelStyle;
     _cancelButton.target = self;
     _cancelButton.action = @selector(cancelButtonClicked:);
@@ -452,7 +487,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     
     // Back button with standard spacing and height (20px from bottom)
     _backButton = [[NSButton alloc] initWithFrame:NSMakeRect(494, 20, 85, 24)];
-    _backButton.title = NSLocalizedString(@"Go Back", @"Go back button title");
+    _backButton.title = GSAssistantLocalized(@"Go Back", @"Go back button title");
     _backButton.bezelStyle = NSRoundedBezelStyle;
     _backButton.target = self;
     _backButton.action = @selector(backButtonClicked:);
@@ -460,7 +495,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     
     // Continue button - standard height and spacing (20px from bottom)
     _continueButton = [[NSButton alloc] initWithFrame:NSMakeRect(591, 20, 85, 24)];
-    _continueButton.title = NSLocalizedString(@"Continue", @"Continue button title");
+    _continueButton.title = GSAssistantLocalized(@"Continue", @"Continue button title");
     _continueButton.bezelStyle = NSRoundedBezelStyle;
     _continueButton.target = self;
     _continueButton.keyEquivalent = @"\r";
@@ -490,21 +525,31 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
 
 - (void)addStep:(id<GSAssistantStepProtocol>)step {
     [_stepsArray addObject:step];
-    
+
     // Set assistant window reference for all steps that support it
     if ([step isKindOfClass:[GSAssistantStep class]]) {
         GSAssistantStep *assistantStep = (GSAssistantStep *)step;
         assistantStep.assistantWindow = self;
+    } else if ([step respondsToSelector:@selector(setAssistantWindow:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [step performSelector:@selector(setAssistantWindow:) withObject:self];
+#pragma clang diagnostic pop
     }
 }
 
 - (void)insertStep:(id<GSAssistantStepProtocol>)step atIndex:(NSInteger)index {
     [_stepsArray insertObject:step atIndex:index];
-    
+
     // Set assistant window reference for all steps that support it
     if ([step isKindOfClass:[GSAssistantStep class]]) {
         GSAssistantStep *assistantStep = (GSAssistantStep *)step;
         assistantStep.assistantWindow = self;
+    } else if ([step respondsToSelector:@selector(setAssistantWindow:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [step performSelector:@selector(setAssistantWindow:) withObject:self];
+#pragma clang diagnostic pop
     }
 }
 
@@ -726,10 +771,10 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         if (customTitle) {
             _continueButton.title = customTitle;
         } else {
-            _continueButton.title = isLastStep ? NSLocalizedString(@"Finish", @"Finish button title") : NSLocalizedString(@"Continue", @"Continue button title");
+            _continueButton.title = isLastStep ? GSAssistantLocalized(@"Finish", @"Finish button title") : GSAssistantLocalized(@"Continue", @"Continue button title");
         }
     } else {
-        _continueButton.title = isLastStep ? NSLocalizedString(@"Finish", @"Finish button title") : NSLocalizedString(@"Continue", @"Continue button title");
+        _continueButton.title = isLastStep ? GSAssistantLocalized(@"Finish", @"Finish button title") : GSAssistantLocalized(@"Continue", @"Continue button title");
     }
     
     BOOL canGoBack = (_currentIndex > 0);
@@ -745,10 +790,10 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         if (customTitle) {
             _backButton.title = customTitle;
         } else {
-            _backButton.title = NSLocalizedString(@"Go Back", @"Go back button title");
+            _backButton.title = GSAssistantLocalized(@"Go Back", @"Go back button title");
         }
     } else {
-        _backButton.title = NSLocalizedString(@"Go Back", @"Go back button title");
+        _backButton.title = GSAssistantLocalized(@"Go Back", @"Go back button title");
     }
     
     _cancelButton.hidden = !_allowsCancel;
@@ -769,13 +814,13 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
 #pragma mark - Error and Success Pages
 
 - (void)showErrorPageWithMessage:(NSString *)message {
-    [self showErrorPageWithTitle:@"Error" message:message];
+    [self showErrorPageWithTitle:GSAssistantLocalized(@"Error", @"Error page title") message:message];
 }
 
 - (void)showErrorPageWithTitle:(NSString *)title message:(NSString *)message {
     GSCompletionStep *errorStep = [[GSCompletionStep alloc] initWithCompletionMessage:message success:NO];
     errorStep.title = title;
-    errorStep.stepDescription = @"An error occurred during the process.";
+    errorStep.stepDescription = GSAssistantLocalized(@"An error occurred during the process.", @"Error page description");
     
     [self.steps removeAllObjects];
     [self addStep:errorStep];
@@ -788,7 +833,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
 - (void)showSuccessPageWithTitle:(NSString *)title message:(NSString *)message {
     GSCompletionStep *successStep = [[GSCompletionStep alloc] initWithCompletionMessage:message success:YES];
     successStep.title = title;
-    successStep.stepDescription = @"The process completed successfully.";
+    successStep.stepDescription = GSAssistantLocalized(@"The process completed successfully.", @"Success page description");
     
     [self.steps removeAllObjects];
     [self addStep:successStep];
@@ -803,8 +848,8 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     
     // Create a completion step that auto-hides navigation buttons
     GSCompletionStep *successStep = [[GSCompletionStep alloc] initWithCompletionMessage:message success:YES];
-    successStep.title = @"Setup Complete";
-    successStep.stepDescription = @"The process completed successfully.";
+    successStep.title = GSAssistantLocalized(@"Setup Complete", @"Success completion title");
+    successStep.stepDescription = GSAssistantLocalized(@"The process completed successfully.", @"Success completion description");
     successStep.hideNavigationButtons = YES; // Hide all navigation buttons
     
     [self.steps removeAllObjects];
@@ -913,7 +958,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     // Options button (left side, hidden by default) with standard margins
     NSRect optionsFrame = NSMakeRect(24, buttonY, 80, 24);
     _optionsButton = [[NSButton alloc] initWithFrame:optionsFrame];
-    [_optionsButton setTitle:@"Options..."];
+    [_optionsButton setTitle:GSAssistantLocalized(@"Options...", @"Options button title")];
     [_optionsButton setBezelStyle:NSRoundedBezelStyle];
     [_optionsButton setTarget:self];
     [_optionsButton setAction:@selector(optionsButtonClicked:)];
@@ -923,7 +968,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     // Continue button (right side) 100x24, right edge 24px
     NSRect continueFrame = NSMakeRect(_windowWidth - 24 - 100, buttonY, 100, 24);
     _continueButton = [[NSButton alloc] initWithFrame:continueFrame];
-    [_continueButton setTitle:@"Continue"];
+    [_continueButton setTitle:GSAssistantLocalized(@"Continue", @"Continue button title")];
     [_continueButton setBezelStyle:NSRoundedBezelStyle];
     [_continueButton setKeyEquivalent:@"\r"];
     [_continueButton setTarget:self];
@@ -934,7 +979,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
     // Back button (left of continue by 12px), 80x24
     NSRect backFrame = NSMakeRect(_windowWidth - 24 - 100 - 12 - 80, buttonY, 80, 24);
     _backButton = [[NSButton alloc] initWithFrame:backFrame];
-    [_backButton setTitle:NSLocalizedString(@"Go Back", @"Go back button title")];
+    [_backButton setTitle:GSAssistantLocalized(@"Go Back", @"Go back button title")];
     [_backButton setBezelStyle:NSRoundedBezelStyle];
     [_backButton setTarget:self];
     [_backButton setAction:@selector(backClicked:)];
@@ -952,23 +997,29 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         id<GSAssistantStepProtocol> step = _stepsArray[i];
         CGFloat yPosition = startY - 45 - (i * stepPitch);
 
-        NSRect stepFrame = NSMakeRect(6, yPosition - 12, GSAssistantInstallerSidebarWidth - 12 - 6, 24);
+        // Row uses the whole sidebar width; the label gets everything the
+        // bullet leaves over so a translated step name is not sliced off.
+        NSRect stepFrame = NSMakeRect(4, yPosition - 12, GSAssistantInstallerSidebarWidth - 8, 24);
         NSView *stepRow = [[NSView alloc] initWithFrame:stepFrame];
 
         // Bullet 16x16 at x=8
-        GSStepBulletView *bullet = [[GSStepBulletView alloc] initWithFrame:NSMakeRect(8, 5, 16, 16)];
+        GSStepBulletView *bullet = [[GSStepBulletView alloc] initWithFrame:NSMakeRect(4, 5, 16, 16)];
         [bullet setState:(i == 0 ? 1 : 0)];
 
         // Label
-        NSTextField *label = [[NSTextField alloc] initWithFrame:NSMakeRect(32, 1, stepFrame.size.width - 36, 20)];
+        NSTextField *label = [[NSTextField alloc] initWithFrame:NSMakeRect(22, 4, stepFrame.size.width - 26, 14)];
         [label setStringValue:[step stepTitle]];
         [label setBezeled:NO];
         [label setDrawsBackground:NO];
         [label setEditable:NO];
         [label setSelectable:NO];
         [label setBordered:NO];
-        [label setFont:[NSFont systemFontOfSize:12]];
+        [label setFont:[NSFont systemFontOfSize:11]];
         [label setTextColor:[NSColor colorWithCalibratedWhite:0.25 alpha:1.0]];
+        // One line only; anything that still does not fit ends in an ellipsis
+        // instead of being sliced off at the edge of the sidebar.
+        [[label cell] setWraps:NO];
+        [[label cell] setLineBreakMode:NSLineBreakByTruncatingTail];
 
         [stepRow addSubview:bullet];
         [stepRow addSubview:label];
@@ -989,15 +1040,15 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         if (i < _currentIndex) {
             [bullet setState:2];
             [label setTextColor:[NSColor colorWithCalibratedWhite:0.5 alpha:1.0]];
-            [label setFont:[NSFont systemFontOfSize:12]];
+            [label setFont:[NSFont systemFontOfSize:11]];
         } else if (i == _currentIndex) {
             [bullet setState:1];
             [label setTextColor:[NSColor blackColor]];
-            [label setFont:[NSFont boldSystemFontOfSize:12]];
+            [label setFont:[NSFont boldSystemFontOfSize:11]];
         } else {
             [bullet setState:0];
             [label setTextColor:[NSColor colorWithCalibratedWhite:0.6 alpha:1.0]];
-            [label setFont:[NSFont systemFontOfSize:12]];
+            [label setFont:[NSFont systemFontOfSize:11]];
         }
     }
 }
@@ -1041,6 +1092,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         CGFloat descBlockHeight = 0.0;
         if (desc && [desc length] > 0) {
             NSRect inner = NSInsetRect(_installerContentCardView.bounds, 12.0, 12.0);
+            NSFont *descFont = [NSFont systemFontOfSize:12];
             NSRect descFrame = NSMakeRect(inner.origin.x, inner.origin.y + inner.size.height - 18.0, inner.size.width, 16.0);
             _installerStepDescriptionField = [[NSTextField alloc] initWithFrame:descFrame];
             [_installerStepDescriptionField setStringValue:desc];
@@ -1049,7 +1101,7 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
             [_installerStepDescriptionField setDrawsBackground:NO];
             [_installerStepDescriptionField setEditable:NO];
             [_installerStepDescriptionField setSelectable:NO];
-            [_installerStepDescriptionField setFont:[NSFont systemFontOfSize:12]];
+            [_installerStepDescriptionField setFont:descFont];
             [_installerStepDescriptionField setTextColor:[NSColor colorWithCalibratedWhite:0.25 alpha:1.0]];
             // Enable wrapping for GNUstep labels
             if ([[_installerStepDescriptionField cell] respondsToSelector:@selector(setWraps:)]) {
@@ -1059,28 +1111,27 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
                 [[_installerStepDescriptionField cell] setScrollable:NO];
             }
 
-            // Compute expected height using the cell's measurement
-            CGFloat baseHeight = 18.0;
-            CGFloat padding = 16.0;
-            CGFloat available = inner.size.height - 20.0;
-            CGFloat computedHeight = 48.0;
-            CGFloat maxWidth = inner.size.width;
-            if ([[_installerStepDescriptionField cell] respondsToSelector:@selector(cellSizeForBounds:)]) {
-                NSRect measureBounds = NSMakeRect(0, 0, maxWidth, 2000);
-                NSSize expected = [[_installerStepDescriptionField cell] cellSizeForBounds:measureBounds];
-                computedHeight = MAX(expected.height + 6.0, baseHeight);
-            }
-            // Ensure we leave sufficient space for the step content (minimum 80px)
-            CGFloat minContentHeight = 80.0;
-            CGFloat maxDescHeight = MAX(available - minContentHeight, baseHeight);
-            if (maxDescHeight < baseHeight) maxDescHeight = baseHeight;
-            computedHeight = MIN(computedHeight, maxDescHeight);
+            /* Measure the wrapped text itself.  -[NSTextFieldCell
+             * cellSizeForBounds:] reports one line no matter how the cell
+             * wraps, and a frame a fraction shorter than the real text makes
+             * the cell drop every line but the first - which is how the second
+             * line of the step description went missing. */
+            NSRect measured = [desc boundingRectWithSize:NSMakeSize(inner.size.width, 4000.0)
+                                                 options:NSStringDrawingUsesLineFragmentOrigin
+                                              attributes:@{NSFontAttributeName: descFont}];
+            CGFloat descHeight = ceil(measured.size.height) + 2.0;
 
-            // Position description at top area inside the card
-            NSRect finalDescFrame = NSMakeRect(inner.origin.x, inner.origin.y + inner.size.height - computedHeight - padding/2.0, maxWidth, computedHeight + padding/2.0);
+            // Ensure we leave sufficient space for the step content
+            CGFloat available = inner.size.height - 80.0;
+            descHeight = MIN(MAX(descHeight, 18.0), MAX(available, 18.0));
+
+            // Description sits at the top of the card, step content below it
+            NSRect finalDescFrame = NSMakeRect(inner.origin.x,
+                                               inner.origin.y + inner.size.height - descHeight,
+                                               inner.size.width, descHeight);
             _installerStepDescriptionField.frame = finalDescFrame;
             [_installerContentCardView addSubview:_installerStepDescriptionField];
-            descBlockHeight = 20.0; // label height + minimal spacing
+            descBlockHeight = descHeight + 6.0;
         }
 
         // Place step view below the description inside the card with optimized padding to maximize vertical space
@@ -1114,10 +1165,10 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         if (customTitle) {
             _continueButton.title = customTitle;
         } else {
-            _continueButton.title = isLastStep ? NSLocalizedString(@"Finish", @"Finish button title") : NSLocalizedString(@"Continue", @"Continue button title");
+            _continueButton.title = isLastStep ? GSAssistantLocalized(@"Finish", @"Finish button title") : GSAssistantLocalized(@"Continue", @"Continue button title");
         }
     } else {
-        _continueButton.title = isLastStep ? NSLocalizedString(@"Finish", @"Finish button title") : NSLocalizedString(@"Continue", @"Continue button title");
+        _continueButton.title = isLastStep ? GSAssistantLocalized(@"Finish", @"Finish button title") : GSAssistantLocalized(@"Continue", @"Continue button title");
     }
     
     // Set continue button as default
@@ -1136,10 +1187,10 @@ static const CGFloat GSAssistantWindowMinHeight = 450.0;
         if (customBackTitle) {
             _backButton.title = customBackTitle;
         } else {
-            _backButton.title = NSLocalizedString(@"Go Back", @"Go back button title");
+            _backButton.title = GSAssistantLocalized(@"Go Back", @"Go back button title");
         }
     } else {
-        _backButton.title = NSLocalizedString(@"Go Back", @"Go back button title");
+        _backButton.title = GSAssistantLocalized(@"Go Back", @"Go back button title");
     }
     
     // Options button is hidden by default

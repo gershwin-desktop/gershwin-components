@@ -13,21 +13,28 @@
 + (Display *)sharedDisplay;
 + (void)cleanup;
 
+// Hand the pages of freed heap memory back to the system.  For after work
+// that allocates a lot and frees it again; costs a few milliseconds.
++ (void)releaseFreedHeapMemory;
+
 + (NSString *)getApplicationNameForWindow:(unsigned long)windowId;
 + (BOOL)isWindowValid:(unsigned long)windowId;
 + (BOOL)isWindowMapped:(unsigned long)windowId;
 + (BOOL)isDesktopWindow:(unsigned long)windowId;
+// Same check on a connection the caller owns, for threads with their own.
++ (BOOL)isDesktopWindow:(unsigned long)windowId onDisplay:(Display *)display;
 + (BOOL)isDialogWindow:(unsigned long)windowId;
 // True for a real top-level application window per ICCCM/EWMH: viewable, not
 // override-redirect, and with a normal/dialog/utility _NET_WM_WINDOW_TYPE (or
 // no type at all).  Window-manager-internal windows (tooltips, menus, docks,
 // notifications) and Chromium's internal helper windows that Chromium marks as
-// non-normal are excluded, so the global menu does not chase them.
-+ (BOOL)isRealApplicationWindow:(unsigned long)windowId;
+// non-normal are excluded, so the global menu does not chase them.  Queried
+// on the caller's own connection: the shared display is used by the main
+// thread, and Xlib aborted when another thread used it at the same time.
++ (BOOL)isRealApplicationWindow:(unsigned long)windowId onDisplay:(Display *)display;
 // Read _NET_ACTIVE_WINDOW on a fresh connection (safe from any thread).
 + (unsigned long)getActiveWindowFresh;
 + (NSArray *)getAllWindows;
-+ (unsigned long)getActiveWindow;
 + (NSString *)getWindowProperty:(unsigned long)windowId atomName:(NSString *)atomName;
 + (NSString*)getWindowMenuService:(unsigned long)windowId;
 + (NSString*)getWindowMenuPath:(unsigned long)windowId;
@@ -39,10 +46,10 @@
 + (void)removeGlobalMenuSupport;
 
 /* ── Gershwin root-window "active application" properties ──────────────
-   The WM maintains _GERSHWIN_ACTIVE_APP (Cardinal = PID of the frontmost
+   The WM maintains _ACTIVE_APPLICATION (Cardinal = PID of the frontmost
    application) and clears _NET_ACTIVE_WINDOW when a windowless app is the
    frontmost.  Menu.app reads the PID to decide which app menu to show.
-   Menu.app maintains _GERSHWIN_MENU_APPS (array of Cardinal PIDs of apps
+   Menu.app maintains _MENU_APPLICATIONS (array of Cardinal PIDs of apps
    that have an application-level menu); the WM's Alt-Tab reads it to list
    windowless apps. */
 + (pid_t)getActiveApplicationPID;

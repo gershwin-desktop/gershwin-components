@@ -1,0 +1,12 @@
+# The tests link the library built in the directory above, not an
+# installed copy, so they test this tree. GNUstep.sh puts the installed
+# libraries in LD_LIBRARY_PATH, which beats a DT_RUNPATH but not a DT_RPATH,
+# hence --disable-new-dtags.
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+MIDINET_DIR := $(CURDIR)/..
+MIDINET_LIB := $(wildcard $(MIDINET_DIR)/obj/libMIDINetworkBackend.so)
+
+ADDITIONAL_INCLUDE_DIRS += -I$(MIDINET_DIR)
+ADDITIONAL_TOOL_LIBS += $(if $(MIDINET_LIB),$(MIDINET_LIB),-lMIDINetworkBackend)
+ADDITIONAL_LDFLAGS += -Wl,--disable-new-dtags -Wl,-rpath,$(MIDINET_DIR)/obj

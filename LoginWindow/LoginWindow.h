@@ -53,6 +53,7 @@
     NSDate *sessionStartTime;
     BOOL didStartXServer;
     pid_t xServerPid;
+    pid_t _cjkFontHelperPid;
     BOOL isTerminating;
     KeyboardManager *_keyboardManager;
     NSWindow *_logWindow;
@@ -73,6 +74,11 @@
 - (void)keyboardLayoutChanged:(id)sender;
 - (void)resetLoginWindow;
 - (void)monitorSession;
+- (void)releaseLoginDaemons;
+- (void)reapStrayChildren;
+- (void)startCJKFontInstall;
+- (void)reapCJKFontHelper;
+- (void)renderDesktopBackground;
 - (BOOL)trySystemAction:(NSString *)actionType;
 - (void)killAllSessionProcesses:(uid_t)uid;
 - (BOOL)isXServerRunning;
@@ -91,5 +97,6 @@
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector;
 - (void)showKeyboardLayoutLog:(id)sender;
 - (void)updateLocalizedStrings;
+- (void)releaseLoginUI;
 
 @end

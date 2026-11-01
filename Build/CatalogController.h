@@ -6,6 +6,8 @@
 
 #import <AppKit/AppKit.h>
 
+@class CatalogEntry;
+
 @interface CatalogController : NSObject <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 {
     NSWindow *_window;
@@ -21,6 +23,9 @@
 }
 
 - (void)showWindow;
+
+/* Shallow clone args; adds --recurse-submodules when entry.submodules is set. */
+- (NSArray *)cloneArgumentsForEntry:(CatalogEntry *)entry URL:(NSString *)url dir:(NSString *)dir;
 
 /* Called by the search field's field editor when Up/Down is pressed there:
    jumps focus into the results list. */

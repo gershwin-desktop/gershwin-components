@@ -106,7 +106,19 @@
         }
     }
 
+    // The text just went in, so the layout manager already knows the
+    // document's full height; restore where the note was scrolled to before
+    // the scroll view's own frame is possibly still its initial size.
+    NSScrollView *restoredScrollView = [[noteView textView] enclosingScrollView];
+    [[restoredScrollView contentView] scrollToPoint:document.scrollPosition];
+    [restoredScrollView reflectScrolledClipView:[restoredScrollView contentView]];
+
     [noteWindow setContentView:noteView];
+
+    // A saved note may lie under the menu bar or off a screen that has
+    // since shrunk; NSWindow only constrains titled windows by itself.
+    [noteWindow setFrame:[noteWindow frameFittingScreen:[noteWindow frame]]
+                 display:NO];
 
     if (collapsed) {
         [noteWindow collapse];
@@ -128,11 +140,29 @@
     document.rtfData = [[noteView textView] RTFFromRange:NSMakeRange(0, [currentText length])];
     document.color = noteColor;
     document.font = noteFont;
-    document.frame = [noteWindow frame];
+    document.frame = [noteWindow uncollapsedFrame];
     document.floatOnTop = floatOnTop;
     document.translucent = translucent;
     document.collapsed = collapsed;
     document.modificationDate = modificationDate;
+    document.scrollPosition = [[[[noteView textView] enclosingScrollView] contentView] bounds].origin;
+}
+
+// A manual save (Cmd-S) writes everything now instead of waiting for the
+// delayed auto-save, and drops that pending auto-save: it would only rewrite
+// what was just written.
+- (void)saveNow
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(autoSave)
+                                               object:nil];
+    StickiesAppDelegate *delegate = (StickiesAppDelegate *)[NSApp delegate];
+    if (delegate) {
+        [delegate saveNotes];
+    } else {
+        [self saveNote];
+        [[StickyNoteDatabase sharedDatabase] save];
+    }
 }
 
 - (void)closeNote

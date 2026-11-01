@@ -1,0 +1,34 @@
+Device 'TPPS/2 IBM TrackPoint':
+	Device Enabled (190):	1
+	Coordinate Transformation Matrix (192):	1.000000, 0.000000, 0.000000, 0.000000, 1.000000, 0.000000, 0.000000, 0.000000, 1.000000
+	libinput Natural Scrolling Enabled (333):	0
+	libinput Natural Scrolling Enabled Default (334):	0
+	libinput Scroll Methods Available (337):	0, 0, 1
+	libinput Scroll Method Enabled (338):	0, 0, 1
+	libinput Scroll Method Enabled Default (339):	0, 0, 1
+	libinput Middle Emulation Enabled (345):	0
+	libinput Middle Emulation Enabled Default (346):	0
+	libinput Accel Speed (347):	0.000000
+	libinput Accel Speed Default (348):	0.000000
+	libinput Accel Profiles Available (349):	1, 1, 1
+	libinput Accel Profile Enabled (350):	1, 0, 0
+	libinput Accel Profile Enabled Default (351):	1, 0, 0
+	libinput Accel Custom Fallback Points (352):	<no items>
+	libinput Accel Custom Fallback Step (353):	0.000000
+	libinput Accel Custom Motion Points (354):	<no items>
+	libinput Accel Custom Motion Step (355):	0.000000
+	libinput Accel Custom Scroll Points (356):	<no items>
+	libinput Accel Custom Scroll Step (357):	0.000000
+	libinput Left Handed Enabled (358):	0
+	libinput Left Handed Enabled Default (359):	0
+	libinput Send Events Modes Available (360):	1, 0
+	libinput Send Events Mode Enabled (361):	0, 0
+	libinput Send Events Mode Enabled Default (362):	0, 0
+	Device Node (363):	"/dev/input/event7"
+	Device Product ID (364):	1133, 49271
+	libinput Drag Lock Buttons (365):	<no items>
+	libinput Horizontal Scroll Enabled (366):	1
+	libinput Scrolling Pixel Distance (340):	15
+	libinput Scrolling Pixel Distance Default (341):	15
+	libinput Button Scrolling Button (367):	2
+	libinput Button Scrolling Button Default (368):	2

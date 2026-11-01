@@ -39,3 +39,25 @@
 "Hide Screenshot" = "Hide Screenshot";
 "Hide Others" = "Hide Others";
 "Show All" = "Show All";
+
+/* Screen Recording */
+"Record a video:" = "Record a video:";
+"Record Area..." = "Record Area...";
+"Record" = "Record";
+"Stop" = "Stop";
+"Cancel" = "Cancel";
+"Saving..." = "Saving...";
+"Recording in %d..." = "Recording in %d...";
+"Recording cancelled" = "Recording cancelled";
+"Recording discarded" = "Recording discarded";
+"Recording Failed" = "Recording Failed";
+"Saved to %@" = "Saved to %@";
+"ffmpeg Not Found" = "ffmpeg Not Found";
+"These options apply to screen recordings." = "These options apply to screen recordings.";
+"Frames per second:" = "Frames per second:";
+"Size:" = "Size:";
+"Full Size" = "Full Size";
+"Half Size" = "Half Size";
+"One Third" = "One Third";
+"Show the pointer" = "Show the pointer";
+"Record sound (WebM and MP4)" = "Record sound (WebM and MP4)";

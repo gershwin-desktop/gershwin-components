@@ -16,6 +16,9 @@
     // Power Source
     NSTextField *sourceLabel;
     NSTextField *batteryPercentLabel;
+    NSSlider *chargeLimitSlider;
+    NSTextField *chargeLimitTitleLabel;
+    NSTextField *chargeLimitLabel;
     // CPU
     NSPopUpButton *governorPopUp;
 
@@ -39,6 +42,7 @@
     BOOL hddSleepState;
     BOOL wakeNetworkState;
     BOOL powerFailState;
+    BOOL chargeLimitAvailable;
 }
 
 - (NSView *)createMainView;

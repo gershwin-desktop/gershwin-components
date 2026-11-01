@@ -61,28 +61,74 @@ static const CGFloat kTopInset = 24.0;
   [self setNeedsDisplay:YES];
 }
 
-- (void)layoutBooks
++ (NSInteger)booksPerRowForWidth:(CGFloat)w
 {
-  [_bookRects removeAllObjects];
-  CGFloat w = [self bounds].size.width;
   CGFloat usable = w - 2.0 * kInset + kSpineGap;
-  NSInteger perRow = (NSInteger)(usable / (kSpineWidth + kSpineGap));
-  if (perRow < 1) perRow = 1;
-  NSInteger count = [_books count];
-  NSInteger rows = (count + perRow - 1) / perRow;
-  if (rows < 1) rows = 1;
-  CGFloat totalH = kTopInset + (CGFloat)rows * kShelfHeight + kBoardThickness;
-  [self setFrameSize:NSMakeSize(w, MAX(totalH, [self bounds].size.height))];
+  return MAX(1, (NSInteger)(usable / (kSpineWidth + kSpineGap)));
+}
 
++ (CGFloat)contentHeightForCount:(NSInteger)count width:(CGFloat)w
+{
+  NSInteger perRow = [self booksPerRowForWidth:w];
+  NSInteger rows = MAX(1, (count + perRow - 1) / perRow);
+  return kTopInset + (CGFloat)rows * kShelfHeight;
+}
+
+// WHY a pure function of count and width: the rects must not depend on the
+// current frame height or on earlier layouts, or live resizing would move
+// the books by the amount the visible height changes.
++ (NSArray<NSValue *> *)spineRectsForCount:(NSInteger)count width:(CGFloat)w
+{
+  NSInteger perRow = [self booksPerRowForWidth:w];
+  NSMutableArray *rects = [NSMutableArray arrayWithCapacity:count];
   for (NSInteger i = 0; i < count; i++)
     {
       NSInteger row = i / perRow;
       NSInteger col = i % perRow;
       CGFloat x = kInset + (CGFloat)col * (kSpineWidth + kSpineGap);
       CGFloat bookH = kShelfHeight - kBoardThickness - 14.0 - (CGFloat)(i % 3) * 10.0;
-      CGFloat y = kTopInset + (CGFloat)row * kShelfHeight + kBoardThickness + 6.0;
-      [_bookRects addObject:[NSValue valueWithRect:NSMakeRect(x, y, kSpineWidth, bookH)]];
+      // Books stand on the board at the bottom of their shelf row; rows run
+      // top to bottom because the view is flipped.
+      CGFloat boardY = kTopInset + (CGFloat)row * kShelfHeight
+                       + kShelfHeight - kBoardThickness;
+      [rects addObject:[NSValue valueWithRect:
+          NSMakeRect(x, boardY + 2.0 - bookH, kSpineWidth, bookH)]];
     }
+  return rects;
+}
+
+// WHY flipped: the scroll view rounds a bottom-up document's origin to whole
+// window units while the visible height is fractional (GSScaleFactor 1.2),
+// so content placed relative to the top jittered during live resize. A
+// flipped view keeps the origin at 0 and the first shelf at the top.
+- (BOOL)isFlipped
+{
+  return YES;
+}
+
+- (void)setFrameSize:(NSSize)size
+{
+  CGFloat oldW = [self frame].size.width;
+  [super setFrameSize:size];
+  // Height-only changes (the clip view resizing us) leave the layout alone.
+  if (size.width != oldW)
+    [self layoutBooks];
+}
+
+- (void)layoutBooks
+{
+  NSRect b = [self bounds];
+  NSInteger count = [_books count];
+  [_bookRects setArray:[[self class] spineRectsForCount:count width:b.size.width]];
+
+  // Fill the visible area so the wood has no gap below the last shelf; the
+  // document never shrinks below its shelves.
+  CGFloat totalH = [[self class] contentHeightForCount:count width:b.size.width];
+  CGFloat visibleH = [self enclosingScrollView]
+      ? [[self enclosingScrollView] contentSize].height : 0.0;
+  CGFloat h = MAX(totalH, visibleH);
+  if (h != b.size.height)
+    [super setFrameSize:NSMakeSize(b.size.width, h)];
 }
 
 - (NSRect)rectForBookAtIndex:(NSInteger)index
@@ -97,6 +143,11 @@ static const CGFloat kTopInset = 24.0;
   NSRect b = [self bounds];
   if (_wood)
     {
+      // WHY: patterns are anchored to the window's lower-left corner, so a
+      // window resized at its bottom edge slid the wood under the books.
+      // Anchoring to the view's top-left corner keeps it still.
+      [[NSGraphicsContext currentContext]
+          setPatternPhase:[self convertPoint:NSZeroPoint toView:nil]];
       [[NSColor colorWithPatternImage:_wood] set];
       NSRectFill(b);
     }
@@ -107,11 +158,11 @@ static const CGFloat kTopInset = 24.0;
     }
 
   NSInteger rows = (NSInteger)([_bookRects count] == 0 ? 1 :
-      (ceil((double)[_bookRects count] / (double)[self perRowForWidth:b.size.width])));
+      (ceil((double)[_bookRects count] / (double)[[self class] booksPerRowForWidth:b.size.width])));
   for (NSInteger r = 0; r < rows; r++)
     {
-      CGFloat shelfTop = kTopInset + (CGFloat)r * kShelfHeight;
-      CGFloat boardY = shelfTop + kShelfHeight - kBoardThickness;
+      CGFloat boardY = kTopInset + (CGFloat)r * kShelfHeight
+                       + kShelfHeight - kBoardThickness;
       [self drawShelfBoard:NSMakeRect(0, boardY, b.size.width, kBoardThickness)];
     }
 
@@ -119,13 +170,6 @@ static const CGFloat kTopInset = 24.0;
     {
       [self drawSpine:[_bookRects[i] rectValue] book:_books[i] selected:(i == _selectedIndex)];
     }
-}
-
-- (NSInteger)perRowForWidth:(CGFloat)w
-{
-  CGFloat usable = w - 2.0 * kInset + kSpineGap;
-  NSInteger perRow = (NSInteger)(usable / (kSpineWidth + kSpineGap));
-  return MAX(1, perRow);
 }
 
 - (void)drawShelfBoard:(NSRect)r
@@ -155,6 +199,9 @@ static const CGFloat kTopInset = 24.0;
       initWithStartingColor:[base colorWithAlphaComponent:1.0]
                 endingColor:[base shadowWithLevel:0.45]];
   NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:r xRadius:4.0 yRadius:4.0];
+  // WHY: setClip intersects with the current clip; without a state restore
+  // every spine after the first was clipped away by the previous one's path.
+  [NSGraphicsContext saveGraphicsState];
   [g drawInRect:r angle:0.0];
   [path setClip];
 
@@ -178,6 +225,7 @@ static const CGFloat kTopInset = 24.0;
       [NSBezierPath setDefaultLineWidth:1.0];
       [NSBezierPath strokeRect:NSInsetRect(r, 0.5, 0.5)];
     }
+  [NSGraphicsContext restoreGraphicsState];
 }
 
 - (void)drawVerticalText:(NSString *)text inRect:(NSRect)r
@@ -195,8 +243,10 @@ static const CGFloat kTopInset = 24.0;
     }
   [NSGraphicsContext saveGraphicsState];
   NSAffineTransform *t = [NSAffineTransform transform];
-  [t translateXBy:r.origin.x + r.size.width / 2.0 yBy:r.origin.y + r.size.height - 8.0];
-  [t rotateByDegrees:-90.0];
+  // Flipped view: +90 turns clockwise, so the title still reads from the
+  // top of the spine downwards.
+  [t translateXBy:r.origin.x + r.size.width / 2.0 yBy:r.origin.y + 8.0];
+  [t rotateByDegrees:90.0];
   [t concat];
   [text drawAtPoint:NSMakePoint(0, -5.0) withAttributes:attrs];
   [NSGraphicsContext restoreGraphicsState];

@@ -9,6 +9,7 @@
 #import <netinet/in.h>
 #import <arpa/inet.h>
 #import "NetworkBrowser.h"
+#import "TXTRecordFormatter.h"
 
 @implementation NetworkBrowser
 
@@ -306,22 +307,11 @@
       if (txtData)
         {
           NSDictionary *txtDict = [NSNetService dictionaryFromTXTRecordData: txtData];
-          if (txtDict && [txtDict count] > 0)
+          NSString *txtLines = [TXTRecordFormatter linesForTXTDictionary: txtDict];
+          if (txtLines)
             {
               [details appendString: @"\nTXT Records:\n"];
-              for (NSString *key in [txtDict allKeys])
-                {
-                  NSData *valueData = [txtDict objectForKey: key];
-                  NSString *valueStr = [[NSString alloc] initWithData: valueData
-                                                             encoding: NSUTF8StringEncoding];
-                  if (valueStr == nil)
-                    {
-                      valueStr = [[NSString alloc] initWithFormat: @"<binary: %lu bytes>",
-                                           (unsigned long)[valueData length]];
-                    }
-                  [details appendFormat: @"  %@: %@\n", key, valueStr];
-                  RELEASE(valueStr);
-                }
+              [details appendString: txtLines];
             }
         }
     }
@@ -527,19 +517,14 @@
   if (txtData)
     {
       NSDictionary *txtDict = [NSNetService dictionaryFromTXTRecordData: txtData];
-      NSData *pathData = [txtDict objectForKey: @"path"];
-      if (pathData)
+      NSString *rawPath = [TXTRecordFormatter stringForValue:
+                                [txtDict objectForKey: @"path"]];
+      if (rawPath)
         {
-          NSString *rawPath = [[NSString alloc] initWithData: pathData
-                                                   encoding: NSUTF8StringEncoding];
-          if (rawPath)
-            {
-              if ([rawPath hasPrefix: @"/"])
-                path = rawPath;
-              else
-                path = [@"/" stringByAppendingString: rawPath];
-            }
-          RELEASE(rawPath);
+          if ([rawPath hasPrefix: @"/"])
+            path = rawPath;
+          else
+            path = [@"/" stringByAppendingString: rawPath];
         }
     }
 

@@ -19,6 +19,10 @@
 @property (nonatomic, copy) NSArray<LibraryBook *> *books;
 @property (nonatomic, assign) NSInteger selectedIndex;
 
++ (NSInteger)booksPerRowForWidth:(CGFloat)w;
++ (CGFloat)contentHeightForCount:(NSInteger)count width:(CGFloat)w;
++ (NSArray<NSValue *> *)spineRectsForCount:(NSInteger)count width:(CGFloat)w;
+
 - (void)reloadData;
 - (NSRect)rectForBookAtIndex:(NSInteger)index;
 

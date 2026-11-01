@@ -5,6 +5,7 @@
  */
 
 #import "DUMockStorageBackend.h"
+#import "DUFATFormat.h"
 
 #import "DUBackendCapabilities.h"
 #import "DUDiskImage.h"
@@ -377,7 +378,7 @@ static const unsigned long long kGiB = 1024ull * 1024 * 1024;
     }
 
     NSArray<NSString *> *identifiers =
-        @[ @"ext4", @"ext3", @"ext2", @"vfat", @"exfat", @"ntfs", @"ufs" ];
+        @[ @"ext4", @"ext3", @"ext2", @"exfat", @"ntfs", @"ufs" ];
     NSMutableArray<NSDictionary *> *formats = [NSMutableArray array];
     for (NSString *identifier in identifiers) {
         [formats addObject:@{
@@ -387,6 +388,8 @@ static const unsigned long long kGiB = 1024ull * 1024 * 1024;
             kDUFormatCanFormatKey : @YES,
         }];
     }
+    [formats addObjectsFromArray:
+        [DUFATFormat formatDescriptorsToolAvailable:YES]];
     return formats;
 }
 

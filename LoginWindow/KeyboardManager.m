@@ -1232,4 +1232,15 @@ static void writeLocaleConfigFile(const char *lang)
     [self applyToXServer];
     return YES;
 }
+- (void)clearTransientData
+{
+    [_detectionLog release];
+    _detectionLog = nil;
+    [_lastError release];
+    _lastError = nil;
+    [_options release];
+    _options = nil;
+    [_model release];
+    _model = nil;
+}
 @end

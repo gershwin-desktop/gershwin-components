@@ -91,6 +91,12 @@
   [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
   [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
   [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+  [editMenu addItem:[NSMenuItem separatorItem]];
+  // Highlighting is its own command so that selecting text to copy it never
+  // leaves a mark in the book.
+  [editMenu addItemWithTitle:@"Highlight Selection"
+                      action:@selector(highlightSelection:)
+               keyEquivalent:@"H"];
   NSMenuItem *editItem = (NSMenuItem *)[mainMenu addItemWithTitle:@"Edit" action:NULL keyEquivalent:@""];
   [mainMenu setSubmenu:editMenu forItem:editItem];
 

@@ -56,3 +56,8 @@ _pmsrc/
 tests.sum
 oldtests.sum
 oldtests.log
+
+# Core dumps (the Menu/ToolkitModules/core source directory is not one)
+core
+core.[0-9]*
+!Menu/ToolkitModules/core/

@@ -3,6 +3,7 @@
 #import <pwd.h>
 #import <grp.h>
 #import "DSPlatform.h"
+#import "DSUserCheck.h"
 
 // Network paths (checked first - used when mounted from server)
 #define DS_NETWORK_USERS_PLIST @"/Network/Library/DirectoryServices/Users.plist"
@@ -12,6 +13,18 @@
 #define DS_LOCAL_USERS_PLIST @"/Local/Library/DirectoryServices/Users.plist"
 #define DS_LOCAL_GROUPS_PLIST @"/Local/Library/DirectoryServices/Groups.plist"
 #define DS_DOMAIN_PLIST @"/Local/Library/DirectoryServices/Domain.plist"
+
+// NextBSD ships its own NSS module for these plists (nss_directory_services),
+// owns /etc/nsswitch.conf, and sets up /Local, the plists, /Volumes and sudo
+// at boot, so init leaves it alone. Detected at runtime, not by #ifdef:
+// NextBSD compiles as FreeBSD. The marker is nextbsd-version, which both
+// image builders write before anything else is built, so it is on every
+// NextBSD image and on no other system.
+// (/usr/lib/system would be wrong: macOS has that too.)
+static BOOL isNextBSD(void) {
+    return [[NSFileManager defaultManager]
+               fileExistsAtPath:@"/bin/nextbsd-version"];
+}
 
 // Get the appropriate users plist path (Network first, then Local)
 static NSString *getUsersPlistPath(void) {
@@ -404,9 +417,24 @@ static int cmdUserAdd(NSArray *args) {
         }
     }
 
-    // Auto-assign UID if not specified
+    // Auto-assign UID if not specified; skip UIDs that /etc/passwd, NIS etc.
+    // already hand out, since the Gershwin store does not know about them.
     if (uid == 0) {
-        uid = findNextUID(users);
+        uid = [DSUserCheck firstFreeUIDFrom:findNextUID(users)
+                                  uidLookup:[DSUserCheck systemUIDLookup]];
+        if (uid == 0) {
+            fprintf(stderr, "Cannot find a free UID in the system user database\n");
+            return 1;
+        }
+    }
+
+    NSString *conflict = [DSUserCheck errorForNewUserName:username
+                                                      uid:uid
+                                               nameLookup:[DSUserCheck systemNameLookup]
+                                                uidLookup:[DSUserCheck systemUIDLookup]];
+    if (conflict) {
+        fprintf(stderr, "%s\n", [conflict UTF8String]);
+        return 1;
     }
 
     // Auto-assign GID (create user's private group) if not specified
@@ -1056,6 +1084,11 @@ static void configureNsswitch(void) {
 }
 
 static int cmdInit(void) {
+    if (isNextBSD()) {
+        printf("Directory Services: set up by NextBSD at boot; nothing to do.\n");
+        return 0;
+    }
+
     NSFileManager *fm = [NSFileManager defaultManager];
     NSError *error = nil;
 
