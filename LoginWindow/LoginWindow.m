@@ -221,6 +221,56 @@ void signalHandler(int sig) {
     }
 }
 
+/* Records who is logged in at the console, as the macOS loginwindow does with
+   State:/Users/ConsoleUser in configd. On NextBSD the disk arbitration daemon
+   reads it to give that user the plugged-in disks and to eject them at logout.
+   The tool only exists there, so elsewhere this does nothing. It is waited for
+   with a time limit, and a failure is only logged: a login never depends on it. */
+static void runConsoleUserTool(const char *verb, const char *user)
+{
+    static const char *tool = "/usr/libexec/consoleuser";
+    if (access(tool, X_OK) != 0) {
+        return;
+    }
+
+    char *const argv[] = { (char *)tool, (char *)verb, (char *)user, NULL };
+    char *const envp[] = { NULL };
+    long maxfd = sysconf(_SC_OPEN_MAX);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Only async-signal-safe calls between fork and exec.
+        for (long fd = 3; fd < maxfd; fd++) {
+            close((int)fd);
+        }
+        execve(tool, argv, envp);
+        _exit(127);
+    }
+    if (pid < 0) {
+        NSLog(@"[LoginWindow] consoleuser %s: fork failed: %s", verb, strerror(errno));
+        return;
+    }
+
+    // Up to 5 seconds, so a stuck configd cannot hold up the login.
+    int status = 0;
+    pid_t result = 0;
+    for (int i = 0; i < 50 && result == 0; i++) {
+        result = waitpid(pid, &status, WNOHANG);
+        if (result == 0) {
+            usleep(100000);
+        }
+    }
+    if (result == 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        NSLog(@"[LoginWindow] consoleuser %s: timed out", verb);
+    } else if (result < 0) {
+        NSLog(@"[LoginWindow] consoleuser %s: waitpid failed: %s", verb, strerror(errno));
+    } else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        NSLog(@"[LoginWindow] consoleuser %s failed (wait status %d)", verb, status);
+    }
+}
+
 @interface LWLogWindow : NSWindow @end
 
 @implementation LWLogWindow
@@ -899,6 +949,7 @@ static NSDictionary *parseStringsFile(NSString *path)
     if (sessionUid > 0) {
         NSDebugLLog(@"gwcomp", @"[DEBUG] Cleaning up active session for UID: %d", sessionUid);
         [self killAllSessionProcesses:sessionUid];
+        runConsoleUserTool("clear", NULL);
         
         // Close PAM session if still open
         if (pamAuth) {
@@ -1753,6 +1804,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         sessionUid = pwd->pw_uid;
         sessionGid = pwd->pw_gid;
         sessionStartTime = [[NSDate date] retain];
+        runConsoleUserTool("set", user_cstr);
         
         // Hide the login window and release UI to free memory
         [self releaseLoginUI];
@@ -2214,6 +2266,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         sessionUid = pwd->pw_uid;
         sessionGid = pwd->pw_gid;
         sessionStartTime = [[NSDate date] retain];
+        runConsoleUserTool("set", user_cstr);
         
         // Hide the login window (it's already visible from startup)
         [loginWindow orderOut:nil];
@@ -2290,6 +2343,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         // Clean up any remaining session processes
         NSDebugLLog(@"gwcomp", @"[DEBUG] Cleaning up remaining session processes for UID: %d", sessionUid);
         [self killAllSessionProcesses:sessionUid];
+        runConsoleUserTool("clear", NULL);
         
         // Close PAM session
         if (pamAuth) {
@@ -2318,6 +2372,7 @@ static NSDictionary *parseStringsFile(NSString *path)
         if (errno == ECHILD) {
             // No child process - session already reaped
             NSDebugLLog(@"gwcomp", @"[DEBUG] Session PID %d already reaped", sessionPid);
+            runConsoleUserTool("clear", NULL);
             sessionPid = 0;
             sessionUid = 0;
             sessionGid = 0;
