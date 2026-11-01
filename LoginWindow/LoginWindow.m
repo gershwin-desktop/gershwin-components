@@ -234,7 +234,7 @@ static void runConsoleUserTool(const char *verb, const char *user)
     }
 
     char *const argv[] = { (char *)tool, (char *)verb, (char *)user, NULL };
-    char *const envp[] = { "PATH=/usr/bin:/bin:/usr/sbin:/sbin", NULL };
+    char *const envp[] = { NULL };
     long maxfd = sysconf(_SC_OPEN_MAX);
 
     pid_t pid = fork();
