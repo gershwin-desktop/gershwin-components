@@ -221,6 +221,13 @@ void signalHandler(int sig) {
     }
 }
 
+/* NextBSD compiles as FreeBSD, so it is detected by nextbsd-version, which
+   only NextBSD images have. */
+static BOOL LWIsNextBSD(void)
+{
+    return access("/bin/nextbsd-version", F_OK) == 0;
+}
+
 /* Records who is logged in at the console, as the macOS loginwindow does with
    State:/Users/ConsoleUser in configd. On NextBSD the disk arbitration daemon
    reads it to give that user the plugged-in disks and to eject them at logout.
@@ -343,8 +350,12 @@ static void runConsoleUserTool(const char *verb, const char *user)
         [self checkAutoLogin];
     }
 
-    // Load desktop background (image or solid color) and set X11 root window background
-    [self loadDesktopBackground];
+    // Load desktop background (image or solid color) and set X11 root window
+    // background. NextBSD already painted its solid root in createLoginWindow,
+    // before the panel was ordered front.
+    if (!LWIsNextBSD()) {
+        [self loadDesktopBackground];
+    }
 
     [loginWindow makeKeyAndOrderFront:self];
     [NSApp activateIgnoringOtherApps:YES];
@@ -659,6 +670,19 @@ static NSDictionary *parseStringsFile(NSString *path)
         }
     }
 
+    // NextBSD: the greeter root is always the solid boot splash grey, #5F6770
+    // (the Workspace backcolor 0.372/0.403/0.439), never the desktop picture,
+    // so the splash, the frame X inherits and the root are the same pixels.
+    // The channels are set exactly below, so XAllocColor gives 5F 67 70.
+    BOOL nextBSDGreeter = LWIsNextBSD();
+    if (nextBSDGreeter) {
+        haveImage = NO;
+        bgRed   = (double)0x5F / 255.0;
+        bgGreen = (double)0x67 / 255.0;
+        bgBlue  = (double)0x70 / 255.0;
+        NSLog(@"[LoginWindow] Desktop background: NextBSD greeter, solid #5F6770");
+    }
+
     // Open X display for all X11 operations
     Display *display = safeXOpenDisplay(NULL, 5);
     if (!display) {
@@ -826,6 +850,12 @@ static NSDictionary *parseStringsFile(NSString *path)
             xc.red   = (unsigned short)(bgRed   * 0xFFFF);
             xc.green = (unsigned short)(bgGreen * 0xFFFF);
             xc.blue  = (unsigned short)(bgBlue  * 0xFFFF);
+            if (nextBSDGreeter) {
+                // 8-bit value repeated into 16 bits: exact on every visual.
+                xc.red   = 0x5F5F;
+                xc.green = 0x6767;
+                xc.blue  = 0x7070;
+            }
             xc.flags = DoRed | DoGreen | DoBlue;
             if (XAllocColor(display, cmap, &xc)) {
                 unsigned int depth = DefaultDepth(display, s);
@@ -1087,6 +1117,14 @@ static NSDictionary *parseStringsFile(NSString *path)
     CGFloat windowX = (screenFrame.size.width - windowSize.width) / 2.0;
     CGFloat windowY = screenFrame.origin.y + (screenFrame.size.height - windowSize.height) * goldenRatio;
     [loginWindow setFrameOrigin:NSMakePoint(windowX, windowY)];
+
+    // NextBSD: the root must be the boot splash grey before the panel
+    // appears, so at handoff only the splash cube and spinner go away. The
+    // solid fill needs no image decoding, so it runs in this process
+    // rather than in the --set-background helper.
+    if (LWIsNextBSD()) {
+        [self renderDesktopBackground];
+    }
 
     [loginWindow makeKeyAndOrderFront:self];
     [loginWindow makeMainWindow];
