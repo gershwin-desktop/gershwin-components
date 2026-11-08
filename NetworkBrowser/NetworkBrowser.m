@@ -10,6 +10,7 @@
 #import <arpa/inet.h>
 #import "NetworkBrowser.h"
 #import "TXTRecordFormatter.h"
+#import "ServiceTypeName.h"
 
 @implementation NetworkBrowser
 
@@ -192,7 +193,8 @@
   if (tableView == typesTable && row >= 0 && row < (NSInteger)[types count])
     {
       NSNetService *type = [types objectAtIndex: row];
-      return [type name];
+      return [ServiceTypeName titleForName: [type name]
+                             protocolLabel: [type type]];
     }
   else if (tableView == servicesTable && row >= 0 && row < (NSInteger)[services count])
     {
@@ -223,9 +225,17 @@
       if (selectedRow >= 0 && selectedRow < (NSInteger)[types count])
         {
           NSNetService *typeService = [types objectAtIndex: selectedRow];
-          NSString *typeName = [typeService name];
+          /* The protocol is part of the type, not of the name: a name can
+           * exist as both TCP and UDP, so never assume "_tcp" here. */
+          NSString *searchType = [ServiceTypeName
+            fullTypeForName: [typeService name]
+              protocolLabel: [typeService type]];
 
-          NSDebugLLog(@"gwcomp", @"Selected type row %ld: %@", selectedRow, typeName);
+          NSDebugLLog(@"gwcomp", @"Selected type row %ld: %@", selectedRow, searchType);
+          if (searchType == nil)
+            {
+              return;
+            }
 
           if (serviceBrowser)
             {
@@ -233,7 +243,6 @@
               RELEASE(serviceBrowser);
             }
 
-          NSString *searchType = [NSString stringWithFormat: @"%@._tcp", typeName];
           NSDebugLLog(@"gwcomp", @"Starting search for type: %@", searchType);
 
           serviceBrowser = [[NSNetServiceBrowser alloc] init];
@@ -369,8 +378,11 @@
       NSDebugLLog(@"gwcomp", @"Found service type: %@", [aNetService name]);
       for (NSNetService *existing in types)
         {
-          if ([[existing name] isEqual: [aNetService name]])
-            return;
+          if ([[existing name] isEqual: [aNetService name]]
+              && [[existing type] isEqual: [aNetService type]])
+            {
+              return;
+            }
         }
       [types addObject: aNetService];
       [typesTable reloadData];
@@ -399,7 +411,8 @@
       NSDebugLLog(@"gwcomp", @"Service type removed: %@", [aNetService name]);
       for (NSNetService *existing in [NSArray arrayWithArray: types])
         {
-          if ([[existing name] isEqual: [aNetService name]])
+          if ([[existing name] isEqual: [aNetService name]]
+              && [[existing type] isEqual: [aNetService type]])
             {
               [types removeObject: existing];
             }
@@ -499,6 +512,10 @@
     return nil;
 
   NSNetService *service = [services objectAtIndex: row];
+  if (![ServiceTypeName typeCanOpenInBrowser: [service type]])
+    {
+      return nil;
+    }
   NSString *host = [service hostName];
   if (!host || [host length] == 0)
     return nil;
@@ -601,6 +618,18 @@
 
 - (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item
 {
+  if ([item action] == @selector(openSelectedServiceInBrowser:))
+    {
+      NSInteger row = [servicesTable selectedRow];
+
+      if (row < 0 || row >= (NSInteger)[services count])
+        {
+          return NO;
+        }
+      NSNetService *service = [services objectAtIndex: row];
+
+      return [ServiceTypeName typeCanOpenInBrowser: [service type]];
+    }
   return YES;
 }
 

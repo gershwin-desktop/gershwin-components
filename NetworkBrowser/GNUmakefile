@@ -16,6 +16,7 @@ NetworkBrowser_HEADER_FILES = \
 	NetworkBrowser.h \
 	ServiceListView.h \
 	ServiceDetailsView.h \
+	ServiceTypeName.h \
 	TXTRecordFormatter.h
 
 NetworkBrowser_OBJC_FILES = \
@@ -23,6 +24,7 @@ NetworkBrowser_OBJC_FILES = \
 	NetworkBrowser.m \
 	ServiceListView.m \
 	ServiceDetailsView.m \
+	ServiceTypeName.m \
 	TXTRecordFormatter.m
 
 NetworkBrowser_RESOURCE_FILES =

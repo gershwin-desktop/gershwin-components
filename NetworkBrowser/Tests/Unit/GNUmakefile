@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_TXTRecordFormatter
+TEST_TOOL_NAME =  t_ServiceTypeName t_TXTRecordFormatter
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -21,6 +21,7 @@ ADDITIONAL_OBJCFLAGS += -Wno-deprecated
 ADDITIONAL_OBJCCFLAGS += -Wno-deprecated
 
 
+t_ServiceTypeName_OBJC_FILES=t_ServiceTypeName.m
 t_TXTRecordFormatter_OBJC_FILES=t_TXTRecordFormatter.m
 
 -include GNUmakefile.preamble
