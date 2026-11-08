@@ -543,6 +543,19 @@ BOOL startXorgLikeShellScript(void)
             }
         }
 
+        // NextBSD: the kernel boot splash is on ttyv0, so X starts there
+        // ("vt1") and VT_ACTIVATE is a no-op instead of a switch that
+        // repaints the console. "-background none" leaves the root showing
+        // the frame the kernel drew, so the splash carries over to the
+        // greeter without a black frame (modesetting with glamor copies the
+        // console framebuffer). NextBSD compiles as FreeBSD, so it is
+        // detected by nextbsd-version, which only NextBSD images have.
+        if (access("/bin/nextbsd-version", F_OK) == 0) {
+            execl("/usr/X11/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth",
+                  "vt1", "-background", "none", "-nolisten", "tcp", (char *)NULL);
+            // Fall through to the generic paths if /usr/X11 has no Xorg.
+        }
+
         if (vtArg) {
             execl("/usr/local/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", vtArg, (char *)NULL);
             execl("/usr/bin/Xorg", "Xorg", ":0", "-auth", "/var/run/xauth", vtArg, (char *)NULL);
