@@ -14,6 +14,8 @@
 #import <dispatch/dispatch.h>
 #import "SoundBackend.h"
 
+@class SoundJackStatusReader;
+
 @interface SoundController : NSObject <NSTableViewDataSource, NSTableViewDelegate, SoundBackendDelegate>
 {
     // Backend
@@ -61,6 +63,22 @@
     NSTextField *outputBalanceLeftLabel;
     NSTextField *outputBalanceRightLabel;
     
+    // JACK box of the Output tab; nil unless this platform has jackd
+    NSBox *jackBox;
+    NSButton *jackUseCheckbox;
+    NSTextField *jackBufferLabel;
+    NSPopUpButton *jackBufferPopup;
+    NSTextField *jackRateLabel;
+    NSPopUpButton *jackRatePopup;
+    NSTextField *jackStatusLabel;
+    SoundJackStatusReader *jackStatusReader;
+    SoundJackStatusReader *jackSettingsReader;
+    NSTimer *jackStatusTimer;
+    BOOL jackBoxExpanded;
+    CGFloat outputRegionTop;
+    CGFloat outputRegionBottom;
+    NSWindow *observedWindow;
+
     // ============ Input Tab ============
     NSView *inputView;
     
@@ -114,6 +132,9 @@
     dispatch_source_t outputVolumeTimer;
     float pendingOutputVolume;
     dispatch_source_t alertVolumeTimer;
+    // Waits after an output click in JACK mode until the routing moved
+    NSTimer *jackAlertTimer;
+    NSDate *jackAlertStart;
     float pendingAlertVolume;
     dispatch_source_t inputVolumeTimer;
     float pendingInputVolume;
@@ -138,6 +159,15 @@
 - (void)updateInputControlsWithVolume:(float)volume muted:(BOOL)muted;
 - (BOOL)selectOutputDevice:(AudioDevice *)device;
 - (BOOL)selectInputDevice:(AudioDevice *)device;
+
+// JACK box
+- (void)updateJackControls;
+- (void)startJackStatusTimer;
+- (void)stopJackStatusTimer;
+- (void)mainViewDidMoveToWindow:(NSWindow *)window;
+- (IBAction)jackUseChanged:(id)sender;
+- (IBAction)jackBufferChanged:(id)sender;
+- (IBAction)jackRateChanged:(id)sender;
 
 // Input level monitoring
 - (void)startInputLevelMonitoring;

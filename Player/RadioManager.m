@@ -5,6 +5,7 @@
  */
 
 #import "RadioManager.h"
+#import "PlayerAsync.h"
 #import "RadioStation.h"
 #import "RadioBrowser.h"
 
@@ -19,8 +20,13 @@
 static const int kMaxCacheEntries = 200;
 static const int kMaxDownloadRetries = 3;
 
+// Stations fade in and out, and cross-fade when switching
+static const NSTimeInterval kDefaultFadeDuration = 1.0;
+
 @implementation RadioManager
 
+
+@synthesize fadeDuration = _fadeDuration;
 @synthesize delegate = _delegate;
 @synthesize volume = _volume;
 @synthesize muted = _muted;
@@ -31,10 +37,11 @@ static const int kMaxDownloadRetries = 3;
 + (instancetype)sharedManager
 {
     static RadioManager *shared = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        shared = [[self alloc] init];
-    });
+    @synchronized(self) {
+        if (shared == nil) {
+            shared = [[self alloc] init];
+        }
+    }
     return shared;
 }
 
@@ -42,15 +49,17 @@ static const int kMaxDownloadRetries = 3;
 {
     self = [super init];
     if (self) {
-        _player = [[StreamPlayer sharedPlayer] retain];
-        [_player setDelegate:self];
+        _fadeDuration = kDefaultFadeDuration;
+        [self makeSession];
         _stations = [[NSArray alloc] init];
         _stationImages = [[NSMutableDictionary alloc] init];
+        _placeholderImages = [[NSMutableDictionary alloc] init];
         _iconIndex = [[NSMutableDictionary alloc] init];
         _downloadingKeys = [[NSMutableSet alloc] init];
         _maxCacheEntries = kMaxCacheEntries;
-        _iconQueue = dispatch_queue_create("com.gershwin.player.radioIcon", DISPATCH_QUEUE_SERIAL);
-        _iconSemaphore = dispatch_semaphore_create(3);
+        // At most three icon downloads at a time
+        _iconQueue = [[NSOperationQueue alloc] init];
+        [_iconQueue setMaxConcurrentOperationCount:3];
         _volume = 1.0f;
         _muted = NO;
 
@@ -73,37 +82,110 @@ static const int kMaxDownloadRetries = 3;
 
 - (void)dealloc
 {
-    [_player setDelegate:nil];
-    [_player release];
+    [_session setDelegate:nil];
+    [_session release];
     [_stations release];
     [_stationImages release];
+    [_placeholderImages release];
     [_iconIndex release];
     [_downloadingKeys release];
     [_iconCachePath release];
     [_currentStationName release];
     [_currentStreamURL release];
-    dispatch_release(_iconQueue);
-    dispatch_release(_iconSemaphore);
+    [_iconQueue cancelAllOperations];
+    [_iconQueue release];
     [super dealloc];
 }
 
 #pragma mark - Properties
 
+// Playback is a PlayerSession of its own, of one item at a time: the same
+// states and effects as local playback, with every item joined live.  A
+// new station opens in a player of its own while the old one plays on,
+// and the two cross-fade once it plays.
+- (void)makeSession
+{
+    _session = [[PlayerSession alloc] initWithMedia:[self makePlayer]];
+    [_session setDelegate:self];
+    [_session setFadesInEveryItem:YES];
+    [_session setFadeDuration:_fadeDuration];
+    // Not retained by the block: the session lives no longer than self
+    __block RadioManager *manager = self;
+    [_session setMediaFactory:^id<MediaPlayback>(void) {
+        return [manager makePlayer];
+    }];
+}
+
+- (PlayerPlaybackState)state
+{
+    return [_session state];
+}
+
 - (BOOL)isPlaying
 {
-    return [_player isPlaying];
+    return [_session state] == PlayerPlaybackPlaying;
+}
+
+- (BOOL)isConnecting
+{
+    return _resolving || [_session state] == PlayerPlaybackOpening;
+}
+
+- (BOOL)isPausePending
+{
+    return [_session isPausePending];
+}
+
+- (BOOL)isBuffering
+{
+    return [_session isBuffering];
+}
+
+- (NSError *)lastError
+{
+    return [_session lastError];
+}
+
+- (NSTimeInterval)currentTime
+{
+    return [_session currentTime];
+}
+
+- (NSTimeInterval)duration
+{
+    return [_session duration];
+}
+
+- (StreamPlayer *)player
+{
+    PlayerPlaybackState state = [_session state];
+    if (state == PlayerPlaybackEmpty || state == PlayerPlaybackStopped) {
+        return nil;
+    }
+    return (StreamPlayer *)[_session media];
+}
+
+- (StreamPlayer *)makePlayer
+{
+    return [[[StreamPlayer alloc] init] autorelease];
+}
+
+- (void)setFadeDuration:(NSTimeInterval)duration
+{
+    _fadeDuration = duration;
+    [_session setFadeDuration:duration];
 }
 
 - (void)setVolume:(float)volume
 {
     _volume = volume;
-    [_player setVolume:volume];
+    [_session setVolume:volume];
 }
 
 - (void)setMuted:(BOOL)muted
 {
     _muted = muted;
-    [_player setMuted:muted];
+    [_session setMuted:muted];
 }
 
 #pragma mark - Public API
@@ -115,36 +197,11 @@ static const int kMaxDownloadRetries = 3;
         [_delegate radioManagerDidUpdateStatus:self status:@"Loading stations..."];
     }
 
+    NSUInteger request = ++_listRequest;
     [[RadioBrowser sharedBrowser] localStationsWithCompletion:
      ^(NSArray *stations, NSError *error) {
-        if (stations) {
-            [self->_stations release];
-            self->_stations = [[self limitStations:stations] retain];
-            [self->_stationImages removeAllObjects];
-
-            // Notify delegate FIRST so the UI updates before any downloads
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
-                [self->_delegate radioManagerDidUpdateStations:self];
-            }
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-                [self->_delegate radioManagerDidUpdateStatus:self status:
-                    [NSString stringWithFormat:@"%tu stations loaded", [self->_stations count]]];
-            }
-
-            // Start prefetching icons for the first few stations
-            NSUInteger prefetchCount = MIN(8, [self->_stations count]);
-            for (NSUInteger i = 0; i < prefetchCount; i++) {
-                [self prefetchIconForStationAtIndex:i];
-            }
-        } else {
-            NSString *errMsg = error ? [error localizedDescription] : @"Unknown error";
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
-                [self->_delegate radioManager:self didFailWithError:errMsg];
-            }
-        }
+        [self showStations:stations ofRequest:request error:error
+                    status:@"%tu stations loaded" failure:@"Unknown error"];
     }];
 }
 
@@ -159,107 +216,161 @@ static const int kMaxDownloadRetries = 3;
         [_delegate radioManagerDidUpdateStatus:self status:[NSString stringWithFormat:@"Searching: %@", query]];
     }
 
+    NSUInteger request = ++_listRequest;
     [[RadioBrowser sharedBrowser] searchStations:query
                                       completion:^(NSArray *stations, NSError *error) {
-        if (stations) {
-            [self->_stations release];
-            self->_stations = [[self limitStations:stations] retain];
-            [self->_stationImages removeAllObjects];
-
-            // Notify delegate FIRST so the UI updates before any downloads
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
-                [self->_delegate radioManagerDidUpdateStations:self];
-            }
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-                [self->_delegate radioManagerDidUpdateStatus:self status:
-                    [NSString stringWithFormat:@"Found %tu stations", [self->_stations count]]];
-            }
-
-            // Start prefetching icons for the first few stations
-            NSUInteger prefetchCount = MIN(8, [self->_stations count]);
-            for (NSUInteger i = 0; i < prefetchCount; i++) {
-                [self prefetchIconForStationAtIndex:i];
-            }
-        } else {
-            NSString *errMsg = error ? [error localizedDescription] : @"Search failed";
-            if (self->_delegate != nil &&
-                [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
-                [self->_delegate radioManager:self didFailWithError:errMsg];
-            }
-        }
+        [self showStations:stations ofRequest:request error:error
+                    status:@"Found %tu stations" failure:@"Search failed"];
     }];
+}
+
+// Only the list asked for last is shown: a slow answer to an earlier
+// request (the local stations loading while the user already searched)
+// must not replace it.
+- (void)showStations:(NSArray *)stations
+           ofRequest:(NSUInteger)request
+               error:(NSError *)error
+              status:(NSString *)statusFormat
+             failure:(NSString *)failure
+{
+    if (request != _listRequest) {
+        return;
+    }
+    if (!stations) {
+        NSString *errMsg = error ? [error localizedDescription] : failure;
+        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
+            [_delegate radioManager:self didFailWithError:errMsg];
+        }
+        return;
+    }
+    [_stations release];
+    _stations = [[self limitStations:stations] retain];
+    [_stationImages removeAllObjects];
+    [_placeholderImages removeAllObjects];
+
+    // Notify delegate FIRST so the UI updates before any downloads
+    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStations:)]) {
+        [_delegate radioManagerDidUpdateStations:self];
+    }
+    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
+        [_delegate radioManagerDidUpdateStatus:self status:
+            [NSString stringWithFormat:statusFormat, [_stations count]]];
+    }
+
+    // Start prefetching icons for the first few stations
+    NSUInteger prefetchCount = MIN(8, [_stations count]);
+    for (NSUInteger i = 0; i < prefetchCount; i++) {
+        [self prefetchIconForStationAtIndex:i];
+    }
 }
 
 - (void)playStation:(RadioStation *)station
 {
     if (!station) return;
-
     NSString *urlString = [station streamURL];
     if (!urlString) urlString = [station tuneURL];
     if (!urlString || [urlString length] == 0) return;
 
-    [_currentStationName release];
-    _currentStationName = [[station name] copy];
-    [_currentStreamURL release];
-    _currentStreamURL = [urlString copy];
+    NSUInteger attempt = ++_tuneAttempt;
+    [self setStationName:[station name] url:urlString];
+    [self notifyStatus:[NSString stringWithFormat:@"Connecting to %@...", [station name]]];
 
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:[NSString stringWithFormat:@"Connecting to %@...", [station name]]];
-    }
-
-    // Handle tune URLs (TuneIn playlist resolution) by resolving first
+    // Tune URLs (TuneIn playlists) name the stream only once resolved; the
+    // station that plays goes on playing meanwhile
     if ([urlString rangeOfString:@"Tune.ashx" options:NSCaseInsensitiveSearch].location != NSNotFound ||
         [urlString hasSuffix:@".m3u"] || [urlString hasSuffix:@".m3u8"]) {
+        _resolving = YES;
+        [self notifyStateChange];
         [self resolveStreamURL:urlString completion:^(NSString *resolved) {
+            if (attempt != self->_tuneAttempt) {
+                return;   // another station was chosen, or the radio stopped
+            }
+            self->_resolving = NO;
             if (resolved) {
-                [self->_currentStreamURL release];
-                self->_currentStreamURL = [resolved copy];
+                [self setStationName:self->_currentStationName url:resolved];
                 [station setStreamURL:resolved];
-                [self openAndPlayURL:resolved];
+                [self openURL:resolved startingAt:-1.0];
             } else {
-                if (self->_delegate != nil &&
-                    [self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
+                [self notifyStateChange];
+                if ([self->_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
                     [self->_delegate radioManager:self didFailWithError:@"Failed to resolve stream URL"];
                 }
             }
         }];
     } else {
-        [self openAndPlayURL:urlString];
+        _resolving = NO;
+        [self openURL:urlString startingAt:-1.0];
     }
 }
 
 - (void)playURL:(NSString *)urlString
 {
+    [self playURL:urlString displayName:nil];
+}
+
+- (void)playURL:(NSString *)urlString displayName:(NSString *)displayName
+{
+    [self playURL:urlString displayName:displayName startingAt:-1.0];
+}
+
+- (void)playURL:(NSString *)urlString displayName:(NSString *)displayName
+     startingAt:(NSTimeInterval)position
+{
     if (!urlString || [urlString length] == 0) return;
+    _tuneAttempt++;
+    _resolving = NO;
+    [self setStationName:(displayName ?: [urlString lastPathComponent]) url:urlString];
+    [self notifyStatus:[NSString stringWithFormat:@"Connecting to %@...", _currentStationName]];
+    [self openURL:urlString startingAt:position];
+}
 
-    [_currentStationName release];
-    _currentStationName = [[urlString lastPathComponent] copy];
-    [_currentStreamURL release];
-    _currentStreamURL = [urlString copy];
+- (void)togglePause
+{
+    [_session togglePlayPause];
+}
 
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:@"Connecting..."];
-    }
-
-    [self openAndPlayURL:urlString];
+- (void)seekToTime:(NSTimeInterval)seconds
+{
+    [_session seekToTime:seconds];
 }
 
 - (void)stop
 {
-    [_player stop];
-    [_player close];
-    [_currentStationName release];
-    _currentStationName = nil;
-    [_currentStreamURL release];
-    _currentStreamURL = nil;
-
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
-        [_delegate radioManagerDidStop:self];
+    _tuneAttempt++;
+    _resolving = NO;
+    // The name goes first: the stop is reported without it
+    [self setStationName:nil url:nil];
+    if ([_session canStop]) {
+        [_session stop];
+    } else {
+        [self notifyStateChange];
     }
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:@"Stopped"];
+    [self notifyStatus:@"Stopped"];
+}
+
+- (void)setStationName:(NSString *)name url:(NSString *)url
+{
+    if (name != _currentStationName) {
+        [_currentStationName release];
+        _currentStationName = [name copy];
+    }
+    if (url != _currentStreamURL) {
+        [_currentStreamURL release];
+        _currentStreamURL = [url copy];
+    }
+}
+
+- (void)notifyStatus:(NSString *)status
+{
+    if ([_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
+        [_delegate radioManagerDidUpdateStatus:self status:status];
+    }
+}
+
+- (void)notifyStateChange
+{
+    if ([_delegate respondsToSelector:@selector(radioManagerDidChangeState:)]) {
+        [_delegate radioManagerDidChangeState:self];
     }
 }
 
@@ -273,7 +384,7 @@ static const int kMaxDownloadRetries = 3;
         return;
     }
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    PlayerRunInBackground(^{
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
         [req setHTTPMethod:@"GET"];
         [req setTimeoutInterval:15.0];
@@ -285,7 +396,7 @@ static const int kMaxDownloadRetries = 3;
                                                          error:&error];
 
         if (error || !data || [data length] == 0) {
-            dispatch_async(dispatch_get_main_queue(), ^{
+            PlayerRunOnMainThread(^{
                 if (completion) completion(nil);
             });
             return;
@@ -300,15 +411,17 @@ static const int kMaxDownloadRetries = 3;
                                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
                 if ([trim hasPrefix:@"#"]) return;
                 if ([trim hasPrefix:@"http://"] || [trim hasPrefix:@"https://"]) {
-                    found = trim;
+                    // Owned: the line is gone with the enumeration's pool
+                    found = [trim copy];
                     *stop = YES;
                 }
             }];
             [text release];
 
             if (found) {
-                dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerRunOnMainThread(^{
                     if (completion) completion(found);
+                    [found release];
                 });
                 return;
             }
@@ -318,14 +431,14 @@ static const int kMaxDownloadRetries = 3;
         if (response && [response URL]) {
             NSString *finalURL = [[response URL] absoluteString];
             if (![finalURL isEqualToString:tuneURL]) {
-                dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerRunOnMainThread(^{
                     if (completion) completion(finalURL);
                 });
                 return;
             }
         }
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+        PlayerRunOnMainThread(^{
             if (completion) completion(nil);
         });
     });
@@ -333,29 +446,36 @@ static const int kMaxDownloadRetries = 3;
 
 #pragma mark - Playback Internals
 
-- (void)openAndPlayURL:(NSString *)urlString
+- (void)openURL:(NSString *)urlString startingAt:(NSTimeInterval)position
 {
-    NSError *error = nil;
-    BOOL success = [_player openURL:urlString error:&error];
-
-    if (success) {
-        [_player play];
-    } else {
-        NSString *errMsg = error ? [error localizedDescription] : @"Failed to open stream";
-        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
-            [_delegate radioManager:self didFailWithError:errMsg];
-        }
-        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-            [_delegate radioManagerDidUpdateStatus:self status:@"Error"];
-        }
+    [_session openItems:@[urlString]];
+    if (position > 0) {
+        // Kept by the session until the stream is open
+        [_session seekToTime:position];
     }
 }
 
-#pragma mark - StreamPlayerDelegate
+#pragma mark - PlayerSessionDelegate
 
-- (void)streamPlayerDidStartPlaying:(StreamPlayer *)player
+- (void)playerSessionDidChangeState:(PlayerSession *)session
 {
-    // Find the station matching this stream URL
+    PlayerPlaybackState was = _lastState;
+    PlayerPlaybackState now = [session state];
+    _lastState = now;
+    if (now == PlayerPlaybackPlaying && was == PlayerPlaybackOpening) {
+        [self didStartPlaying];
+    } else if (now == PlayerPlaybackStopped && was != PlayerPlaybackStopped
+               && was != PlayerPlaybackOpening) {
+        // Stopped, or the stream (an episode) ended by itself
+        if ([_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
+            [_delegate radioManagerDidStop:self];
+        }
+    }
+    [self notifyStateChange];
+}
+
+- (void)didStartPlaying
+{
     RadioStation *currentStation = nil;
     for (RadioStation *s in _stations) {
         if (_currentStationName && [[s name] isEqualToString:_currentStationName]) {
@@ -363,53 +483,31 @@ static const int kMaxDownloadRetries = 3;
             break;
         }
     }
-
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStartPlaying:station:)]) {
+    if ([_delegate respondsToSelector:@selector(radioManagerDidStartPlaying:station:)]) {
         [_delegate radioManagerDidStartPlaying:self station:currentStation];
     }
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:
-            _currentStationName ? [NSString stringWithFormat:@"Playing: %@", _currentStationName] : @"Playing"];
-    }
+    [self notifyStatus:_currentStationName
+        ? [NSString stringWithFormat:@"Playing: %@", _currentStationName] : @"Playing"];
 }
 
-- (void)streamPlayerDidStop:(StreamPlayer *)player
+- (void)playerSession:(PlayerSession *)session didFailToOpenItem:(NSString *)item
+                error:(NSError *)error userOpened:(BOOL)userOpened
 {
-    // Only notify delegate if we aren't already playing a new stream
-    // The async dispatch_async in StreamPlayer's stop means this callback
-    // can arrive after a new stream has already started playing
-    if (![_player isPlaying]) {
-        if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidStop:)]) {
-            [_delegate radioManagerDidStop:self];
-        }
-    }
-}
-
-- (void)streamPlayer:(StreamPlayer *)player didFailWithError:(NSError *)error
-{
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
+    // Radio shows every failure in its status line, never as an alert
+    if ([_delegate respondsToSelector:@selector(radioManager:didFailWithError:)]) {
         [_delegate radioManager:self didFailWithError:[error localizedDescription]];
     }
 }
 
-- (void)streamPlayer:(StreamPlayer *)player didUpdateStatus:(NSString *)status
-{
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(radioManagerDidUpdateStatus:status:)]) {
-        [_delegate radioManagerDidUpdateStatus:self status:status];
-    }
-}
-
-- (void)streamPlayer:(StreamPlayer *)player didUpdateMetadata:(NSDictionary *)metadata
+- (void)playerSession:(PlayerSession *)session didUpdateMetadata:(NSDictionary *)metadata
 {
     // Forward the full metadata dictionary so the UI can display StreamTitle, icy-url, etc.
-    if (_delegate != nil &&
-        [_delegate respondsToSelector:@selector(radioManager:didUpdateMetadata:)]) {
+    if ([_delegate respondsToSelector:@selector(radioManager:didUpdateMetadata:)]) {
         [_delegate radioManager:self didUpdateMetadata:metadata];
     }
-    // Also forward just the StreamTitle for backward compatibility
     NSString *radioText = [metadata objectForKey:@"StreamTitle"];
-    if ([radioText length] > 0 && _delegate != nil &&
-        [_delegate respondsToSelector:@selector(radioManager:didUpdateRadioText:)]) {
+    if ([radioText length] > 0
+        && [_delegate respondsToSelector:@selector(radioManager:didUpdateRadioText:)]) {
         [_delegate radioManager:self didUpdateRadioText:radioText];
     }
 }
@@ -428,8 +526,15 @@ static const int kMaxDownloadRetries = 3;
     return [self textPlaceholderForStation:station];
 }
 
+// The same stand-in object every time, so whoever draws it can tell that
+// nothing changed until the station's own icon arrives.
 - (NSImage *)textPlaceholderForStation:(RadioStation *)station
 {
+    NSString *key = [station stationId] ?: [station name];
+    NSImage *cached = key ? [_placeholderImages objectForKey:key] : nil;
+    if (cached) {
+        return cached;
+    }
     NSString *name = [station name] ?: @"Radio Station";
     NSSize size = NSMakeSize(200, 200);
 
@@ -507,7 +612,11 @@ static const int kMaxDownloadRetries = 3;
     }
 
     [image unlockFocus];
-    return [image autorelease];
+    [image autorelease];
+    if (key) {
+        [_placeholderImages setObject:image forKey:key];
+    }
+    return image;
 }
 
 - (void)prefetchIconForStationAtIndex:(NSUInteger)index
@@ -531,14 +640,16 @@ static const int kMaxDownloadRetries = 3;
                 [_stationImages setObject:image forKey:key];
                 [image release];
 
-                // Update last access
-                NSMutableDictionary *entry = [[_iconIndex objectForKey:key] mutableCopy];
-                if (!entry) entry = [[NSMutableDictionary alloc] init];
-                [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
-                          forKey:@"lastAccess"];
-                [_iconIndex setObject:entry forKey:key];
-                [entry release];
-                [self saveIconIndex];
+                // Update last access; downloads update the index concurrently
+                @synchronized(self) {
+                    NSMutableDictionary *entry = [[_iconIndex objectForKey:key] mutableCopy];
+                    if (!entry) entry = [[NSMutableDictionary alloc] init];
+                    [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
+                              forKey:@"lastAccess"];
+                    [_iconIndex setObject:entry forKey:key];
+                    [entry release];
+                    [self saveIconIndex];
+                }
 
                 // Notify delegate
                 if (_delegate != nil &&
@@ -557,7 +668,13 @@ static const int kMaxDownloadRetries = 3;
     }
 
     NSString *imageURL = [station imageURL];
-    if (!imageURL || [imageURL length] == 0) return;
+    if (!imageURL || [imageURL length] == 0) {
+        // Nothing to fetch; another station may still use the same key
+        @synchronized(_downloadingKeys) {
+            [_downloadingKeys removeObject:key];
+        }
+        return;
+    }
 
     [self downloadImageWithURL:imageURL key:key station:station attempt:1];
 }
@@ -579,10 +696,7 @@ static const int kMaxDownloadRetries = 3;
         return;
     }
 
-    // Dispatch work to background FIRST, then wait on semaphore
-    // (never block the main thread on the semaphore)
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-        dispatch_semaphore_wait(self->_iconSemaphore, DISPATCH_TIME_FOREVER);
+    [_iconQueue addOperationWithBlock:^{
         @autoreleasepool {
             // Build candidate URLs - try the original first, then fallback
             NSMutableArray *candidates = [NSMutableArray array];
@@ -658,25 +772,27 @@ static const int kMaxDownloadRetries = 3;
                 NSLog(@"[RadioManager] Icon downloaded OK size=%tu for %@",
                       [data length], [url absoluteString]);
 
-                // Save valid image to disk cache
-                NSString *cachePath = [self cachePathForKey:key];
-                if (cachePath) {
-                    NSString *fname = [cachePath lastPathComponent];
-                    [data writeToFile:cachePath options:NSDataWritingAtomic error:NULL];
+                // Save valid image to disk cache; downloads run concurrently
+                @synchronized(self) {
+                    NSString *cachePath = [self cachePathForKey:key];
+                    if (cachePath) {
+                        NSString *fname = [cachePath lastPathComponent];
+                        [data writeToFile:cachePath options:NSDataWritingAtomic error:NULL];
 
-                    // Update index
-                    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-                    [entry setObject:fname forKey:@"filename"];
-                    [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
-                              forKey:@"lastAccess"];
-                    [entry setObject:@([data length]) forKey:@"size"];
-                    [_iconIndex setObject:entry forKey:key];
-                    [self saveIconIndex];
-                    [self pruneCacheIfNeeded];
+                        // Update index
+                        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+                        [entry setObject:fname forKey:@"filename"];
+                        [entry setObject:@((unsigned long long)[[NSDate date] timeIntervalSince1970])
+                                  forKey:@"lastAccess"];
+                        [entry setObject:@([data length]) forKey:@"size"];
+                        [_iconIndex setObject:entry forKey:key];
+                        [self saveIconIndex];
+                        [self pruneCacheIfNeeded];
+                    }
                 }
 
                 // Decode image on main thread
-                dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerRunOnMainThread(^{
                     NSImage *image = [[NSImage alloc] initWithData:data];
                     if (image) {
                         [_stationImages setObject:image forKey:key];
@@ -702,8 +818,7 @@ static const int kMaxDownloadRetries = 3;
 
             if (!success && attempt < kMaxDownloadRetries) {
                 double delay = pow(2.0, attempt);
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
-                               dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+                PlayerRunOnMainThreadAfter(delay, ^{
                     [self downloadImageWithURL:urlStr key:key station:station attempt:attempt + 1];
                 });
             } else if (!success) {
@@ -712,9 +827,8 @@ static const int kMaxDownloadRetries = 3;
                 }
             }
 
-            dispatch_semaphore_signal(self->_iconSemaphore);
         }
-    });
+    }];
 }
 
 - (NSString *)cachePathForKey:(NSString *)key
@@ -731,8 +845,10 @@ static const int kMaxDownloadRetries = 3;
     NSString *fname = [NSString stringWithFormat:@"%016llx.img", hash];
 
     // Check if index has a different filename
-    NSDictionary *entry = [_iconIndex objectForKey:key];
-    NSString *idxFname = [entry objectForKey:@"filename"];
+    NSString *idxFname;
+    @synchronized(self) {
+        idxFname = [[[[_iconIndex objectForKey:key] objectForKey:@"filename"] retain] autorelease];
+    }
     if (idxFname && [idxFname length] > 0) {
         return [_iconCachePath stringByAppendingPathComponent:idxFname];
     }

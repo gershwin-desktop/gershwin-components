@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright (c) 2026 Simon Peter
+  SPDX-License-Identifier: BSD-2-Clause
+
+  AppGarden application icon. Source of truth: the PNGs are rendered from
+  this file with ImageMagick, so edit the SVG, never the PNGs.
+
+    convert -background none -resize 512x512!   AppGarden.svg AppGarden.png
+    convert -background none -resize 1024x1024! AppGarden.svg AppGarden@2x.png
+
+  width/height are 1024 so both commands rasterize at full resolution and
+  the 512 px icon is a downscale of that instead of an upscale.
+  Six paths, no text, no drop shadow.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1024" height="1024" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="garden" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#63D68F"/>
+      <stop offset="1" stop-color="#0FA394"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square, corner radius 22 percent, green to teal -->
+  <path fill="url(#garden)"
+        d="M 112.64 0 H 399.36 A 112.64 112.64 0 0 1 512 112.64
+           V 399.36 A 112.64 112.64 0 0 1 399.36 512 H 112.64
+           A 112.64 112.64 0 0 1 0 399.36 V 112.64
+           A 112.64 112.64 0 0 1 112.64 0 Z"/>
+
+  <!-- Inner border: 6 percent black, fully inside the rounded square -->
+  <path fill="none" stroke="#000000" stroke-opacity="0.06" stroke-width="12"
+        d="M 112.64 8 H 399.36 A 104.64 104.64 0 0 1 504 112.64
+           V 399.36 A 104.64 104.64 0 0 1 399.36 504 H 112.64
+           A 104.64 104.64 0 0 1 8 399.36 V 112.64
+           A 104.64 104.64 0 0 1 112.64 8 Z"/>
+
+  <!-- Sprout stem -->
+  <path fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round"
+        d="M 256 355 C 256 310 253 252 256 196"/>
+
+  <!-- Left leaf -->
+  <path fill="#FFFFFF"
+        d="M 256 316 C 200 330 140 292 104 196
+           C 164 192 234 244 256 316 Z"/>
+
+  <!-- Right leaf -->
+  <path fill="#FFFFFF"
+        d="M 256 272 C 312 286 372 248 408 152
+           C 348 148 278 200 256 272 Z"/>
+
+  <!-- Flat pot line at the bottom third, over the base of the stem -->
+  <path fill="#FFFFFF"
+        d="M 133 344 H 379 A 11 11 0 0 1 379 366 H 133
+           A 11 11 0 0 1 133 344 Z"/>
+</svg>

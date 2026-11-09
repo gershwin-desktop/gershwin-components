@@ -85,7 +85,8 @@ ApplicationName.app/
 
 ### Features
 
-- **Parses .desktop files** - Extracts Name, Exec, Icon, and Version information
+- **Parses .desktop files** - Extracts Name, Exec, Icon, Version and StartupWMClass information
+- **Window class** - StartupWMClass becomes `GSX11WindowClass` in Info.plist, which Workspace and the Dock use to find the program's windows
 - **Creates proper GNUstep bundles** - Generates valid Info.plist and executable structure
 - **Icon support** - Automatically searches for and copies application icons from standard locations
 - **Launcher script** - Creates a shell wrapper that executes the original application command

@@ -9,6 +9,7 @@
 #import "DBusConnection.h"
 #import "X11ShortcutManager.h"
 #import "DBusMenuShortcutParser.h"
+#import "DBusMenuLayout.h"
 #import "MenuProfiler.h"
 
 // DBus info is stored on each NSMenuItem via -setRepresentedObject: with a
@@ -71,6 +72,45 @@ static NSString *const kDBusInfoKey = @"dbusInfo";
     }
 }
 
+/* Titles from the top-level menu down to menuItem. */
++ (NSArray *)titlePathOfMenuItem:(NSMenuItem *)menuItem
+{
+    NSMutableArray *titles = [NSMutableArray arrayWithObject:[menuItem title] ?: @""];
+    NSMenu *menu = [menuItem menu];
+    while (menu != nil && [menu supermenu] != nil) {
+        NSMenu *parent = [menu supermenu];
+        NSInteger index = [parent indexOfItemWithSubmenu:menu];
+        if (index < 0) {
+            break;
+        }
+        [titles insertObject:[[parent itemAtIndex:index] title] ?: @"" atIndex:0];
+        menu = parent;
+    }
+    return titles;
+}
+
++ (int)currentItemIdForMenuItem:(NSMenuItem *)menuItem
+                    serviceName:(NSString *)serviceName
+                     objectPath:(NSString *)objectPath
+                 dbusConnection:(GNUDBusConnection *)dbusConnection
+{
+    int remembered = (int)[menuItem tag];
+    NSNumber *current = [DBusMenuLayout currentIdForTitlePath:[self titlePathOfMenuItem:menuItem]
+                                                  fromService:serviceName
+                                                   objectPath:objectPath
+                                                   connection:(id<DBusMenuLayoutSource>)dbusConnection];
+    if (current == nil) {
+        NSDebugLLog(@"gwcomp", @"DBusMenuActionHandler: '%@' not found in the current menu of %@, using id %d",
+                    [menuItem title], serviceName, remembered);
+        return remembered;
+    }
+    if ([current intValue] != remembered) {
+        NSDebugLLog(@"gwcomp", @"DBusMenuActionHandler: '%@' was renumbered by %@: %d -> %d",
+                    [menuItem title], serviceName, remembered, [current intValue]);
+    }
+    return [current intValue];
+}
+
 + (void)menuItemAction:(id)sender
 {
     MENU_PROFILE_BEGIN(DBusMenuItemAction);
@@ -95,7 +135,10 @@ static NSString *const kDBusInfoKey = @"dbusInfo";
         return;
     }
     
-    int menuItemId = [menuItem tag];
+    int menuItemId = [self currentItemIdForMenuItem:menuItem
+                                        serviceName:serviceName
+                                         objectPath:objectPath
+                                     dbusConnection:dbusConnection];
     NSDebugLLog(@"gwcomp", @"DBusMenuActionHandler: Triggering action for menu item '%@' (ID=%d, service=%@, path=%@)", 
           [menuItem title], menuItemId, serviceName, objectPath);
     

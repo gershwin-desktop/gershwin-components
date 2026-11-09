@@ -7,7 +7,7 @@
     </array>
     <key>os_overrides</key>
     <dict>
-        <key>linux</key>
+        <key>debian</key>
         <dict>
             <key>description</key>
             <string>CPU profiler using hardware performance counters</string>
@@ -15,6 +15,24 @@
             <array>
                 <string>linux-perf</string>
                 <string>heaptrack</string>
+            </array>
+        </dict>
+        <key>arch</key>
+        <dict>
+            <key>description</key>
+            <string>CPU profiler using hardware performance counters</string>
+            <key>packages</key>
+            <array>
+                <string>perf</string>
+                <string>heaptrack</string>
+            </array>
+        </dict>
+        <key>linux</key>
+        <dict>
+            <key>description</key>
+            <string>Distribution not listed here, so no package names are known</string>
+            <key>packages</key>
+            <array>
             </array>
         </dict>
         <key>freebsd</key>
@@ -39,6 +57,15 @@
             <string>Use native NetBSD profiling tools instead of perf</string>
             <key>packages</key>
             <array>
+            </array>
+        </dict>
+        <key>nextbsd</key>
+        <dict>
+            <key>description</key>
+            <string>Heap memory profiler for NextBSD</string>
+            <key>packages</key>
+            <array>
+                <string>heaptrack</string>
             </array>
         </dict>
     </dict>

@@ -1,0 +1,208 @@
+/*
+ * Copyright (c) 2026 Simon Peter
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+/* Every user-visible string of AppGarden, in the order the layers appear:
+ * models, the catalog and image services, the download layer, the views and
+ * the controllers. The key is the English text, the value is what is shown -
+ * English is the source language, so they match until a translation exists. */
+
+/* ---------------------------------------------------------------- Models */
+
+/* Freedesktop category names as the sidebar and the detail page show them. */
+"Audio & Video" = "Audio & Video";
+"Developer Tools" = "Developer Tools";
+"Games" = "Games";
+"Internet" = "Internet";
+"Productivity" = "Productivity";
+"Graphics & Design" = "Graphics & Design";
+"Utilities" = "Utilities";
+"Science" = "Science";
+"System" = "System";
+"Education" = "Education";
+"Finance" = "Finance";
+"Audio" = "Audio";
+"Music" = "Music";
+"Video" = "Video";
+"Chat" = "Chat";
+"News" = "News";
+"Settings" = "Settings";
+"Engineering" = "Engineering";
+"Terminal Emulators" = "Terminal Emulators";
+"Emulators" = "Emulators";
+"Video Conferencing" = "Video Conferencing";
+"Ham Radio" = "Ham Radio";
+"Electronics" = "Electronics";
+"Word Processors" = "Word Processors";
+"Astronomy" = "Astronomy";
+"Qt" = "Qt";
+"GTK" = "GTK";
+"GNOME" = "GNOME";
+"Application" = "Application";
+
+/* License strings. */
+"Unknown license" = "Unknown license";
+"Proprietary" = "Proprietary";
+"GPL-3.0 or later" = "GPL-3.0 or later";
+
+/* Catalog errors shown in an alert when the feed cannot be used. */
+"The catalog is not valid JSON." = "The catalog is not valid JSON.";
+"The catalog is not a JSON object." = "The catalog is not a JSON object.";
+"The catalog has no \"items\" list." = "The catalog has no \"items\" list.";
+"The catalog's \"items\" entry is not a list." = "The catalog's \"items\" entry is not a list.";
+
+/* -------------------------------------------------- Services: catalog */
+
+/* Catalog fetch failures, shown in the status banner next to the cached
+ * catalog, or in the error view when there is no cache at all. %@ carries
+ * curl's first stderr line. */
+"Could not download the catalog: %@" = "Could not download the catalog: %@";
+"The catalog download produced no data." = "The catalog download produced no data.";
+"The catalog cache could not be read." = "The catalog cache could not be read.";
+"Could not save the catalog: %@" = "Could not save the catalog: %@";
+
+/* Image fetch failures. The caller draws the placeholder icon and keeps
+ * these as a tooltip; %@ carries curl's first stderr line. */
+"Could not download the image: %@" = "Could not download the image: %@";
+"Could not download the image: no data arrived." = "Could not download the image: no data arrived.";
+"Not an image" = "Not an image";
+"No image URL was given." = "No image URL was given.";
+"This image failed to load earlier in this session." = "This image failed to load earlier in this session.";
+
+/* ------------------------------------------------ Services: downloading */
+
+/* Removal and launch failures, shown in an alert. The first %@ is the
+ * application's display name, the second the underlying reason. */
+"Could not remove %@: %@" = "Could not remove %@: %@";
+"Could not start %@: %@" = "Could not start %@: %@";
+
+/* Showing the installed file in the file manager (AGInstaller revealApp:),
+ * shown in an alert. %@ is the application's display name, or the file
+ * manager's own reason. */
+"%@ is no longer on disk." = "%@ is no longer on disk.";
+"The file manager is not running." = "The file manager is not running.";
+"The file manager did not show the file." = "The file manager did not show the file.";
+"The file manager could not be reached: %@" = "The file manager could not be reached: %@";
+
+/* A refusal by GitHub that was a rate limit. The downloader's own message
+ * now says what went wrong in most cases, so this prefix only fires for the
+ * ones it cannot explain (curl would not start, an empty body, a redirect
+ * loop) - but then a refusal and a network fault read the same, which is
+ * what this makes legible. %@ is the framework's own message, which is
+ * English: this prefix is the only localizable part. */
+"GitHub rate limit reached: %@" = "GitHub rate limit reached: %@";
+
+/* -------------------------------------------------------------- Views */
+
+/* Grid page states (AGAppGridView). %@ is the search query. */
+"Loading catalog..." = "Loading catalog...";
+"No applications match \"%@\"." = "No applications match \"%@\".";
+"You have not downloaded anything yet. Apps you get from AppGarden appear here." = "You have not downloaded anything yet. Apps you get from AppGarden appear here.";
+
+/* Download button titles, one per state (AGInstallButton). */
+"Get" = "Get";
+"Waiting..." = "Waiting...";
+"Show" = "Show";
+"Failed" = "Failed";
+"Open Page" = "Open Page";
+"Unavailable" = "Unavailable";
+"Downloading. Click to cancel." = "Downloading. Click to cancel.";
+
+/* Alert titles and the failed-state tooltip fallback: a download that did
+ * not finish, and an Open click the file manager did not answer. */
+"Download Failed" = "Download Failed";
+"The download failed." = "The download failed.";
+"Try Again" = "Try Again";
+"Cancel" = "Cancel";
+"OK" = "OK";
+"Could Not Show the File" = "Could Not Show the File";
+
+/* Screenshot frame fallback when the picture does not arrive (AGScreenshotView). */
+"Screenshot unavailable" = "Screenshot unavailable";
+
+/* Risk warning (AGInstallButton), shown by Get when an item's metadata falls
+ * into a risk category. The first %@ is the item's name, the second the
+ * keywords that matched, which can come from the name, description,
+ * categories, authors or links. The risk sentences themselves live in
+ * Resources/RiskCategories.plist, which is data rather than interface. */
+"Do you want to download \"%@\"?" = "Do you want to download \"%@\"?";
+"Download at Your Own Risk" = "Download at Your Own Risk";
+
+/* GitHub stars (AGGitHubInfo, AGDetailViewController). */
+"%@ stars on GitHub" = "%@ stars on GitHub";
+"1 star on GitHub" = "1 star on GitHub";
+"GitHub stars unavailable" = "GitHub stars unavailable";
+"Checking..." = "Checking...";
+"License as reported by GitHub" = "License as reported by GitHub";
+"GitHub rate limit reached." = "GitHub rate limit reached.";
+"GitHub answered: %@" = "GitHub answered: %@";
+"GitHub gave no answer about this repository." = "GitHub gave no answer about this repository.";
+"Could not reach GitHub: %@" = "Could not reach GitHub: %@";
+"The repository page has no description." = "The repository page has no description.";
+"Could not read the repository page: %@" = "Could not read the repository page: %@";
+"The repository page has no star count." = "The repository page has no star count.";
+"This is not a GitHub repository name." = "This is not a GitHub repository name.";
+
+/* --------------------------------------------------------- Controllers */
+
+/* Top bar and banner (AGMainWindowController, AGStatusBannerController).
+ * "Back" is the tooltip and the identity of the top bar's arrow, which
+ * draws no text. The banner's first %@ is the fetch date, the second the
+ * download error. */
+"Back" = "Back";
+"Search" = "Search";
+"Retry" = "Retry";
+"Showing the catalog from %@. Could not reach appimage.github.io: %@" = "Showing the catalog from %@. Could not reach appimage.github.io: %@";
+
+/* Sidebar section rows and headers (AGSidebarController), the same two
+ * names reused by the View menu (AGAppDelegate). */
+"Library" = "Library";
+"Categories" = "Categories";
+"Discover" = "Discover";
+"Downloaded" = "Downloaded";
+
+/* Detail page (AGDetailViewController). %@ is the application's name. */
+"View on appimage.github.io" = "View on appimage.github.io";
+"View on GitHub" = "View on GitHub";
+"Description" = "Description";
+"The publisher did not provide a description." = "The publisher did not provide a description.";
+"Information" = "Information";
+"Developer" = "Developer";
+"Category" = "Category";
+"License" = "License";
+"Source" = "Source";
+"Download page" = "Download page";
+"Self-contained" = "Self-contained";
+"Requires glibc" = "Requires glibc";
+"Yes" = "Yes";
+"No" = "No";
+"Remove" = "Remove";
+"Remove %@?" = "Remove %@?";
+"The application file is deleted from your Applications folder." = "The application file is deleted from your Applications folder.";
+"Could Not Remove the Application" = "Could Not Remove the Application";
+
+/* Menu (AGAppDelegate). The first key is the application menu's own title,
+ * which carries the application name. */
+"AppGarden" = "AppGarden";
+"About AppGarden" = "About AppGarden";
+"Hide AppGarden" = "Hide AppGarden";
+"Hide Others" = "Hide Others";
+"Show All" = "Show All";
+"Quit AppGarden" = "Quit AppGarden";
+"File" = "File";
+"Close Window" = "Close Window";
+"Edit" = "Edit";
+"Cut" = "Cut";
+"Copy" = "Copy";
+"Paste" = "Paste";
+"Select All" = "Select All";
+"Find" = "Find";
+"View" = "View";
+"Reload Catalog" = "Reload Catalog";
+"Go" = "Go";
+"Window" = "Window";
+"Minimize" = "Minimize";
+"Help" = "Help";
+"AppGarden Help" = "AppGarden Help";

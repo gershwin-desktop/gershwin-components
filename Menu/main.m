@@ -11,133 +11,11 @@
 #import "MenuController.h"
 #import "MenuProfiler.h"
 #import "CrashHandler.h"
+#import "MenuInstanceTakeover.h"
 #import <signal.h>
 #import <sys/types.h>
 #import <unistd.h>
-#import <dirent.h>
 #import <X11/Xlib.h>
-
-// Function to resolve a symlink to its actual path
-static NSString *resolveSymlink(NSString *linkPath) {
-    char buffer[PATH_MAX];
-    ssize_t len = readlink([linkPath fileSystemRepresentation], buffer, sizeof(buffer) - 1);
-    if (len != -1) {
-        buffer[len] = '\0';
-        return [NSString stringWithUTF8String:buffer];
-    }
-    return nil;
-}
-
-// Resolve an executable path to its canonical absolute path when possible.
-static NSString *canonicalPathForExecutable(NSString *path)
-{
-    char resolved[PATH_MAX];
-
-    if (!path) {
-        return nil;
-    }
-
-    if (realpath([path fileSystemRepresentation], resolved) != NULL) {
-        return [NSString stringWithUTF8String:resolved];
-    }
-
-    return path;
-}
-
-// Function to kill any other instances of this application
-static void killOtherInstances(void) {
-    // Get the path to the current executable
-    NSString *currentPath = [[NSBundle mainBundle] executablePath];
-    if (!currentPath) {
-        NSDebugLLog(@"gwcomp", @"Menu.app: Warning - could not determine executable path");
-        return;
-    }
-    
-    pid_t currentPID = getpid();
-    
-    // Resolve the current executable path to its real path
-    NSString *currentRealPath = canonicalPathForExecutable(currentPath);
-    
-    NSDebugLLog(@"gwcomp", @"Menu.app: Current executable: %@ (real: %@)", currentPath, currentRealPath);
-    
-    // Scan /proc filesystem for other instances (works on Linux and BSD with /proc)
-    DIR *procDir = opendir("/proc");
-    if (!procDir) {
-        NSDebugLLog(@"gwcomp", @"Menu.app: Warning - could not open /proc directory");
-        return;
-    }
-    
-    struct dirent *entry;
-    while ((entry = readdir(procDir)) != NULL) {
-        // Skip non-numeric entries and . and ..
-        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') {
-            continue;
-        }
-        
-        pid_t otherPID = (pid_t)strtol(entry->d_name, NULL, 10);
-        if (otherPID <= 0 || otherPID == currentPID) {
-            continue;
-        }
-        
-        // Try to read the exe link (works on Linux and some BSDs)
-        NSString *exePath = [NSString stringWithFormat:@"/proc/%d/exe", otherPID];
-        NSString *linkedPath = resolveSymlink(exePath);
-        
-        // If exe link doesn't work, try file link (some BSDs)
-        if (!linkedPath) {
-            exePath = [NSString stringWithFormat:@"/proc/%d/file", otherPID];
-            linkedPath = resolveSymlink(exePath);
-        }
-        
-        if (!linkedPath) {
-            continue;
-        }
-        
-        // Resolve the found process's executable to real path for comparison
-        NSString *otherRealPath = canonicalPathForExecutable(linkedPath);
-        
-        // Compare the executable paths
-        if ([otherRealPath isEqualToString:currentRealPath]) {
-            /* Only this user's instances: a Menu on another display/session
-             * belongs to a different (test) user and must be left alone.
-             * Linux reads /proc/<pid>/status; the BSDs fall back to ps. */
-            int otherUid = -1;
-#if defined(__linux__)
-            NSString *statusPath = [NSString stringWithFormat:@"/proc/%d/status", otherPID];
-            FILE *sf = fopen([statusPath UTF8String], "r");
-            if (sf) {
-                char line[256];
-                while (fgets(line, sizeof(line), sf)) {
-                    if (strncmp(line, "Uid:", 4) == 0) {
-                        sscanf(line + 4, "%d", &otherUid);
-                        break;
-                    }
-                }
-                fclose(sf);
-            }
-#else
-            char cmd[64];
-            snprintf(cmd, sizeof(cmd), "ps -o uid= -p %d", otherPID);
-            FILE *sf = popen(cmd, "r");
-            if (sf) {
-                if (fscanf(sf, "%d", &otherUid) != 1) otherUid = -1;
-                pclose(sf);
-            }
-#endif
-            if (otherUid != (int)getuid()) {
-                continue;
-            }
-            NSDebugLLog(@"gwcomp", @"Menu.app: Killing other instance with PID %d", otherPID);
-            kill(otherPID, SIGTERM);
-            // Give it a moment to terminate gracefully
-            usleep(100000); // 100ms
-            // Force kill if still running
-            kill(otherPID, SIGKILL);
-        }
-    }
-    
-    closedir(procDir);
-}
 
 /* The Menu app routinely walks the window tree while other clients - and its
    own popup menus - create and destroy transient windows.  A query that races
@@ -171,8 +49,11 @@ int main(int __attribute__((unused)) argc, const char * __attribute__((unused)) 
 
     NSDebugLLog(@"gwcomp", @"Menu.app: Starting application initialization...");
     
-    // Kill any other instances of Menu.app before proceeding
-    killOtherInstances();
+    // Replace only the Menu of this display; a Menu on another display belongs
+    // to another session and must keep running.
+    if (!MenuTakeOverDisplay()) {
+        return 1;
+    }
     
     @autoreleasepool {
         @try {

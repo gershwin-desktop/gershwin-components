@@ -1,0 +1,29 @@
+Geom name: da0
+modified: false
+state: OK
+fwheads: 255
+fwsectors: 63
+last: 30228479
+first: 63
+entries: 4
+scheme: MBR
+Providers:
+1. Name: da0s1
+   Mediasize: 15477342720 (14G)
+   Sectorsize: 512
+   Stripesize: 0
+   Stripeoffset: 32256
+   Mode: r0w0e0
+   efimedia: HD(1,MBR,0xeb9caa03,0x3f,0x1d9c000)
+   rawtype: 12
+   length: 15477342720
+   offset: 32256
+   type: fat32lba
+   index: 1
+   end: 30228479
+   start: 63
+Consumers:
+1. Name: da0
+   Mediasize: 15477350400 (14G)
+   Sectorsize: 512
+   Mode: r0w0e0

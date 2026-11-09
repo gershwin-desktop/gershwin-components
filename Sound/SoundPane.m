@@ -105,6 +105,7 @@
     // Refresh data when the pane is selected
     [controller refreshDevices];
     [controller startInputLevelMonitoring];
+    [controller startJackStatusTimer];
     // Start periodic device refresh (every 2 seconds)
     [self startRefreshTimer];
     [self setInitialKeyView:nil];
@@ -120,6 +121,7 @@
 {
     [super didUnselect];
     [self stopRefreshTimer];
+    [controller stopJackStatusTimer];
     NSDebugLLog(@"gwcomp", @"SoundPane: didUnselect called");
 }
 

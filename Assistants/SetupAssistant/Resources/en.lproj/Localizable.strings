@@ -1,0 +1,73 @@
+/* Setup Assistant Localizable Strings */
+/* English */
+
+"Setup Assistant" = "Setup Assistant";
+"Welcome" = "Welcome";
+"Welcome to the Setup Assistant. This assistant will help you configure your system." = "Welcome to the Setup Assistant. This assistant will help you configure your system.";
+"Welcome to Gershwin" = "Welcome to Gershwin";
+"This assistant will help you set up your new Gershwin system. You will be asked to configure your language, keyboard, regional settings, create a user account, and set your computer name." = "This assistant will help you set up your new Gershwin system. You will be asked to configure your language, keyboard, regional settings, create a user account, and set your computer name.";
+"Click Continue to begin." = "Click Continue to begin.";
+
+/* Language */
+"Language" = "Language";
+"Select your preferred language for the system." = "Select your preferred language for the system.";
+"Language:" = "Language:";
+"The selected language will be used for the system interface and applications." = "The selected language will be used for the system interface and applications.";
+
+/* Keyboard */
+"Keyboard" = "Keyboard";
+"Select your keyboard layout." = "Select your keyboard layout.";
+"Keyboard Layout:" = "Keyboard Layout:";
+"Select the keyboard layout that matches your physical keyboard." = "Select the keyboard layout that matches your physical keyboard.";
+
+/* Language and Keyboard */
+"Language and Keyboard" = "Language and Keyboard";
+"Select your language and keyboard layout." = "Select your language and keyboard layout.";
+
+/* Region and Formats */
+"Region and Formats" = "Region and Formats";
+"Select your region and formatting preferences." = "Select your region and formatting preferences.";
+"Region:" = "Region:";
+"Currency:" = "Currency:";
+"Measurement:" = "Measurement:";
+"Imperial (miles, pounds)" = "Imperial (miles, pounds)";
+"Metric (kilometers, kilograms)" = "Metric (kilometers, kilograms)";
+
+/* Date and Time */
+"Date and Time" = "Date and Time";
+"Set your date, time, and timezone." = "Set your date, time, and timezone.";
+"Timezone:" = "Timezone:";
+"Date:" = "Date:";
+"Time:" = "Time:";
+"Set date and time automatically via network" = "Set date and time automatically via network";
+
+/* User Account */
+"User Account" = "User Account";
+"Create a user account for yourself." = "Create a user account for yourself.";
+"Full Name:" = "Full Name:";
+"Username:" = "Username:";
+"Password:" = "Password:";
+"Confirm:" = "Confirm:";
+"Full Name is required" = "Full Name is required";
+"Username is required" = "Username is required";
+"Username may only contain letters, numbers, and underscores" = "Username may only contain letters, numbers, and underscores";
+"Passwords do not match" = "Passwords do not match";
+"Account will be created using the Gershwin Directory Service." = "Account will be created using the Gershwin Directory Service.";
+"Account will be created using standard Unix tools." = "Account will be created using standard Unix tools.";
+
+/* Computer Name */
+"Computer Name" = "Computer Name";
+"Set your computer name." = "Set your computer name.";
+"Computer Name:" = "Computer Name:";
+"Local Host Name:" = "Local Host Name:";
+"The computer name is how your device appears on the network. The local host name is used for local networking and file sharing." = "The computer name is how your device appears on the network. The local host name is used for local networking and file sharing.";
+
+/* Common */
+"Continue" = "Continue";
+"Cancel Setup?" = "Cancel Setup?";
+"Are you sure you want to cancel the setup? Any progress will be lost." = "Are you sure you want to cancel the setup? Any progress will be lost.";
+"Cancel Setup" = "Cancel Setup";
+"Continue Setup" = "Continue Setup";
+"Applying Settings" = "Applying Settings";
+"Please wait while we apply your settings..." = "Please wait while we apply your settings...";
+"Setup completed successfully! Your system is now ready to use." = "Setup completed successfully! Your system is now ready to use.";

@@ -1,0 +1,5 @@
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
+ADDITIONAL_INCLUDE_DIRS += -I../..
+
+# The unit under test is Foundation-only; link it as a separate object.
+t_XLXephyr_OBJC_FILES += ../../XLXephyr.m

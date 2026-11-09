@@ -7,12 +7,14 @@
 #import <AppKit/NSApplication.h>
 #import <Foundation/NSAutoreleasePool.h>
 #import "WhisperController.h"
+#import "WApplication.h"
 
 int main(int argc, const char *argv[])
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-    [NSApplication sharedApplication];
+    /* WApplication first, so it is the shared application. */
+    [WApplication sharedApplication];
 
     WhisperController *controller = [[WhisperController alloc] init];
     [[NSApplication sharedApplication] setDelegate:controller];

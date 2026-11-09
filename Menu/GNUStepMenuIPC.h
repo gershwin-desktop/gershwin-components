@@ -51,4 +51,11 @@
 // via updateMenuForApplication:menuData:clientName:.  Used when Menu.app
 // starts after a windowless app, or after the app's last window closes.
 - (oneway void)requestApplicationMenuUpdate;
+
+// Synchronous: for clients whose submenus are filled or rebuilt only when
+// they are about to be used (GTK programs).  The client runs that step again
+// and returns nil when it has no such submenus, an empty dictionary when it
+// has but nothing changed, or the complete new menu data.  Clients that do not
+// implement it are not asked again.  Must respond promptly (< 300 ms).
+- (bycopy id)refreshedMenuDataForWindow:(NSNumber *)windowId;
 @end

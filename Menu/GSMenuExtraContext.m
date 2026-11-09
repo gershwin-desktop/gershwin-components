@@ -25,4 +25,9 @@
     [_manager refreshExtraWithIdentifier:_identifier];
 }
 
+- (void)invalidateWidth
+{
+    [_manager invalidateWidthForExtraWithIdentifier:_identifier];
+}
+
 @end

@@ -8,8 +8,10 @@
 launch application "Whisper"
 wait until window "Whisper Speech-to-Text" timeout 2s
 assert window "Whisper Speech-to-Text"
+# One button does both jobs: it shows the app icon and is called "Record" at
+# rest, and turns into a stop square called "Stop" while recording.
 assert button "Record"
-assert button "Stop"
+assert not exists button "Stop"
 assert text contains "Ready"
 assert button "Copy to Clipboard"
 assert menu item "Whisper/Quit Whisper" shortcut "Cmd+Q"

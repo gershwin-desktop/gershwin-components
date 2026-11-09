@@ -16,6 +16,12 @@
 @class MenuProtocolManager;
 @class WindowSwitchContext;
 
+/* Posted whenever setupMenuViewWithMenu: finishes building a fresh top-level
+   menu (window switch, application switch, or falling back to the system-
+   only menu) - the moment the set of title widths the menu bar's layout
+   depends on may have changed.  object is the AppMenuWidget itself. */
+extern NSString * const AppMenuWidgetDidRebuildMenuNotification;
+
 @interface AppMenuWidget : NSView <NSMenuDelegate>
 
 @property (nonatomic, weak) MenuProtocolManager *protocolManager;
@@ -25,6 +31,9 @@
 @property (nonatomic, strong) NSMenu *currentMenu;
 @property (nonatomic, assign) pid_t currentWindowPID;
 @property (nonatomic, assign) BOOL needsRedraw;
+/* Set while a changed menu of the same window is loaded: loadMenu: then
+   rebuilds although the top-level titles are the same. */
+@property (nonatomic, assign) BOOL rebuildEvenIfUnchanged;
 
 /* The system submenu (contains Search, System Preferences, and dynamic application list) */
 @property (nonatomic, strong) NSMenu *systemMenu;
@@ -51,6 +60,10 @@
    (which used to cascade through NSMenu/NSMenuItem dealloc and re-stat every
    .app bundle for its icon).  Only rebuilt when the underlying tree changes. */
 @property (nonatomic, strong) NSMenu *cachedAppsSubmenu;
+/* One icon per application bundle, kept for as long as the widget lives.
+   Asking the workspace again decodes the bundle's PNG all over, which for a
+   full Applications menu is tens of megabytes per rebuild. */
+@property (nonatomic, strong) NSMutableDictionary *appIconCache;
 @property (nonatomic, assign) NSTimeInterval lastSystemMenuUpdateTime;
 
 /* Coalescing timer for window focus changes */
@@ -78,11 +91,29 @@
 - (void)displayMenuForWindow:(unsigned long)windowId;
 - (void)setupMenuViewWithMenu:(NSMenu *)menu;
 - (void)loadMenu:(NSMenu *)menu forWindow:(unsigned long)windowId;
+/* The app changed the menu of a window: rebuild if it is still on show and
+   something visible changed.  Waits while a menu of the bar is open. */
+- (void)reloadMenuAfterAppChangeForWindow:(unsigned long)windowId;
 - (void)loadApplicationMenu:(NSMenu *)menu forPID:(pid_t)pid;
 - (void)checkAndDisplayMenuForNewlyRegisteredWindow:(unsigned long)windowId;
 - (BOOL)isPlaceholderMenu:(NSMenu *)menu;
 - (void)closeActiveWindow:(NSMenuItem *)sender;
 - (void)sendAltF4ToWindow:(unsigned long)windowId;
+
+/* ── Menu bar layout (title overflow) ──────────────────────────── */
+
+/* Natural (unclipped) width of each top-level item of the menu currently
+   built, in display order - measured fresh every time setupMenuViewWithMenu:
+   builds a menu, before any overflow folding is applied.  Feed this to
+   +[MenuBarLayout layoutForBarWidth:...] to decide how many fit. */
+- (NSArray<NSNumber *> *)topLevelItemWidths;
+
+/* Show exactly the first `count` top-level items directly; any items beyond
+   that are moved (not copied - their own submenu, target and action travel
+   with them) into a single trailing overflow item's submenu instead of
+   being pushed off-screen.  Passing the full item count restores normal
+   display.  Idempotent: a no-op if the fold already matches. */
+- (void)setVisibleTopLevelItemCount:(NSUInteger)count;
 
 /* System submenu actions */
 - (void)openSystemPreferences:(NSMenuItem *)sender;

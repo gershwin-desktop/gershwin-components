@@ -1,10 +1,13 @@
 #!/usr/bin/env run_uitest
-# Processes: the process monitor must start, show its window and its main
-# menu, then quit with the standard Cmd+Q shortcut.
+# Processes: the process monitor must start, show its window, its main menu and
+# the controls that make the list actionable (the "only what looks wrong"
+# filter, the summary line, the Process menu), then quit with the standard
+# Cmd+Q shortcut.
 #
 # Leaves the computer as it was found: the app is quit at the end.
 #
 # Run with: run_uitest Processes/Tests/processes.uitest
+shell "pkill -9 -u $(id -u) -x Processes; sleep 1; true"
 launch application "Processes"
 wait until window "Processes" timeout 15s
 assert window "Processes"
@@ -12,9 +15,26 @@ assert menu item "Processes/About Processes" exists
 assert menu item "Processes/Hide Processes" exists
 assert menu item "Processes/Quit Processes" shortcut "Cmd+Q"
 assert menu item "Window/Minimize" shortcut "Cmd+M"
+
+# What can be done with the selected process
+assert menu item "Process/Get Info" shortcut "Cmd+I"
+assert menu item "Process/Quit Process" exists
+assert menu item "Process/Force Quit Process" exists
+assert menu item "Process/Suspend" exists
+assert menu item "Process/Resume" exists
+assert menu item "Process/Refresh Now" shortcut "Cmd+R"
+
+# The list says what it found; the filter narrows it down to the findings
+wait until textfield "processes" timeout 20s
+assert checkbox "Only what looks wrong" exists
+click checkbox "Only what looks wrong"
+assert checkbox "Only what looks wrong" checked
+click checkbox "Only what looks wrong"
+assert text contains "processes"
+
 activate application "Processes"
 wait until menu bar "Processes" timeout 10s
 press "Alt+Q"
 wait until not exists window "Processes" timeout 5s
 assert not exists application "Processes"
-log "Processes starts, shows its menu and quits"
+log "Processes starts, reports what it found, offers the actions and quits"

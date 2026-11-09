@@ -190,6 +190,15 @@
 "Partition %lu has no size." = "Partition %lu has no size.";
 "Partition %lu has no start " = "Partition %lu has no start ";
 "Partition Scheme:" = "Partition Scheme:";
+"Partition Map Scheme:" = "Partition Map Scheme:";
+"Partition Type:" = "Partition Type:";
+"Partition UUID:" = "Partition UUID:";
+"Partition Label:" = "Partition Label:";
+"None" = "None";
+"GUID Partition Map" = "GUID Partition Map";
+"Master Boot Record" = "Master Boot Record";
+"Apple Partition Map" = "Apple Partition Map";
+"BSD Disklabel" = "BSD Disklabel";
 "Partition Table Scheme" = "Partition Table Scheme";
 "Partition scheme %@ is not supported " = "Partition scheme %@ is not supported ";
 "Partition scheme %@ is not supported." = "Partition scheme %@ is not supported.";

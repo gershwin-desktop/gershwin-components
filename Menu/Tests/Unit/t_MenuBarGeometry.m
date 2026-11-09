@@ -1,0 +1,106 @@
+/*
+ * Copyright (c) 2026 Simon Peter
+ *
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-or-later
+ *
+ * Coverage for MenuBarGeometryForMonitor(): the bar window, its content
+ * size and its strut come from the primary monitor only, so the global menu
+ * and the menu extras share that monitor (issue #135).  Headless.
+ */
+#import <Foundation/Foundation.h>
+#import "Testing.h"
+#import "../../MenuBarGeometry.h"
+
+static NSString * const kSuiteName = @"Menu bar on the primary monitor";
+
+int main(void)
+{
+  NSAutoreleasePool *arp = [NSAutoreleasePool new];
+  NSLog(@"%@", kSuiteName);
+
+  /* Laptop 1280x800 primary at 0,0, external 1920x1080 right of it. */
+  NSSize root = NSMakeSize(3200, 1080);
+
+  {
+    MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(0, 0, 1280, 800),
+                                                  root, 22, 1.0);
+    PASS(g.windowFrame.size.width == 1280,
+         "bar is as wide as the primary monitor, not the whole X screen");
+    PASS(g.windowFrame.origin.x == 0 && g.windowFrame.origin.y == 1058
+         && g.windowFrame.size.height == 22,
+         "bar sits at the top of the primary in GNUstep coordinates (1080 - 22)");
+    PASS(g.contentSize.width == 1280 && g.contentSize.height == 22,
+         "content spans the primary's width at scale 1");
+    PASS(g.strut[2] == 22 && g.strut[8] == 0 && g.strut[9] == 1279,
+         "strut reserves the top 22 px over the primary's columns only");
+  }
+
+  {
+    /* The external monitor made primary, scale 2. */
+    MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(1280, 0, 1920, 1080),
+                                                  root, 22, 2.0);
+    PASS(g.windowFrame.origin.x == 1280 && g.windowFrame.size.width == 1920,
+         "bar moves to the primary's origin and width when the primary changes");
+    PASS(g.windowFrame.size.height == 44 && g.windowFrame.origin.y == 1036,
+         "bar height scales with GSScaleFactor");
+    PASS(g.contentSize.width == 960 && g.contentSize.height == 22,
+         "content is in points: 1920 px / 2");
+    PASS(g.strut[2] == 44 && g.strut[8] == 1280 && g.strut[9] == 3199,
+         "strut follows the primary to the right monitor");
+  }
+
+  {
+    /* Primary placed lower than the root top (stacked layout): the strut
+     * reaches from the root top to the bar's bottom, over the primary's
+     * columns; the window manager applies it to the primary only. */
+    MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(0, 1080, 1280, 800),
+                                                  NSMakeSize(1920, 1880), 22, 1.0);
+    PASS(g.windowFrame.origin.y == 778,
+         "a primary below another monitor puts the bar at its own top");
+    PASS(g.strut[2] == 1102 && g.strut[8] == 0 && g.strut[9] == 1279,
+         "top strut is the primary's top plus the bar, over its columns");
+  }
+
+  {
+    /* Slide-in at 60 fps over 0.3 s from one 22 px bar height above the
+     * top of a primary whose top is at GNUstep y 800. */
+    BOOL whole = YES;
+    int i;
+
+    for (i = 0; i <= 20; i++)
+      {
+        CGFloat top = MenuBarSlideInTop(800, 22, i / 18.0);
+        if (top != floor(top))
+          whole = NO;
+      }
+    PASS(whole, "every slide-in step is a whole pixel");
+    PASS(MenuBarSlideInTop(800, 22, 0) == 822
+         && MenuBarSlideInTop(800, 22, 1) == 800,
+         "slide-in runs from one bar height above to the final top");
+    PASS(MenuBarSlideInTop(800, 22, 0.99) == 800,
+         "the step just before the end is the final top, not 800.0003");
+  }
+
+  {
+    /* Per-monitor scale: libs-back draws a monitor at its RandR "DPI" / 96
+     * and falls back to GSScaleFactor where the output has no DPI, so the
+     * bar on the primary must be laid out at that same factor. */
+    PASS(MenuBarScaleForMonitor(96, 1.25) == 1.0,
+         "a 100%% primary is drawn at 1.0 although GSScaleFactor is 1.25");
+    PASS(MenuBarScaleForMonitor(120, 1.0) == 1.25,
+         "a 125%% primary is drawn at 1.25 although GSScaleFactor is 1.0");
+    PASS(MenuBarScaleForMonitor(0, 1.5) == 1.5,
+         "a primary without a DPI follows GSScaleFactor");
+    PASS(MenuBarScaleForMonitor(-1, 0) == 1.0,
+         "nothing known means 1.0");
+
+    MenuBarGeometry g = MenuBarGeometryForMonitor(NSMakeRect(1920, 0, 1920, 1080),
+                                                  NSMakeSize(3840, 1080), 22,
+                                                  MenuBarScaleForMonitor(96, 1.25));
+    PASS(g.windowFrame.size.height == 22 && g.contentSize.width == 1920,
+         "on a 100%% primary the bar is 22 px high and lays out 1920 points");
+  }
+
+  [arp release];
+  return 0;
+}

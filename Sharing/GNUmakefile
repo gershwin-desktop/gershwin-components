@@ -6,9 +6,12 @@ BUNDLE_NAME = Sharing
 Sharing_OBJC_FILES = \
 	SharingPane.m \
 	SharingController.m \
-	GSServiceDiscoveryManager.m
+	GSServiceDiscoveryManager.m \
+	GSXrdpSession.m
 
 Sharing_RESOURCE_FILES = Sharing.png
+Sharing_LOCALIZED_RESOURCE_FILES = Localizable.strings
+Sharing_LANGUAGES = English German
 Sharing_BUNDLE_LIBS = -lPreferencePanes
 Sharing_PRINCIPAL_CLASS = SharingPane
 
@@ -32,9 +35,9 @@ include $(GNUSTEP_MAKEFILES)/bundle.make
 HELPER_SRC = sharing-helper.c
 HELPER_BIN = obj/sharing-helper
 
-$(HELPER_BIN): $(HELPER_SRC)
+$(HELPER_BIN): $(HELPER_SRC) sshd-x11.c sshd-x11.h
 	@mkdir -p obj
-	$(CC) -O2 -Wall -o $@ $<
+	$(CC) -O2 -Wall -o $@ $(HELPER_SRC) sshd-x11.c
 
 all:: $(HELPER_BIN)
 

@@ -8,11 +8,16 @@
 
 #import "SharingController.h"
 #import "GSServiceDiscoveryManager.h"
+#import "GSXrdpSession.h"
 #import <dispatch/dispatch.h>
 #import <sys/utsname.h>
 #import <arpa/inet.h>
 #import <netinet/in.h>
 #import <ifaddrs.h>
+
+// The pane's bundle, not the application's, holds its Localizable.strings.
+#define SharingLocalized(s) \
+    NSLocalizedStringFromTableInBundle(s, nil, [NSBundle bundleForClass:[SharingController class]], nil)
 
 // AppearanceMetrics design philosophy - do NOT hardcode layout values
 // All spacing shall be multiples of 4px (4, 8, 12, 16, 20, 24)
@@ -248,6 +253,25 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         return [trimmed isEqualToString:@"running"];
     }
     return NO;
+}
+
+// "enabled" or "disabled"; anything else (the helper could not understand
+// sshd_config) is reported as unknown so the pane does not guess.
+- (NSString *)getX11State
+{
+    NSString *output = [self runHelper:@"x11-status"];
+    NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([trimmed isEqualToString:@"enabled"] || [trimmed isEqualToString:@"disabled"]) {
+        return trimmed;
+    }
+    return nil;
+}
+
+- (BOOL)getX11Installed
+{
+    NSString *output = [self runHelper:@"x11-installed"];
+    NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return [trimmed isEqualToString:@"installed"];
 }
 
 - (BOOL)getVNCStatus
@@ -586,6 +610,59 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     }
 }
 
+- (void)toggleX11:(id)sender
+{
+    BOOL shouldEnable = [x11Checkbox state] == NSOnState;
+
+    if (![self runHelperWithSudo:shouldEnable ? @"x11-start" : @"x11-stop"]) {
+        [x11Checkbox setState:x11Enabled ? NSOnState : NSOffState];
+        NSRunAlertPanel(SharingLocalized(@"X11 Forwarding Error"),
+                        SharingLocalized(@"The sshd configuration could not be changed. It may use a layout this pane does not handle, or sshd rejected the change. Check the system log for details."),
+                        SharingLocalized(@"OK"), nil, nil);
+        return;
+    }
+    x11Enabled = shouldEnable;
+    [self refreshStatus:nil];
+}
+
+- (void)updateX11UIWithState:(NSString *)state installed:(BOOL)installed
+{
+    if (!x11Checkbox) {
+        return;
+    }
+    NSColor *grey = [NSColor colorWithCalibratedWhite:0.6 alpha:1.0];
+
+    if (!installed) {
+        [x11Checkbox setEnabled:NO];
+        [x11Checkbox setState:NSOffState];
+        [x11StatusLabel setStringValue:SharingLocalized(@"N/A")];
+        [x11StatusLabel setTextColor:grey];
+        [x11InfoLabel setStringValue:SharingLocalized(@"Install the OpenSSH server and xauth to allow X11 forwarding.")];
+        [x11InfoLabel setHidden:NO];
+    } else if (state == nil) {
+        [x11Checkbox setEnabled:NO];
+        [x11Checkbox setState:NSOffState];
+        [x11StatusLabel setStringValue:SharingLocalized(@"Unknown")];
+        [x11StatusLabel setTextColor:grey];
+        [x11InfoLabel setStringValue:SharingLocalized(@"The sshd configuration could not be read or is not understood; edit it by hand.")];
+        [x11InfoLabel setHidden:NO];
+    } else {
+        x11Enabled = [state isEqualToString:@"enabled"];
+        [x11Checkbox setEnabled:YES];
+        [x11Checkbox setState:x11Enabled ? NSOnState : NSOffState];
+        if (x11Enabled) {
+            [x11StatusLabel setStringValue:SharingLocalized(@"On")];
+            [x11StatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+            [x11InfoLabel setStringValue:SharingLocalized(@"To use it: ssh -X user@host")];
+            [x11InfoLabel setHidden:NO];
+        } else {
+            [x11StatusLabel setStringValue:SharingLocalized(@"Off")];
+            [x11StatusLabel setTextColor:[NSColor grayColor]];
+            [x11InfoLabel setHidden:YES];
+        }
+    }
+}
+
 - (void)toggleVNC:(id)sender
 {
     BOOL shouldEnable = [vncCheckbox state] == NSOnState;
@@ -801,6 +878,20 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     if (success) {
         rdpEnabled = shouldEnable;
+
+        // The helper only starts xrdp; without this wrapper a login over RDP
+        // lands in the distribution's default session instead of Gershwin.
+        NSError *sessionError = nil;
+        BOOL sessionOK = shouldEnable
+            ? [GSXrdpSession configureInHome:NSHomeDirectory()
+                               sessionScript:[GSXrdpSession defaultSessionScript]
+                                       error:&sessionError]
+            : [GSXrdpSession restoreInHome:NSHomeDirectory() error:&sessionError];
+        if (!sessionOK) {
+            NSRunAlertPanel(@"Remote Desktop Warning",
+                           @"Could not set up the Gershwin session for Remote Desktop:\n%@",
+                           @"OK", nil, nil, [sessionError localizedDescription]);
+        }
 
         if (shouldEnable) {
             GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
@@ -1083,9 +1174,12 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL isMediaInstalled  = [self getMediaInstalled];
         BOOL isRdpInstalled  = [self getRDPInstalled];
         BOOL isCloudInstalled = [self getCloudInstalled];
+        BOOL isX11Installed = [self getX11Installed];
+        NSString *x11State = isX11Installed ? [self getX11State] : nil;
 
         dispatch_async(dispatch_get_main_queue(), ^{
             isRefreshingStatus = NO;
+            [self updateX11UIWithState:x11State installed:isX11Installed];
             [self updateUIWithHostname:hostname
                                    ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web media:media rdp:rdp cloud:cloud
                           sshInstalled:isSshInstalled vncInstalled:isVncInstalled
@@ -1467,6 +1561,9 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
             [rdpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
 
             NSString *info = [NSString stringWithFormat:@"Remote Desktop available at: %@:3389", serviceAddress];
+            if (![GSXrdpSession isConfiguredInHome:NSHomeDirectory()]) {
+                info = [info stringByAppendingString:@" (Gershwin session not set up)"];
+            }
             [rdpInfoLabel setStringValue:info];
             [rdpInfoLabel setHidden:NO];
 
@@ -1699,6 +1796,8 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         CGFloat ty = tabContentH - kTabContentTop;
         ty = addService(tv, ty, &sshCheckbox, &sshStatusLabel, &sshInfoLabel,
                         @"Remote Login (SSH)", @"Off", @selector(toggleSSH:), YES);
+        ty = addService(tv, ty, &x11Checkbox, &x11StatusLabel, &x11InfoLabel,
+                        SharingLocalized(@"X11 Forwarding over SSH"), SharingLocalized(@"Off"), @selector(toggleX11:), YES);
         ty = addService(tv, ty, &vncCheckbox, &vncStatusLabel, &vncInfoLabel,
                         @"Screen Sharing (VNC)", @"Off", @selector(toggleVNC:), YES);
         addService(tv, ty, &rdpCheckbox, &rdpStatusLabel, &rdpInfoLabel,

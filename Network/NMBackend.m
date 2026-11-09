@@ -1236,7 +1236,16 @@ enum {
             
             NSString *ssid = [fields objectAtIndex:0];
             NSString *bssid = [fields objectAtIndex:1];
-            int signal = [[fields objectAtIndex:2] intValue];
+            /* nmcli's SIGNAL is a 0-100 quality, but WLAN.signalStrength is
+               dBm everywhere else: BSDBackend fills it from the S:N ratio and
+               signalBars, the Network pane's bars and the menu bar's signal
+               levels all read it as dBm.  NetworkManager derives quality as
+               2 * (dBm + 100), so invert that here, once, instead of letting
+               every consumer guess the unit (before this, the menu bar showed
+               full strength for any signal at all and the pane drew four bars
+               for every network). */
+            int quality = [[fields objectAtIndex:2] intValue];
+            int signal = quality / 2 - 100;
             NSString *securityStr = [fields objectAtIndex:3];
             BOOL inUse = [[fields objectAtIndex:4] isEqualToString:@"*"];
             int freq = [fields count] > 5 ? [[fields objectAtIndex:5] intValue] : 0;

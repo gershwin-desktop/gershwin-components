@@ -69,6 +69,10 @@
  */
 - (void)hideSearchPopup;
 
+/* The search box and the rows of the results are made for the scale factor
+   they were first shown at; told when it changes, they are made again. */
+- (void)scaleFactorDidChange;
+
 /**
  * Toggle the search popup
  */

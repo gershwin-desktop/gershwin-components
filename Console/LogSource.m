@@ -497,16 +497,32 @@ static NSArray *TailLines(NSString *path, NSUInteger maxLines)
     // Skip timestamp (first 16 characters typically)
     if ([line length] < 16) return nil;
     
-    NSString *month, *day, *time, *hostname, *message;
+    NSString *month = nil, *day = nil, *time = nil, *hostname = nil, *message = nil;
+    NSCharacterSet *blanks = [NSCharacterSet whitespaceCharacterSet];
     
-    [scanner scanUpToString:@" " intoString:&month];
-    [scanner scanString:@" " intoString:nil];
-    [scanner scanUpToString:@" " intoString:&day];
-    [scanner scanString:@" " intoString:nil];
-    [scanner scanUpToString:@" " intoString:&time];
-    [scanner scanString:@" " intoString:nil];
-    [scanner scanUpToString:@" " intoString:&hostname];
-    [scanner scanString:@" " intoString:nil];
+    // Skip runs of blanks before each token: BSD syslog pads a single-digit
+    // day to two columns ("Nov  8"), so a single-space split loses the day.
+    [scanner scanUpToCharactersFromSet:blanks intoString:&month];
+    [scanner scanCharactersFromSet:blanks intoString:nil];
+    [scanner scanUpToCharactersFromSet:blanks intoString:&day];
+    [scanner scanCharactersFromSet:blanks intoString:nil];
+    [scanner scanUpToCharactersFromSet:blanks intoString:&time];
+    [scanner scanCharactersFromSet:blanks intoString:nil];
+    [scanner scanUpToCharactersFromSet:blanks intoString:&hostname];
+    [scanner scanCharactersFromSet:blanks intoString:nil];
+    
+    // A line without a readable timestamp is skipped; the reader must not
+    // die on a stray or truncated line in a log it does not own.
+    NSArray *monthNames = @[@"Jan", @"Feb", @"Mar", @"Apr", @"May", @"Jun",
+                           @"Jul", @"Aug", @"Sep", @"Oct", @"Nov", @"Dec"];
+    NSArray *timeParts = [time componentsSeparatedByString:@":"];
+    NSInteger dayNum = [day integerValue];
+    if (!month || !day || !time || !hostname ||
+        [monthNames indexOfObject:month] == NSNotFound ||
+        dayNum < 1 || dayNum > 31 ||
+        [timeParts count] != 3) {
+        return nil;
+    }
     
     // Process and PID
     NSString *process = nil;
@@ -559,23 +575,12 @@ static NSArray *TailLines(NSString *path, NSUInteger maxLines)
     NSCalendar *calendar = [NSCalendar currentCalendar];
     [components setYear:[[calendar components:NSCalendarUnitYear fromDate:[NSDate date]] year]];
     
-    // Month name to number
-    NSArray *monthNames = @[@"Jan", @"Feb", @"Mar", @"Apr", @"May", @"Jun",
-                           @"Jul", @"Aug", @"Sep", @"Oct", @"Nov", @"Dec"];
     NSInteger monthNum = [monthNames indexOfObject:month];
-    if (monthNum != NSNotFound) {
-        [components setMonth:monthNum + 1];
-    }
-    
-    [components setDay:[day integerValue]];
-    
-    // Parse time
-    NSArray *timeParts = [time componentsSeparatedByString:@":"];
-    if ([timeParts count] == 3) {
-        [components setHour:[[timeParts objectAtIndex:0] integerValue]];
-        [components setMinute:[[timeParts objectAtIndex:1] integerValue]];
-        [components setSecond:[[timeParts objectAtIndex:2] integerValue]];
-    }
+    [components setMonth:monthNum + 1];
+    [components setDay:dayNum];
+    [components setHour:[[timeParts objectAtIndex:0] integerValue]];
+    [components setMinute:[[timeParts objectAtIndex:1] integerValue]];
+    [components setSecond:[[timeParts objectAtIndex:2] integerValue]];
     
     NSDate *timestamp = [calendar dateFromComponents:components];
     [components release];

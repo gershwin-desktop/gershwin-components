@@ -9,16 +9,19 @@
 
 #import <AppKit/AppKit.h>
 #import "ScreenshotCapture.h"
+#import "RecordingFrame.h"
+#import "ScreenRecorder.h"
 
 @class ScreenshotActionPanel;
 
-@interface ScreenshotController : NSObject
+@interface ScreenshotController : NSObject <RecordingFrameDelegate, ScreenRecorderDelegate>
 {
     NSWindow *mainWindow;
     NSTextField *statusLabel;
     NSButton *windowButton;
     NSButton *areaButton;
     NSButton *screenButton;
+    NSButton *recordButton;
     NSTextField *delayField;
     NSProgressIndicator *progressIndicator;
 
@@ -26,6 +29,15 @@
     NSWindow *preferencesWindow;
     NSButton *frameCheckbox;
     NSButton *shadowCheckbox;
+    NSPopUpButton *framesPerSecondPopUp;
+    NSPopUpButton *sizePopUp;
+    NSButton *pointerCheckbox;
+    NSButton *soundCheckbox;
+
+    RecordingFrame *recordingFrame;
+    ScreenRecorder *recorder;
+    NSTimer *recordingTimer;
+    int recordingCountdown;
 
     ScreenshotMode pendingMode;
     int remainingDelay;
@@ -45,6 +57,8 @@
 - (IBAction)showPreferences:(id)sender;
 - (IBAction)toggleIncludeFrame:(id)sender;
 - (IBAction)toggleIncludeShadow:(id)sender;
+- (IBAction)recordArea:(id)sender;
+- (IBAction)recordingOptionChanged:(id)sender;
 
 @end
 

@@ -138,6 +138,8 @@ typedef NS_ENUM(NSInteger, WLANSecurityType) {
 
 @property (copy) NSString *ssid;
 @property (copy) NSString *bssid;
+/* Signal strength in dBm: negative, -50 excellent, -100 unusable, 0 when it
+   is not known.  Every backend must report this unit. */
 @property int signalStrength;
 @property WLANSecurityType security;
 @property BOOL isConnected;

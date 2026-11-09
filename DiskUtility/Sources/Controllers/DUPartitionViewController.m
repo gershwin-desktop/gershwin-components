@@ -14,12 +14,17 @@
 #import "DUOperationLogView.h"
 #import "DUPaneView.h"
 #import "DUParsing.h"
+#import "DUNotifications.h"
+#import "DUOperation.h"
+#import "DUOperationManager.h"
 #import "DUPartition.h"
+#import "DUPartitionOperation.h"
 #import "DUPartitionLayout.h"
 #import "DUPartitionPlan.h"
 #import "DUPartitionTableParser.h"
 #import "DUStorageBackend.h"
 #import "DUStorageCapabilities.h"
+#import "DUFATFormat.h"
 #import "DUStorageDevice.h"
 #import "DUStorageManager.h"
 #import "DUStorageObject.h"
@@ -59,6 +64,10 @@ static NSString *const kDefaultsConfirmDestructive =
 @property (nonatomic, strong) NSButton *applyButton;
 
 @property (nonatomic, weak) DUStorageDevice *device;
+// A rescan replaces the model objects and the weak device above goes nil
+// with the old snapshot; the identifier still tells a refresh of the shown
+// disk apart from the selection of another one.
+@property (nonatomic, copy) NSString *deviceIdentifier;
 @property (nonatomic, strong) DUPartitionLayout *layout;
 
 // Baseline snapshot taken at refresh time. The layout cannot restore its
@@ -90,6 +99,22 @@ static NSString *const kDefaultsConfirmDestructive =
     _storageManager = manager;
     _logView = logView;
     _selectedIndex = -1;
+
+    // The apply runs as an operation so the main window's progress strip and
+    // its Stop button see it; its feedback arrives through notifications.
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(operationDidUpdate:)
+               name:DUOperationDidUpdateNotification
+             object:nil];
+    for (NSString *name in @[ DUOperationDidFinishNotification,
+                              DUOperationDidFailNotification ]) {
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(operationDidFinish:)
+                   name:name
+                 object:nil];
+    }
 
     // DUPaneView re-runs the layout whenever the tab view resizes us.
     CGFloat width = 400.0;
@@ -355,12 +380,17 @@ static NSString *const kDefaultsConfirmDestructive =
     DUStorageDevice *device = (object != nil &&
         object.type == DUStorageObjectTypeDevice)
         ? (DUStorageDevice *)object : nil;
-    if (_layout != nil && _layout.hasPendingChanges && device != nil &&
-            _device != nil &&
-            [device.identifier isEqualToString:_device.identifier]) {
+    BOOL sameDevice = device != nil &&
+        [device.identifier isEqualToString:_deviceIdentifier];
+    if (_layout != nil && _layout.hasPendingChanges && sameDevice) {
         _device = device;
         return;
     }
+    // The partition the user was looking at stays chosen across a refresh
+    // of the same disk; syncAllViews falls back to the first one if it is
+    // gone.
+    NSInteger keptIndex = sameDevice ? _selectedIndex : -1;
+    _deviceIdentifier = [device.identifier copy];
 
     if (device != nil && device.capacityBytes > 0) {
         _device = device;
@@ -368,6 +398,11 @@ static NSString *const kDefaultsConfirmDestructive =
         _committedScheme =
             [DUPartitionTableParser normalizeSchemeToken:
                  _device.partitionScheme];
+        if (_committedScheme.length == 0) {
+            // A blank or filesystem-on-whole-disk device has no table to
+            // keep; without a scheme the plan was rejected as unsupported.
+            _committedScheme = @"gpt";
+        }
 
         NSError *error = nil;
         DUPartitionLayout *built =
@@ -392,7 +427,7 @@ static NSString *const kDefaultsConfirmDestructive =
         _committedPartitions = @[];
     }
 
-    _selectedIndex = -1;
+    _selectedIndex = keptIndex;
     [self syncAllViews];
 }
 
@@ -434,6 +469,13 @@ static NSString *const kDefaultsConfirmDestructive =
                 return NSOrderedSame;
             }];
     for (DUPartition *source_partition in ordered) {
+        // BIOS boot and ESP slivers below the layout minimum exist on many
+        // real disks; refusing the whole table because of one of them made
+        // the tab unusable. Applying rewrites the table from the layout
+        // anyway, so such slivers are not shown.
+        if (source_partition.sizeBytes < 1024ull * 1024ull) {
+            continue;
+        }
         NSSet<NSString *> *knownIdentifiers = [NSSet setWithArray:
             [fresh.partitions valueForKey:@"identifier"]];
         if (![fresh addPartitionWithSize:source_partition.sizeBytes
@@ -516,8 +558,6 @@ static NSString *const kDefaultsConfirmDestructive =
         ? selected.name
         : (selected.displayName ?: @"");
 
-    [self rebuildFormatPopupForFilesystem:selected.filesystemType];
-
     unsigned long long shownSize = selected.sizeBytes;
     if (_mapView.layout != nil && _mapView.selectedPartitionIndex ==
             _selectedIndex) {
@@ -531,41 +571,52 @@ static NSString *const kDefaultsConfirmDestructive =
     }
     _sizeValue.stringValue =
         [DUParsing humanReadableSizeFromBytes:shownSize];
+    [self rebuildFormatPopupForFilesystem:selected.filesystemType
+                                sizeBytes:shownSize];
 }
 
 // Format choices come from the backend for the whole device; the matching
 // entry is preselected for the chosen filesystem (SPEC section 17).
 - (void)rebuildFormatPopupForFilesystem:(NSString *)filesystemType
+                             sizeBytes:(unsigned long long)sizeBytes
 {
+    // A partition read from disk says "vfat"; the popup offers FAT32.
+    filesystemType = [DUFATFormat canonicalIdentifier:filesystemType];
     [_formatPopup removeAllItems];
     if (_device == nil) {
         return;
     }
     NSArray<NSDictionary *> *formats =
         [self.storageManager supportedFormatsForObject:_device];
+    // Unavailable filesystems stay visible but greyed out; the menu must
+    // not auto-enable them.
+    _formatPopup.menu.autoenablesItems = NO;
     NSInteger matchIndex = -1;
-    NSUInteger index = 0;
+    NSInteger firstEnabled = -1;
     for (NSDictionary *format in formats) {
-        if (![format[kDUFormatCanFormatKey] boolValue]) {
-            continue;
-        }
         NSMenuItem *item = [[NSMenuItem alloc]
             initWithTitle:format[kDUFormatDisplayNameKey] ?: @""
                    action:nil
             keyEquivalent:@""];
         item.representedObject = format[kDUFormatIdentifierKey];
+        // The bounds apply to this partition, not to the whole device the
+        // backend described the formats for.
+        item.enabled = [format[kDUFormatCanFormatKey] boolValue] &&
+            [DUFATFormat descriptor:format allowsBytes:sizeBytes];
         [_formatPopup.menu addItem:item];
-        if (filesystemType.length > 0 &&
+        NSInteger position = (NSInteger)_formatPopup.itemArray.count - 1;
+        if ([item isEnabled] && firstEnabled < 0) {
+            firstEnabled = position;
+        }
+        if ([item isEnabled] && filesystemType.length > 0 &&
             [format[kDUFormatIdentifierKey]
                 isEqualToString:filesystemType]) {
-            matchIndex = (NSInteger)_formatPopup.itemArray.count - 1;
+            matchIndex = position;
         }
-        index++;
     }
-    (void)index;
-    if (_formatPopup.itemArray.count > 0) {
+    if (firstEnabled >= 0) {
         [_formatPopup selectItemAtIndex:
-            matchIndex >= 0 ? matchIndex : 0];
+            matchIndex >= 0 ? matchIndex : firstEnabled];
     }
 }
 
@@ -735,6 +786,35 @@ static NSString *const kDefaultsConfirmDestructive =
         unsigned long long gapBytes = [self largestFreeGapBytes];
         unsigned long long wanted = MAX(gapBytes / 2,
                                         kMinimumNewPartitionBytes);
+        // The 1 MiB left over after an existing table's last partition is
+        // alignment slack, not space worth a partition of its own.
+        if (gapBytes < 16ull * 1024ull * 1024ull) {
+            // A disk filled by its partitions has no gap to split, which
+            // left the count popup unable to add anything; halve the
+            // largest partition and give the freed half to the new one.
+            DUPartition *largest = nil;
+            for (DUPartition *candidate in _layout.partitions) {
+                if (largest == nil ||
+                        candidate.sizeBytes > largest.sizeBytes) {
+                    largest = candidate;
+                }
+            }
+            unsigned long long half = largest.sizeBytes / 2;
+            half -= half % (1024ull * 1024ull);
+            NSError *resizeError = nil;
+            if (largest == nil || half < kMinimumNewPartitionBytes ||
+                ![_layout resizePartition:largest
+                              toSizeBytes:half
+                                    error:&resizeError]) {
+                [self showError:NSLocalizedString(
+                                    @"Not enough free space for another "
+                                    @"partition.", nil)
+                        detail:resizeError.localizedDescription];
+                break;
+            }
+            gapBytes = [self largestFreeGapBytes];
+            wanted = gapBytes;
+        }
         if (wanted > gapBytes) {
             [self showError:NSLocalizedString(
                                 @"Not enough free space for another "
@@ -1096,6 +1176,22 @@ static NSString *const kDefaultsConfirmDestructive =
         }
     }
 
+    // Partitions read from the old table carry no filesystem type, yet the
+    // Format popup shows its first entry for them; without this they were
+    // created blank while the user saw a format selected.
+    NSString *blankFormat = nil;
+    for (NSMenuItem *item in _formatPopup.itemArray) {
+        if ([item isEnabled]) {
+            blankFormat = item.representedObject;
+            break;
+        }
+    }
+    for (DUPartition *partition in _layout.partitions) {
+        if (partition.filesystemType.length == 0 && blankFormat.length > 0) {
+            [_layout setFormat:blankFormat forPartition:partition];
+        }
+    }
+
     DUPartitionPlan *plan =
         [DUPartitionPlan planFromLayout:_layout
                               forDevice:_device
@@ -1108,51 +1204,61 @@ static NSString *const kDefaultsConfirmDestructive =
         return;
     }
 
-    NSError *lockError = nil;
-    if (![self.storageManager acquireLock:_device.identifier
-                                    error:&lockError]) {
-        [self showError:NSLocalizedString(@"The device is busy.", nil)
-                detail:lockError.localizedDescription];
-        return;
-    }
-
     [self.logView appendLine:[NSString stringWithFormat:
         NSLocalizedString(@"Applying partition changes to %@...", nil),
         _device.displayName ?: _device.identifier]];
 
+    DUPartitionOperation *operation = [[DUPartitionOperation alloc]
+        initWithBackend:self.storageManager.backend
+                 device:_device
+                   plan:plan];
+    NSError *startError = nil;
+    if (![self.storageManager.operationManager startOperation:operation
+                                                        error:&startError]) {
+        [self showError:NSLocalizedString(@"The device is busy.", nil)
+                detail:startError.localizedDescription];
+        return;
+    }
     _operationRunning = YES;
     [self updateEnabledStates];
+}
 
-    __weak typeof(self) weakSelf = self;
-    id<DUStorageBackend> backend = self.storageManager.backend;
-    DUStorageObject *target = _device;
-    NSString *lockIdentifier = _device.identifier;
-    void (^progressBlock)(double, NSString *) =
-        ^(double fraction, NSString *message) {
-            (void)fraction;
-            [weakSelf.logView appendLine:message ?: @""];
-        };
-    void (^completionBlock)(NSError *) =
-        ^(NSError *completionError) {
-            // Runs on an arbitrary thread: release the lock immediately,
-            // everything else marshals to the main thread.
-            [weakSelf.storageManager releaseLock:lockIdentifier];
-            NSDictionary *result =
-                @{ @"error" : completionError ?: [NSNull null] };
-            [weakSelf performSelectorOnMainThread:
-                @selector(applyFinishedWithResult:)
-                                   withObject:result
-                                waitUntilDone:NO];
-        };
+- (BOOL)isOwnOperationNotification:(NSNotification *)note
+{
+    DUStorageObject *target = note.userInfo[kDUUserInfoObjectKey];
+    return _operationRunning && target != nil && _device != nil &&
+        [target.identifier isEqualToString:_device.identifier] &&
+        [note.userInfo[kDUUserInfoOperationKey]
+            isKindOfClass:[DUPartitionOperation class]];
+}
 
-    NSThread *worker = [[NSThread alloc] initWithBlock:^{
-        [backend partitionDevice:target
-                         withPlan:plan
-                         progress:progressBlock
-                       completion:completionBlock];
-    }];
-    worker.name = @"DU-Partition-Apply";
-    [worker start];
+- (void)operationDidUpdate:(NSNotification *)note
+{
+    if ([self isOwnOperationNotification:note]) {
+        NSString *message = [note.userInfo[kDUUserInfoOperationKey] message];
+        if (message.length > 0) {
+            [self.logView appendLine:message];
+        }
+    }
+}
+
+- (void)operationDidFinish:(NSNotification *)note
+{
+    if (![self isOwnOperationNotification:note]) {
+        return;
+    }
+    DUOperation *operation = note.userInfo[kDUUserInfoOperationKey];
+    NSError *error = note.userInfo[kDUUserInfoErrorKey];
+    if (error == nil && operation.state == DUOperationStateCancelled) {
+        error = DUErrorMake(DUErrorCancelled, @"Cancelled");
+    }
+    [self applyFinishedWithResult:
+        @{ @"error" : error ?: [NSNull null] }];
+}
+
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 // Main-thread continuation of the apply flow.
@@ -1179,6 +1285,12 @@ static NSString *const kDefaultsConfirmDestructive =
         [self.logView appendLine:NSLocalizedString(
             @"Partitioning failed.", nil)];
         [self.logView appendLine:error.localizedDescription ?: @""];
+        NSString *detail = DUErrorBackendDetail(error);
+        if (detail.length > 0) {
+            [self.logView appendLine:detail];
+        }
+        NSLog(@"Partitioning failed: %@ - %@", error.localizedDescription,
+              detail);
     }
     [self updateEnabledStates];
 
