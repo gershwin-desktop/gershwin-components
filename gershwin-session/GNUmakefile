@@ -5,7 +5,7 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 # Plain C: the supervisor has no use for a Foundation runtime (see the
 # comment in gershwin-session.c).
 TOOL_NAME = gershwin-session
-gershwin-session_C_FILES = gershwin-session.c
+gershwin-session_C_FILES = gershwin-session.c SessionOOM.c
 gershwin-session_TOOL_LIBS =
 
 ADDITIONAL_CFLAGS = -Wall -Wextra

@@ -134,6 +134,9 @@ to the SYSTEM domain unless noted.
   uniquely named pasteboard). `Books/Tests/Live/copy_check.sh <N>` drags
   across two paragraphs in a claimed uitest slot, presses Command-C and checks
   the slot user's pasteboard.
+- `gershwin-session/Tests/`: which supervised apps keep the session's OOM
+  protection (`SessionOOM.c`) and the write into `/proc/self/oom_score_adj`:
+  `gnustep-tests --sequential .` there, headless.
 - For GNUstep unit/red-green tests, follow the global `gnustep-red-green-tdd`
   skill (PASS macro set + wiring).
 - To drive/inspect a running GUI, use the driveui skill / `drive_ui`.

@@ -36,6 +36,13 @@
  *   kill -USR1 <gershwin-session pid>   disable auto restart
  *   kill -USR2 <gershwin-session pid>   enable auto restart
  *
+ * On Linux the supervisor inherits a low oom_score_adj from the root step
+ * that starts the session (LoginWindow.sh), so the kernel's OOM killer
+ * spares it.  Menu, Workspace and WindowManager inherit that protection
+ * across every restart; any other app is started with oom_score_adj 0, so
+ * under memory pressure the kernel kills the biggest ordinary app instead
+ * of the desktop.  See SessionOOM.h.
+ *
  * This is plain C on purpose: the supervisor lives as long as the session
  * and has nothing to do that needs a Foundation runtime, which alone
  * cost it ten megabytes of private memory.
@@ -57,6 +64,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "SessionOOM.h"
 
 /* A supervised app counts as runaway when its CPU time grows faster than
  * CPU_RUNAWAY_RATE cores continuously for longer than CPU_RUNAWAY_SECONDS.
@@ -289,6 +298,22 @@ static pid_t launchApp(const char *name)
 
       argv[0] = (char *)name;
       argv[1] = NULL;
+#if defined(__linux__)
+      {
+        const char *adj = GSSessionOOMScoreAdjForApp(name);
+
+        /* Raising the value needs no privilege, so a failure means the
+         * kernel file is not there or not ours; the app still starts, but
+         * it says so, since it now shares the core's protection. */
+        if (adj != NULL
+          && GSSessionWriteOOMScoreAdj("/proc/self/oom_score_adj", adj) != 0)
+          {
+            fprintf(stderr, "gershwin-session: %s: could not set"
+              " oom_score_adj to %s: %s; it keeps the session's OOM"
+              " protection.\n", name, adj, strerror(errno));
+          }
+      }
+#endif
       execvp(name, argv);
       fprintf(stderr, "gershwin-session: %s: %s\n", name, strerror(errno));
       _exit(127);
@@ -510,6 +535,45 @@ static void launchMissingApps(App *apps, int count)
     }
 }
 
+#if defined(__linux__)
+/* Say whether the core apps are protected from the OOM killer.  Only root
+ * can lower oom_score_adj, so a session that was not started through
+ * LoginWindow.sh (a nested or remote session) runs unprotected; that is
+ * not an error, but it has to be visible when the desktop got killed.
+ */
+static void logOOMProtection(void)
+{
+  FILE *fp = fopen("/proc/self/oom_score_adj", "r");
+  int adj;
+
+  if (fp == NULL)
+    {
+      logLine("Cannot read /proc/self/oom_score_adj: %s; OOM protection"
+        " of the core apps is unknown.", strerror(errno));
+      return;
+    }
+  if (fscanf(fp, "%d", &adj) != 1)
+    {
+      logLine("Cannot parse /proc/self/oom_score_adj; OOM protection of the"
+        " core apps is unknown.");
+      fclose(fp);
+      return;
+    }
+  fclose(fp);
+  if (adj < 0)
+    {
+      logLine("oom_score_adj is %d: Menu, Workspace and WindowManager keep"
+        " it, every other app is started with 0.", adj);
+    }
+  else
+    {
+      logLine("oom_score_adj is %d: the core apps are NOT protected from"
+        " the OOM killer (only the root step in LoginWindow.sh can lower"
+        " it).", adj);
+    }
+}
+#endif
+
 int main(int argc, char *argv[])
 {
   App *apps;
@@ -552,6 +616,9 @@ int main(int argc, char *argv[])
     " Supervising:", (int)getpid(), display != NULL ? display : "(none)");
   for (i = 0; i < count; i++) logLine("  %s", apps[i].name);
   logLine("Auto restart is on; send SIGUSR1 to disable, SIGUSR2 to enable.");
+#if defined(__linux__)
+  logOOMProtection();
+#endif
 
   while (keepRunning)
     {
