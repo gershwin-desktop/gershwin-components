@@ -7,7 +7,12 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 CC ?= cc
 CFLAGS += -Wall -Wextra -fPIC
-LDFLAGS += -shared
+LDFLAGS += -shared -pthread
+
+# The module reads the DirectoryServices plists itself (no daemon); the
+# plist reader and the database are plain C so they load into any process.
+NSS_SRCS = nss_gershwin.c dsdb.c plist.c
+NSS_HDRS = dsdb.h plist.h
 
 ifeq ($(findstring linux,$(GNUSTEP_HOST_OS)),linux)
 NSS_LIB = libnss_gershwin.so.2
@@ -18,11 +23,16 @@ INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARIES)
 
 all: $(NSS_LIB)
 
-$(NSS_LIB): nss_gershwin.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+$(NSS_LIB): $(NSS_SRCS) $(NSS_HDRS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(NSS_SRCS)
+
+# Host-side unit tests for the plist reader and the database.
+check:
+	$(MAKE) -C tests check
 
 clean:
 	rm -f $(NSS_LIB) *.o
+	$(MAKE) -C tests clean
 
 install: $(NSS_LIB)
 	install -d $(INSTALL_DIR)

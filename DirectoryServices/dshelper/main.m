@@ -76,10 +76,10 @@ void printUsage(const char *progname) {
     fprintf(stderr, "  -d    Run in foreground (debug mode)\n");
     fprintf(stderr, "  -h    Show this help\n");
     fprintf(stderr, "\n");
-    fprintf(stderr, "Directory Services Helper - provides user/group lookups for NSS\n");
-    fprintf(stderr, "Listens on: %s\n", DS_SOCKET_PATH);
-    fprintf(stderr, "Checks: %s (first)\n", [DS_NETWORK_USERS_PLIST UTF8String]);
-    fprintf(stderr, "        %s (fallback)\n", [DS_LOCAL_USERS_PLIST UTF8String]);
+    fprintf(stderr, "Directory Services Helper - advertises a directory server\n");
+    fprintf(stderr, "Runs only on a directory server (%s exists);\n",
+            [DS_DOMAIN_PLIST UTF8String]);
+    fprintf(stderr, "users and groups resolve through nss_gershwin without it.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -105,6 +105,15 @@ int main(int argc, char *argv[]) {
         if (getuid() != 0) {
             fprintf(stderr, "dshelper: Must run as root\n");
             return 1;
+        }
+
+        // nss_gershwin reads the plists itself, so a standalone machine or a
+        // client has nothing for dshelper to do. It is needed only on a
+        // directory server, to advertise GershwinDirectory for dscli join.
+        if (![[DSHelper sharedHelper] isServer]) {
+            fprintf(stderr, "dshelper: Not a directory server (no %s); "
+                            "nothing to do\n", [DS_DOMAIN_PLIST UTF8String]);
+            return 0;
         }
 
         // Acquire PID file lock before forking to prevent race conditions

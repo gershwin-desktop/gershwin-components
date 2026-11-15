@@ -1,949 +1,564 @@
 /*
  * nss_gershwin - NSS module for Gershwin Directory Services
  *
- * Queries dshelper daemon via Unix socket to resolve users and groups.
- * Install to: /System/Library/Libraries/nss_gershwin.so.1
+ * The `gershwin` source for the passwd and group databases in
+ * nsswitch.conf(5) (and shadow on Linux). It resolves users and groups
+ * straight from the DirectoryServices plists, with no daemon and no
+ * socket:
+ *
+ *   /Network/Library/DirectoryServices/{Users,Groups}.plist when present,
+ *   /Local/Library/DirectoryServices/{Users,Groups}.plist otherwise.
+ *
+ * The choice is made on every lookup, so joining or leaving a directory
+ * server (mounting or unmounting /Network) switches sources at once. A
+ * missing or unparsable plist makes this source unavailable, and the next
+ * source in nsswitch.conf answers, so local accounts keep working.
+ *
+ * The module used to ask dshelper over /var/run/dshelper.sock, which
+ * made every lookup, sudo included, depend on that daemon staying up.
+ * The rules dshelper applied are kept: the password hash goes only to
+ * root, the home is /Network/Users/<name> on a client and
+ * /Local/Users/<name> otherwise, members of admin get wheel (and sudo
+ * where the system has it), and every directory user gets the
+ * hardware-access groups the system defines.
+ *
+ * The plist reader and the database (plist.c, dsdb.c) are adapted from
+ * NextBSD's nss_directory_services (nextbsd/nextbsd-userland), which
+ * reads the same files; this file is the nsswitch glue for FreeBSD's
+ * ns_mtab interface and glibc's _nss_* interface.
+ *
+ * Install to: /System/Library/Libraries/nss_gershwin.so.1 (FreeBSD)
+ *             /System/Library/Libraries/libnss_gershwin.so.2 (Linux)
  */
+
+#if defined(__linux__)
+#define _GNU_SOURCE
+#endif
 
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <errno.h>
-#include <pwd.h>
 #include <grp.h>
-#ifdef __linux__
-#include <shadow.h>
-#endif
-#include <string.h>
-#include <stdlib.h>
+#include <pthread.h>
+#include <pwd.h>
 #include <stdint.h>
-#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
-#ifdef __linux__
-#include <nss.h>
-#else
-/* FreeBSD compatibility - define Linux NSS types for internal use */
-enum nss_status {
-    NSS_STATUS_TRYAGAIN = -2,
-    NSS_STATUS_UNAVAIL  = -1,
-    NSS_STATUS_NOTFOUND = 0,
-    NSS_STATUS_SUCCESS  = 1
+#include "dsdb.h"
+
+/* Only FreeBSD and glibc have an interface this module plugs into. */
+#if defined(__linux__) || defined(__FreeBSD__)
+
+static size_t pw_cursor;
+static size_t gr_cursor;
+
+/*
+ * After fork(2) the single-threaded child must not inherit the database
+ * lock held by another thread.
+ */
+static pthread_once_t atfork_once = PTHREAD_ONCE_INIT;
+
+static void
+install_atfork(void)
+{
+    (void)pthread_atfork(dsdb_lock, dsdb_unlock, dsdb_atfork_child);
+}
+
+/*
+ * Lookup results shared by both interfaces. Each returns one of these and
+ * leaves an errno value in *err for DS_ERANGE.
+ */
+enum ds_result {
+    DS_SUCCESS,
+    DS_NOTFOUND,
+    DS_UNAVAIL,
+    DS_ERANGE
 };
-#endif
 
-#define DS_SOCKET_PATH "/var/run/dshelper.sock"
-#define BUFFER_SIZE 4096
+enum lookup {
+    LT_NAME,
+    LT_ID,
+    LT_ALL
+};
 
-/*
- * Query dshelper daemon via Unix socket
- * Returns 0 on success, -1 on failure
- */
-static int
-query_dshelper(const char *request, char *response, size_t response_len)
+static enum ds_result
+lookup_passwd(enum lookup how, const char *name, uid_t uid,
+              struct passwd *pwd, char *buffer, size_t buflen, int *err)
 {
-    int fd;
-    struct sockaddr_un addr;
-    ssize_t n;
+    const struct ds_user *u;
+    int rv;
 
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
-        return -1;
+    (void)pthread_once(&atfork_once, install_atfork);
+    dsdb_lock();
+    if (dsdb_refresh_users() != DSDB_OK) {
+        dsdb_unlock();
+        return DS_UNAVAIL;
     }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, DS_SOCKET_PATH, sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd);
-        return -1;
+    switch (how) {
+    case LT_NAME:
+        u = dsdb_user_by_name(name);
+        break;
+    case LT_ID:
+        u = dsdb_user_by_uid(uid);
+        break;
+    default:
+        u = dsdb_user_at(pw_cursor);
+        if (u != NULL)
+            pw_cursor++;
+        break;
     }
-
-    /* Send request */
-    if (write(fd, request, strlen(request)) < 0) {
-        close(fd);
-        return -1;
+    if (u == NULL) {
+        dsdb_unlock();
+        return DS_NOTFOUND;
     }
-
-    /* Read response */
-    n = read(fd, response, response_len - 1);
-    close(fd);
-
-    if (n <= 0) {
-        return -1;
+    rv = dsdb_pack_passwd(u, geteuid() == 0, dsdb_users_from_network(),
+                          pwd, buffer, buflen);
+    if (rv != 0 && how == LT_ALL)
+        pw_cursor--;            /* let the retry see this record */
+    dsdb_unlock();
+    if (rv != 0) {
+        *err = rv;
+        return DS_ERANGE;
     }
+    return DS_SUCCESS;
+}
 
-    response[n] = '\0';
+static enum ds_result
+lookup_group(enum lookup how, const char *name, gid_t gid,
+             struct group *grp, char *buffer, size_t buflen, int *err)
+{
+    const struct ds_group *g;
+    int rv;
 
-    /* Check for NOTFOUND response */
-    if (strcmp(response, "NOTFOUND") == 0) {
-        return -1;
+    (void)pthread_once(&atfork_once, install_atfork);
+    dsdb_lock();
+    if (dsdb_refresh_groups() != DSDB_OK) {
+        dsdb_unlock();
+        return DS_UNAVAIL;
     }
+    if (how != LT_ALL) {
+        /* wheel and sudo come from /etc/group, with the admins added. */
+        rv = dsdb_pack_admin_group(how == LT_NAME ? name : NULL, gid,
+                                   DS_ETC_GROUP, grp, buffer, buflen);
+        if (rv != ENOENT) {
+            dsdb_unlock();
+            if (rv != 0) {
+                *err = rv;
+                return DS_ERANGE;
+            }
+            return DS_SUCCESS;
+        }
+    }
+    switch (how) {
+    case LT_NAME:
+        g = dsdb_group_by_name(name);
+        break;
+    case LT_ID:
+        g = dsdb_group_by_gid(gid);
+        break;
+    default:
+        g = dsdb_group_at(gr_cursor);
+        if (g != NULL)
+            gr_cursor++;
+        break;
+    }
+    if (g == NULL) {
+        dsdb_unlock();
+        return DS_NOTFOUND;
+    }
+    rv = dsdb_pack_group(g, grp, buffer, buflen);
+    if (rv != 0 && how == LT_ALL)
+        gr_cursor--;
+    dsdb_unlock();
+    if (rv != 0) {
+        *err = rv;
+        return DS_ERANGE;
+    }
+    return DS_SUCCESS;
+}
 
-    return 0;
+static void
+rewind_cursor(size_t *cursor)
+{
+    dsdb_lock();
+    *cursor = 0;
+    dsdb_unlock();
 }
 
 /*
- * Parse passwd line: name:x:uid:gid:gecos:home:shell
- * Uses strsep instead of strtok_r to handle empty fields (e.g., empty password)
+ * The full group set for a directory user, malloc'd. -1 with DS_UNAVAIL
+ * semantics when the users plist cannot be read, -2 when the user is not
+ * a directory user.
  */
 static int
-parse_passwd(const char *line, struct passwd *pwd, char *buffer, size_t buflen)
+user_groupset(const char *user, gid_t agroup, gid_t **list, int *count)
 {
-    char *p, *lineptr;
-    char *buf = buffer;
-    size_t remaining = buflen;
+    int rv;
 
-    /* Make a copy we can tokenize */
-    char *linecopy = strdup(line);
-    if (!linecopy) {
+    (void)pthread_once(&atfork_once, install_atfork);
+    dsdb_lock();
+    if (dsdb_refresh_users() != DSDB_OK) {
+        dsdb_unlock();
         return -1;
     }
-    lineptr = linecopy;
-
-    /* name */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    size_t len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    pwd->pw_name = buf;
-    buf += len;
-    remaining -= len;
-
-    /* password (may be empty for noPassword users) */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    pwd->pw_passwd = buf;
-    buf += len;
-    remaining -= len;
-
-    /* uid */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    pwd->pw_uid = (uid_t)strtoul(p, NULL, 10);
-
-    /* gid */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    pwd->pw_gid = (gid_t)strtoul(p, NULL, 10);
-
-    /* gecos */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    pwd->pw_gecos = buf;
-    buf += len;
-    remaining -= len;
-
-    /* home */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    pwd->pw_dir = buf;
-    buf += len;
-    remaining -= len;
-
-    /* shell */
-    p = strsep(&lineptr, ":");
-    if (!p) goto fail;
-    len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    pwd->pw_shell = buf;
-
-#ifdef __FreeBSD__
-    /* FreeBSD-specific fields */
-    pwd->pw_class = "";
-    pwd->pw_change = 0;
-    pwd->pw_expire = 0;
-    pwd->pw_fields = 0;
-#endif
-
-    free(linecopy);
-    return 0;
-
-fail:
-    free(linecopy);
-    return -1;
+    /* Without a readable Groups.plist the user still has a primary gid. */
+    (void)dsdb_refresh_groups();
+    rv = dsdb_groupset(user, agroup, DS_ETC_GROUP, list, count);
+    dsdb_unlock();
+    return rv == 0 ? 0 : -2;
 }
+
+#endif /* __linux__ || __FreeBSD__ */
 
 #ifdef __linux__
 /*
- * Parse shadow line: name:hash:lstchg:min:max:warn:inact:expire:flag
- * dshelper returns: name:hash:uid:gid:gecos:home:shell (passwd format)
- * We extract just name and hash for shadow struct
+ * glibc interface: _nss_gershwin_* functions, dlopen'ed from
+ * libnss_gershwin.so.2.
  */
-static int
-parse_shadow(const char *line, struct spwd *spw, char *buffer, size_t buflen)
+#include <nss.h>
+#include <shadow.h>
+
+static enum nss_status
+nss_status_of(enum ds_result r, int err, int *errnop)
 {
-    char *p, *saveptr;
-    char *buf = buffer;
-    size_t remaining = buflen;
-
-    /* Make a copy we can tokenize */
-    char *linecopy = strdup(line);
-    if (!linecopy) {
-        return -1;
+    switch (r) {
+    case DS_SUCCESS:
+        return NSS_STATUS_SUCCESS;
+    case DS_NOTFOUND:
+        return NSS_STATUS_NOTFOUND;
+    case DS_UNAVAIL:
+        return NSS_STATUS_UNAVAIL;
+    default:
+        *errnop = err;
+        return NSS_STATUS_TRYAGAIN;
     }
-
-    /* name */
-    p = strtok_r(linecopy, ":", &saveptr);
-    if (!p) goto fail;
-    size_t len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    spw->sp_namp = buf;
-    buf += len;
-    remaining -= len;
-
-    /* password hash */
-    p = strtok_r(NULL, ":", &saveptr);
-    if (!p) goto fail;
-    len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    spw->sp_pwdp = buf;
-
-    /* Set reasonable defaults for other fields */
-    spw->sp_lstchg = -1;  /* Password last changed: unknown */
-    spw->sp_min = -1;     /* Min days between changes: no limit */
-    spw->sp_max = -1;     /* Max days password valid: no limit */
-    spw->sp_warn = -1;    /* Days warning before expiry: none */
-    spw->sp_inact = -1;   /* Days after expiry to disable: never */
-    spw->sp_expire = -1;  /* Account expiration date: never */
-    spw->sp_flag = 0;     /* Reserved */
-
-    free(linecopy);
-    return 0;
-
-fail:
-    free(linecopy);
-    return -1;
 }
-#endif /* __linux__ */
-
-/*
- * Parse group line: name:x:gid:member1,member2,...
- */
-static int
-parse_group(const char *line, struct group *grp, char *buffer, size_t buflen)
-{
-    char *p, *saveptr, *memsave;
-    char *buf = buffer;
-    size_t remaining = buflen;
-    int member_count = 0;
-    char **members;
-
-    char *linecopy = strdup(line);
-    if (!linecopy) {
-        return -1;
-    }
-
-    /* name */
-    p = strtok_r(linecopy, ":", &saveptr);
-    if (!p) goto fail;
-    size_t len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    grp->gr_name = buf;
-    buf += len;
-    remaining -= len;
-
-    /* password (x) */
-    p = strtok_r(NULL, ":", &saveptr);
-    if (!p) goto fail;
-    len = strlen(p) + 1;
-    if (len > remaining) goto fail;
-    strcpy(buf, p);
-    grp->gr_passwd = buf;
-    buf += len;
-    remaining -= len;
-
-    /* gid */
-    p = strtok_r(NULL, ":", &saveptr);
-    if (!p) goto fail;
-    grp->gr_gid = (gid_t)strtoul(p, NULL, 10);
-
-    /* members */
-    p = strtok_r(NULL, ":", &saveptr);
-
-    /* Count members first */
-    if (p && strlen(p) > 0) {
-        char *memcopy = strdup(p);
-        char *m = strtok_r(memcopy, ",", &memsave);
-        while (m) {
-            member_count++;
-            m = strtok_r(NULL, ",", &memsave);
-        }
-        free(memcopy);
-    }
-
-    /* Allocate member array in buffer */
-    size_t array_size = (member_count + 1) * sizeof(char *);
-    if (array_size > remaining) goto fail;
-
-    /* Align buffer for pointer array */
-    uintptr_t align = (uintptr_t)buf % sizeof(char *);
-    if (align) {
-        buf += sizeof(char *) - align;
-        remaining -= sizeof(char *) - align;
-    }
-
-    members = (char **)buf;
-    buf += array_size;
-    remaining -= array_size;
-    grp->gr_mem = members;
-
-    /* Parse members again and store */
-    if (p && strlen(p) > 0) {
-        int i = 0;
-        char *m = strtok_r(p, ",", &memsave);
-        while (m && i < member_count) {
-            len = strlen(m) + 1;
-            if (len > remaining) goto fail;
-            strcpy(buf, m);
-            members[i++] = buf;
-            buf += len;
-            remaining -= len;
-            m = strtok_r(NULL, ",", &memsave);
-        }
-        members[i] = NULL;
-    } else {
-        members[0] = NULL;
-    }
-
-    free(linecopy);
-    return 0;
-
-fail:
-    free(linecopy);
-    return -1;
-}
-
-/*
- * NSS entry points
- */
 
 enum nss_status
 _nss_gershwin_getpwnam_r(const char *name, struct passwd *pwd,
-                          char *buffer, size_t buflen, int *errnop)
+                         char *buffer, size_t buflen, int *errnop)
 {
-    char request[256];
-    char response[BUFFER_SIZE];
-
-    snprintf(request, sizeof(request), "getpwnam:%s", name);
-
-    if (query_dshelper(request, response, sizeof(response)) != 0) {
-        *errnop = ENOENT;
-        return NSS_STATUS_NOTFOUND;
-    }
-
-    if (parse_passwd(response, pwd, buffer, buflen) != 0) {
-        *errnop = ERANGE;
-        return NSS_STATUS_TRYAGAIN;
-    }
-
-    return NSS_STATUS_SUCCESS;
+    int err = 0;
+    enum ds_result r = lookup_passwd(LT_NAME, name, 0, pwd, buffer, buflen, &err);
+    return nss_status_of(r, err, errnop);
 }
 
 enum nss_status
 _nss_gershwin_getpwuid_r(uid_t uid, struct passwd *pwd,
-                          char *buffer, size_t buflen, int *errnop)
+                         char *buffer, size_t buflen, int *errnop)
 {
-    char request[256];
-    char response[BUFFER_SIZE];
+    int err = 0;
+    enum ds_result r = lookup_passwd(LT_ID, NULL, uid, pwd, buffer, buflen, &err);
+    return nss_status_of(r, err, errnop);
+}
 
-    snprintf(request, sizeof(request), "getpwuid:%u", (unsigned)uid);
+enum nss_status
+_nss_gershwin_getpwent_r(struct passwd *pwd, char *buffer, size_t buflen,
+                         int *errnop)
+{
+    int err = 0;
+    enum ds_result r = lookup_passwd(LT_ALL, NULL, 0, pwd, buffer, buflen, &err);
+    return nss_status_of(r, err, errnop);
+}
 
-    if (query_dshelper(request, response, sizeof(response)) != 0) {
-        *errnop = ENOENT;
-        return NSS_STATUS_NOTFOUND;
-    }
+enum nss_status
+_nss_gershwin_setpwent(int stayopen __attribute__((unused)))
+{
+    rewind_cursor(&pw_cursor);
+    return NSS_STATUS_SUCCESS;
+}
 
-    if (parse_passwd(response, pwd, buffer, buflen) != 0) {
-        *errnop = ERANGE;
-        return NSS_STATUS_TRYAGAIN;
-    }
-
+enum nss_status
+_nss_gershwin_endpwent(void)
+{
     return NSS_STATUS_SUCCESS;
 }
 
 enum nss_status
 _nss_gershwin_getgrnam_r(const char *name, struct group *grp,
-                          char *buffer, size_t buflen, int *errnop)
+                         char *buffer, size_t buflen, int *errnop)
 {
-    char request[256];
-    char response[BUFFER_SIZE];
-
-    snprintf(request, sizeof(request), "getgrnam:%s", name);
-
-    if (query_dshelper(request, response, sizeof(response)) != 0) {
-        *errnop = ENOENT;
-        return NSS_STATUS_NOTFOUND;
-    }
-
-    if (parse_group(response, grp, buffer, buflen) != 0) {
-        *errnop = ERANGE;
-        return NSS_STATUS_TRYAGAIN;
-    }
-
-    return NSS_STATUS_SUCCESS;
+    int err = 0;
+    enum ds_result r = lookup_group(LT_NAME, name, 0, grp, buffer, buflen, &err);
+    return nss_status_of(r, err, errnop);
 }
 
 enum nss_status
 _nss_gershwin_getgrgid_r(gid_t gid, struct group *grp,
-                          char *buffer, size_t buflen, int *errnop)
+                         char *buffer, size_t buflen, int *errnop)
 {
-    char request[256];
-    char response[BUFFER_SIZE];
+    int err = 0;
+    enum ds_result r = lookup_group(LT_ID, NULL, gid, grp, buffer, buflen, &err);
+    return nss_status_of(r, err, errnop);
+}
 
-    snprintf(request, sizeof(request), "getgrgid:%u", (unsigned)gid);
+enum nss_status
+_nss_gershwin_getgrent_r(struct group *grp, char *buffer, size_t buflen,
+                         int *errnop)
+{
+    int err = 0;
+    enum ds_result r = lookup_group(LT_ALL, NULL, 0, grp, buffer, buflen, &err);
+    return nss_status_of(r, err, errnop);
+}
 
-    if (query_dshelper(request, response, sizeof(response)) != 0) {
-        *errnop = ENOENT;
-        return NSS_STATUS_NOTFOUND;
-    }
-
-    if (parse_group(response, grp, buffer, buflen) != 0) {
-        *errnop = ERANGE;
-        return NSS_STATUS_TRYAGAIN;
-    }
-
+enum nss_status
+_nss_gershwin_setgrent(int stayopen __attribute__((unused)))
+{
+    rewind_cursor(&gr_cursor);
     return NSS_STATUS_SUCCESS;
 }
 
-#ifdef __linux__
+enum nss_status
+_nss_gershwin_endgrent(void)
+{
+    return NSS_STATUS_SUCCESS;
+}
+
 /*
- * Shadow database lookup for Linux PAM authentication
- * pam_unix uses getspnam() to get password hashes on Linux
+ * Shadow lookup, for a `shadow: gershwin files` line. Only root sees the
+ * hash, as with /etc/shadow; anyone else gets "*".
  */
 enum nss_status
 _nss_gershwin_getspnam_r(const char *name, struct spwd *spw,
-                          char *buffer, size_t buflen, int *errnop)
+                         char *buffer, size_t buflen, int *errnop)
 {
-    char request[256];
-    char response[BUFFER_SIZE];
+    const struct ds_user *u;
+    const char *hash;
+    size_t nlen, hlen;
 
-    /* Use getpwnam which returns the password hash when called by root */
-    snprintf(request, sizeof(request), "getpwnam:%s", name);
-
-    if (query_dshelper(request, response, sizeof(response)) != 0) {
-        *errnop = ENOENT;
+    (void)pthread_once(&atfork_once, install_atfork);
+    dsdb_lock();
+    if (dsdb_refresh_users() != DSDB_OK) {
+        dsdb_unlock();
+        return NSS_STATUS_UNAVAIL;
+    }
+    u = dsdb_user_by_name(name);
+    if (u == NULL) {
+        dsdb_unlock();
         return NSS_STATUS_NOTFOUND;
     }
-
-    if (parse_shadow(response, spw, buffer, buflen) != 0) {
+    hash = dsdb_password_field(u, geteuid() == 0);
+    nlen = strlen(u->name) + 1;
+    hlen = strlen(hash) + 1;
+    if (nlen + hlen > buflen) {
+        dsdb_unlock();
         *errnop = ERANGE;
         return NSS_STATUS_TRYAGAIN;
     }
-
+    memset(spw, 0, sizeof(*spw));
+    memcpy(buffer, u->name, nlen);
+    memcpy(buffer + nlen, hash, hlen);
+    dsdb_unlock();
+    spw->sp_namp = buffer;
+    spw->sp_pwdp = buffer + nlen;
+    spw->sp_lstchg = -1;    /* last changed: unknown */
+    spw->sp_min = -1;       /* no minimum age */
+    spw->sp_max = -1;       /* never expires */
+    spw->sp_warn = -1;
+    spw->sp_inact = -1;
+    spw->sp_expire = -1;
+    spw->sp_flag = ~0UL;
     return NSS_STATUS_SUCCESS;
 }
 
 /*
- * Check if a group exists in /etc/group
- */
-static int
-group_exists_in_etc_linux(const char *groupname)
-{
-    FILE *f = fopen("/etc/group", "r");
-    if (!f) return 0;
-
-    char line[512];
-    size_t namelen = strlen(groupname);
-
-    while (fgets(line, sizeof(line), f)) {
-        /* Check if line starts with "groupname:" */
-        if (strncmp(line, groupname, namelen) == 0 && line[namelen] == ':') {
-            fclose(f);
-            return 1;
-        }
-    }
-
-    fclose(f);
-    return 0;
-}
-
-/*
- * Look up a group's GID from /etc/group by name.
- * Returns the GID, or (gid_t)-1 if not found.
- * Format: name:x:gid:members
- */
-static gid_t
-group_gid_from_etc_linux(const char *groupname)
-{
-    FILE *f = fopen("/etc/group", "r");
-    if (!f) return (gid_t)-1;
-
-    char line[512];
-    size_t namelen = strlen(groupname);
-
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, groupname, namelen) == 0 && line[namelen] == ':') {
-            /* Skip past name: and password: fields to get GID */
-            char *p = line + namelen + 1;
-            p = strchr(p, ':');
-            if (p) {
-                gid_t gid = (gid_t)strtoul(p + 1, NULL, 10);
-                fclose(f);
-                return gid;
-            }
-        }
-    }
-
-    fclose(f);
-    return (gid_t)-1;
-}
-
-/*
- * Hardware access groups that all DS users should belong to, if they
- * exist on the system.  GIDs vary across distros so we look them up
- * by name from /etc/group at login time.
- */
-static const char *hw_access_groups[] = {
-    "audio",    /* sound devices */
-    "video",    /* GPU, framebuffer, webcam */
-    "render",   /* DRM render nodes */
-    "input",    /* input devices (gamepads, tablets) */
-    "cups",     /* printing (Arch, Fedora, Gentoo) */
-    "lpadmin",  /* printing (Debian, Ubuntu) */
-    "webcamd",  /* webcam userland drivers */
-    "vboxusers", /* VirtualBox USB and device access */
-    NULL
-};
-
-#define ADMIN_GID_LINUX 5000
-#define WHEEL_GID_LINUX 0
-#define SUDO_GID_LINUX 27
-
-/*
- * initgroups_dyn - return all groups for a user (Linux)
- * This is where we add wheel (0) and sudo (27) for admin users
+ * initgroups(3) and getgrouplist(3): append the user's groups other than
+ * `group` (already in the list) to *groupsp, growing it up to `limit`
+ * (no limit when limit <= 0).
  */
 enum nss_status
-_nss_gershwin_initgroups_dyn(const char *user, gid_t group __attribute__((unused)),
-                              long int *start, long int *size, gid_t **groupsp,
-                              long int limit, int *errnop)
+_nss_gershwin_initgroups_dyn(const char *user, gid_t group, long int *start,
+                             long int *size, gid_t **groupsp, long int limit,
+                             int *errnop)
 {
-    char request[256];
-    char response[BUFFER_SIZE];
-    gid_t *groups = *groupsp;
-    long int count = *start;
-    int is_admin = 0;
+    gid_t *list, *groups = *groupsp;
+    int count, i, rv;
+    long int j, newsize;
 
-    /* Query dshelper for user's group memberships */
-    snprintf(request, sizeof(request), "getgrouplist:%s", user);
+    rv = user_groupset(user, group, &list, &count);
+    if (rv == -1)
+        return NSS_STATUS_UNAVAIL;
+    if (rv != 0)
+        return NSS_STATUS_NOTFOUND;
 
-    if (query_dshelper(request, response, sizeof(response)) != 0) {
-        /* User not found in our directory - that's OK, not an error */
-        return NSS_STATUS_SUCCESS;
-    }
-
-    /* Response format: gid1,gid2,gid3,... */
-    char *saveptr;
-    char *gidstr = strtok_r(response, ",", &saveptr);
-
-    while (gidstr) {
-        gid_t gid = (gid_t)strtoul(gidstr, NULL, 10);
-
-        /* Check if already in list */
-        int found = 0;
-        for (long int i = 0; i < count; i++) {
-            if (groups[i] == gid) {
-                found = 1;
+    for (i = 0; i < count; i++) {
+        if (list[i] == group)
+            continue;
+        for (j = 0; j < *start; j++)
+            if (groups[j] == list[i])
                 break;
+        if (j < *start)
+            continue;
+        if (*start == *size) {
+            if (limit > 0 && *size >= limit)
+                break;          /* full: what fits is the answer */
+            newsize = *size > 0 ? 2 * *size : 16;
+            if (limit > 0 && newsize > limit)
+                newsize = limit;
+            groups = realloc(groups, (size_t)newsize * sizeof(gid_t));
+            if (groups == NULL) {
+                free(list);
+                *errnop = ENOMEM;
+                return NSS_STATUS_TRYAGAIN;
             }
+            *groupsp = groups;
+            *size = newsize;
         }
-
-        if (!found) {
-            /* Grow array if needed */
-            if (count >= *size) {
-                long int newsize = *size * 2;
-                if (limit > 0 && newsize > limit) newsize = limit;
-                if (newsize == *size) {
-                    *errnop = ERANGE;
-                    return NSS_STATUS_TRYAGAIN;
-                }
-                gid_t *newgroups = realloc(groups, newsize * sizeof(gid_t));
-                if (!newgroups) {
-                    *errnop = ENOMEM;
-                    return NSS_STATUS_TRYAGAIN;
-                }
-                groups = newgroups;
-                *groupsp = groups;
-                *size = newsize;
-            }
-
-            groups[count++] = gid;
-            if (gid == ADMIN_GID_LINUX) {
-                is_admin = 1;
-            }
-        }
-
-        gidstr = strtok_r(NULL, ",", &saveptr);
+        groups[(*start)++] = list[i];
     }
-
-    /* Add hardware access groups for all DS users */
-    for (int g = 0; hw_access_groups[g] != NULL; g++) {
-        gid_t hw_gid = group_gid_from_etc_linux(hw_access_groups[g]);
-        if (hw_gid == (gid_t)-1) continue;
-
-        int has_it = 0;
-        for (long int i = 0; i < count; i++) {
-            if (groups[i] == hw_gid) { has_it = 1; break; }
-        }
-        if (!has_it) {
-            if (count >= *size) {
-                long int newsize = *size * 2;
-                if (limit > 0 && newsize > limit) newsize = limit;
-                if (newsize > *size) {
-                    gid_t *newgroups = realloc(groups, newsize * sizeof(gid_t));
-                    if (newgroups) {
-                        groups = newgroups;
-                        *groupsp = groups;
-                        *size = newsize;
-                    }
-                }
-            }
-            if (count < *size) {
-                groups[count++] = hw_gid;
-            }
-        }
-    }
-
-    /* If user is in admin group, add wheel and sudo */
-    if (is_admin) {
-        /* Add wheel group */
-        int has_wheel = 0;
-        for (long int i = 0; i < count; i++) {
-            if (groups[i] == WHEEL_GID_LINUX) has_wheel = 1;
-        }
-        if (!has_wheel) {
-            if (count >= *size) {
-                long int newsize = *size * 2;
-                if (limit > 0 && newsize > limit) newsize = limit;
-                if (newsize > *size) {
-                    gid_t *newgroups = realloc(groups, newsize * sizeof(gid_t));
-                    if (newgroups) {
-                        groups = newgroups;
-                        *groupsp = groups;
-                        *size = newsize;
-                    }
-                }
-            }
-            if (count < *size) {
-                groups[count++] = WHEEL_GID_LINUX;
-            }
-        }
-
-        /* Add sudo group if it exists */
-        if (group_exists_in_etc_linux("sudo")) {
-            int has_sudo = 0;
-            for (long int i = 0; i < count; i++) {
-                if (groups[i] == SUDO_GID_LINUX) has_sudo = 1;
-            }
-            if (!has_sudo) {
-                if (count >= *size) {
-                    long int newsize = *size * 2;
-                    if (limit > 0 && newsize > limit) newsize = limit;
-                    if (newsize > *size) {
-                        gid_t *newgroups = realloc(groups, newsize * sizeof(gid_t));
-                        if (newgroups) {
-                            groups = newgroups;
-                            *groupsp = groups;
-                            *size = newsize;
-                        }
-                    }
-                }
-                if (count < *size) {
-                    groups[count++] = SUDO_GID_LINUX;
-                }
-            }
-        }
-    }
-
-    *start = count;
+    free(list);
     return NSS_STATUS_SUCCESS;
 }
 #endif /* __linux__ */
 
 #ifdef __FreeBSD__
 /*
- * FreeBSD NSS wrapper functions
- * These have the signature: int (*nss_method)(void *retval, void *mdata, va_list ap)
+ * FreeBSD interface: nsdispatch(3) loads nss_gershwin.so.1 and calls
+ * nss_module_register for the method table.
  */
 #include <nsswitch.h>
 #include <stdarg.h>
 
 static int
-nss_getpwnam_r(void *retval, void *mdata __unused, va_list ap)
+ns_status_of(enum ds_result r, int err, int *errnop)
 {
-    const char *name = va_arg(ap, const char *);
-    struct passwd *pwd = va_arg(ap, struct passwd *);
-    char *buffer = va_arg(ap, char *);
-    size_t buflen = va_arg(ap, size_t);
-    int *errnop = va_arg(ap, int *);
+    switch (r) {
+    case DS_SUCCESS:
+        return NS_SUCCESS;
+    case DS_NOTFOUND:
+        return NS_NOTFOUND;
+    case DS_UNAVAIL:
+        return NS_UNAVAIL;
+    default:
+        /* libc's own sources: ERANGE + NS_RETURN makes the caller retry
+         * with a larger buffer. */
+        *errnop = err;
+        return NS_RETURN;
+    }
+}
 
-    enum nss_status status = _nss_gershwin_getpwnam_r(name, pwd, buffer, buflen, errnop);
+static int
+ns_passwd(void *retval, void *mdata, va_list ap)
+{
+    enum lookup how = (enum lookup)(uintptr_t)mdata;
+    const char *name = NULL;
+    uid_t uid = 0;
+    struct passwd *pwd;
+    char *buffer;
+    size_t buflen;
+    int *errnop, err = 0, rv;
 
-    if (status == NSS_STATUS_SUCCESS) {
+    if (how == LT_NAME)
+        name = va_arg(ap, const char *);
+    else if (how == LT_ID)
+        uid = va_arg(ap, uid_t);
+    pwd = va_arg(ap, struct passwd *);
+    buffer = va_arg(ap, char *);
+    buflen = va_arg(ap, size_t);
+    errnop = va_arg(ap, int *);
+
+    rv = ns_status_of(lookup_passwd(how, name, uid, pwd, buffer, buflen, &err),
+                      err, errnop);
+    if (rv == NS_SUCCESS && retval != NULL)
         *(struct passwd **)retval = pwd;
-        return NS_SUCCESS;
-    } else if (status == NSS_STATUS_TRYAGAIN) {
-        return NS_TRYAGAIN;
-    }
-    return NS_NOTFOUND;
+    return rv;
 }
 
 static int
-nss_getpwuid_r(void *retval, void *mdata __unused, va_list ap)
+ns_group(void *retval, void *mdata, va_list ap)
 {
-    uid_t uid = va_arg(ap, uid_t);
-    struct passwd *pwd = va_arg(ap, struct passwd *);
-    char *buffer = va_arg(ap, char *);
-    size_t buflen = va_arg(ap, size_t);
-    int *errnop = va_arg(ap, int *);
+    enum lookup how = (enum lookup)(uintptr_t)mdata;
+    const char *name = NULL;
+    gid_t gid = 0;
+    struct group *grp;
+    char *buffer;
+    size_t buflen;
+    int *errnop, err = 0, rv;
 
-    enum nss_status status = _nss_gershwin_getpwuid_r(uid, pwd, buffer, buflen, errnop);
+    if (how == LT_NAME)
+        name = va_arg(ap, const char *);
+    else if (how == LT_ID)
+        gid = va_arg(ap, gid_t);
+    grp = va_arg(ap, struct group *);
+    buffer = va_arg(ap, char *);
+    buflen = va_arg(ap, size_t);
+    errnop = va_arg(ap, int *);
 
-    if (status == NSS_STATUS_SUCCESS) {
-        *(struct passwd **)retval = pwd;
-        return NS_SUCCESS;
-    } else if (status == NSS_STATUS_TRYAGAIN) {
-        return NS_TRYAGAIN;
-    }
-    return NS_NOTFOUND;
-}
-
-static int
-nss_getgrnam_r(void *retval, void *mdata __unused, va_list ap)
-{
-    const char *name = va_arg(ap, const char *);
-    struct group *grp = va_arg(ap, struct group *);
-    char *buffer = va_arg(ap, char *);
-    size_t buflen = va_arg(ap, size_t);
-    int *errnop = va_arg(ap, int *);
-
-    enum nss_status status = _nss_gershwin_getgrnam_r(name, grp, buffer, buflen, errnop);
-
-    if (status == NSS_STATUS_SUCCESS) {
+    rv = ns_status_of(lookup_group(how, name, gid, grp, buffer, buflen, &err),
+                      err, errnop);
+    if (rv == NS_SUCCESS && retval != NULL)
         *(struct group **)retval = grp;
-        return NS_SUCCESS;
-    } else if (status == NSS_STATUS_TRYAGAIN) {
-        return NS_TRYAGAIN;
-    }
-    return NS_NOTFOUND;
+    return rv;
+}
+
+/* setpwent/endpwent and setgrent/endgrent: nothing is kept open. */
+static int
+ns_pwcursor(void *retval __unused, void *mdata __unused, va_list ap __unused)
+{
+    rewind_cursor(&pw_cursor);
+    return NS_UNAVAIL;          /* every source is run */
 }
 
 static int
-nss_getgrgid_r(void *retval, void *mdata __unused, va_list ap)
+ns_grcursor(void *retval __unused, void *mdata __unused, va_list ap __unused)
 {
-    gid_t gid = va_arg(ap, gid_t);
-    struct group *grp = va_arg(ap, struct group *);
-    char *buffer = va_arg(ap, char *);
-    size_t buflen = va_arg(ap, size_t);
-    int *errnop = va_arg(ap, int *);
-
-    enum nss_status status = _nss_gershwin_getgrgid_r(gid, grp, buffer, buflen, errnop);
-
-    if (status == NSS_STATUS_SUCCESS) {
-        *(struct group **)retval = grp;
-        return NS_SUCCESS;
-    } else if (status == NSS_STATUS_TRYAGAIN) {
-        return NS_TRYAGAIN;
-    }
-    return NS_NOTFOUND;
+    rewind_cursor(&gr_cursor);
+    return NS_UNAVAIL;
 }
 
 /*
- * Check if a group exists in /etc/group
+ * getgrouplist(3). For a directory user the answer is complete here, so
+ * NS_SUCCESS ends the search. For anyone else, NS_NOTFOUND lets `files`
+ * answer.
  */
 static int
-group_exists_in_etc(const char *groupname)
+ns_getgroupmembership(void *retval __unused, void *mdata __unused, va_list ap)
 {
-    FILE *f = fopen("/etc/group", "r");
-    if (!f) return 0;
-
-    char line[512];
-    size_t namelen = strlen(groupname);
-
-    while (fgets(line, sizeof(line), f)) {
-        /* Check if line starts with "groupname:" */
-        if (strncmp(line, groupname, namelen) == 0 && line[namelen] == ':') {
-            fclose(f);
-            return 1;
-        }
-    }
-
-    fclose(f);
-    return 0;
-}
-
-/*
- * Look up a group's GID from /etc/group by name.
- * Returns the GID, or (gid_t)-1 if not found.
- */
-static gid_t
-group_gid_from_etc(const char *groupname)
-{
-    FILE *f = fopen("/etc/group", "r");
-    if (!f) return (gid_t)-1;
-
-    char line[512];
-    size_t namelen = strlen(groupname);
-
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, groupname, namelen) == 0 && line[namelen] == ':') {
-            char *p = line + namelen + 1;
-            p = strchr(p, ':');
-            if (p) {
-                gid_t gid = (gid_t)strtoul(p + 1, NULL, 10);
-                fclose(f);
-                return gid;
-            }
-        }
-    }
-
-    fclose(f);
-    return (gid_t)-1;
-}
-
-/* Hardware access groups - shared with Linux via same names */
-static const char *hw_access_groups_bsd[] = {
-    "audio", "video", "render", "input",
-    "cups",     /* printing */
-    "webcamd",  /* webcam userland drivers */
-    "vboxusers", /* VirtualBox USB and device access */
-    NULL
-};
-
-/*
- * getgroupmembership - return all groups for a user
- * This is where we add wheel (0) for admin users
- * sudo (27) is only added on Linux where it exists
- */
-#define ADMIN_GID 5000
-#define WHEEL_GID 0
-#define SUDO_GID 27
-
-static int
-nss_getgroupmembership(void *retval __unused, void *mdata __unused, va_list ap)
-{
-    const char *username = va_arg(ap, const char *);
-    gid_t basegid __unused = va_arg(ap, gid_t);
+    const char *user = va_arg(ap, const char *);
+    gid_t agroup = va_arg(ap, gid_t);
     gid_t *groups = va_arg(ap, gid_t *);
     int maxgrp = va_arg(ap, int);
     int *grpcnt = va_arg(ap, int *);
+    gid_t *list;
+    int count, n, rv;
 
-    char request[256];
-    char response[BUFFER_SIZE];
-    int count = *grpcnt;
-    int is_admin = 0;
-    int user_found = 0;
-
-    /* Query gsdh for user's group memberships */
-    snprintf(request, sizeof(request), "getgrouplist:%s", username);
-
-    if (query_dshelper(request, response, sizeof(response)) == 0) {
-        user_found = 1;
-        /* Response format: gid1,gid2,gid3,... */
-        char *saveptr;
-        char *gidstr = strtok_r(response, ",", &saveptr);
-
-        while (gidstr && count < maxgrp) {
-            gid_t gid = (gid_t)strtoul(gidstr, NULL, 10);
-
-            /* Check if already in list */
-            int found = 0;
-            for (int i = 0; i < count; i++) {
-                if (groups[i] == gid) {
-                    found = 1;
-                    break;
-                }
-            }
-
-            if (!found) {
-                groups[count++] = gid;
-                if (gid == ADMIN_GID) {
-                    is_admin = 1;
-                }
-            }
-
-            gidstr = strtok_r(NULL, ",", &saveptr);
-        }
-    }
-
-    /* If user not found in gsdh, let next NSS module handle it */
-    if (!user_found) {
+    rv = user_groupset(user, agroup, &list, &count);
+    if (rv == -1)
+        return NS_UNAVAIL;
+    if (rv != 0)
         return NS_NOTFOUND;
-    }
-
-    /* Add hardware access groups for all DS users */
-    for (int g = 0; hw_access_groups_bsd[g] != NULL; g++) {
-        gid_t hw_gid = group_gid_from_etc(hw_access_groups_bsd[g]);
-        if (hw_gid == (gid_t)-1) continue;
-
-        int has_it = 0;
-        for (int i = 0; i < count; i++) {
-            if (groups[i] == hw_gid) { has_it = 1; break; }
-        }
-        if (!has_it && count < maxgrp) {
-            groups[count++] = hw_gid;
-        }
-    }
-
-    /* If user is in admin group, add wheel (and sudo on Linux) */
-    if (is_admin) {
-        int has_wheel = 0;
-
-        for (int i = 0; i < count; i++) {
-            if (groups[i] == WHEEL_GID) has_wheel = 1;
-        }
-
-        if (!has_wheel && count < maxgrp) {
-            groups[count++] = WHEEL_GID;
-        }
-
-        /* Only add sudo group if it exists (Linux) */
-        if (group_exists_in_etc("sudo")) {
-            int has_sudo = 0;
-            for (int i = 0; i < count; i++) {
-                if (groups[i] == SUDO_GID) has_sudo = 1;
-            }
-            if (!has_sudo && count < maxgrp) {
-                groups[count++] = SUDO_GID;
-            }
-        }
-    }
-
+    n = count < maxgrp ? count : maxgrp;
+    if (n > 0)
+        memcpy(groups, list, (size_t)n * sizeof(gid_t));
+    free(list);
     *grpcnt = count;
     return NS_SUCCESS;
 }
 
-/*
- * Module registration for FreeBSD NSS
- */
 static ns_mtab methods[] = {
-    { NSDB_PASSWD, "getpwnam_r", nss_getpwnam_r, NULL },
-    { NSDB_PASSWD, "getpwuid_r", nss_getpwuid_r, NULL },
-    { NSDB_GROUP,  "getgrnam_r", nss_getgrnam_r, NULL },
-    { NSDB_GROUP,  "getgrgid_r", nss_getgrgid_r, NULL },
-    { NSDB_GROUP,  "getgroupmembership", nss_getgroupmembership, NULL },
+    { NSDB_PASSWD, "getpwnam_r", ns_passwd, (void *)LT_NAME },
+    { NSDB_PASSWD, "getpwuid_r", ns_passwd, (void *)LT_ID },
+    { NSDB_PASSWD, "getpwent_r", ns_passwd, (void *)LT_ALL },
+    { NSDB_PASSWD, "setpwent", ns_pwcursor, NULL },
+    { NSDB_PASSWD, "endpwent", ns_pwcursor, NULL },
+    { NSDB_GROUP,  "getgrnam_r", ns_group, (void *)LT_NAME },
+    { NSDB_GROUP,  "getgrgid_r", ns_group, (void *)LT_ID },
+    { NSDB_GROUP,  "getgrent_r", ns_group, (void *)LT_ALL },
+    { NSDB_GROUP,  "setgrent", ns_grcursor, NULL },
+    { NSDB_GROUP,  "endgrent", ns_grcursor, NULL },
+    { NSDB_GROUP,  "getgroupmembership", ns_getgroupmembership, NULL },
 };
+
+/* nsswitch.h declares the type of this entry point but not the function. */
+ns_mtab *nss_module_register(const char *, unsigned int *,
+                             nss_module_unregister_fn *);
 
 ns_mtab *
 nss_module_register(const char *name __unused, unsigned int *size,
                     nss_module_unregister_fn *unregister)
 {
+    (void)pthread_once(&atfork_once, install_atfork);
     *size = sizeof(methods) / sizeof(methods[0]);
     *unregister = NULL;
     return methods;

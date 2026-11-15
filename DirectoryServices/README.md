@@ -1,12 +1,12 @@
 # Gershwin Directory Services
 
-NSS module and helper daemon for managing users and groups via plist files.
+NSS module, management CLI and directory-server helper for users and groups kept in plist files.
 
 ## Components
 
-- **dshelper** - Directory helper daemon (`/System/Library/Tools/dshelper`)
+- **nss_gershwin** - NSS module (`/System/Library/Libraries/nss_gershwin.so.1` on FreeBSD, `libnss_gershwin.so.2` on Linux). Reads the plists itself, so users and groups resolve with no daemon running.
 - **dscli** - User and group management CLI (`/System/Library/Tools/dscli`)
-- **nss_gershwin** - NSS module (`/System/Library/Libraries/nss_gershwin.so.1`)
+- **dshelper** - Directory server helper (`/System/Library/Tools/dshelper`). Runs only on a directory server, where it advertises the server so clients can find it with `dscli join`.
 
 ## Linux Packages
 
@@ -26,7 +26,7 @@ pacman -S rpcbind nfs-utils
 
 ### Notes
 
-- `rpcbind` is not needed by dshelper or gdomap; it is only needed for NFS, i.e. client/server mode (`dscli promote`, `dscli join`), which fails if it is missing
+- `rpcbind` is not needed by nss_gershwin, dshelper or gdomap; it is only needed for NFS, i.e. client/server mode (`dscli promote`, `dscli join`), which fails if it is missing
 - NFS packages are only needed for client/server mode (`dscli promote`, `dscli join`). Local-only accounts (`dscli init`, `dscli user add`, etc.) work without them
 - On Arch, `nfs-utils` provides both server and client functionality (no separate `nfs-common`)
 - On Devuan, `nfs-kernel-server` pulls in `nfs-common` automatically
@@ -40,9 +40,17 @@ gmake
 sudo -E gmake install
 ```
 
-## Enabling the Service
+## Services
 
-To start dshelper automatically at boot:
+Local users need no service: nss_gershwin reads the plists in every process
+that looks up a user or group, so login, `sudo` and `id` keep working even if
+no daemon is running.
+
+dshelper is needed only on a directory server. `dscli promote` enables and
+starts it, and `dscli demote` stops and disables it, so there is normally
+nothing to set up by hand. Its service does nothing on a machine that is not
+a directory server (no `Domain.plist`): the rc and init scripts skip it, the
+systemd unit has `ConditionPathExists`, and the binary exits.
 
 | Platform | Enable | Start |
 |----------|--------|-------|
@@ -50,9 +58,7 @@ To start dshelper automatically at boot:
 | Linux (sysvinit) | `sudo update-rc.d dshelper defaults` | `sudo service dshelper start` |
 | Linux (systemd) | `sudo systemctl enable gdomap dshelper` | `sudo systemctl start gdomap dshelper` |
 
-The service runs before the login manager, ensuring directory users can log in.
-
-**Note:** The dshelper service requires **gdomap** (GNUstep Distributed Objects name server) for network service discovery. On FreeBSD and Linux sysvinit, gdomap is bundled with the dshelper service and starts/stops automatically. On Linux systemd, gdomap runs as a separate service unit—enable both as shown above.
+**Note:** dshelper requires **gdomap** (GNUstep Distributed Objects name server) to advertise the server. On FreeBSD and Linux sysvinit, gdomap is bundled with the dshelper service and starts/stops automatically. On Linux systemd, gdomap runs as a separate service unit, which `dscli promote` enables too.
 
 ## Quick Start
 
@@ -60,7 +66,6 @@ The service runs before the login manager, ensuring directory users can log in.
 dscli init
 dscli user add jsmith --realname "John Smith" --admin
 dscli passwd jsmith
-dshelper
 
 # Verify
 getent passwd jsmith
@@ -81,7 +86,7 @@ sudo dscli promote
 showmount -e localhost
 ```
 
-This configures NFS exports, starts NFS services, creates `Domain.plist`, and restarts dshelper. When dshelper starts on a server (where `Domain.plist` exists), it registers the `GershwinDirectory` service with gdomap for client auto-discovery.
+This configures NFS exports, starts NFS services, creates `Domain.plist`, and enables and starts dshelper, which registers the `GershwinDirectory` service with gdomap for client auto-discovery.
 
 Only one directory server is allowed per network. The promote command checks for existing servers and prevents duplicates.
 
@@ -92,13 +97,12 @@ To use users from a directory server:
 ```sh
 sudo dscli init
 sudo dscli join
-sudo dshelper
 
 # Verify
 getent passwd jsmith
 ```
 
-The `join` command auto-discovers directory servers on the network.
+The `join` command auto-discovers directory servers on the network. A client does not run dshelper: once `/Network` is mounted, nss_gershwin reads the server's plists from it.
 
 ## Managing Users from Clients
 
@@ -132,7 +136,7 @@ To stop being a directory server:
 sudo dscli demote
 ```
 
-This unregisters the service from gdomap (so clients can no longer discover it), removes `Domain.plist`, stops NFS services, and removes `/Local` from NFS exports.
+This unregisters the service from gdomap (so clients can no longer discover it), removes `Domain.plist`, stops and disables dshelper, stops NFS services, and removes `/Local` from NFS exports.
 
 All clients must run `dscli leave` before a server can be demoted.
 
@@ -206,21 +210,27 @@ dshelper      # Run as daemon (background)
 dshelper -d   # Run in foreground (debug mode)
 ```
 
+dshelper exits at once on a machine that is not a directory server.
+
 ## How It Works
 
 ### Data Files
 
-dshelper checks for plists in this order:
+nss_gershwin checks for plists in this order, on every lookup:
 1. `/Network/Library/DirectoryServices/` (client with server mounted)
 2. `/Local/Library/DirectoryServices/` (server or standalone)
 
 ### Machine Roles
 
-| Machine | /Network mounted? | Domain.plist exists? | dshelper reads from |
-|---------|-------------------|---------------------|---------------------|
-| Server | No | Yes | /Local |
-| Client | Yes | No | /Network |
-| Standalone | No | No | /Local |
+| Machine | /Network mounted? | Domain.plist exists? | nss_gershwin reads from | dshelper |
+|---------|-------------------|---------------------|-------------------------|----------|
+| Server | No | Yes | /Local | runs |
+| Client | Yes | No | /Network | not needed |
+| Standalone | No | No | /Local | not needed |
+
+A missing or unparsable plist makes the `gershwin` source unavailable, and
+the next source in `nsswitch.conf` (`files`) answers, so local system
+accounts always resolve.
 
 ## Service Discovery
 
@@ -276,7 +286,7 @@ This allows clients to discover and connect to directory servers without manual 
 
 Directory Services uses plist files instead of traditional Unix configuration files (`/etc/passwd`, `/etc/group`, `/etc/shadow`). This separation keeps directory-managed users distinct from local system accounts.
 
-On the server, user and group plists are stored in `/Local/Library/DirectoryServices/`. When clients join the directory, the server's `/Local` is NFS-mounted at `/Network` on the client. The dshelper daemon reads from `/Network/Library/DirectoryServices/` when the mount is present, giving clients access to the same user database as the server.
+On the server, user and group plists are stored in `/Local/Library/DirectoryServices/`. When clients join the directory, the server's `/Local` is NFS-mounted at `/Network` on the client. nss_gershwin reads from `/Network/Library/DirectoryServices/` when the mount is present, giving clients access to the same user database as the server.
 
 The **nss_gershwin** NSS module integrates with the system's name service switch. When configured in `/etc/nsswitch.conf`:
 
@@ -285,13 +295,13 @@ passwd: gershwin files
 group:  gershwin files
 ```
 
-The system queries dshelper for directory users first, then falls back to local files (`/etc/passwd`, `/etc/group`). This allows directory accounts to take precedence while still supporting local system accounts.
+The system looks up directory users first, then falls back to local files (`/etc/passwd`, `/etc/group`). This allows directory accounts to take precedence while still supporting local system accounts.
 
-Authentication works through standard `pam_unix`. The daemon returns password hashes only to root callers (verified via `getpeereid`), matching FreeBSD's `/etc/master.passwd` security model. No PAM configuration changes are required—pam_unix automatically uses NSS to resolve users, so directory users authenticate seamlessly.
+Authentication works through standard `pam_unix`. nss_gershwin returns password hashes only to root callers, matching FreeBSD's `/etc/master.passwd` security model. No PAM configuration changes are required—pam_unix automatically uses NSS to resolve users, so directory users authenticate seamlessly. SudoAskPass, which runs as the user, checks a directory user's password against the plist itself.
 
 ## Admin Access
 
-Members of the `admin` group (gid 5000) are automatically nested into `wheel` and `sudo` groups if they exist on the system. This enables `su` access on FreeBSD (wheel) and sudo access on Linux (sudo group).
+Members of the `admin` group (gid 5000) are automatically nested into `wheel` and `sudo` groups if they exist on the system: both appear in the user's group list, and `getent group wheel` / `getent group sudo` list the admins next to the members in `/etc/group`. This enables `su` access on FreeBSD (wheel) and sudo access on Linux (sudo group).
 
 The `dscli init` command automatically configures sudo for Gershwin tools and the admin group:
 
@@ -346,24 +356,29 @@ Home directory is derived automatically: `/Local/Users/<username>` on server, `/
 
 ## Troubleshooting
 
-Run dshelper in foreground mode to see debug output:
-
-```sh
-sudo dshelper -d
-# Look for "Loaded N users from /path" in output
-```
-
 Test NSS lookups:
 
 ```sh
 getent passwd testuser
 id testuser
+sudo getent passwd testuser   # as root, the password field is the hash
 ```
 
-Direct socket query (as root to see password hash):
+If a directory user does not resolve, check that `/etc/nsswitch.conf` has
+`passwd: gershwin files` and `group: gershwin files`, and that the plist
+parses (`plparse Users.plist`): an unparsable plist
+makes the module step aside for `files`.
+
+The module's own tests run on the build host, with no nsswitch involved:
 
 ```sh
-sudo sh -c 'echo "getpwnam:testuser" | nc -U /var/run/dshelper.sock'
+cd nss_gershwin && gmake check
+```
+
+On a directory server, run dshelper in foreground mode to see debug output:
+
+```sh
+sudo dshelper -d
 ```
 
 ## Developer Guide
