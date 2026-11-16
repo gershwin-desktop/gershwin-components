@@ -94,6 +94,41 @@ int main(void)
     [pf release];
   }
 
+  /* A plain-make aggregate names its directories in SUBDIRS; only the
+     sources those directories list are compiled, so a Windows-only C file
+     lying elsewhere in the tree must not be scanned. */
+  {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *root = [NSTemporaryDirectory()
+        stringByAppendingPathComponent: @"t_preflight_subdirs"];
+    [fm removeItemAtPath: root error: NULL];
+    [fm createDirectoryAtPath: [root stringByAppendingPathComponent: @"App"]
+  withIntermediateDirectories: YES attributes: nil error: NULL];
+    [fm createDirectoryAtPath: [root stringByAppendingPathComponent: @"win"]
+  withIntermediateDirectories: YES attributes: nil error: NULL];
+    [@"ifneq (,$(WINDOWS))\nSUBDIRS = win App\nelse\nSUBDIRS = App\nendif\n"
+        writeToFile: [root stringByAppendingPathComponent: @"GNUmakefile"]
+         atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+    [@"App_OBJC_FILES = main.m\n"
+        writeToFile: [root stringByAppendingPathComponent: @"App/GNUmakefile"]
+         atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+    [@"" writeToFile: [root stringByAppendingPathComponent: @"App/main.m"]
+         atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+    [@"#include <winsock2.h>\n"
+        writeToFile: [root stringByAppendingPathComponent: @"win/agent.c"]
+         atomically: YES encoding: NSUTF8StringEncoding error: NULL];
+
+    GWBuildPreflight *pf = [GWBuildPreflight new];
+    NSArray *listed = [pf sourceFilesFromMakefile:
+        [root stringByAppendingPathComponent: @"GNUmakefile"]
+                                             seen: [NSMutableSet set]];
+    PASS([listed count] == 1 &&
+         [[listed[0] lastPathComponent] isEqual: @"main.m"],
+         "SUBDIRS aggregate yields only the sources its directories list");
+    [pf release];
+    [fm removeItemAtPath: root error: NULL];
+  }
+
   /* A header that is actually compiled must NOT be skipped. */
   {
     GWBuildPreflight *pf = [GWBuildPreflight new];

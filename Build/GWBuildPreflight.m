@@ -198,7 +198,10 @@ typedef NS_ENUM(NSInteger, GWPreflightConsent) {
         BOOL listsSources = ([name hasSuffix:@"_OBJC_FILES"] || [name hasSuffix:@"_C_FILES"]
             || [name hasSuffix:@"_OBJCC_FILES"] || [name hasSuffix:@"_CC_FILES"]
             || [name hasSuffix:@"_CPP_FILES"] || [name hasSuffix:@"_HEADER_FILES"]);
-        BOOL listsSubprojects = [name hasSuffix:@"SUBPROJECTS"];
+        // Plain-make aggregates (a recursive $(MAKE) -C loop) name their
+        // directories in SUBDIRS.  Both arms of a conditional are followed, so
+        // a platform switch can only add sources to scan, never hide one.
+        BOOL listsSubprojects = ([name hasSuffix:@"SUBPROJECTS"] || [name isEqualToString:@"SUBDIRS"]);
         if (!listsSources && !listsSubprojects) continue;
 
         for (NSString *token in [value componentsSeparatedByCharactersInSet:

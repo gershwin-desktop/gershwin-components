@@ -1841,10 +1841,15 @@ static void closeInheritedDescriptors(void)
 
 - (NSString *)productNameFromMakefile:(NSString *)path
 {
-    return [self productNameFromMakefile:path depth:0];
+    // An aggregate such as a library with tools and an application lists the
+    // helper tools first; the application is what gets installed and launched.
+    NSString *name = [self productNameFromMakefile:path depth:0 appOnly:YES];
+    return name ? name : [self productNameFromMakefile:path depth:0 appOnly:NO];
 }
 
-- (NSString *)productNameFromMakefile:(NSString *)path depth:(NSInteger)depth
+- (NSString *)productNameFromMakefile:(NSString *)path
+                                depth:(NSInteger)depth
+                              appOnly:(BOOL)appOnly
 {
     NSString *content = [NSString stringWithContentsOfFile:path
                                                   encoding:NSUTF8StringEncoding
@@ -1864,14 +1869,16 @@ static void closeInheritedDescriptors(void)
     for (NSString *line in lines) {
         NSString *trimmed = [line stringByTrimmingCharactersInSet:
             [NSCharacterSet whitespaceCharacterSet]];
-        if ([trimmed hasPrefix:@"APP_NAME"] || [trimmed hasPrefix:@"BUNDLE_NAME"] ||
-            [trimmed hasPrefix:@"TOOL_NAME"]) {
+        if ([trimmed hasPrefix:@"APP_NAME"] ||
+            (!appOnly && ([trimmed hasPrefix:@"BUNDLE_NAME"] ||
+                          [trimmed hasPrefix:@"TOOL_NAME"]))) {
             NSString *name = [self parseVariableValue:trimmed];
             if ([name length] > 0) return name;
-        } else if ([trimmed hasPrefix:@"SUBPROJECTS"] && depth < 3) {
+        } else if (([trimmed hasPrefix:@"SUBPROJECTS"] || [trimmed hasPrefix:@"SUBDIRS"]) && depth < 3) {
             NSString *vals = [self parseVariableValue:trimmed];
             if ([vals length] > 0) {
-                [subprojects addObjectsFromArray:[vals componentsSeparatedByString:@" "]];
+                [subprojects addObjectsFromArray:[vals componentsSeparatedByCharactersInSet:
+                    [NSCharacterSet whitespaceCharacterSet]]];
             }
         }
     }
@@ -1885,7 +1892,9 @@ static void closeInheritedDescriptors(void)
             NSString *subMakefile = [[dir stringByAppendingPathComponent:sub]
                 stringByAppendingPathComponent:@"GNUmakefile"];
             if (![[NSFileManager defaultManager] fileExistsAtPath:subMakefile]) continue;
-            NSString *name = [self productNameFromMakefile:subMakefile depth:depth + 1];
+            NSString *name = [self productNameFromMakefile:subMakefile
+                                                     depth:depth + 1
+                                                   appOnly:appOnly];
             if (name) return name;
         }
     }
