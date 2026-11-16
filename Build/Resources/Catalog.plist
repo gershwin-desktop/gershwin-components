@@ -68,6 +68,14 @@
 	</dict>
 	<dict>
 		<key>Name</key>
+		<string>Colloquy</string>
+		<key>GitURL</key>
+		<string>https://github.com/probonopd/colloquy</string>
+		<key>Description</key>
+		<string>Chat on IRC with styled transcripts, several connections at once and file transfers</string>
+	</dict>
+	<dict>
+		<key>Name</key>
 		<string>EasyDiff</string>
 		<key>GitURL</key>
 		<string>https://github.com/gnustep/apps-easydiff</string>
@@ -373,22 +381,6 @@
 		<string>https://github.com/mrtonik/Clock</string>
 		<key>Description</key>
 		<string>Track time across cities, with alarms, a stopwatch, and a timer</string>
-	</dict>
-	<dict>
-		<key>Name</key>
-		<string>Performance Dashboard</string>
-		<key>GitURL</key>
-		<string>https://github.com/danjboyd/gnustep-performance-dashboard</string>
-		<key>Description</key>
-		<string>Find slowdowns in your apps with a time profiler and views for hangs, memory use, leaks, file activity, and network traffic</string>
-	</dict>
-	<dict>
-		<key>Name</key>
-		<string>Ycode</string>
-		<key>GitURL</key>
-		<string>https://github.com/gnustep/libs-xcode</string>
-		<key>Description</key>
-		<string>Code editor and project workspace with syntax highlighting, code browser, debugger, terminal, and Git support</string>
 	</dict>
 	<dict>
 		<key>Name</key>
@@ -907,6 +899,36 @@
 		<string>https://github.com/gcasa/Molecule</string>
 		<key>Description</key>
 		<string>View molecules as ball-and-stick models with rotation, zoom, atom labels, and automatic animation</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>MarkdownViewer</string>
+		<key>GitURL</key>
+		<string>https://github.com/danjboyd/ObjcMarkdown</string>
+		<key>Description</key>
+		<string>Read, edit and preview Markdown documents with a rendered view, a syntax-highlighted source editor and a file explorer</string>
+		<key>Submodules</key>
+		<true/>
+		<key>MakeArgs</key>
+		<array>
+			<string>OMD_SKIP_TESTS=1</string>
+		</array>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Performance Dashboard</string>
+		<key>GitURL</key>
+		<string>https://github.com/danjboyd/gnustep-performance-dashboard</string>
+		<key>Description</key>
+		<string>Find slowdowns in your apps with a time profiler and views for hangs, memory use, leaks, file activity, and network traffic</string>
+	</dict>
+	<dict>
+		<key>Name</key>
+		<string>Ycode</string>
+		<key>GitURL</key>
+		<string>https://github.com/gnustep/libs-xcode</string>
+		<key>Description</key>
+		<string>Code editor and project workspace with syntax highlighting, code browser, debugger, terminal, and Git support</string>
 	</dict>
 	<dict>
 		<key>Name</key>
