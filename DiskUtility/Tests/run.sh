@@ -11,7 +11,7 @@ if [ -f /System/Library/Makefiles/GNUstep.sh ]; then
     . /System/Library/Makefiles/GNUstep.sh
 fi
 
-TOOLS="t_Parsing t_PartitionLayout t_Models t_MockBackend t_SHA256 t_Libraries"
+TOOLS="t_Parsing t_PartitionLayout t_Models t_MockBackend t_SHA256 t_Libraries t_FATFormat t_LinuxDiscovery t_PartitionTypeNames"
 
 gmake || exit 2
 
@@ -34,5 +34,56 @@ for tool in $TOOLS; do
         status=1
     fi
 done
+
+# Tests/Manager has its own makefile: DUStorageManager pulls in the whole
+# operation and notification graph, which does not belong in the ARC support
+# library the tools above share. It is hermetic like them, so it is part of
+# this suite rather than an on-demand extra.
+if [ -d Manager ]; then
+    (cd Manager && gmake) || status=1
+    binary="./Manager/obj/t_StorageManager"
+    if [ ! -x "$binary" ]; then
+        echo "t_StorageManager: MISSING BINARY"
+        status=1
+    else
+        output=$("$binary" 2>&1)
+        code=$?
+        summary=$(printf '%s\n' "$output" | grep '^== summary ==')
+        passed=$(printf '%s\n' "$output" | grep -c '^  ok  ')
+        failed=$(printf '%s\n' "$output" | grep -c '^  FAIL')
+        echo "t_StorageManager: $passed passed, $failed failed"
+        if [ "$failed" -ne 0 ] || [ "$code" -ne 0 ]; then
+            printf '%s\n' "$output" | grep '^  FAIL'
+            status=1
+        fi
+    fi
+fi
+
+# Tests/Panes builds real AppKit views and so needs an X display. It never
+# falls back to $DISPLAY, which is usually the user's own desktop: name a
+# private Xvfb explicitly, e.g. DU_TEST_DISPLAY=:98 sh run.sh
+if [ -n "$DU_TEST_DISPLAY" ] && [ -d Panes ]; then
+    (cd Panes && gmake) || status=1
+    for tool in t_PaneChoices t_DeviceBrowser t_WakeFlows; do
+        binary="./Panes/obj/$tool"
+        if [ ! -x "$binary" ]; then
+            echo "$tool: MISSING BINARY"
+            status=1
+            continue
+        fi
+        output=$(DISPLAY="$DU_TEST_DISPLAY" "$binary" -GSTheme GNUstep 2>&1)
+        code=$?
+        passed=$(printf '%s\n' "$output" | grep -c '^Passed test:')
+        failed=$(printf '%s\n' "$output" | grep -c '^Failed test:')
+        crashed=$(printf '%s\n' "$output" | grep -c 'Uncaught exception')
+        echo "$tool: $passed passed, $failed failed, $crashed uncaught"
+        if [ "$failed" -ne 0 ] || [ "$crashed" -ne 0 ] || [ "$code" -ne 0 ]; then
+            printf '%s\n' "$output" | grep -E '^Failed test:|Uncaught exception'
+            status=1
+        fi
+    done
+else
+    echo "t_PaneChoices, t_DeviceBrowser, t_WakeFlows: skipped (set DU_TEST_DISPLAY to a private X display)"
+fi
 
 exit $status

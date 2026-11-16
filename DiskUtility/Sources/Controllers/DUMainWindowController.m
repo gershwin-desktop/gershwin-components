@@ -38,7 +38,16 @@ static const CGFloat kMinimumWindowWidth = 650.0;
 static const CGFloat kMinimumWindowHeight = 450.0;
 static const CGFloat kBrowserWidth = 190.0;
 static const CGFloat kToolbarHeight = 44.0;
-static const CGFloat kInfoPanelHeight = 120.0;
+/* The information footer has to hold the widest row set the panel ever
+ * produces - a disk reports 9 rows (Device, Connection, Connection Type,
+ * Capacity, Partition Scheme, Read Status, Write Status, Health Status, SMART
+ * Status). In two columns that is 5 rows, so the height is
+ *   5 * 18 (row pitch) + 16 (type icon) + 8 (below the icon) + 8 (top and
+ *   bottom margins) = 122
+ * plus the slack that keeps the last row clear of the window edge. At 120
+ * the fifth row sat at y = -2, outside its own view: the Partition Scheme
+ * line was cut off against the bottom of the window. */
+static const CGFloat kInfoPanelHeight = 140.0;
 static const CGFloat kSeparatorThickness = 1.0;
 // Operation status strip above the info footer: visible while any storage
 // operation runs, so long work never needs a modal dialog (ARCHITECTURE.md
@@ -448,8 +457,15 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
 
 - (void)toolbarClicked:(NSButton *)sender
 {
-    [self runCommand:objc_getAssociatedObject(sender, "duToken")
-           forObject:self.selectedObject];
+    NSString *token = objc_getAssociatedObject(sender, "duToken");
+    DUStorageCapabilities *caps = self.selectedObject.capabilities;
+    // One button serves both directions (it is enabled for either): with
+    // nothing left to mount it unmounts.
+    if ([token isEqualToString:@"mount"] && !caps.canMount &&
+        caps.canUnmount) {
+        token = @"unmount";
+    }
+    [self runCommand:token forObject:self.selectedObject];
 }
 
 #pragma mark - Commands
@@ -459,6 +475,28 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
 - (void)runCommand:(NSString *)token forObject:(DUStorageObject *)object
 {
     if (object == nil) {
+        return;
+    }
+
+    // Commands that read the medium start an ejected disk first and then
+    // run on the disk as it is afterwards, partitions included.
+    NSSet<NSString *> *needsMedium = [NSSet setWithArray:@[
+        @"verify", @"repair", @"mount", @"info", @"newimage", @"journaling",
+    ]];
+    if ([needsMedium containsObject:token] &&
+        [self.storageManager objectNeedsWake:object]) {
+        [self.storageManager wakeObject:object
+                             completion:^(DUStorageObject *fresh,
+                                          NSError *error) {
+            if (fresh == nil) {
+                NSRunAlertPanel(
+                    NSLocalizedString(@"Disk Utility", nil),
+                    error.localizedDescription ?: @"",
+                    NSLocalizedString(@"OK", nil), nil, nil);
+                return;
+            }
+            [self runCommand:token forObject:fresh];
+        }];
         return;
     }
 
@@ -1069,6 +1107,8 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
                 ?: NSLocalizedString(@"Could not eject.", nil),
             NSLocalizedString(@"OK", nil), nil, nil);
     }
+    // Volumes unmounted before a failure stay unmounted.
+    [self refreshMountState];
 }
 
 - (void)mountFinishedWithResult:(NSDictionary *)result
@@ -1083,8 +1123,13 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
             error.localizedDescription
                 ?: NSLocalizedString(@"The operation failed.", nil),
             NSLocalizedString(@"OK", nil), nil, nil);
-        return;
     }
+    // A whole disk can fail on one volume after mounting the others.
+    [self refreshMountState];
+}
+
+- (void)refreshMountState
+{
     // Model refresh picks up the new mount state asynchronously; the
     // topology notification comes back on the main thread.
     DUStorageManager *manager = self.storageManager;
@@ -1973,6 +2018,10 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
     if (value >= 3.0) {
         [defaults setDouble:value forKey:@"DURefreshInterval"];
     }
+    // The device monitor re-arms its timer on NSUserDefaultsDidChangeNotification,
+    // which libs-base posts only from -synchronize; without it the new
+    // interval would apply up to 30 s later.
+    [defaults synchronize];
 }
 
 - (void)windowWillClose:(NSNotification *)notification

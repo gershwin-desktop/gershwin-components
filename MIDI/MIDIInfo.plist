@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="0.9">
+<dict>
+	<key>CFBundleName</key>
+	<string>MIDI</string>
+	<key>CFBundleDisplayName</key>
+	<string>MIDI</string>
+	<key>ApplicationName</key>
+	<string>MIDI</string>
+	<key>ApplicationDescription</key>
+	<string>Play and receive MIDI over the network with other computers and devices</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.gershwin-desktop.MIDI.prefpane</string>
+	<key>CFBundleExecutable</key>
+	<string>MIDI</string>
+	<key>CFBundleVersion</key>
+	<string>1.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>NSPrincipalClass</key>
+	<string>MIDIPane</string>
+	<key>NSPrefPaneIconFile</key>
+	<string>MIDI.png</string>
+	<key>NSPrefPaneIconLabel</key>
+	<string>MIDI</string>
+	<key>NSPrefPaneCategory</key>
+	<string>Network</string>
+	<key>Authors</key>
+	<array>
+		<string>Simon Peter</string>
+	</array>
+	<key>URL</key>
+	<string>https://github.com/gershwin-desktop/gershwin-components</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2026 Simon Peter</string>
+	<key>CopyrightDescription</key>
+	<string>Released under the BSD 2-Clause License</string>
+</dict>
+</plist>

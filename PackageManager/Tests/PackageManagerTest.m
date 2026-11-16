@@ -22,6 +22,23 @@
 #import "GWPackageManagerBackend.h"
 #import "GWPackageManager.h"
 #import "GWHeaderDatabase.h"
+#import "GWDebBackend.h"
+#import "GWSudoHelper.h"
+#import "GWAppImageDownloader.h"
+#import "GWAppImageAssetPicker.h"
+#import "GWCurlMeterReader.h"
+
+/* The key a Dependencies.plist uses for "any system with this kernel",
+ * which is what dependencySearchOrder falls back to last. */
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+static NSString * const kKernelKey = @"freebsd";
+#elif defined(__OpenBSD__)
+static NSString * const kKernelKey = @"openbsd";
+#elif defined(__NetBSD__)
+static NSString * const kKernelKey = @"netbsd";
+#else
+static NSString * const kKernelKey = @"linux";
+#endif
 
 #pragma mark - Test Assertion Framework
 
@@ -80,6 +97,20 @@ static void runTest(NSString *name, BOOL (^block)(void))
         }
     }
 }
+
+/* The asset-picker cases live in their own file, but they are compiled INTO
+ * this tool rather than linked beside it: they use the TAssert macros
+ * above, and those expand to a `return NO` that only means anything inside a
+ * function this file owns. Included here, after the macros and this runner
+ * exist, and deliberately not added to OBJC_FILES. */
+void AGRegisterAppImageAssetPickerTests(void);
+#include "AGAppImageAssetPickerTests.m"
+
+/* The download.kde.org resolver, the same arrangement: its cases are a
+ * function this file owns, and the recorded index pages it parses live in
+ * Tests/kdefixtures (see the README there). */
+void AGRegisterKDEAppImagePickerTests(void);
+#include "GWKDEAppImagePickerTests.m"
 
 #pragma mark - Mock Objects
 
@@ -212,6 +243,7 @@ static void runTest(NSString *name, BOOL (^block)(void))
   NSError *_uninstallError;
   NSArray *_filesResult;
   NSString *_owningFileResult;
+  NSSet *_installedPackageNames;
 }
 @property (readonly) NSArray<NSDictionary *> *recordedCalls;
 @property (readonly) NSString *backendName;
@@ -219,6 +251,7 @@ static void runTest(NSString *name, BOOL (^block)(void))
 - (void)setUninstallResult:(BOOL)result error:(NSError *)error;
 - (void)setFilesResult:(NSArray *)files;
 - (void)setOwningFileResult:(NSString *)path;
+- (void)setInstalledPackageNames:(NSArray<NSString *> *)names;
 - (void)clearResults;
 @end
 
@@ -252,10 +285,23 @@ static void runTest(NSString *name, BOOL (^block)(void))
 
 - (void)setFilesResult:(NSArray *)files { _filesResult = files; }
 - (void)setOwningFileResult:(NSString *)path { _owningFileResult = path; }
+- (void)setInstalledPackageNames:(NSArray<NSString *> *)names
+{
+  _installedPackageNames = names ? [NSSet setWithArray:names] : nil;
+}
 
 - (void)clearResults { [_recordedCalls removeAllObjects]; }
 
 - (NSArray *)recordedCalls { return [_recordedCalls copy]; }
+
+- (BOOL)isPackageInstalled:(NSString *)packageName
+{
+  [_recordedCalls addObject:@{
+    @"method": @"isPackageInstalled:",
+    @"packageName": packageName ?: @"",
+  }];
+  return [_installedPackageNames containsObject:packageName];
+}
 
 - (BOOL)installPackages:(NSArray *)packageNames
         localFilePaths:(NSArray *)filePaths
@@ -336,8 +382,10 @@ static void runTest(NSString *name, BOOL (^block)(void))
 @interface GWMockProgressHandler : NSObject <GWInstallProgressHandler>
 {
   NSMutableArray *_progressCalls;
+  NSMutableArray *_outputLines;
 }
 @property (readonly) NSArray *progressCalls;
+@property (readonly) NSArray *outputLines;
 @end
 
 @implementation GWMockProgressHandler
@@ -345,7 +393,11 @@ static void runTest(NSString *name, BOOL (^block)(void))
 - (instancetype)init
 {
   self = [super init];
-  if (self) _progressCalls = [NSMutableArray array];
+  if (self)
+    {
+      _progressCalls = [NSMutableArray array];
+      _outputLines = [NSMutableArray array];
+    }
   return self;
 }
 
@@ -357,7 +409,13 @@ static void runTest(NSString *name, BOOL (^block)(void))
   }];
 }
 
+- (void)installDidOutputLine:(NSString *)line
+{
+  [_outputLines addObject:line ?: @""];
+}
+
 - (NSArray *)progressCalls { return [_progressCalls copy]; }
+- (NSArray *)outputLines { return [_outputLines copy]; }
 
 @end
 
@@ -368,6 +426,10 @@ static void runTest(NSString *name, BOOL (^block)(void))
 + (BOOL)testFreeBSDWithoutOSReleaseFallbackToUname;
 + (BOOL)testLinuxWithOSRelease;
 + (BOOL)testLinuxMultipleIDLike;
++ (BOOL)testDependencySearchOrderPerDistribution;
++ (BOOL)testDependencySearchOrderFamilyBeforeKernel;
++ (BOOL)testInstallSpecPicksDistributionPackages;
++ (BOOL)testInstallSpecFallsBackToKernelEntry;
 + (BOOL)testOpenBSDWithoutOSRelease;
 @end
 
@@ -461,6 +523,132 @@ static void runTest(NSString *name, BOOL (^block)(void))
   TAssertEqualObjects(searchOrder, (@[@"ubuntu", @"ubuntu", @"debian"]),
                       @"Search order should include both ID_LIKE values");
 
+  [[NSFileManager defaultManager] removeItemAtPath:osReleasePath error:nil];
+  [GWOSDetector setOSReleasePathOverride:nil];
+
+  return YES;
+}
+
++ (BOOL)testDependencySearchOrderPerDistribution
+{
+  // The package names differ per distribution (Arch calls the profiler
+  // "perf", Debian "linux-perf"), so the distribution must be asked first
+  // and the kernel only last.
+  NSString *tmpDir = NSTemporaryDirectory();
+  NSString *osReleasePath = [tmpDir stringByAppendingPathComponent:@"os-release-test-arch"];
+  NSString *content = @"ID=arch\n";
+  [content writeToFile:osReleasePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+  [GWOSDetector setOSReleasePathOverride:osReleasePath];
+  [GWOSDetector setUnameOverride:nil];
+
+  NSArray *order = [GWOSDetector dependencySearchOrder];
+
+  TAssertEqualObjects([order firstObject], @"arch",
+                      @"The distribution itself must be asked first");
+  TAssert([order containsObject:kKernelKey],
+          @"The kernel must be the shared fallback, got %@", order);
+  TAssert([order indexOfObject:kKernelKey] == [order count] - 1,
+          @"The kernel must come last, got %@", order);
+
+  [[NSFileManager defaultManager] removeItemAtPath:osReleasePath error:nil];
+  [GWOSDetector setOSReleasePathOverride:nil];
+
+  return YES;
+}
+
++ (BOOL)testDependencySearchOrderFamilyBeforeKernel
+{
+  // A derivative falls back to the distribution it is built on, and on to
+  // the package-manager family, before the kernel entry is reached.
+  NSString *tmpDir = NSTemporaryDirectory();
+  NSString *osReleasePath = [tmpDir stringByAppendingPathComponent:@"os-release-test-mint"];
+  NSString *content = @"ID=linuxmint\nID_LIKE=ubuntu\n";
+  [content writeToFile:osReleasePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+  [GWOSDetector setOSReleasePathOverride:osReleasePath];
+  [GWOSDetector setUnameOverride:nil];
+
+  NSArray *order = [GWOSDetector dependencySearchOrder];
+  NSArray *expected = @[@"linuxmint", @"ubuntu", @"debian", kKernelKey];
+
+  TAssertEqualObjects(order, expected,
+                      @"Order should be distribution, ID_LIKE, family, kernel");
+
+  [[NSFileManager defaultManager] removeItemAtPath:osReleasePath error:nil];
+  [GWOSDetector setOSReleasePathOverride:nil];
+
+  return YES;
+}
+
++ (BOOL)testInstallSpecPicksDistributionPackages
+{
+  // The bug this guards against: on Arch the shared "linux" entry offered
+  // the Debian package name linux-perf, which does not exist there.
+  NSString *tmpDir = NSTemporaryDirectory();
+  NSString *osReleasePath = [tmpDir stringByAppendingPathComponent:@"os-release-test-arch-spec"];
+  [@"ID=arch\n" writeToFile:osReleasePath atomically:YES
+                    encoding:NSUTF8StringEncoding error:nil];
+  [GWOSDetector setOSReleasePathOverride:osReleasePath];
+  [GWOSDetector setUnameOverride:nil];
+
+  NSString *plistPath = [tmpDir stringByAppendingPathComponent:@"install-test-distro.plist"];
+  NSDictionary *plist = @{
+    @"packages": @[],
+    @"os_overrides": @{
+      @"debian": @{@"packages": @[@"linux-perf"]},
+      @"arch": @{@"packages": @[@"perf"]},
+      @"linux": @{@"packages": @[]},
+    },
+  };
+  [plist writeToFile:plistPath atomically:YES];
+
+  NSError *error = nil;
+  GWPackageInstallSpec *spec = [[GWPackageInstallSpec alloc] initWithPlistAtPath:plistPath
+                                                                        specType:GWPackageInstallSpecTypeInstall
+                                                                           error:&error];
+
+  TAssertNotNil(spec, @"Should parse the plist");
+  TAssertEqualObjects(spec.packages, @[@"perf"],
+                      @"Arch must get its own package name");
+
+  [[NSFileManager defaultManager] removeItemAtPath:plistPath error:nil];
+  [[NSFileManager defaultManager] removeItemAtPath:osReleasePath error:nil];
+  [GWOSDetector setOSReleasePathOverride:nil];
+
+  return YES;
+}
+
++ (BOOL)testInstallSpecFallsBackToKernelEntry
+{
+  // A plist that names one set of packages for every Linux distribution
+  // must still be found on a distribution that has no entry of its own.
+  NSString *tmpDir = NSTemporaryDirectory();
+  NSString *osReleasePath = [tmpDir stringByAppendingPathComponent:@"os-release-test-arch-kernel"];
+  [@"ID=arch\n" writeToFile:osReleasePath atomically:YES
+                    encoding:NSUTF8StringEncoding error:nil];
+  [GWOSDetector setOSReleasePathOverride:osReleasePath];
+  [GWOSDetector setUnameOverride:nil];
+
+  NSString *plistPath = [tmpDir stringByAppendingPathComponent:@"install-test-kernel.plist"];
+  NSDictionary *plist = @{
+    @"packages": @[],
+    @"os_overrides": @{
+      kKernelKey: @{@"packages": @[@"shared-for-this-kernel"]},
+    },
+  };
+  [plist writeToFile:plistPath atomically:YES];
+
+  NSError *error = nil;
+  GWPackageInstallSpec *spec = [[GWPackageInstallSpec alloc] initWithPlistAtPath:plistPath
+                                                                        specType:GWPackageInstallSpecTypeInstall
+                                                                           error:&error];
+
+  TAssertNotNil(spec, @"Should parse the plist");
+  TAssertEqualObjects(spec.packages, @[@"shared-for-this-kernel"],
+                      @"The kernel entry must be the last fallback");
+
+  [[NSFileManager defaultManager] removeItemAtPath:plistPath error:nil];
   [[NSFileManager defaultManager] removeItemAtPath:osReleasePath error:nil];
   [GWOSDetector setOSReleasePathOverride:nil];
 
@@ -654,6 +842,8 @@ static void runTest(NSString *name, BOOL (^block)(void))
 + (BOOL)testFreeBSDBackendExecuteCommand;
 + (BOOL)testOpenBSDBackendExecuteCommand;
 + (BOOL)testInstallFailsReportsError;
++ (BOOL)testDebBackendIsPackageInstalledAgainstRealSystem;
++ (BOOL)testSudoCommandNeverDuplicatesToolPath;
 @end
 
 @implementation BackendTestHelper
@@ -751,6 +941,75 @@ static void runTest(NSString *name, BOOL (^block)(void))
   return YES;
 }
 
+// A mocked executor only proves the backend parses whatever canned output
+// the test author assumed dpkg-query would produce - it can't catch the
+// backend invoking the wrong binary or an invalid flag, since the mock
+// never actually runs anything. That gap let isPackageInstalled: call plain
+// "dpkg -W" (dpkg has no -W; only dpkg-query does) ship silently: every
+// query failed with a non-zero exit and was read as "not installed",
+// so Software Update's prerequisites step tried to reinstall dozens of
+// already-installed packages. Skips itself (returns YES) off Debian-family
+// systems rather than asserting on the wrong package manager.
++ (BOOL)testDebBackendIsPackageInstalledAgainstRealSystem
+{
+  if (![[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/dpkg-query"]) {
+    return YES; // not a Debian-family system; nothing to verify here
+  }
+
+  GWDebBackend *backend = [[GWDebBackend alloc] init];
+
+  TAssertTrue([backend isPackageInstalled:@"dpkg"],
+              @"dpkg itself must be installed on any system that has dpkg-query");
+  TAssertTrue(![backend isPackageInstalled:@"this-package-definitely-does-not-exist-xyz123"],
+              @"a nonexistent package name must report not installed");
+
+  return YES;
+}
+
+// Every backend built its argv the same hand-rolled way: prepend sudo's
+// flags, then unconditionally re-add the tool's own path before the real
+// arguments - correct when escalating through sudo (sudo's first argument
+// names the program to run), but wrong when already root, where the launch
+// path IS the tool and NSTask sets argv[0] to it on its own. The stray extra
+// copy landed as the tool's first REAL argument: apt-get read
+// "/usr/bin/apt-get" as an unknown operation and failed every real install
+// this app ever ran as root (its actual production context), while every
+// mocked backend test stayed green because tests run as a normal user, where
+// the sudo-prefixed branch happens to mask the bug. Exercises whichever
+// branch this process's real uid takes; CI usually runs as non-root, so a
+// root run (as the privileged helper itself is) is the only way to see the
+// other branch - see GWSudoHelper.h for why the invariant must hold either way.
++ (BOOL)testSudoCommandNeverDuplicatesToolPath
+{
+  NSString *toolPath = @"/usr/bin/apt-get";
+  NSArray *toolArgs = @[@"install", @"-y", @"somepackage"];
+  NSArray *args = nil;
+  NSString *launchPath = GWSudoCommand(toolPath, toolArgs, &args);
+
+  NSUInteger toolPathOccurrences = 0;
+  for (NSString *arg in args) {
+    if ([arg isEqualToString:toolPath]) toolPathOccurrences++;
+  }
+
+  if ([launchPath isEqualToString:toolPath]) {
+    // Already root: NSTask supplies argv[0], so the tool path must not also
+    // appear as a real argument.
+    TAssertTrue(toolPathOccurrences == 0,
+                @"already-root command must not repeat the tool path as an argument");
+  } else {
+    // Escalating: sudo needs the tool path as its own first argument, and
+    // exactly once.
+    TAssertTrue(toolPathOccurrences == 1,
+                @"sudo command must name the tool path exactly once");
+  }
+
+  NSArray *trailingArgs = [args subarrayWithRange:NSMakeRange([args count] - [toolArgs count], [toolArgs count])];
+  TAssertEqualObjects(trailingArgs, toolArgs,
+                       @"the real arguments must survive, in order, as the command's tail");
+
+  return YES;
+}
+
 @end
 
 #pragma mark - GWPackageManager Public API Tests
@@ -763,6 +1022,8 @@ static void runTest(NSString *name, BOOL (^block)(void))
 + (BOOL)testUninstallPackages;
 + (BOOL)testFilesForPackage;
 + (BOOL)testPackageOwningFile;
++ (BOOL)testIsPackageInstalled;
++ (BOOL)testMissingPackagesFrom;
 + (BOOL)testRunInstallFromPlistCallsBackend;
 + (BOOL)testRunInstallFromPlistInstallationFails;
 + (BOOL)testRunUninstallFromPlist;
@@ -889,6 +1150,34 @@ static void runTest(NSString *name, BOOL (^block)(void))
 
   TAssertEqualObjects(owner, @"sl",
                       @"Should identify sl as owning package");
+
+  return YES;
+}
+
++ (BOOL)testIsPackageInstalled
+{
+  GWMockPackageManagerBackend *mockBackend = [[GWMockPackageManagerBackend alloc] init];
+  [mockBackend setInstalledPackageNames:@[@"sl"]];
+  GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:mockBackend];
+
+  TAssertTrue([pm isPackageInstalled:@"sl"],
+              @"sl was marked installed on the mock backend");
+  TAssertTrue(![pm isPackageInstalled:@"freerdp"],
+              @"freerdp was not marked installed on the mock backend");
+
+  return YES;
+}
+
++ (BOOL)testMissingPackagesFrom
+{
+  GWMockPackageManagerBackend *mockBackend = [[GWMockPackageManagerBackend alloc] init];
+  [mockBackend setInstalledPackageNames:@[@"sl"]];
+  GWPackageManager *pm = [[GWPackageManager alloc] initWithBackend:mockBackend];
+
+  NSArray *missing = [pm missingPackagesFrom:@[@"sl", @"freerdp", @"cowsay"]];
+
+  TAssertEqualObjects(missing, (@[@"freerdp", @"cowsay"]),
+                      @"Only the not-installed packages should come back, in order");
 
   return YES;
 }
@@ -1194,6 +1483,633 @@ static void runTest(NSString *name, BOOL (^block)(void))
 
 #pragma mark - Test Runner
 
+#pragma mark - Curl Meter / AppImage Download Tests
+
+/* The half of GWAppImageDownloader that runs curl, driven here against a
+ * local file so the test needs no network. The method is private to the
+ * implementation; this declaration only lets the test name it. */
+@interface GWAppImageDownloader (MeterTesting)
+- (BOOL)_downloadURL:(NSString *)url
+              toPath:(NSString *)dest
+            progress:(id<GWInstallProgressHandler>)progress
+               error:(NSError **)error;
+@end
+
+static BOOL testNearly(float a, float b)
+{
+  return (a > b - 0.0001f) && (a < b + 0.0001f);
+}
+
+/* The real NSTask-backed executor, not the mock every other case in this file
+ * injects.  A mock answers from a dictionary and never touches an
+ * out-parameter, so it could not have caught what these cases are about: the
+ * convenience selectors that take no "output" pass nil, and the real one used
+ * to read through it anyway.  That killed the process outright - and in
+ * Software Update it killed the privileged update helper on the very first
+ * prerequisite check, so an update stopped after gershwin-developer and
+ * installed nothing else.  If any case below dies instead of returning, the
+ * whole tool dies, so the regression is self-announcing.
+ *
+ * /bin/sh is used as the command because it exists on every platform these
+ * builds run on; the backends it stands in for do not.
+ *
+ * Only the non-live selectors are covered here. The live one (the install
+ * path's) is deliberately left alone: it currently hangs on any command that
+ * writes to a pipe, which is a separate defect and not something to be
+ * introduced by a test run. See the note in GWSystemCommandExecutor.m. */
+@interface GWRealCommandExecutorTestHelper : NSObject
+@end
+
+@implementation GWRealCommandExecutorTestHelper
+
++ (GWSystemCommandExecutor *)executor
+{
+  return [GWSystemCommandExecutor sharedExecutor];
+}
+
++ (int)runShell:(NSString *)script
+{
+  return [[self executor] execute:@"/bin/sh" arguments:@[@"-c", script]];
+}
+
++ (BOOL)testNoOutputSelectorReturnsZero
+{
+  return [self runShell:@"exit 0"] == 0;
+}
+
++ (BOOL)testNoOutputSelectorReportsFailure
+{
+  return [self runShell:@"exit 3"] == 3;
+}
+
++ (BOOL)testNoOutputSelectorStandsInForAPackageQuery
+{
+  // The shape every backend's -isPackageInstalled: uses, and the one that
+  // crashed: a command whose stdout nobody wants, only the exit status.
+  return [self runShell:@"exit 0"] == 0;
+}
+
++ (BOOL)testOutputSelectorStillCapturesStdout
+{
+  NSString *output = nil;
+  int status = [[self executor] execute:@"/bin/sh"
+                             arguments:@[@"-c", @"printf hello"]
+                                output:&output];
+  return status == 0 && [output isEqualToString:@"hello"];
+}
+
++ (BOOL)testOutputAndErrorSelectorsBothCapture
+{
+  NSString *output = nil;
+  NSString *errorOutput = nil;
+  int status = [[self executor] execute:@"/bin/sh"
+                             arguments:@[@"-c", @"printf out; printf err >&2"]
+                                output:&output
+                          errorOutput:&errorOutput];
+  return status == 0 && [output isEqualToString:@"out"]
+                     && [errorOutput isEqualToString:@"err"];
+}
+
++ (BOOL)testFailingCommandStillReturnsItsCapturedOutput
+{
+  NSString *output = nil;
+  int status = [[self executor] execute:@"/bin/sh"
+                             arguments:@[@"-c", @"printf nope; exit 7"]
+                                output:&output];
+  return status == 7 && [output isEqualToString:@"nope"];
+}
+
++ (BOOL)testMissingCommandIsReportedNotCrashed
+{
+  return [[self executor] execute:@"/nonexistent/command/xyz" arguments:@[]] != 0;
+}
+
+@end
+
+/* The live selector - the one every package INSTALL goes through - driven
+ * against the real executor and guarded by a real timeout.
+ *
+ * It used to be driven by a dispatch source per pipe, which signalled its
+ * semaphore from the CANCEL handler, so the only thing that could release the
+ * waiter was a read() inside the event handler seeing EOF.  A command that
+ * wrote anything consumed the last of its output in that read and then needed
+ * one more event to observe the close; when that event did not arrive the
+ * waiter sat on DISPATCH_TIME_FOREVER with no way out.  Measured on Linux:
+ *
+ *   /bin/sh -c "printf a"  -> hung
+ *   /bin/sh -c "exit 0"    -> returned
+ *
+ * Only a command that writes nothing happened to work, which is why this
+ * survived: the install path reaches it only when a package is genuinely being
+ * installed.  It did not reproduce on the NextBSD box, so it was a
+ * platform-dependent hang rather than a certain one - worse, in that it would
+ * have passed a casual check on the machine you happened to be using.
+ *
+ * Each case runs the call on a background queue and waits with a deadline, so
+ * a regression FAILS the case instead of hanging the suite: a test that takes
+ * the suite with it when it fails is a test nobody runs. */
+@interface GWLiveExecutorTestHelper : NSObject
+@end
+
+@implementation GWLiveExecutorTestHelper
+
+/* Runs the live selector and reports what came back. nil status means it did
+ * not return before the deadline. */
++ (NSDictionary *)runScript:(NSString *)script seconds:(double)seconds
+{
+  GWSystemCommandExecutor *executor = [GWSystemCommandExecutor sharedExecutor];
+  __block NSMutableArray *outLines = [NSMutableArray array];
+  __block NSMutableArray *errLines = [NSMutableArray array];
+  __block NSString *capturedErr = nil;
+  __block NSNumber *status = nil;
+  __block BOOL firstLineArrivedWhileRunning = NO;
+  __block BOOL childExited = NO;
+
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    int s = [executor execute:@"/bin/sh"
+                    arguments:@[@"-c", script]
+               stdoutCallback:^(NSString *line) {
+      @synchronized (outLines) {
+        if ([line length] > 0 && !childExited) firstLineArrivedWhileRunning = YES;
+        [outLines addObject:line];
+      }
+    }
+               stderrCallback:^(NSString *line) {
+      @synchronized (errLines) { if ([line length] > 0) [errLines addObject:line]; }
+    }
+            capturedErrorOutput:&capturedErr];
+    status = @(s);
+    dispatch_semaphore_signal(done);
+  });
+
+  long waited = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW,
+      (int64_t)(seconds * NSEC_PER_SEC)));
+  if (waited != 0) return nil; // hung: the whole point of these cases
+
+  return @{
+    @"status": status,
+    @"out": [outLines copy],
+    @"err": [errLines copy],
+    @"captured": capturedErr ?: @"",
+    @"live": @(firstLineArrivedWhileRunning),
+  };
+}
+
++ (BOOL)testCommandThatWritesReturns
+{
+  return [self runScript:@"printf a" seconds:20.0] != nil;
+}
+
++ (BOOL)testCommandThatWritesBothStreamsReturns
+{
+  return [self runScript:@"printf a; printf b >&2; exit 3" seconds:20.0] != nil;
+}
+
++ (BOOL)testOutputFarPastAPipeBufferReturns
+{
+  // 20000 lines is several times a pipe buffer, so a reader that stopped
+  // draining would wedge the child in write() instead of finishing.
+  return [self runScript:@"i=1; while [ $i -le 20000 ]; do echo line $i; i=$((i+1)); done"
+                 seconds:60.0] != nil;
+}
+
++ (BOOL)testSlowCommandStillReturns
+{
+  return [self runScript:@"sleep 0.3; echo late" seconds:30.0] != nil;
+}
+
++ (BOOL)testEveryLineIsDelivered
+{
+  NSDictionary *r = [self runScript:
+    @"i=1; while [ $i -le 5 ]; do echo out$i; i=$((i+1)); done" seconds:30.0];
+  return r != nil && [r[@"out"] count] == 5;
+}
+
++ (BOOL)testExitStatusIsReported
+{
+  NSDictionary *r = [self runScript:@"printf a; exit 3" seconds:20.0];
+  return r != nil && [r[@"status"] intValue] == 3;
+}
+
++ (BOOL)testStderrIsDeliveredAndCaptured
+{
+  NSDictionary *r = [self runScript:
+    @"i=1; while [ $i -le 4 ]; do echo err$i >&2; i=$((i+1)); done" seconds:30.0];
+  return r != nil && [r[@"err"] count] == 4 &&
+         [[r[@"captured"] description] length] > 0;
+}
+
++ (BOOL)testALineArrivesBeforeTheCommandFinishes
+{
+  // The reason this selector exists at all: an install streams progress, and
+  // a caller that sees nothing until pkg exits cannot show a progress bar.
+  // The trailing sleep makes "delivered only at the end" distinguishable
+  // from "delivered as it happened".
+  NSDictionary *r = [self runScript:
+    @"echo first; sleep 1; echo last" seconds:30.0];
+  return r != nil && [r[@"live"] boolValue];
+}
+
++ (BOOL)testALineWithNoTrailingNewlineIsStillDelivered
+{
+  NSDictionary *r = [self runScript:@"printf no-newline" seconds:20.0];
+  return r != nil && [r[@"out"] count] == 1 &&
+         [r[@"out"][0] isEqualToString:@"no-newline"];
+}
+
+@end
+
+@interface GWCurlMeterTestHelper : NSObject
+@end
+
+@implementation GWCurlMeterTestHelper
+
+/* One meter update as curl writes it: a carriage return, that many bar
+ * characters padded to the meter's 76 columns, then the percent. */
++ (NSString *)updateForPercent:(double)percent
+{
+  NSUInteger bars = (NSUInteger)(percent / 100.0 * 76.0);
+  NSMutableString *bar = [NSMutableString string];
+  for (NSUInteger i = 0; i < bars; i++)
+    [bar appendString:@"#"];
+  while ([bar length] < 76)
+    [bar appendString:@" "];
+  return [NSString stringWithFormat:@"\r%@%.1f%%", bar, percent];
+}
+
++ (NSArray<NSNumber *> *)valuesOf:(GWMockProgressHandler *)mock
+{
+  NSMutableArray<NSNumber *> *values = [NSMutableArray array];
+  for (NSDictionary *call in [mock progressCalls])
+    [values addObject:call[@"progress"]];
+  return values;
+}
+
++ (BOOL)testMeterUpdatesBecomeFractions
+{
+  double percents[] = {0.0, 12.5, 42.0, 99.9, 100.0};
+  size_t count = sizeof(percents) / sizeof(percents[0]);
+
+  NSMutableString *stream = [NSMutableString string];
+  for (size_t i = 0; i < count; i++)
+    [stream appendString:[self updateForPercent:percents[i]]];
+  [stream appendString:@"\n"];
+
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+  [reader ingestData:[stream dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader finish];
+
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  TAssertTrue([values count] == (NSUInteger)count,
+              @"Each whole percent of the meter should be reported once, got %lu",
+              (unsigned long)[values count]);
+
+  float previous = -1.0f;
+  for (size_t i = 0; i < count; i++)
+    {
+      /* The transfer owns 0.05 .. 0.95 of the run, so 42 % of the bytes is
+       * 0.428 of the install, not 42 % of the bar's width. */
+      float expected = 0.05f + (0.95f - 0.05f) * (float)(percents[i] / 100.0);
+      float value = [values[i] floatValue];
+      TAssertTrue(testNearly(value, expected),
+                  @"%.1f %% should map to %f, got %f",
+                  percents[i], expected, value);
+      TAssertTrue(value >= previous,
+                  @"Progress should never move backwards (%f after %f)",
+                  value, previous);
+      previous = value;
+    }
+
+  TAssertEqualObjects([mock progressCalls][0][@"message"],
+                      @"Downloading AppImage...",
+                      @"The report should carry the phase text");
+  return YES;
+}
+
++ (BOOL)testMeterUpdatesSplitAcrossChunks
+{
+  /* curl writes whenever it feels like it, so an update is routinely cut in
+   * half: three byte chunks split "42.0%" in the middle of the number. */
+  NSMutableString *stream = [NSMutableString string];
+  double percents[] = {0.0, 12.5, 42.0, 99.9, 100.0};
+  size_t count = sizeof(percents) / sizeof(percents[0]);
+  for (size_t i = 0; i < count; i++)
+    [stream appendString:[self updateForPercent:percents[i]]];
+  [stream appendString:@"\n"];
+
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  NSData *data = [stream dataUsingEncoding:NSUTF8StringEncoding];
+  const NSUInteger step = 3;
+  for (NSUInteger offset = 0; offset < [data length]; offset += step)
+    {
+      NSUInteger length = MIN(step, [data length] - offset);
+      [reader ingestData:[data subdataWithRange:NSMakeRange(offset, length)]];
+    }
+  [reader finish];
+
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  TAssertTrue([values count] == (NSUInteger)count,
+              @"A meter split across chunks should still yield every update, "
+              @"got %lu", (unsigned long)[values count]);
+  for (size_t i = 0; i < count; i++)
+    {
+      float expected = 0.05f + (0.95f - 0.05f) * (float)(percents[i] / 100.0);
+      TAssertTrue(testNearly([values[i] floatValue], expected),
+                  @"Update %lu mapped to %f instead of %f",
+                  (unsigned long)i, [values[i] floatValue], expected);
+    }
+  return YES;
+}
+
++ (BOOL)testSpinnerAndTextAreNotProgress
+{
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  /* A transfer whose size the server never declared draws a spinner instead
+   * of a percent: nothing is measurable, so nothing may be reported. */
+  NSArray<NSString *> *noise = @[
+    @"\r#=#=#                       ",
+    @"\r##O#-#                   ",
+    @"\rcurl: (22) The requested URL returned error: 404\n",
+    @"\rTotal 42%\n",             /* a percent in prose is not a meter */
+    @"a tail with no separator at all",
+  ];
+  for (NSString *text in noise)
+    [reader ingestData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader ingestData:[NSData data]];
+  [reader finish];
+
+  TAssertTrue([mock.progressCalls count] == 0,
+              @"Nothing measurable should report nothing, got %lu reports",
+              (unsigned long)[mock.progressCalls count]);
+  return YES;
+}
+
++ (BOOL)testCurlTextLinesAreForwarded
+{
+  /* The stream is one thing to curl: the meter it draws, and the words it
+   * writes when something goes wrong. Those words are the only place the
+   * reason for a failure exists, so they have to come out the other end as
+   * lines while the meter stays progress. */
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  NSMutableString *stream = [NSMutableString string];
+  [stream appendString:[self updateForPercent:42.0]];
+  [stream appendString:@"\r#=#=#                       "];
+  [stream appendString:@"\rcurl: (22) The requested URL returned error: 403\n"];
+  [stream appendString:[self updateForPercent:100.0]];
+  [stream appendString:@"\n"];
+
+  [reader ingestData:[stream dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader finish];
+
+  TAssertTrue([[mock progressCalls] count] == 2,
+              @"The two meter updates should still be the only reports, got %lu",
+              (unsigned long)[[mock progressCalls] count]);
+  TAssertTrue([[mock outputLines] count] == 1,
+              @"The spinner is a picture and the meter is progress, so only "
+              @"curl's own line should come through, got %lu",
+              (unsigned long)[[mock outputLines] count]);
+  TAssertEqualObjects([mock outputLines][0],
+                      @"curl: (22) The requested URL returned error: 403",
+                      @"The line should arrive as curl wrote it, got %s",
+                      [[mock outputLines][0] UTF8String]);
+  return YES;
+}
+
++ (BOOL)testOutputLineSplitsTextFromMeterGlyphs
+{
+  /* The rule behind the forwarding: words come through, the meter's own
+   * no-percent drawing does not, and whitespace is not part of the line. */
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@""],
+             @"An empty segment has nothing to say");
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@"   \n"],
+             @"A blank segment has nothing to say");
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@"#=#=#"],
+             @"A spinner is a picture, not a line of text");
+  TAssertNil([GWCurlMeterReader outputLineForSegment:@"  # #-=O#-  #"],
+             @"A spinner with a glyph face in it is still a picture");
+  TAssertEqualObjects(
+      [GWCurlMeterReader outputLineForSegment:
+          @"  curl: (6) Could not resolve host: github.com  "],
+      @"curl: (6) Could not resolve host: github.com",
+      @"Text should come through trimmed, got %s",
+      [[GWCurlMeterReader outputLineForSegment:
+          @"  curl: (6) Could not resolve host: github.com  "] UTF8String]);
+  TAssertEqualObjects(
+      [GWCurlMeterReader outputLineForSegment:@"Total 42%"],
+      @"Total 42%",
+      @"A percent in prose is text, not a meter update");
+  return YES;
+}
+
++ (BOOL)testStderrPipeLinesAreForwarded
+{
+  /* The release lookup has no meter to read, so its stderr goes through the
+   * class entry point instead - including a line cut in half by a write. */
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  NSPipe *pipe = [NSPipe pipe];
+  NSFileHandle *writer = [pipe fileHandleForWriting];
+  [writer writeData:[@"curl: (22) The requested URL retur"
+                     dataUsingEncoding:NSUTF8StringEncoding]];
+  [writer writeData:[@"ned error: 403\n#=#=#\n"
+                     dataUsingEncoding:NSUTF8StringEncoding]];
+  [writer closeFile];
+
+  [GWCurlMeterReader forwardStderrOfPipe:pipe toProgress:mock];
+
+  TAssertTrue([[mock outputLines] count] == 1,
+              @"A line split across writes should arrive once, and the "
+              @"spinner after it not at all, got %lu: %s",
+              (unsigned long)[[mock outputLines] count],
+              [[[mock outputLines] componentsJoinedByString:@" | "] UTF8String]);
+  TAssertEqualObjects([mock outputLines][0],
+                      @"curl: (22) The requested URL returned error: 403",
+                      @"The line should be reassembled, got %s",
+                      [[mock outputLines][0] UTF8String]);
+  TAssertTrue([[mock progressCalls] count] == 0,
+              @"A silent curl has no meter to report, got %lu reports",
+              (unsigned long)[[mock progressCalls] count]);
+  return YES;
+}
+
++ (BOOL)testWholePercentThrottle
+{
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  /* The meter ticks faster than a bar moves: two updates in the same whole
+   * percent are one report. A retry that restarts the transfer does move
+   * the bar, so it is reported again. */
+  for (NSString *percent in @[@"42.0", @"42.9", @"43.0", @"42.0"])
+    [reader ingestData:[[NSString stringWithFormat:@"\r#### %@%%", percent]
+                        dataUsingEncoding:NSUTF8StringEncoding]];
+  [reader finish];
+
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  TAssertTrue([values count] == 3,
+              @"One report per whole percent, got %lu",
+              (unsigned long)[values count]);
+  TAssertTrue(testNearly([values[0] floatValue], 0.05f + 0.9f * 0.42f),
+              @"First report at 42 %%, got %f", [values[0] floatValue]);
+  TAssertTrue(testNearly([values[1] floatValue], 0.05f + 0.9f * 0.43f),
+              @"43 %% should be reported, got %f", [values[1] floatValue]);
+  TAssertTrue(testNearly([values[2] floatValue], 0.05f + 0.9f * 0.42f),
+              @"A retry should move the bar back, got %f", [values[2] floatValue]);
+  return YES;
+}
+
++ (BOOL)testFinishReportsAnUnterminatedUpdate
+{
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWCurlMeterReader *reader = [[GWCurlMeterReader alloc]
+      initWithProgress:mock
+               message:@"Downloading AppImage..."
+                 first:0.05f
+                   last:0.95f];
+
+  [reader ingestData:[@"\r#### 77.0%" dataUsingEncoding:NSUTF8StringEncoding]];
+  TAssertTrue([mock.progressCalls count] == 0,
+              @"An update is only complete once its carriage return arrived");
+
+  [reader finish];
+  TAssertTrue([mock.progressCalls count] == 1,
+              @"The last update of the stream should be reported, got %lu",
+              (unsigned long)[mock.progressCalls count]);
+  TAssertTrue(testNearly([mock.progressCalls[0][@"progress"] floatValue],
+                         0.05f + 0.9f * 0.77f),
+              @"77 %% should map to %f, got %f",
+              0.05f + 0.9f * 0.77f,
+              [mock.progressCalls[0][@"progress"] floatValue]);
+  return YES;
+}
+
++ (BOOL)testDownloadReportsCurlProgress
+{
+  NSString *source = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"gw_meter_%@.bin", [[NSUUID UUID] UUIDString]]];
+  NSString *dest = [source stringByAppendingString:@".out"];
+  NSMutableData *payload = [NSMutableData data];
+  NSData *line = [@"0123456789abcdef" dataUsingEncoding:NSUTF8StringEncoding];
+  while ([payload length] < 400000)
+    [payload appendData:line];
+  if (![payload writeToFile:source atomically:YES])
+    {
+      TAssertTrue(NO, @"The fixture file should be writable");
+      return NO;
+    }
+
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWAppImageDownloader *downloader = [[GWAppImageDownloader alloc] init];
+  NSError *error = nil;
+  BOOL ok = [downloader _downloadURL:[@"file://" stringByAppendingString:source]
+                              toPath:dest
+                            progress:mock
+                               error:&error];
+
+  unsigned long long size = ok
+      ? [[[NSFileManager defaultManager] attributesOfItemAtPath:dest
+                                                        error:NULL] fileSize]
+      : 0;
+  NSArray<NSNumber *> *values = [self valuesOf:mock];
+  BOOL ordered = YES;
+  float previous = -1.0f;
+  for (NSNumber *value in values)
+    {
+      if ([value floatValue] < previous)
+        ordered = NO;
+      previous = [value floatValue];
+    }
+  float last = ([values count] > 0) ? [values lastObject].floatValue : -1.0f;
+
+  [[NSFileManager defaultManager] removeItemAtPath:source error:NULL];
+  [[NSFileManager defaultManager] removeItemAtPath:dest error:NULL];
+
+  TAssertTrue(ok, @"A file:// download should succeed (%@)",
+              [error localizedDescription]);
+  TAssertTrue(size == (unsigned long long)[payload length],
+              @"The bytes on disk should match what curl was given");
+  TAssertTrue([values count] >= 1,
+              @"The run should start by saying nothing is measurable yet");
+  TAssertTrue(testNearly([values[0] floatValue], -1.0f),
+              @"The first report should be the indeterminate one, got %f",
+              [values[0] floatValue]);
+  TAssertTrue(ordered, @"Progress should never move backwards");
+  if ([values count] > 1)
+    {
+      /* A transfer curl could measure must end where the download's slice of
+       * the run ends - this is the number the button draws. */
+      TAssertTrue(testNearly(last, 0.95f),
+                  @"A finished transfer should end at 0.95, got %f", last);
+      for (NSNumber *value in values)
+        {
+          if ([value floatValue] < 0.0f)
+            continue;   /* the indeterminate report that opens the run */
+          TAssertTrue([value floatValue] >= 0.0499f
+                      && [value floatValue] <= 0.9501f,
+                      @"Every byte report belongs to the download's slice, got %f",
+                      [value floatValue]);
+        }
+    }
+  return YES;
+}
+
++ (BOOL)testDownloadForwardsCurlFailure
+{
+  /* End to end: the download's own failure text, which is the evidence the
+   * caller rewrites its error from, has to arrive at the handler. */
+  NSString *missing = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"gw_absent_%@.AppImage",
+        [[NSUUID UUID] UUIDString]]];
+  GWMockProgressHandler *mock = [[GWMockProgressHandler alloc] init];
+  GWAppImageDownloader *downloader = [[GWAppImageDownloader alloc] init];
+  NSError *error = nil;
+  BOOL ok = [downloader _downloadURL:[@"file://" stringByAppendingString:missing]
+                              toPath:[missing stringByAppendingString:@".out"]
+                            progress:mock
+                               error:&error];
+
+  NSArray<NSString *> *lines = [mock outputLines];
+  TAssertFalse(ok, @"A file:// URL that is not there should fail the download");
+  TAssertNotNil(error, @"The failure should be reported as an error");
+  TAssertTrue([lines count] >= 1,
+              @"curl's own reason for failing should reach the handler, got %lu",
+              (unsigned long)[lines count]);
+  if ([lines count] > 0)
+    TAssertTrue([lines[0] hasPrefix:@"curl:"],
+                @"The handler should see curl's line verbatim, got \"%s\"",
+                [lines[0] UTF8String]);
+  return YES;
+}
+
+@end
+
 @interface TestRunner : NSObject
 + (int)runAllTests;
 @end
@@ -1211,6 +2127,18 @@ static void runTest(NSString *name, BOOL (^block)(void))
   });
   runTest(@"testLinuxWithOSRelease", ^{
     return [GWOSDetectorTestHelper testLinuxWithOSRelease];
+  });
+  runTest(@"testDependencySearchOrderPerDistribution", ^{
+    return [GWOSDetectorTestHelper testDependencySearchOrderPerDistribution];
+  });
+  runTest(@"testDependencySearchOrderFamilyBeforeKernel", ^{
+    return [GWOSDetectorTestHelper testDependencySearchOrderFamilyBeforeKernel];
+  });
+  runTest(@"testInstallSpecPicksDistributionPackages", ^{
+    return [GWOSDetectorTestHelper testInstallSpecPicksDistributionPackages];
+  });
+  runTest(@"testInstallSpecFallsBackToKernelEntry", ^{
+    return [GWOSDetectorTestHelper testInstallSpecFallsBackToKernelEntry];
   });
   runTest(@"testLinuxMultipleIDLike", ^{
     return [GWOSDetectorTestHelper testLinuxMultipleIDLike];
@@ -1252,6 +2180,12 @@ static void runTest(NSString *name, BOOL (^block)(void))
   runTest(@"testInstallFailsReportsError", ^{
     return [BackendTestHelper testInstallFailsReportsError];
   });
+  runTest(@"testDebBackendIsPackageInstalledAgainstRealSystem", ^{
+    return [BackendTestHelper testDebBackendIsPackageInstalledAgainstRealSystem];
+  });
+  runTest(@"testSudoCommandNeverDuplicatesToolPath", ^{
+    return [BackendTestHelper testSudoCommandNeverDuplicatesToolPath];
+  });
 
   // --- GWPackageManager API Tests ---
   runTest(@"testInitWithBackend", ^{
@@ -1274,6 +2208,12 @@ static void runTest(NSString *name, BOOL (^block)(void))
   });
   runTest(@"testPackageOwningFile", ^{
     return [PackageManagerTestHelper testPackageOwningFile];
+  });
+  runTest(@"testIsPackageInstalled", ^{
+    return [PackageManagerTestHelper testIsPackageInstalled];
+  });
+  runTest(@"testMissingPackagesFrom", ^{
+    return [PackageManagerTestHelper testMissingPackagesFrom];
   });
   runTest(@"testRunInstallFromPlistCallsBackend", ^{
     return [PackageManagerTestHelper testRunInstallFromPlistCallsBackend];
@@ -1310,6 +2250,96 @@ static void runTest(NSString *name, BOOL (^block)(void))
   runTest(@"testDistroMappingForKnownFamilies", ^{
     return [GWHeaderDatabaseTestHelper testDistroMappingForKnownFamilies];
   });
+
+  // --- AppImage download progress (curl's meter) ---
+  runTest(@"testMeterUpdatesBecomeFractions", ^{
+    return [GWCurlMeterTestHelper testMeterUpdatesBecomeFractions];
+  });
+  runTest(@"testMeterUpdatesSplitAcrossChunks", ^{
+    return [GWCurlMeterTestHelper testMeterUpdatesSplitAcrossChunks];
+  });
+  runTest(@"testSpinnerAndTextAreNotProgress", ^{
+    return [GWCurlMeterTestHelper testSpinnerAndTextAreNotProgress];
+  });
+  runTest(@"testCurlTextLinesAreForwarded", ^{
+    return [GWCurlMeterTestHelper testCurlTextLinesAreForwarded];
+  });
+  runTest(@"testOutputLineSplitsTextFromMeterGlyphs", ^{
+    return [GWCurlMeterTestHelper testOutputLineSplitsTextFromMeterGlyphs];
+  });
+  runTest(@"testStderrPipeLinesAreForwarded", ^{
+    return [GWCurlMeterTestHelper testStderrPipeLinesAreForwarded];
+  });
+  runTest(@"testWholePercentThrottle", ^{
+    return [GWCurlMeterTestHelper testWholePercentThrottle];
+  });
+  runTest(@"testFinishReportsAnUnterminatedUpdate", ^{
+    return [GWCurlMeterTestHelper testFinishReportsAnUnterminatedUpdate];
+  });
+  runTest(@"testDownloadReportsCurlProgress", ^{
+    return [GWCurlMeterTestHelper testDownloadReportsCurlProgress];
+  });
+  runTest(@"testDownloadForwardsCurlFailure", ^{
+    return [GWCurlMeterTestHelper testDownloadForwardsCurlFailure];
+  });
+
+  // --- the real NSTask-backed executor (every other case uses a mock) ---
+  runTest(@"testNoOutputSelectorReturnsZero", ^{
+    return [GWRealCommandExecutorTestHelper testNoOutputSelectorReturnsZero];
+  });
+  runTest(@"testNoOutputSelectorReportsFailure", ^{
+    return [GWRealCommandExecutorTestHelper testNoOutputSelectorReportsFailure];
+  });
+  runTest(@"testNoOutputSelectorStandsInForAPackageQuery", ^{
+    return [GWRealCommandExecutorTestHelper testNoOutputSelectorStandsInForAPackageQuery];
+  });
+  runTest(@"testOutputSelectorStillCapturesStdout", ^{
+    return [GWRealCommandExecutorTestHelper testOutputSelectorStillCapturesStdout];
+  });
+  runTest(@"testOutputAndErrorSelectorsBothCapture", ^{
+    return [GWRealCommandExecutorTestHelper testOutputAndErrorSelectorsBothCapture];
+  });
+  runTest(@"testFailingCommandStillReturnsItsCapturedOutput", ^{
+    return [GWRealCommandExecutorTestHelper testFailingCommandStillReturnsItsCapturedOutput];
+  });
+  runTest(@"testMissingCommandIsReportedNotCrashed", ^{
+    return [GWRealCommandExecutorTestHelper testMissingCommandIsReportedNotCrashed];
+  });
+
+  // --- the live selector, the install path, guarded by a real timeout ---
+  runTest(@"testCommandThatWritesReturns", ^{
+    return [GWLiveExecutorTestHelper testCommandThatWritesReturns];
+  });
+  runTest(@"testCommandThatWritesBothStreamsReturns", ^{
+    return [GWLiveExecutorTestHelper testCommandThatWritesBothStreamsReturns];
+  });
+  runTest(@"testOutputFarPastAPipeBufferReturns", ^{
+    return [GWLiveExecutorTestHelper testOutputFarPastAPipeBufferReturns];
+  });
+  runTest(@"testSlowCommandStillReturns", ^{
+    return [GWLiveExecutorTestHelper testSlowCommandStillReturns];
+  });
+  runTest(@"testEveryLineIsDelivered", ^{
+    return [GWLiveExecutorTestHelper testEveryLineIsDelivered];
+  });
+  runTest(@"testExitStatusIsReported", ^{
+    return [GWLiveExecutorTestHelper testExitStatusIsReported];
+  });
+  runTest(@"testStderrIsDeliveredAndCaptured", ^{
+    return [GWLiveExecutorTestHelper testStderrIsDeliveredAndCaptured];
+  });
+  runTest(@"testALineArrivesBeforeTheCommandFinishes", ^{
+    return [GWLiveExecutorTestHelper testALineArrivesBeforeTheCommandFinishes];
+  });
+  runTest(@"testALineWithNoTrailingNewlineIsStillDelivered", ^{
+    return [GWLiveExecutorTestHelper testALineWithNoTrailingNewlineIsStillDelivered];
+  });
+
+  // --- AppImage asset picking (real releases, see the file's header) ---
+  AGRegisterAppImageAssetPickerTests();
+
+  // --- AppImage picking from a download.kde.org directory (real pages) ---
+  AGRegisterKDEAppImagePickerTests();
 
   return (failCount == 0) ? 0 : 1;
 }

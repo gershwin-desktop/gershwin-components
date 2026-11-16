@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #import "DURepairPermissionsTool.h"
 #import "DUAuthorizationManager.h"
+#import "DUErrors.h"
 #import "DUProcessRunner.h"
 
 // Repairs every local user's home directory so all files there belong to the
@@ -160,7 +161,40 @@
                     progress(1.0, NSLocalizedString(
                                  @"Home directory permissions repaired.", nil));
                 }
+                /* The per-user FAILED markers in the log are the report, but
+                 * a run in which chown/chmod never started (a refused
+                 * escalation, a missing tool) produced none of them and still
+                 * completed with success. Surface that case. */
                 if (completion != NULL) {
+                    if (result == nil || !result.exitedNormally ||
+                        result.terminationStatus != 0) {
+                        completion([NSError
+                            errorWithDomain:DUStorageErrorDomain
+                                       code:DUErrorFilesystemError
+                                   userInfo:@{
+                                       NSLocalizedDescriptionKey :
+                                           NSLocalizedString(
+                                               @"Home directory permissions "
+                                               @"could not be repaired.",
+                                               nil),
+                                       NSLocalizedFailureReasonErrorKey :
+                                           result.standardError ?: @"",
+                                   }]);
+                        return;
+                    }
+                    if (reported < users.count) {
+                        completion([NSError
+                            errorWithDomain:DUStorageErrorDomain
+                                       code:DUErrorFilesystemError
+                                   userInfo:@{
+                                       NSLocalizedDescriptionKey :
+                                           NSLocalizedString(
+                                               @"Only some home directories "
+                                               @"could be repaired.",
+                                               nil),
+                                   }]);
+                        return;
+                    }
                     completion(nil);
                 }
             }

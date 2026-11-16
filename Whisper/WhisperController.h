@@ -8,15 +8,10 @@
 #define WHISPER_CONTROLLER_H
 
 #import <AppKit/AppKit.h>
+#import "WRecordButton.h"
+#import "WDictationMachine.h"
+#import "WDictationViewState.h"
 
-typedef NS_ENUM(NSInteger, WhisperState) {
-    WhisperStateIdle,
-    WhisperStateLoadingModel,
-    WhisperStateRecording,
-    WhisperStateTranscribing,
-    WhisperStateDone,
-    WhisperStateError
-};
 
 @interface WhisperController : NSObject <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 {
@@ -26,9 +21,8 @@ typedef NS_ENUM(NSInteger, WhisperState) {
     // File selection
     NSString *currentFilePath;
 
-    // Recording
-    NSButton *recordButton;
-    NSButton *stopButton;
+    // Recording: one button that both starts and stops
+    WRecordButton *recordButton;
     NSProgressIndicator *recordSpinner;
 
     // Model management
@@ -60,7 +54,19 @@ typedef NS_ENUM(NSInteger, WhisperState) {
     // Whisper state
     void *whisperLib;
     struct whisper_context *whisperCtx;
-    WhisperState state;
+    // The one owner of what Whisper is doing (docs/state-machine.md)
+    WDictationMachine *machine;
+    WDViewState *viewState;
+    // Events fired while effects run wait here, so each transition and its
+    // effects complete before the next one starts.
+    NSMutableArray *pendingEvents;
+    BOOL dispatching;
+    // whisper.cpp allows one whisper_full per context at a time; a serial
+    // queue makes that a property of the queue instead of a racy flag.
+    NSOperationQueue *whisperQueue;
+    NSString *loadedModelName;
+    double jobProgress;
+    NSMenuItem *recordMenuItem;
     NSMutableArray *segments;
 
     // Timing
@@ -68,12 +74,12 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 
     // Recording state
     void *captureHandle;
+    // YES while Player is paused because this recording needs the sound
+    BOOL playerPausedForRecording;
     NSString *currentLangCode;
     NSTimer *recordTimer;
     NSTimer *streamTimer;
     NSTimeInterval recordStartTime;
-    int lastSegmentCount;
-    BOOL isTranscribing;
 
     // Vocabulary editor
     NSPanel *vocabPanel;
@@ -108,8 +114,12 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 - (BOOL)application:(NSApplication *)application openFile:(NSString *)filename;
 
 // Actions
-- (IBAction)recordAudio:(id)sender;
-- (IBAction)stopRecording:(id)sender;
+/// The one record button: starts a recording, or stops the one that is
+/// running, whichever applies when it is pressed.
+- (IBAction)toggleRecording:(id)sender;
+/// Gives Player back the pause -pausePlayerForRecording took, if it is
+/// still ours to give (never resumes a pause the user took themselves).
+- (void)resumePlayerIfPaused;
 - (IBAction)openFile:(id)sender;
 - (IBAction)modelSelected:(id)sender;
 - (IBAction)languageChanged:(id)sender;
@@ -122,10 +132,7 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 - (IBAction)editVocabulary:(id)sender;
 
 // Transcription
-- (void)transcriptionThread:(id)object;
-- (void)transcriptionProgress:(NSNumber *)progress;
-- (void)transcriptionFinished:(NSString *)result;
-- (void)transcriptionFailed:(NSString *)error;
+- (IBAction)transcribe:(id)sender;
 
 // Model management
 - (void)populateModelList;
@@ -141,9 +148,11 @@ typedef NS_ENUM(NSInteger, WhisperState) {
 // Audio loading
 - (float *)loadAudio:(NSString *)path outSamples:(int *)outNSamples outSampleRate:(int *)outSampleRate;
 
-// State
-- (void)setState:(WhisperState)newState;
-- (void)updateUIForState;
+// State: every change goes through the machine, the UI follows -render
+- (void)fireEvent:(WDEvent)event generation:(NSUInteger)gen
+           detail:(NSString *)detail;
+- (void)fireUserEvent:(WDEvent)event;
+- (void)render;
 
 // Display
 - (NSString *)displayTextFromSegments;

@@ -8,7 +8,9 @@
 #import "DBusMenuImporter.h"
 #import "DBusMenuShortcutParser.h"
 #import "DBusMenuParser.h"
+#import "DBusMenuLayout.h"
 #import "DBusMenuActionHandler.h"
+#import "MenuShortcutItems.h"
 #import "DBusSubmenuManager.h"
 #import "MenuUtils.h"
 #import "AppMenuWidget.h"
@@ -58,6 +60,13 @@
         return NO;
     }
     
+    /* Apps announce a changed menu with LayoutUpdated or
+       ItemsPropertiesUpdated; without listening, the menu bar keeps the old
+       tree (and the old item ids) until the user switches windows. */
+    [self.dbusConnection watchSignalsOfInterface:@"com.canonical.dbusmenu"
+                                          target:self
+                                        selector:@selector(dbusMenuChanged:)];
+
     // DO NOT register service yet - we'll do that after full initialization
     // This prevents other applications from seeing us before we're ready
     NSDebugLog(@"DBusMenuImporter: Connected to DBus - deferring service registration until ready");
@@ -445,6 +454,17 @@
         }
     }
     
+    /* Electron creates a submenu's children only on AboutToShow, so the tree
+       just read has empty top-level menus.  Fill them now, before parsing,
+       so the items and their shortcuts are registered like any other app's. */
+    if ([result isKindOfClass:[NSArray class]] && [result count] >= 2) {
+        id filledLayout = [DBusMenuLayout layoutItem:[result objectAtIndex:1]
+                   withLazySubmenusFilledFromService:serviceName
+                                          objectPath:objectPath
+                                          connection:self.dbusConnection];
+        result = [NSArray arrayWithObjects:[result objectAtIndex:0], filledLayout, nil];
+    }
+
     // Parse the menu structure and create NSMenu
     // The result should be a structure containing menu items with their properties
     NSMenu *menu = [DBusMenuParser parseMenuFromDBusResult:result 
@@ -478,6 +498,46 @@
     return menu;
 }
 
+/* A dbusmenu signal: forget the cached menus of the windows that export
+   that menu and reload the one on show once the app has finished changing
+   it (Electron sends dozens of LayoutUpdated in a burst). */
+- (void)dbusMenuChanged:(NSDictionary *)info
+{
+    NSString *member = [info objectForKey:@"member"];
+    if (![member isEqualToString:@"LayoutUpdated"]
+        && ![member isEqualToString:@"ItemsPropertiesUpdated"]) {
+        return;
+    }
+    NSString *sender = [info objectForKey:@"sender"];
+    NSString *path = [info objectForKey:@"path"];
+    NSMutableArray *windows = [NSMutableArray array];
+    @synchronized(_windowRegistryLock) {
+        for (NSNumber *windowKey in [self.windowMenuPaths allKeys]) {
+            NSString *service = [self.registeredWindows objectForKey:windowKey];
+            /* a signal always comes from a unique name; a window registered
+               under a well-known name is matched by its path alone */
+            BOOL sameService = [service isEqualToString:sender] || ![service hasPrefix:@":"];
+            if (sameService && [[self.windowMenuPaths objectForKey:windowKey] isEqualToString:path]) {
+                [windows addObject:windowKey];
+                [self.menuCache removeObjectForKey:windowKey];
+            }
+        }
+    }
+    NSNumber *shown = [NSNumber numberWithUnsignedLong:self.appMenuWidget.currentWindowId];
+    if (![windows containsObject:shown]) {
+        return;
+    }
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(reloadShownMenu:)
+                                               object:shown];
+    [self performSelector:@selector(reloadShownMenu:) withObject:shown afterDelay:0.4];
+}
+
+- (void)reloadShownMenu:(NSNumber *)windowKey
+{
+    [self.appMenuWidget reloadMenuAfterAppChangeForWindow:[windowKey unsignedLongValue]];
+}
+
 - (void)activateMenuItem:(NSMenuItem *)menuItem forWindow:(unsigned long)windowId
 {
     MENU_PROFILE_BEGIN(activateMenuItem);
@@ -494,7 +554,10 @@
     }
     
     // Send Event method call to activate the menu item
-    int menuItemId = (int)[menuItem tag];
+    int menuItemId = [DBusMenuActionHandler currentItemIdForMenuItem:menuItem
+                                                         serviceName:serviceName
+                                                          objectPath:objectPath
+                                                      dbusConnection:self.dbusConnection];
     NSArray *arguments = [NSArray arrayWithObjects:
                          [NSNumber numberWithInt:menuItemId],
                          @"clicked",
@@ -1069,34 +1132,17 @@
 
 - (void)reregisterShortcutsForMenuItems:(NSArray *)items serviceName:(NSString *)serviceName objectPath:(NSString *)objectPath
 {
-    /* Snapshot the array: [NSMenu itemArray] returns the menu's LIVE array in
-     * GNUstep, and the menu can be mutated while we walk it (e.g. the system
-     * menu is still being populated) - fast-enumerating the live array then
-     * crashes mid-loop and silently drops the app's shortcuts. */
-    NSArray *snapshot = [items copy];
-    for (NSMenuItem *item in snapshot) {
-        // Check if this item has a shortcut
-        NSString *keyEquivalent = [item keyEquivalent];
-        if (keyEquivalent && [keyEquivalent length] > 0) {
-            NSUInteger modifierMask = [item keyEquivalentModifierMask];
-
-            if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:keyEquivalent
-                                                                modifiers:modifierMask]) {
-                NSDebugLog(@"DBusMenuImporter: Re-registering DBus shortcut: %@", [item title]);
-                
-                // Re-register through DBusMenuActionHandler
-                [DBusMenuActionHandler setupActionForMenuItem:item
-                                                   serviceName:serviceName
-                                                    objectPath:objectPath
-                                                dbusConnection:_dbusConnection];
-            }
-        }
-        
-        // Process submenus recursively
-        if ([item hasSubmenu]) {
-            [self reregisterShortcutsForMenuItems:[[item submenu] itemArray] 
-                                      serviceName:serviceName 
-                                       objectPath:objectPath];
+    /* Only items this importer set up: Menu's own system menu sits in the
+     * same tree, and handing its Force Quit to the application's handler
+     * left neither the menu item nor Alt-Shift-Escape opening the panel. */
+    for (NSMenuItem *item in MenuItemsWithShortcutsHandledBy(items, [DBusMenuActionHandler class])) {
+        if ([DBusMenuShortcutParser shouldRegisterGlobalShortcutForKey:[item keyEquivalent]
+                                                            modifiers:[item keyEquivalentModifierMask]]) {
+            NSDebugLog(@"DBusMenuImporter: Re-registering DBus shortcut: %@", [item title]);
+            [DBusMenuActionHandler setupActionForMenuItem:item
+                                               serviceName:serviceName
+                                                objectPath:objectPath
+                                            dbusConnection:_dbusConnection];
         }
     }
 }

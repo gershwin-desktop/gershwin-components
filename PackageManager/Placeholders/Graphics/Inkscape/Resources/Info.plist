@@ -9,7 +9,7 @@
   <key>CFBundleIconFile</key>
   <string>Inkscape.png</string>
   <key>CFBundleIdentifier</key>
-  <string>org.gershwin.Inkscape</string>
+  <string>io.github.gershwin-desktop.Inkscape</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

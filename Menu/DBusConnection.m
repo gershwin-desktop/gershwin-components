@@ -13,6 +13,48 @@
 // Use typedef to avoid naming conflicts
 typedef struct DBusConnection DBusConnectionStruct;
 
+/* Waits for the reply of a method call while still servicing the calls that
+ * arrive on this connection. dbus_connection_send_with_reply_and_block()
+ * queues incoming method calls until it returns, so an application that
+ * calls us (for example Qt's UnregisterWindow, which it waits on) while we
+ * call it (GetLayout) stalls both sides until our timeout runs out, and the
+ * application shows no window in the meantime. Dispatching here lets us
+ * answer the application's call and so lets it answer ours. */
+static DBusMessage *gw_send_and_service(DBusConnectionStruct *connection,
+                                        DBusMessage *message,
+                                        int timeoutMs,
+                                        DBusError *error)
+{
+    DBusPendingCall *pending = NULL;
+    if (!dbus_connection_send_with_reply(connection, message, &pending, timeoutMs) || !pending) {
+        dbus_set_error(error, DBUS_ERROR_NO_MEMORY, "Could not send the method call");
+        return NULL;
+    }
+
+    const int sliceMs = 10;
+    for (int waited = 0; !dbus_pending_call_get_completed(pending) && waited < timeoutMs + sliceMs; waited += sliceMs) {
+        if (!dbus_connection_read_write_dispatch(connection, sliceMs)) {
+            break;
+        }
+    }
+
+    if (!dbus_pending_call_get_completed(pending)) {
+        dbus_pending_call_cancel(pending);
+        dbus_pending_call_unref(pending);
+        dbus_set_error(error, DBUS_ERROR_NO_REPLY, "Did not receive a reply");
+        return NULL;
+    }
+
+    DBusMessage *reply = dbus_pending_call_steal_reply(pending);
+    dbus_pending_call_unref(pending);
+    if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        dbus_set_error_from_message(error, reply);
+        dbus_message_unref(reply);
+        return NULL;
+    }
+    return reply;
+}
+
 // Forward declaration for internal method
 @interface GNUDBusConnection (Private)
 - (id)parseDBusMessageIterator:(DBusMessageIter *)iter;
@@ -55,7 +97,88 @@ static DBusHandlerResult gw_dbus_object_path_message_handler(DBusConnection *con
     return handled ? DBUS_HANDLER_RESULT_HANDLED : DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
+/* Watched signal interfaces -> NSArray of {target, selector} entries. */
+static NSMutableDictionary *gw_signal_watchers;
+
+static DBusHandlerResult gw_dbus_signal_filter(DBusConnection *connection,
+                                               DBusMessage *message,
+                                               void *user_data)
+{
+    (void)connection;
+    if (!message || !user_data || dbus_message_get_type(message) != DBUS_MESSAGE_TYPE_SIGNAL) {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    const char *iface = dbus_message_get_interface(message);
+    const char *member = dbus_message_get_member(message);
+    const char *sender = dbus_message_get_sender(message);
+    const char *path = dbus_message_get_path(message);
+    if (!iface || !member || !sender || !path) {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    NSString *interfaceName = [NSString stringWithUTF8String:iface];
+    if ([gw_signal_watchers objectForKey:interfaceName] == nil) {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    NSDictionary *info = [NSDictionary dictionaryWithObjectsAndKeys:
+        interfaceName, @"interface",
+        [NSString stringWithUTF8String:member], @"member",
+        [NSString stringWithUTF8String:sender], @"sender",
+        [NSString stringWithUTF8String:path], @"path", nil];
+    GNUDBusConnection *self = (__bridge GNUDBusConnection *)user_data;
+    [self performSelector:@selector(deliverSignal:) withObject:info afterDelay:0];
+    /* other parts of libdbus (pending calls, match rules) may want it too */
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
 @implementation GNUDBusConnection
+
+- (BOOL)watchSignalsOfInterface:(NSString *)interfaceName
+                         target:(id)target
+                       selector:(SEL)selector
+{
+    if (!self.connected || !self.connection || !interfaceName || !target || !selector) {
+        return NO;
+    }
+    DBusConnectionStruct *conn = (DBusConnectionStruct *)self.connection;
+    if (gw_signal_watchers == nil) {
+        gw_signal_watchers = [NSMutableDictionary dictionary];
+        if (!dbus_connection_add_filter(conn, gw_dbus_signal_filter, (__bridge void *)self, NULL)) {
+            gw_signal_watchers = nil;
+            return NO;
+        }
+    }
+    NSMutableArray *watchers = [gw_signal_watchers objectForKey:interfaceName];
+    if (watchers == nil) {
+        DBusError error;
+        dbus_error_init(&error);
+        NSString *rule = [NSString stringWithFormat:@"type='signal',interface='%@'", interfaceName];
+        dbus_bus_add_match(conn, [rule UTF8String], &error);
+        if (dbus_error_is_set(&error)) {
+            NSLog(@"DBusConnection: cannot watch signals of %@: %s", interfaceName, error.message);
+            dbus_error_free(&error);
+            return NO;
+        }
+        watchers = [NSMutableArray array];
+        [gw_signal_watchers setObject:watchers forKey:interfaceName];
+    }
+    [watchers addObject:[NSArray arrayWithObjects:target, NSStringFromSelector(selector), nil]];
+    return YES;
+}
+
+- (void)deliverSignal:(NSDictionary *)info
+{
+    NSArray *watchers = [[gw_signal_watchers objectForKey:[info objectForKey:@"interface"]] copy];
+    for (NSArray *watcher in watchers) {
+        id target = [watcher objectAtIndex:0];
+        SEL selector = NSSelectorFromString([watcher objectAtIndex:1]);
+        if ([target respondsToSelector:selector]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [target performSelector:selector withObject:info];
+#pragma clang diagnostic pop
+        }
+    }
+}
 
 + (GNUDBusConnection *)sessionBus
 {
@@ -372,8 +495,7 @@ static DBusHandlerResult gw_dbus_object_path_message_handler(DBusConnection *con
     DBusError error;
     dbus_error_init(&error);
     
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block((DBusConnectionStruct *)self.connection, 
-                                                                  message, 5000, &error);
+    DBusMessage *reply = gw_send_and_service((DBusConnectionStruct *)self.connection, message, 5000, &error);
     dbus_message_unref(message);
     
     if (dbus_error_is_set(&error)) {
@@ -555,8 +677,7 @@ static DBusHandlerResult gw_dbus_object_path_message_handler(DBusConnection *con
     DBusError error;
     dbus_error_init(&error);
     
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block((DBusConnectionStruct *)self.connection, 
-                                                                  message, 5000, &error);
+    DBusMessage *reply = gw_send_and_service((DBusConnectionStruct *)self.connection, message, 5000, &error);
     dbus_message_unref(message);
     
     if (dbus_error_is_set(&error)) {

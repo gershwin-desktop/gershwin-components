@@ -20,6 +20,10 @@ extern NSString * const WindowMonitorActiveWindowChangedNotification;
 // contains the property's atom name under @"atom".
 extern NSString * const WindowMonitorRootPropertyChangedNotification;
 
+// Posted on the main thread when _NET_ACTIVE_WINDOW names a different window
+// that is viewable, before any filtering.  userInfo holds @"windowId".
+extern NSString * const WindowMonitorViewableActiveWindowNotification;
+
 /**
  * WindowMonitor
  * 
@@ -29,7 +33,6 @@ extern NSString * const WindowMonitorRootPropertyChangedNotification;
 @interface WindowMonitor : NSObject
 
 @property (nonatomic, weak) id<WindowMonitorDelegate> delegate;
-@property (nonatomic, assign, readonly) Display *display;
 @property (nonatomic, assign, readonly) Window rootWindow;
 @property (nonatomic, assign, readonly) unsigned long currentActiveWindow;
 
@@ -45,11 +48,6 @@ extern NSString * const WindowMonitorRootPropertyChangedNotification;
  * Stop monitoring and clean up resources.
  */
 - (void)stopMonitoring;
-
-/**
- * Check if a window is a GNUstep window.
- */
-- (BOOL)isGNUstepWindow:(unsigned long)windowId;
 
 /**
  * Get the current active window immediately.

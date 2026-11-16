@@ -1,0 +1,5 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+t_DSUserCheck_OBJC_FILES += ../dscli/DSUserCheck.m
+ADDITIONAL_INCLUDE_DIRS += -I../dscli
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror

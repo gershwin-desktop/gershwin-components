@@ -9,7 +9,7 @@
   <key>CFBundleIconFile</key>
   <string>Scribus.png</string>
   <key>CFBundleIdentifier</key>
-  <string>org.gershwin.Scribus</string>
+  <string>io.github.gershwin-desktop.Scribus</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

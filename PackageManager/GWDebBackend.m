@@ -14,6 +14,7 @@
 
 static NSString *const kAPTGetPath = @"/usr/bin/apt-get";
 static NSString *const kDpkgPath = @"/usr/bin/dpkg";
+static NSString *const kDpkgQueryPath = @"/usr/bin/dpkg-query";
 
 #pragma mark - GWDebBackend
 
@@ -42,6 +43,25 @@ static NSString *const kDpkgPath = @"/usr/bin/dpkg";
   return [self initWithExecutor:nil];
 }
 
+#pragma mark - GWPackageManagerBackend - Query
+
+- (BOOL)isPackageInstalled:(NSString *)packageName
+{
+  // "-W" (list with a custom --showformat) is a dpkg-query option, not a
+  // plain dpkg one; dpkg itself rejects it with "unbekannte Option -W" /
+  // "unknown option -W" and a non-zero exit, which isPackageInstalled: was
+  // silently reading as "not installed" - so every declared package looked
+  // missing regardless of its real state.
+  NSString *output = nil;
+  int status = [_executor execute:kDpkgQueryPath
+                        arguments:@[@"-W", @"-f=${Status}", packageName]
+                           output:&output];
+  if (status != 0) {
+    return NO;
+  }
+  return [output rangeOfString:@"install ok installed"].location != NSNotFound;
+}
+
 #pragma mark - GWPackageManagerBackend - Install
 
 - (BOOL)installPackages:(NSArray<NSString *> *)packageNames
@@ -55,12 +75,10 @@ static NSString *const kDpkgPath = @"/usr/bin/dpkg";
 
   // Install local .deb files first
   if ([filePaths count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kDpkgPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kDpkgPath];
-    [args addObjectsFromArray:@[@"-i"]];
-    [args addObjectsFromArray:filePaths];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObject:@"-i"];
+    [toolArgs addObjectsFromArray:filePaths];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kDpkgPath, toolArgs, &args);
 
     NSLog(@"GWDebBackend -> dpkg -i local packages: %@", filePaths);
     NSString *dpkgStderr = nil;
@@ -94,12 +112,10 @@ static NSString *const kDpkgPath = @"/usr/bin/dpkg";
 
   // Install packages from repositories
   if ([packageNames count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kAPTGetPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kAPTGetPath];
-    [args addObjectsFromArray:@[@"install", @"-y"]];
-    [args addObjectsFromArray:packageNames];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObjects:@"install", @"-y", nil];
+    [toolArgs addObjectsFromArray:packageNames];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kAPTGetPath, toolArgs, &args);
 
     int status = 0;
     // default status for the first iteration
@@ -183,12 +199,10 @@ static NSString *const kDpkgPath = @"/usr/bin/dpkg";
   [progressHandler installDidProgress:0.5f message:@"Removing packages..."];
 
   if ([packageNames count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kAPTGetPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kAPTGetPath];
-    [args addObjectsFromArray:@[@"remove", @"-y"]];
-    [args addObjectsFromArray:packageNames];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObjects:@"remove", @"-y", nil];
+    [toolArgs addObjectsFromArray:packageNames];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kAPTGetPath, toolArgs, &args);
 
     int status = [_executor execute:launchPath arguments:args];
     if (status != 0) {

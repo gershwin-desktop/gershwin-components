@@ -171,10 +171,20 @@ static NSString * const kDefaultsConfirmDestructive =
         [_view addSubview:subview];
     }
 
+    /* BOTH notifications: DUOperation posts DidFail (a different name) for
+     * every failure, and this controller observed only DidFinish. A failed
+     * restore therefore left operationRunning = YES, the Restore button
+     * disabled for good, and nothing in the log - the user could not retry
+     * until some other operation happened to finish. */
     [[NSNotificationCenter defaultCenter]
         addObserver:self
            selector:@selector(operationDidFinish:)
                name:DUOperationDidFinishNotification
+             object:nil];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(operationDidFinish:)
+               name:DUOperationDidFailNotification
              object:nil];
 
     [self layoutForWidth:NSWidth(_view.frame) height:NSHeight(_view.frame)];
@@ -588,6 +598,27 @@ typedef struct {
     DUStorageObject *source = self.resolvedSource;
     DUStorageObject *destination = self.resolvedDestination;
     if (source == nil || destination == nil || self.operationRunning) {
+        return;
+    }
+    // An ejected disk on either side is started first, one at a time, so
+    // the size checks and the confirmation see the real disk.
+    BOOL sourceAsleep = [self.storageManager objectNeedsWake:source];
+    if (sourceAsleep || [self.storageManager objectNeedsWake:destination]) {
+        [self.logView appendLine:NSLocalizedString(@"Starting the disk...", nil)];
+        [self.storageManager wakeObject:sourceAsleep ? source : destination
+                             completion:^(DUStorageObject *fresh,
+                                          NSError *error) {
+            if (fresh == nil) {
+                [self.logView appendLine:error.localizedDescription ?: @""];
+                return;
+            }
+            if (sourceAsleep) {
+                self.resolvedSource = fresh;
+            } else {
+                self.resolvedDestination = fresh;
+            }
+            [self restoreClicked:sender];
+        }];
         return;
     }
 

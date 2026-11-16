@@ -1,0 +1,12 @@
+obj/
+*.app/
+# gnustep-tests results, and the objects gnustep-make puts next to a test
+# directory for sources listed with a ../../ path.
+Tests/tests.log
+Tests/tests.sum
+Tests/oldtests.*
+Tests/*/Model/
+Tests/*/DBus/
+Tests/*/UI/
+# Generated from Resources/org.freedesktop.secrets.service.in
+/org.freedesktop.secrets.service

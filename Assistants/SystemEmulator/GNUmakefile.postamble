@@ -1,7 +1,8 @@
-# Copy the .desktop file, the OS icon set and the embedded framework into the
-# app bundle after the standard build has assembled it.
+# Copy the OS icon set and the embedded framework into the app bundle after
+# the standard build has assembled it.  There is no .desktop file to copy: the
+# desktop does not use them, so the file is gone from the tree and copying it
+# here only failed the install.
 after-all::
-	cp -f Resources/SystemEmulator.desktop $(APP_NAME).app/Resources/
 	cp -rf Resources/Icons $(APP_NAME).app/Resources/
 	@echo "Copying GSAssistantFramework into app bundle..."
 	@mkdir -p $(APP_NAME).app/Frameworks

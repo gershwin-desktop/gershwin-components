@@ -18,4 +18,10 @@
 
 - (void)invalidatePresentation;
 
+/* Tells the manager that the width measured for this extra is stale, so that
+   the next time the bar is laid out it is measured again.  An extra that
+   changes shape - appearing, disappearing, growing a title - calls this
+   alongside -invalidatePresentation; one that does not need never does. */
+- (void)invalidateWidth;
+
 @end

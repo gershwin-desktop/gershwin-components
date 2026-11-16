@@ -9,7 +9,13 @@
 // Outcome of a completed external process run.
 @interface DUProcessResult : NSObject
 
-// Raw wait status; interpret via WIFEXITED/WEXITSTATUS.
+/* The process's EXIT CODE, as reported by -[NSTask terminationStatus].
+ *
+ * This is NOT the raw wait status, and WEXITSTATUS() must not be applied to
+ * it: GNUstep's NSTask already decodes the waitpid status, so for an exit
+ * code of 8 the property holds 8 while WEXITSTATUS(8) is 0 - which made every
+ * failing tool below exit code 256 read as a success. Use
+ * -exitedWithStatus: to test for a specific code. */
 @property (nonatomic, readonly) int terminationStatus;
 
 @property (nonatomic, readonly) NSString *standardOutput;
@@ -18,11 +24,32 @@
 @property (nonatomic, readonly) BOOL wasCancelled;
 @property (nonatomic, readonly) BOOL timedOut;
 
+// Whether the process exited of its own accord with the given exit code.
+// This is the only correct way to read terminationStatus (see the property's
+// comment): the value is already an exit code, not a wait status.
+- (BOOL)exitedWithStatus:(int)status;
+
+// Synthesized result used to report a refused privilege escalation through
+// the same channel as a real run, so a caller that only receives a result
+// cannot mistake "sudo never ran the tool" for "the tool found damage".
++ (DUProcessResult *)resultWithStandardOutput:(NSString *)standardOutput
+                               standardError:(NSString *)standardError
+                             terminationStatus:(int)terminationStatus
+                               exitedNormally:(BOOL)exitedNormally
+                                    timedOut:(BOOL)timedOut
+                               wasCancelled:(BOOL)wasCancelled;
+
 @end
 
 // Handle for cancelling an in-flight streaming run. Safe to call from any
 // thread; cancel is idempotent.
 @interface DUProcessHandle : NSObject
+
+// A process started through sudo runs as root, and the unprivileged app may
+// not signal it; the authorization layer installs this to deliver the
+// signal through an elevated kill instead.
+@property (nonatomic, copy) void (^elevatedTerminate)(int processIdentifier);
+@property (nonatomic, readonly) int processIdentifier;
 
 - (void)cancel;
 

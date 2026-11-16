@@ -767,6 +767,10 @@
                                                    port:_vncPort];
     
     if (_vncWindow) {
+        /* Owned by ARC through this reference; if it were also released on
+         * close, -close would release it a second time. */
+        [_vncWindow setReleasedWhenClosed:NO];
+
         // Set delegate to receive close notifications
         [_vncWindow setVncDelegate:self];
         
@@ -942,6 +946,9 @@
                                                backing:NSBackingStoreBuffered 
                                                  defer:NO];
     
+    /* Owned by ARC through this reference; if it were also released on
+     * close, -close would release it a second time. */
+    [_logWindow setReleasedWhenClosed:NO];
     [_logWindow setTitle:[NSString stringWithFormat:@"VM Log - %@", _vmName]];
     [_logWindow setDelegate:self];
     

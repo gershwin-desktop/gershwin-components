@@ -7,8 +7,10 @@ COMMON_TOOL_LIBS = -lgnustep-base -lobjc
 
 TOOL_NAME = make_appimage make_standalone
 
-make_appimage_OBJC_FILES = main.m AppImagePackager.m $(COMMON_OBJC_FILES)
-make_appimage_TOOL_LIBS = $(COMMON_TOOL_LIBS)
+make_appimage_OBJC_FILES = main.m AppImagePackager.m IconConverter.m $(COMMON_OBJC_FILES)
+# gnustep-gui only for IconConverter's image decoding and PNG encoding, which
+# replaced a run of ImageMagick's convert; make_standalone does not need it.
+make_appimage_TOOL_LIBS = $(COMMON_TOOL_LIBS) -lgnustep-gui
 
 make_standalone_OBJC_FILES = main_standalone.m $(COMMON_OBJC_FILES)
 make_standalone_TOOL_LIBS = $(COMMON_TOOL_LIBS)

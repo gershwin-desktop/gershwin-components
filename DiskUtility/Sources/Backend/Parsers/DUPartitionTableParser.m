@@ -34,6 +34,10 @@ static NSDictionary<NSString *, NSString *> *sFilesystemTable = nil;
             @"vfat": @"FAT",
             @"fat": @"FAT",
             @"msdos": @"FAT",
+            @"msdosfs": @"FAT",
+            @"fat12": @"MS-DOS (FAT12)",
+            @"fat16": @"MS-DOS (FAT16)",
+            @"fat32": @"MS-DOS (FAT32)",
             @"ufs": @"UFS",
             @"zfs": @"ZFS",
             @"ntfs": @"NTFS",
@@ -67,6 +71,10 @@ static NSDictionary<NSString *, NSString *> *sFilesystemTable = nil;
     if ([lower isEqualToString:@"mbr"] || [lower isEqualToString:@"dos"] ||
         [lower isEqualToString:@"msdos"]) {
         return @"mbr";
+    }
+    if ([lower isEqualToString:@"mac"] || [lower isEqualToString:@"apm"]) {
+        // lsblk says "mac", gpart says "APM".
+        return @"apm";
     }
     if ([lower containsString:@"disklabel"] || [lower isEqualToString:@"bsd"]) {
         return @"bsd";

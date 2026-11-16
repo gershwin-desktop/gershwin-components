@@ -1,0 +1,4 @@
+{"head": {"title": "Local Radio", "status": "200"}, "body": [
+  {"element": "outline", "type": "audio", "item": "station", "text": "Modes Station One", "URL": "file://@DIR@/station.mp3"},
+  {"element": "outline", "type": "audio", "item": "station", "text": "Modes Station Two", "URL": "file://@DIR@/station.mp3"}
+]}

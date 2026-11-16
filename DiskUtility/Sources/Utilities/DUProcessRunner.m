@@ -22,6 +22,36 @@ static const NSTimeInterval kTerminateGraceSeconds = 5.0;
 @end
 
 @implementation DUProcessResult
+
+// The exit code must be compared directly: see the property comment in
+// DUProcessRunner.h. WEXITSTATUS() on an already-decoded code reports 0 for
+// every code below 256, which is how a failing fsck_msdosfs (exit 8) was read
+// as a clean volume.
+- (BOOL)exitedWithStatus:(int)status
+{
+    return self.exitedNormally && self.terminationStatus == status;
+}
+
+// A refused privilege escalation has to be expressible as a DUProcessResult so
+// the streaming path can hand one to its caller: without it every streamed
+// verb reported filesystem damage for a sudo run that never happened.
++ (DUProcessResult *)resultWithStandardOutput:(NSString *)standardOutput
+                               standardError:(NSString *)standardError
+                             terminationStatus:(int)terminationStatus
+                               exitedNormally:(BOOL)exitedNormally
+                                    timedOut:(BOOL)timedOut
+                               wasCancelled:(BOOL)wasCancelled
+{
+    DUProcessResult *result = [[DUProcessResult alloc] init];
+    result->_standardOutput = [standardOutput copy];
+    result->_standardError = [standardError copy];
+    result->_terminationStatus = terminationStatus;
+    result->_exitedNormally = exitedNormally;
+    result->_timedOut = timedOut;
+    result->_wasCancelled = wasCancelled;
+    return result;
+}
+
 @end
 
 @interface DUProcessHandle ()
@@ -30,11 +60,20 @@ static const NSTimeInterval kTerminateGraceSeconds = 5.0;
 
 @implementation DUProcessHandle
 
+- (int)processIdentifier
+{
+    return _task != nil ? _task.processIdentifier : 0;
+}
+
 - (void)cancel
 {
     @synchronized (self) {
         if (_task != nil && _task.isRunning) {
-            [_task terminate];
+            if (_elevatedTerminate != nil) {
+                _elevatedTerminate(_task.processIdentifier);
+            } else {
+                [_task terminate];
+            }
         }
     }
 }
@@ -404,6 +443,13 @@ static const NSTimeInterval kTerminateGraceSeconds = 5.0;
         initWithBlock:^{
             NSFileHandle *fileHandle = mergedPipe.fileHandleForReading;
             NSMutableData *pending = [NSMutableData data];
+            /* A carriage return ends a line as surely as a newline does.
+             * dd(1) with status=progress rewrites ONE logical line over and
+             * over with \r and only sends the final \n when it exits, so
+             * splitting on \n alone held every progress tick in the buffer
+             * until the copy was already finished - which is why a 500 GB
+             * copy showed 2% and then jumped to 100%. */
+            NSData *carriageReturn = [NSData dataWithBytes:"\r" length:1];
             NSData *newline = [NSData dataWithBytes:"\n" length:1];
             for (;;) {
                 NSData *chunk = nil;
@@ -416,20 +462,35 @@ static const NSTimeInterval kTerminateGraceSeconds = 5.0;
                     break;
                 }
                 [pending appendData:chunk];
-                NSRange newlineRange;
-                while ((newlineRange = [pending rangeOfData:newline
-                                                    options:0
-                                                      range:NSMakeRange(0, pending.length)]).location
-                       != NSNotFound) {
-                    NSUInteger newlineIndex = newlineRange.location;
-                    NSData *lineData =
-                        [pending subdataWithRange:NSMakeRange(0, newlineIndex)];
-                    [pending replaceBytesInRange:NSMakeRange(0, newlineIndex + 1)
+                for (;;) {
+                    NSRange breakRange =
+                        [pending rangeOfData:carriageReturn
+                                      options:0
+                                        range:NSMakeRange(0, pending.length)];
+                    NSRange newlineRange =
+                        [pending rangeOfData:newline
+                                      options:0
+                                        range:NSMakeRange(0, pending.length)];
+                    NSUInteger end;
+                    if (breakRange.location != NSNotFound &&
+                        (newlineRange.location == NSNotFound ||
+                         breakRange.location <= newlineRange.location)) {
+                        end = breakRange.location;
+                    } else if (newlineRange.location != NSNotFound) {
+                        end = newlineRange.location;
+                    } else {
+                        break;
+                    }
+                    if (end > 0) {
+                        NSData *lineData =
+                            [pending subdataWithRange:NSMakeRange(0, end)];
+                        lineSink([[NSString alloc]
+                            initWithData:lineData
+                                encoding:NSUTF8StringEncoding] ?: @"");
+                    }
+                    [pending replaceBytesInRange:NSMakeRange(0, end + 1)
                                        withBytes:NULL
                                           length:0];
-                    lineSink([[NSString alloc]
-                        initWithData:lineData
-                            encoding:NSUTF8StringEncoding] ?: @"");
                 }
             }
             if (pending.length > 0) {

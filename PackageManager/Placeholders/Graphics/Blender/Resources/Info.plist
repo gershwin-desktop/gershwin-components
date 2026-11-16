@@ -9,7 +9,7 @@
   <key>CFBundleIconFile</key>
   <string>Blender.png</string>
   <key>CFBundleIdentifier</key>
-  <string>org.gershwin.Blender</string>
+  <string>io.github.gershwin-desktop.Blender</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

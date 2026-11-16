@@ -1,0 +1,5 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+ADDITIONAL_INCLUDE_DIRS += -I..
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Wno-unused-parameter
+# The decision lives in plain C, as the supervisor itself is plain C.
+t_SessionOOM_C_FILES += ../SessionOOM.c

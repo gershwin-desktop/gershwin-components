@@ -25,3 +25,20 @@ NSArray<NSString *> *GWSudoArgPrefix(void)
     return @[];
   return @[ @"-A", @"-E" ];
 }
+
+NSString *GWSudoCommand(NSString *toolPath, NSArray<NSString *> *toolArgs,
+                         NSArray<NSString *> **outArguments)
+{
+  NSArray<NSString *> *sudoArgs = GWSudoArgPrefix();
+  NSMutableArray<NSString *> *args = [NSMutableArray arrayWithArray:sudoArgs];
+  NSString *launchPath;
+  if ([sudoArgs count] > 0) {
+    launchPath = GWSudoPath();
+    [args addObject:toolPath]; // sudo's own first argument names the real tool
+  } else {
+    launchPath = toolPath; // NSTask sets argv[0] to this already
+  }
+  [args addObjectsFromArray:toolArgs];
+  if (outArguments) *outArguments = [args copy];
+  return launchPath;
+}

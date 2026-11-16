@@ -198,14 +198,21 @@
     return success;
 }
 
-- (BOOL)restartDSHelper
+- (BOOL)startDSHelper
 {
-    // Restart dshelper so it detects server role and registers with gdomap
-    if ([self serviceRestart:@"dshelper"]) {
-        printf("Restarted dshelper (service now discoverable)\n");
+    // Enable dshelper at boot and (re)start it so it registers with gdomap
+    if (![self serviceEnable:@"dshelper"]) {
+        fprintf(stderr, "Failed to enable dshelper\n");
+        return NO;
+    }
+    // Not "restart": the rc script's stop fails when dshelper is not
+    // running, and rc.subr then skips the start.
+    [self runCommand:@"service dshelper onestop >/dev/null 2>&1"];
+    if ([self serviceStart:@"dshelper"]) {
+        printf("Started dshelper (service now discoverable)\n");
         return YES;
     }
-    fprintf(stderr, "Failed to restart dshelper\n");
+    fprintf(stderr, "Failed to start dshelper\n");
     return NO;
 }
 
@@ -267,6 +274,18 @@
         printf("Unregistered GershwinDirectory from gdomap\n");
         return YES;
     }
+    return NO;
+}
+
+- (BOOL)stopDSHelper
+{
+    // onestop works whether or not dshelper_enable is still set
+    [self runCommand:@"service dshelper onestop >/dev/null 2>&1"];
+    if ([self runCommand:@"sysrc dshelper_enable=NO >/dev/null 2>&1"]) {
+        printf("Stopped and disabled dshelper\n");
+        return YES;
+    }
+    fprintf(stderr, "Failed to disable dshelper\n");
     return NO;
 }
 

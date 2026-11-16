@@ -554,7 +554,6 @@ static void VNCErr(const char *format, ...)
     
     rfbClient *client = NULL;
     int connectResult = 0;
-    BOOL credentialsObtained = NO;  // Track if we've successfully obtained credentials
     
     for (int attempt = 0; attempt < 3; attempt++) {
         if (_shouldStop) {

@@ -8,7 +8,8 @@
  *
  * Override resolution:
  * 1. Start with top-level values (packages, local_packages, post_command)
- * 2. Check os_overrides for the current OS (in GWOSDetector search order)
+ * 2. Check os_overrides for the current OS (in GWOSDetector dependency
+ *    search order: distribution, family, kernel)
  * 3. Override matching keys; missing keys fall back to top-level values
  */
 
@@ -80,7 +81,7 @@ NSString *const GWPackageManagerErrorDomain = @"GWPackageManagerErrorDomain";
   if (osOverrides)
     {
       NSLog(@"GWPackageInstallSpec -> os_overrides present, resolving...");
-      NSArray *searchOrder = [GWOSDetector osSearchOrder];
+      NSArray *searchOrder = [GWOSDetector dependencySearchOrder];
       for (NSString *osID in searchOrder)
         {
           NSDictionary *override = osOverrides[osID];

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<defs><linearGradient id="cau" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe98a"></stop><stop offset="0.55" stop-color="#f6c21c"></stop><stop offset="1" stop-color="#d99a06"></stop></linearGradient></defs>
+<path d="M32 5L60 55H4z" fill="url(#cau)" stroke="#8a6200" stroke-width="2" stroke-linejoin="round"></path>
+<path d="M32 22v17" stroke="#1a1a1a" stroke-width="6" stroke-linecap="round"></path>
+<circle cx="32" cy="47" r="3.6" fill="#1a1a1a"></circle>
+</svg>

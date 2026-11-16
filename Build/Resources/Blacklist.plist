@@ -28,5 +28,6 @@
     <string>udisks</string>
     <string>storaged</string>
     <string>upower</string>
+    <string>XCTest</string>
 </array>
 </plist>

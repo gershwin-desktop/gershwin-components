@@ -22,7 +22,7 @@ Modern UIBridge workflows rely on the **Eau theme**, which is the default theme 
 ### Lifecycle and Registration
 When a GNUstep application using the Eau theme launches:
 - It automatically instantiates a UIBridge provider.
-- It registers a unique service name with the `NSConnection` name server, following the pattern `org.gershwin.Gershwin.Theme.UIBridge.<PID>`.
+- It registers a unique service name with the `NSConnection` name server, following the pattern `io.github.gershwin-desktop.Theme.UIBridge.<PID>`.
 - This eliminates the need for any external components or complex setup.
 
 ### Object Registry and Identity

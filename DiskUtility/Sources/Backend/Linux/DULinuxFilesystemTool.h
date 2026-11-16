@@ -8,6 +8,8 @@
 
 #import <Foundation/Foundation.h>
 
+@class DUProcessResult;
+
 // Raw tool output attached to errors alongside the generic localized
 // description, so the operation log can show diagnostics without leaking
 // them into the primary user-facing message (ARCHITECTURE.md section 46).
@@ -72,6 +74,28 @@ extern NSString * const kDUBackendDetailKey;
 // format cannot inherit leftovers. Fails hard when wipefs exists but fails;
 // returns nil immediately when wipefs is not installed (the subsequent
 // mkfs overwrites the primary signatures anyway).
+// YES when the mkfs tool for the identifier is installed on this host;
+// the format popups grey out the rest.
+// Installs (nil removes) the calling thread's cancellation probe; streamed
+// tools started from this thread are terminated when it turns YES.
++ (void)setCancelCheck:(BOOL (^)(void))check;
++ (BOOL)cancelRequested;
+
++ (BOOL)canFormatFilesystemType:(NSString *)fstype;
+
+// Unmounts every filesystem mounted from the device node itself or from one
+// of its partitions (e.g. /dev/sda and /dev/sda1, /dev/nvme0n1p2). Returns
+// nil when nothing remains mounted, otherwise a DUErrorDeviceBusy error.
++ (NSError *)unmountAllMountsOfDevicePath:(NSString *)devicePath;
+
+// The one unmount every Disk Utility path goes through: announces the
+// unmount to the desktop, unmounts through udevil as the user when udevil
+// is given (the counterpart of a user mount) or umount(8) as root
+// otherwise, and announces the completed unmount on success.
++ (DUProcessResult *)unmountMountPoint:(NSString *)mountPoint
+                                udevil:(NSString *)udevil
+                                 error:(NSError **)error;
+
 + (NSError *)wipeSignaturesAtDevicePath:(NSString *)devicePath;
 
 // One-pass zero overwrite (dd if=/dev/zero bs=1M status=progress, run

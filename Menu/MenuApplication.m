@@ -89,6 +89,16 @@ id menu_drawRectWithoutBottomLine(id self, SEL _cmd, NSRect dirtyRect);
 - (void)installGracefulTerminationSignals;
 - (void)installTerminationSourceForSignal:(int)sig name:(NSString *)name;
 - (void)handleTerminationSignal:(int)sig;
+- (void)trackKeyAndMainWindows;
+@end
+
+/* NSApplication's own handlers that keep -keyWindow and -mainWindow current;
+   libs-gui implements them but does not declare them publicly. */
+@interface NSApplication (KeyAndMainWindowTracking)
+- (void)_windowDidBecomeKey:(NSNotification *)notification;
+- (void)_windowDidResignKey:(NSNotification *)notification;
+- (void)_windowDidBecomeMain:(NSNotification *)notification;
+- (void)_windowDidResignMain:(NSNotification *)notification;
 @end
 
 @implementation MenuApplication
@@ -286,7 +296,9 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
     // DON'T call super finishLaunching as it may be causing immediate termination
     // [super finishLaunching];
     NSDebugLLog(@"gwcomp", @"MenuApplication: Skipped super finishLaunching to prevent termination");
-    
+
+    [self trackKeyAndMainWindows];
+
     NSDebugLLog(@"gwcomp", @"MenuApplication: Initializing application...");
     
     // Check if we're running in a terminal
@@ -351,6 +363,22 @@ id menu_drawRectWithoutBottomLine(id self, SEL cmd __attribute__((unused)), NSRe
     [self activateIgnoringOtherApps:YES];
     
     NSDebugLLog(@"gwcomp", @"MenuApplication: Initialization complete - Menu will appear immediately");
+}
+
+/* Without these observers, which [super finishLaunching] would register,
+   -keyWindow stays nil, and the X backend drops every key press for our
+   windows: alerts and panels would ignore Return and Escape. */
+- (void)trackKeyAndMainWindows
+{
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self selector:@selector(_windowDidBecomeKey:)
+               name:NSWindowDidBecomeKeyNotification object:nil];
+    [nc addObserver:self selector:@selector(_windowDidResignKey:)
+               name:NSWindowDidResignKeyNotification object:nil];
+    [nc addObserver:self selector:@selector(_windowDidBecomeMain:)
+               name:NSWindowDidBecomeMainNotification object:nil];
+    [nc addObserver:self selector:@selector(_windowDidResignMain:)
+               name:NSWindowDidResignMainNotification object:nil];
 }
 
 - (void)installGracefulTerminationSignals
