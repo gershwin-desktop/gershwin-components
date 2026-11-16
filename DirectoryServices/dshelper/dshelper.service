@@ -1,8 +1,10 @@
 [Unit]
-Description=Gershwin Directory Services Helper
+Description=Gershwin Directory Services Helper (directory server)
 After=network.target gdomap.service
-Before=display-manager.service
 Wants=gdomap.service
+# Only a directory server needs dshelper; nss_gershwin resolves users
+# without it. dscli promote enables this unit, dscli demote disables it.
+ConditionPathExists=/Local/Library/DirectoryServices/Domain.plist
 
 [Service]
 Type=forking

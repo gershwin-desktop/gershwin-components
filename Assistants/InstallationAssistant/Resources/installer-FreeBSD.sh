@@ -581,8 +581,6 @@ if [ "$IMAGE_MODE" = "0" ]; then
     fi
     echo "Running dscli init in chroot..."
     chroot "$MNT" /bin/sh -c '. /System/Library/Makefiles/GNUstep.sh && /System/Library/Tools/dscli init' || true
-    echo "Restarting dshelper in chroot..."
-    chroot "$MNT" service dshelper restart || true
 fi
 
 # Install bootloader

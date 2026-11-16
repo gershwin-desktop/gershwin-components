@@ -1251,8 +1251,9 @@ static int cmdPromote(void) {
     }
     printf("Created Domain.plist\n");
 
-    // Restart dshelper so it registers with gdomap
-    [platform restartDSHelper];
+    // Start dshelper (and enable it at boot) so it registers with gdomap.
+    // Only a server runs it; users resolve through nss_gershwin either way.
+    [platform startDSHelper];
 
     printf("\nServer promotion complete.\n");
     printf("Clients can now join with: dscli join\n");
@@ -1306,6 +1307,9 @@ static int cmdDemote(void) {
 
     // Unregister service from gdomap (so clients can't discover us)
     [platform unregisterService];
+
+    // A machine that is not a server has no use for dshelper
+    [platform stopDSHelper];
 
     // Stop NFS server
     [platform stopNFSServer];
@@ -1388,7 +1392,7 @@ static int cmdJoin(NSString *server) {
         return 1;
     }
 
-    printf("\nJoin complete. Start dshelper to enable directory users.\n");
+    printf("\nJoin complete. Directory users are available now.\n");
     return 0;
 }
 

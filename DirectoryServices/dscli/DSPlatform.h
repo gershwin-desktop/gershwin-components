@@ -12,12 +12,16 @@
 - (BOOL)configureNFSExports;
 - (BOOL)enableNFSServer;
 - (BOOL)startNFSServer;
-- (BOOL)restartDSHelper;
+// dshelper runs only on a directory server (to advertise it for join);
+// nss_gershwin resolves users without it. Enable it at boot and (re)start it.
+- (BOOL)startDSHelper;
 
 // Server (demote) operations
 - (BOOL)removeNFSExports;
 - (BOOL)stopNFSServer;
 - (BOOL)unregisterService;
+// Stop dshelper and stop starting it at boot.
+- (BOOL)stopDSHelper;
 
 // Client (join) operations
 - (BOOL)enableNFSClient;

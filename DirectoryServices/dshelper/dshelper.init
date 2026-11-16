@@ -6,13 +6,16 @@
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Gershwin Directory Services Helper
-# Description:       Provides user/group lookups for NSS via plist files
+# Description:       Advertises a Gershwin directory server for dscli join.
+#                    Not needed for local users: nss_gershwin reads the
+#                    DirectoryServices plists itself.
 ### END INIT INFO
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin:/System/Library/Tools
 NAME=dshelper
 DAEMON=/System/Library/Tools/dshelper
 PIDFILE=/var/run/dshelper.pid
+DOMAIN_PLIST=/Local/Library/DirectoryServices/Domain.plist
 
 # Source GNUstep environment
 . /System/Library/Makefiles/GNUstep.sh
@@ -21,6 +24,10 @@ PIDFILE=/var/run/dshelper.pid
 
 case "$1" in
     start)
+        if [ ! -f "$DOMAIN_PLIST" ]; then
+            echo "$NAME: not a directory server, not starting."
+            exit 0
+        fi
         echo "Starting $NAME"
         if [ -f "$PIDFILE" ]; then
             echo "$NAME already running."

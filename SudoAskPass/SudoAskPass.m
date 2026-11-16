@@ -12,9 +12,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <security/pam_appl.h>
+#ifdef __linux__
+#include <crypt.h>
+#endif
 
 #import "AppearanceMetrics.h"
 
@@ -110,7 +111,11 @@ static const float kDisclosureSide = 24.0;
 }
 @end
 
-#define DS_SOCKET_PATH "/var/run/dshelper.sock"
+// Directory Services keeps its accounts in these plists; the /Network copy
+// (a client joined to a directory server) wins over the local one, the same
+// rule nss_gershwin applies.
+#define DS_NETWORK_USERS_PLIST @"/Network/Library/DirectoryServices/Users.plist"
+#define DS_LOCAL_USERS_PLIST @"/Local/Library/DirectoryServices/Users.plist"
 
 /* Outcome of asking one authentication backend about a password.
  * "Unavailable" is distinct from "rejected": a backend that is not
@@ -212,7 +217,7 @@ static int savedStdoutFd = -1;
 
 - (void)showPasswordDialog;
 - (BOOL)validatePassword:(NSString *)password;
-- (NSString *)sendDirectoryServicesRequest:(NSString *)request;
+- (NSDictionary *)directoryServicesRecordForUser:(NSString *)username;
 - (GWAuthResult)checkPassword:(NSString *)password
       withDirectoryServicesUser:(NSString *)username;
 - (GWAuthResult)checkPassword:(NSString *)password withPAMUser:(NSString *)username;
@@ -780,7 +785,8 @@ static int savedStdoutFd = -1;
     //
     // Whichever backend owns the account answers for it: Directory Services
     // for DS-managed users, PAM for local OS accounts. The two coexist, so a
-    // system running dshelper still authenticates its local users correctly.
+    // system with directory users still authenticates its local users
+    // correctly.
     // If neither can render a verdict we accept and let sudo be the authority
     // - an absent backend must not produce a dialog no password can satisfy.
 
@@ -803,80 +809,51 @@ static int savedStdoutFd = -1;
     return YES;
 }
 
-- (NSString *)sendDirectoryServicesRequest:(NSString *)request
+- (NSDictionary *)directoryServicesRecordForUser:(NSString *)username
 {
-    // Returns dshelper's reply, or nil if the daemon is not reachable.
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) {
-        return nil;
-    }
-
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, DS_SOCKET_PATH, sizeof(addr.sun_path) - 1);
-
-    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        return nil;
-    }
-
-    const char *requestBytes = [request UTF8String];
-    size_t remaining = strlen(requestBytes);
-    while (remaining > 0) {
-        ssize_t written = write(sock, requestBytes, remaining);
-        if (written <= 0) {
-            close(sock);
-            return nil;
-        }
-        requestBytes += written;
-        remaining -= (size_t)written;
-    }
-
-    // Shutdown write side so dshelper knows the request is complete
-    shutdown(sock, SHUT_WR);
-
-    // Read the whole reply; getpwnam records are longer than an auth verdict.
-    NSMutableData *reply = [NSMutableData data];
-    char buf[512];
-    ssize_t bytesRead;
-    while ((bytesRead = read(sock, buf, sizeof(buf))) > 0) {
-        [reply appendBytes:buf length:(NSUInteger)bytesRead];
-    }
-    close(sock);
-
-    if (bytesRead < 0 || [reply length] == 0) {
-        return nil;
-    }
-
-    NSString *response = [[[NSString alloc] initWithData:reply
-                                               encoding:NSUTF8StringEncoding] autorelease];
-    return [response stringByTrimmingCharactersInSet:
-                [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    // Returns the user's record, or nil if Directory Services does not hold
+    // this account (or its plist cannot be read).
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *path = [fm fileExistsAtPath:DS_NETWORK_USERS_PLIST]
+                         ? DS_NETWORK_USERS_PLIST : DS_LOCAL_USERS_PLIST;
+    NSDictionary *users = [NSDictionary dictionaryWithContentsOfFile:path];
+    id record = [users objectForKey:username];
+    return [record isKindOfClass:[NSDictionary class]] ? record : nil;
 }
 
 - (GWAuthResult)checkPassword:(NSString *)password
     withDirectoryServicesUser:(NSString *)username
 {
-    // Establish whether Directory Services owns this account before asking it
-    // to authenticate. If it does, its verdict is final - falling back to PAM
-    // for a DS-managed user would consult a stack that holds no hash for them,
-    // and pam_unix's nullok accepts ANY password for an account with no shadow
-    // entry. Local OS accounts are unknown to dshelper and fall through to PAM.
-    NSString *record = [self sendDirectoryServicesRequest:
-                            [NSString stringWithFormat:@"getpwnam:%@", username]];
-    if (!record || [record length] == 0 || [record hasPrefix:@"NOTFOUND"]) {
+    // Establish whether Directory Services owns this account before checking
+    // the password against it. If it does, its verdict is final - falling
+    // back to PAM for a DS-managed user would consult a stack that holds no
+    // hash for them, and pam_unix's nullok accepts ANY password for an
+    // account with no shadow entry. Local OS accounts are not in the plist
+    // and fall through to PAM.
+    //
+    // The hash is checked here rather than through PAM because nss_gershwin
+    // gives it only to root, and this dialog runs as the user. The rules are
+    // the ones dshelper's auth request used.
+    NSDictionary *record = [self directoryServicesRecordForUser:username];
+    if (!record) {
         return GWAuthUnavailable;
     }
 
-    NSString *verdict = [self sendDirectoryServicesRequest:
-                            [NSString stringWithFormat:@"auth:%@:%@", username, password]];
-    if (!verdict || [verdict length] == 0) {
-        return GWAuthUnavailable;
+    id noPassword = [record objectForKey:@"noPassword"];
+    if ([noPassword respondsToSelector:@selector(boolValue)] && [noPassword boolValue]) {
+        return GWAuthAccepted;
     }
 
-    // dshelper returns "1" for success, "0" for failure
-    return ([verdict characterAtIndex:0] == '1') ? GWAuthAccepted : GWAuthRejected;
+    id hash = [record objectForKey:@"passwordHash"];
+    if (![hash isKindOfClass:[NSString class]] || [hash length] == 0) {
+        return GWAuthRejected;          // no password set: the account is locked
+    }
+
+    const char *computed = crypt([password UTF8String], [hash UTF8String]);
+    if (computed && strcmp(computed, [hash UTF8String]) == 0) {
+        return GWAuthAccepted;
+    }
+    return GWAuthRejected;
 }
 
 - (const char *)pamServiceName
