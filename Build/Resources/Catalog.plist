@@ -1010,5 +1010,15 @@
 		<key>Description</key>
 		<string>Draw first and second order Bode diagrams of filters</string>
 	</dict>
+	<dict>
+		<key>Name</key>
+		<string>ScreenshotTool</string>
+		<key>GitURL</key>
+		<string>https://github.com/danjboyd/ScreenshotTool</string>
+		<key>Description</key>
+		<string>Mark up screenshots with pens, highlighters, arrows, text, and callouts, then copy or save them</string>
+		<key>Submodules</key>
+		<true/>
+	</dict>
 </array>
 </plist>
