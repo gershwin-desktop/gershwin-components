@@ -30,4 +30,34 @@
 + (BOOL)needsAppleISOKeySwapForKeyboardType:(NSString *)keyboardType isApple:(BOOL)isApple;
 + (BOOL)applyAppleISOKeySwap;
 
+/* The layouts XKB knows, read from rules/base.lst: layout code -> human
+ * description.  *variantsByLayout (optional) receives layout code -> array of
+ * {code, description} dictionaries.  Empty when no base.lst is installed. */
++ (NSDictionary *)availableLayouts:(NSDictionary **)variantsByLayout;
+
+/* The user's saved choice (the KeyboardPreferences domain), which
+ * gershwin-apply-settings puts back at login; empty when none was saved. */
++ (NSDictionary *)savedPreferences;
+
+/* Remembers layout and variant for the next login and leaves the other saved
+ * keys (options, keyboard type, Apple flag) as the Keyboard pane wrote them. */
++ (void)persistLayout:(NSString *)layout variant:(NSString *)variant;
+
+/* The layouts the user chose to have in the menu bar's Keyboard menu, each a
+ * {layout, variant (optional)} dictionary, saved with the other keyboard
+ * preferences so the pane and the menu extra agree. */
++ (NSArray *)menuLayouts;
++ (void)setMenuLayouts:(NSArray *)menuLayouts;
++ (BOOL)menuLayouts:(NSArray *)menuLayouts containLayout:(NSString *)layout variant:(NSString *)variant;
+
+/* Switches the Keyboard menu extra on when at least two layouts are chosen for
+ * the menu and off when fewer are, in the Menu preferences' saved set, and
+ * tells a running Menu.  A menu to switch between one layout is pointless. */
++ (void)syncKeyboardMenuExtraWithMenuLayouts;
+
+/* Posted (distributed) whenever the saved layout or the menu layouts change,
+ * so the menu extra in the running Menu follows the preference pane at once. */
+extern NSString *const KeyboardBackendPreferencesDidChangeNotification;
++ (void)announcePreferencesChange;
+
 @end

@@ -48,6 +48,10 @@ static NSString *const kOrderKey = @"GSMenuExtraOrder";
             @"Sound", @"name",
             [NSNumber numberWithInteger:70], @"priority", nil],
         [NSDictionary dictionaryWithObjectsAndKeys:
+            @"io.github.gershwin-desktop.menuextra.keyboard", @"identifier",
+            @"Keyboard", @"name",
+            [NSNumber numberWithInteger:65], @"priority", nil],
+        [NSDictionary dictionaryWithObjectsAndKeys:
             @"io.github.gershwin-desktop.menuextra.wlan", @"identifier",
             @"WLAN", @"name",
             [NSNumber numberWithInteger:60], @"priority", nil],

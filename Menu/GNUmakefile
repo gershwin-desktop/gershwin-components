@@ -237,9 +237,9 @@ HAVE_LIBDBUS := $(shell CC="$(CC)" sh has-libdbus.sh "$(DBUS_CFLAGS) $(DBUS_LIBS
 
 # Every menu extra that Menu builds, and the bundle each one leaves behind,
 # in one place so that the two lists cannot disagree about what there is.
-MENU_EXTRA_DIRS = ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra
+MENU_EXTRA_DIRS = ClockExtra BatteryExtra CPUExtra RAMExtra WLANExtra SoundExtra BrightnessExtra BuildMonitorExtra KeyboardExtra
 MENU_EXTRA_BUNDLES = ClockExtra/Clock BatteryExtra/Battery CPUExtra/CPU RAMExtra/RAM \
-	WLANExtra/WLAN SoundExtra/Sound BrightnessExtra/Brightness BuildMonitorExtra/BuildMonitor
+	WLANExtra/WLAN SoundExtra/Sound BrightnessExtra/Brightness BuildMonitorExtra/BuildMonitor KeyboardExtra/Keyboard
 ifeq ($(HAVE_LIBDBUS),yes)
 MENU_EXTRA_DIRS += MediaExtra
 MENU_EXTRA_BUNDLES += MediaExtra/Media
