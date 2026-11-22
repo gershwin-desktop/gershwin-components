@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (c) 2026 Simon Peter, SPDX-License-Identifier: BSD-2-Clause -->
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f4f4"/>
+      <stop offset="1" stop-color="#b9bcc2"/>
+    </linearGradient>
+    <linearGradient id="lid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e2e4e8"/>
+      <stop offset="1" stop-color="#9da1a8"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b8fd6"/>
+      <stop offset="1" stop-color="#1d3f78"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7cf2ff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#d8ffff"/>
+      <stop offset="1" stop-color="#7cf2ff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- open lid, seen from the front -->
+  <path d="M90 250 L140 70 L400 70 L420 250 Z" fill="url(#lid)" stroke="#5d6168" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M122 232 L160 96 L380 96 L394 232 Z" fill="#ffffff" opacity="0.55"/>
+  <!-- body -->
+  <path d="M40 300 L80 240 L440 240 L470 300 L470 380 Q470 400 450 400 L60 400 Q40 400 40 380 Z" fill="url(#body)" stroke="#5d6168" stroke-width="6" stroke-linejoin="round"/>
+  <!-- glass -->
+  <path d="M95 290 L115 258 L410 258 L428 290 Z" fill="url(#glass)" stroke="#2a3446" stroke-width="4" stroke-linejoin="round"/>
+  <!-- document on the glass -->
+  <path d="M150 286 L162 262 L300 262 L296 286 Z" fill="#ffffff" stroke="#8a8f98" stroke-width="2"/>
+  <!-- scan beam -->
+  <rect x="222" y="252" width="26" height="42" fill="url(#beam)"/>
+  <!-- front panel -->
+  <path d="M40 310 L470 310" stroke="#8a8f98" stroke-width="4"/>
+  <circle cx="420" cy="350" r="14" fill="#3fbf5a" stroke="#2a6b36" stroke-width="4"/>
+  <rect x="80" y="340" width="180" height="20" rx="10" fill="#9da1a8"/>
+</svg>
