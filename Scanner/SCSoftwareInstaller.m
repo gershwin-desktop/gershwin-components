@@ -162,10 +162,14 @@ static NSMutableSet *runningJobs;
     {
       return @[@"sane-backends", @"sane-airscan"];
     }
-  /* sane-airscan is a port on OpenBSD, but its package name is not confirmed */
+  /*
+   * OpenBSD packages sane-backends in flavors, so the plain name is refused
+   * as ambiguous. The escl flavor adds SANE's own driver for network
+   * scanners, since sane-airscan's package name is not confirmed there.
+   */
   if ([family isEqualToString: @"openbsd"])
     {
-      return @[@"sane-backends"];
+      return @[@"sane-backends--escl"];
     }
   return nil;
 }
