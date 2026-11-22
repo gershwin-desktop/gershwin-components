@@ -12,6 +12,8 @@
 - (void) deviceChooser: (SCDeviceChooser *)chooser didChooseDevice: (SCDeviceInfo *)device;
 /* NO keeps the chooser from searching, e.g. while SANE is not installed */
 - (BOOL) deviceChooserShouldSearch: (SCDeviceChooser *)chooser;
+/* Called after each search, before the automatic open */
+- (void) deviceChooser: (SCDeviceChooser *)chooser didFindDevices: (NSArray *)devices;
 /* Called after each search; return YES to open `device` without asking */
 - (SCDeviceInfo *) deviceChooser: (SCDeviceChooser *)chooser
        deviceToOpenAutomaticallyFrom: (NSArray *)devices;

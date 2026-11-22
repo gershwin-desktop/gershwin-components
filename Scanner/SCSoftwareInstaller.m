@@ -174,6 +174,22 @@ static NSMutableSet *runningJobs;
   return nil;
 }
 
++ (NSArray *) usbScanningPackagesForFamily: (NSString *)family
+{
+  /* Not found in OpenBSD's ports */
+  if ([family isEqualToString: @"debian"] || [family isEqualToString: @"arch"]
+      || [family isEqualToString: @"freebsd"])
+    {
+      return @[@"ipp-usb"];
+    }
+  return nil;
+}
+
++ (NSArray *) usbScanningPackages
+{
+  return [self usbScanningPackagesForFamily: [GWOSDetector packageManagerFamily]];
+}
+
 + (NSArray *) scannerSupportPackages
 {
   return [self scannerSupportPackagesForFamily: [GWOSDetector packageManagerFamily]];

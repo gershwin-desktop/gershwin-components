@@ -35,6 +35,10 @@
 + (NSArray *) scannerSupportPackagesForFamily: (NSString *)family;
 + (NSArray *) scannerSupportPackages;
 
+/* ipp-usb, which lets sane-airscan scan from printers connected by USB; nil where not packaged */
++ (NSArray *) usbScanningPackagesForFamily: (NSString *)family;
++ (NSArray *) usbScanningPackages;
+
 /*
  * Asks whether to install `what` ("German text recognition"), explaining
  * why with `reason`, and installs `packages`. The completion runs on the

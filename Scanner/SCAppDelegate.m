@@ -13,6 +13,7 @@
 #import "SCPermissionCheck.h"
 #import "SCSoftwareInstaller.h"
 #import "SCSaneLibrary.h"
+#import "SCIPPUSB.h"
 #include <unistd.h>
 
 @interface SCAppDelegate () <SCDeviceChooserDelegate>
@@ -30,6 +31,8 @@
   /* At launch the last scanner is opened without asking first */
   BOOL _openingLastDevice;
   BOOL _saneReady;
+  /* USB scanning (ipp-usb) is offered once per session */
+  BOOL _usbScanningOffered;
 }
 
 #pragma mark Menu
@@ -128,6 +131,67 @@
   _chooser = [SCDeviceChooser new];
   [_chooser setDelegate: self];
   [self startScanning];
+}
+
+/*
+ * A printer with a scanner connected by USB usually speaks IPP-over-USB;
+ * sane-airscan reaches it only through ipp-usb, which is then offered,
+ * or started when it is installed but not running
+ */
+- (void) deviceChooser: (SCDeviceChooser *)chooser didFindDevices: (NSArray *)devices
+{
+  NSArray *names = [SCIPPUSB connectedDeviceNames];
+  NSString *what, *reason;
+  BOOL installed = [SCIPPUSB programPath] != nil;
+
+  if (_usbScanningOffered || [names count] == 0 || [SCIPPUSB isRunning])
+    {
+      return;
+    }
+  _usbScanningOffered = YES;
+  what = [NSString stringWithFormat: @"USB scanning for %@",
+                   [names componentsJoinedByString: @", "]];
+  reason = [NSString stringWithFormat:
+    @"%@ is connected by USB. Like most current printers with a scanner, it "
+    @"scans over USB through IPP-over-USB, which needs the ipp-usb service.",
+    [names componentsJoinedByString: @", "]];
+  if (installed)
+    {
+      NSAlert *alert = [NSAlert new];
+
+      [alert setMessageText: [NSString stringWithFormat: @"Start %@?", what]];
+      [alert setInformativeText: [reason stringByAppendingString:
+        @" It is installed but not running; starting it needs your password."]];
+      [alert addButtonWithTitle: @"Start"];
+      [alert addButtonWithTitle: @"Not Now"];
+      if ([alert runModal] == NSAlertFirstButtonReturn)
+        {
+          [self startUSBScanning];
+        }
+      return;
+    }
+  [SCSoftwareInstaller offerPackages: [SCSoftwareInstaller usbScanningPackages]
+                                what: what reason: reason
+                          completion: ^(BOOL done) {
+      if (done)
+        {
+          [self startUSBScanning];
+        }
+    }];
+}
+
+- (void) startUSBScanning
+{
+  [_chooser setBusy: YES message: @"Starting USB scanning..."];
+  [SCIPPUSB startWithCompletion: ^(BOOL running) {
+      [_chooser setBusy: NO message: running ? @"" :
+        @"USB scanning could not be started."];
+      if (running)
+        {
+          /* The printer now appears like a network scanner */
+          [_chooser showAndSearch];
+        }
+    }];
 }
 
 /* SANE is installed only when Scanner is used; until then there is nothing to open */

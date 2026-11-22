@@ -30,6 +30,7 @@ Scanner_OBJC_FILES = \
 	SCTextRecognizer.m \
 	SCSoftwareInstaller.m \
 	SCPermissionCheck.m \
+	SCIPPUSB.m \
 	SCSaver.m \
 	SCFormView.m \
 	SCOptionControl.m \
@@ -57,6 +58,7 @@ Scanner_HEADER_FILES = \
 	SCTextRecognizer.h \
 	SCSoftwareInstaller.h \
 	SCPermissionCheck.h \
+	SCIPPUSB.h \
 	SCSaver.h \
 	SCFormView.h \
 	SCOptionControl.h \

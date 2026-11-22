@@ -28,3 +28,9 @@ t_PermissionCheck_OBJC_FILES += ../../SCPermissionCheck.m
 
 ../../SCLanguageGuess.m_FILE_FLAGS += -fobjc-arc
 t_LanguageGuess_OBJC_FILES += ../../SCLanguageGuess.m
+
+../../SCIPPUSB.m_FILE_FLAGS += -fobjc-arc
+t_IPPUSB_OBJC_FILES += ../../SCIPPUSB.m
+# SCIPPUSB starts ipp-usb through PackageManager's sudo helper
+t_IPPUSB_OBJCFLAGS += -I/System/Library/Headers -Wno-nullability-completeness
+t_IPPUSB_TOOL_LIBS += -L/System/Library/Frameworks/PackageManager.framework/Versions/1 -lPackageManager

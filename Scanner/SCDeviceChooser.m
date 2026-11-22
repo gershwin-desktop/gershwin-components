@@ -222,6 +222,7 @@ static const CGFloat SCStatusHeight = 84;
     }
   [self updateButtons];
 
+  [_delegate deviceChooser: self didFindDevices: _devices];
   automatic = [_delegate deviceChooser: self deviceToOpenAutomaticallyFrom: _devices];
   if (automatic != nil)
     {
