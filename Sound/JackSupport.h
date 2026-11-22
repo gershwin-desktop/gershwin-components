@@ -72,6 +72,13 @@ extern NSString * const JackDeviceDisplayName;
 /* nil when libjack is missing or no server of that name runs.  Never starts
    a server.  serverName nil means the default server. */
 + (JackConnection *)openWithServerName:(NSString *)serverName;
+
+/* Where a jackd of that name listens (jack2 under /dev/shm, jack1 under
+   /tmp), and whether something accepts a connection there.  The open below
+   asks this first: libjack's failing open takes locks of the C library in a
+   way that can hang the whole process for good. */
++ (NSArray *)serverSocketPathsForServerName:(NSString *)serverName;
++ (BOOL)serverSocketAcceptsAtPath:(NSString *)path;
 + (JackConnection *)openWithServerName:(NSString *)serverName
                             clientName:(NSString *)clientName;
 

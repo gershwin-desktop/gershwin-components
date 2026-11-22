@@ -12,6 +12,10 @@
 #import <Foundation/Foundation.h>
 #import "Testing.h"
 #import "Sound/JackSupport.h"
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <string.h>
 
 #pragma mark Fixtures
 
@@ -831,6 +835,42 @@ static void testSettings(void)
   [[NSFileManager defaultManager] removeItemAtPath: dir error: NULL];
 }
 
+#pragma mark Server probe
+
+/* libjack's failing client open ends in strerror(), which takes a lock that a
+   libjack thread cancelled in the middle of a translation can hold forever;
+   Menu's main thread hung on it.  A server that is not listening is therefore
+   found out without libjack. */
+static void testServerProbe(void)
+{
+  NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+    [NSString stringWithFormat: @"jackprobe-%d", (int)getpid()]];
+  [[NSFileManager defaultManager] createDirectoryAtPath: dir
+                            withIntermediateDirectories: YES attributes: nil error: NULL];
+  NSString *path = [dir stringByAppendingPathComponent: @"jack_default_0"];
+
+  PASS(![JackConnection serverSocketAcceptsAtPath: path],
+       "no socket file: nobody is listening");
+
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, [path fileSystemRepresentation], sizeof(addr.sun_path) - 1);
+  PASS(bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 && listen(fd, 1) == 0,
+       "fixture: a listening socket");
+  PASS([JackConnection serverSocketAcceptsAtPath: path], "a listening socket accepts");
+
+  close(fd);
+  PASS(![JackConnection serverSocketAcceptsAtPath: path],
+       "a socket file nobody listens on (jackd died) does not count");
+  [[NSFileManager defaultManager] removeItemAtPath: dir error: NULL];
+
+  PASS([[JackConnection serverSocketPathsForServerName: nil] count] > 0
+       && [[[JackConnection serverSocketPathsForServerName: @"x"] firstObject] containsString: @"x"],
+       "the paths name the server");
+}
+
 int main(void)
 {
   NSAutoreleasePool *arp = [NSAutoreleasePool new];
@@ -847,6 +887,7 @@ int main(void)
   testSettings();
   testIsClockDevice();
   testSelection();
+  testServerProbe();
   [arp release];
   return 0;
 }

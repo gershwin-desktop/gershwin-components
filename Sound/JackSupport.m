@@ -10,6 +10,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <string.h>
 #include <stdarg.h>
 #ifdef __linux__
 #include <dlfcn.h>
@@ -241,10 +244,40 @@ static int emptyProcess(jack_nframes_t nframes, void *arg)
     return [self openWithServerName:serverName clientName:JackClientName];
 }
 
++ (NSArray *)serverSocketPathsForServerName:(NSString *)serverName
+{
+    NSString *name = serverName != nil ? serverName : @"default";
+    return @[[NSString stringWithFormat:@"/dev/shm/jack_%@_%u_0", name, (unsigned)getuid()],
+             [NSString stringWithFormat:@"/tmp/jack-%u/%@/jack_0", (unsigned)getuid(), name]];
+}
+
++ (BOOL)serverSocketAcceptsAtPath:(NSString *)path
+{
+    struct sockaddr_un addr;
+    const char *p = [path fileSystemRepresentation];
+    if (p == NULL || strlen(p) >= sizeof(addr.sun_path)) return NO;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return NO;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, p, sizeof(addr.sun_path) - 1);
+    BOOL accepts = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    close(fd);
+    return accepts;
+}
+
 + (JackConnection *)openWithServerName:(NSString *)serverName
                             clientName:(NSString *)clientName
 {
     if (!ensureJackAPI()) return nil;
+    /* Polling a server that is still starting must not go through libjack's
+       error path: it calls strerror(), and a lock of the C library that a
+       libjack thread died holding hung Menu's main thread there for good. */
+    BOOL listening = NO;
+    for (NSString *path in [self serverSocketPathsForServerName:serverName]) {
+        listening = listening || [self serverSocketAcceptsAtPath:path];
+    }
+    if (!listening) return nil;
     // A probe must never start a jackd of its own.
     int options = kJackNoStartServer;
     if (serverName != nil) options |= kJackServerName;
