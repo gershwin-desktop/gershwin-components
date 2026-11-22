@@ -612,6 +612,17 @@ static const char *const hw_groups[] = {
 	"lpadmin",	/* printing (Debian, Ubuntu) */
 	"webcamd",	/* webcam userland drivers */
 	"vboxusers",	/* VirtualBox USB and device access */
+	/*
+	 * USB scanners through SANE. The packaging, not the kernel, decides
+	 * which group gets the device: Debian, Ubuntu and Void grant
+	 * "scanner" (udev setfacl or GROUP=), Arch grants "saned" (its
+	 * 66-saned.rules setfacl), the FreeBSD port owns "saned" and our
+	 * devfs rules hand /dev/usb/ to it, and hplip gives HP all-in-ones
+	 * to "lp".
+	 */
+	"scanner",
+	"saned",
+	"lp",
 };
 
 struct etc_entry {
