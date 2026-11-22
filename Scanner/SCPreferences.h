@@ -17,6 +17,7 @@ extern NSString * const SCThresholdKey;
 extern NSString * const SCRecognizeTextKey;
 extern NSString * const SCDeclinedLanguagesKey;
 extern NSString * const SCOfferedTextRecognitionKey;
+extern NSString * const SCPanelScanningKey;
 extern NSString * const SCDeviceSettingsKey;
 extern NSString * const SCLastDeviceKey;
 

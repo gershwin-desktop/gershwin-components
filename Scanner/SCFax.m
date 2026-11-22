@@ -9,6 +9,8 @@
 #import "SCImageBuilder.h"
 #include <tiffio.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
 
 static NSError *
 SCFaxError(NSString *path, NSString *reason)
@@ -110,4 +112,128 @@ SCG4Data(SCImage *image, NSError **error)
       *error = SCFaxError(temp, @"the compressed image could not be read back.");
     }
   return data;
+}
+
+static NSError *
+SCReadError(NSString *reason)
+{
+  return [NSError errorWithDomain: SCScannerErrorDomain code: 3
+                         userInfo: @{NSLocalizedDescriptionKey:
+                                       [NSString stringWithFormat:
+                                         @"Could not read the scanned page: %@", reason]}];
+}
+
+SCImage *
+SCImageFromTIFFData(NSData *data, NSError **error)
+{
+  NSString *temp = [NSTemporaryDirectory() stringByAppendingPathComponent:
+    [NSString stringWithFormat: @"Scanner-in-%d-%@.tiff", getpid(),
+              [[NSProcessInfo processInfo] globallyUniqueString]]];
+  uint32_t width = 0, height = 0, y;
+  uint16_t bps = 0, spp = 0, photometric = PHOTOMETRIC_MINISBLACK, planar = PLANARCONFIG_CONTIG;
+  uint16_t unit = RESUNIT_INCH, compression = COMPRESSION_NONE;
+  float xres = 0;
+  NSMutableData *pixels;
+  NSUInteger outRow;
+  TIFF *tif;
+  BOOL ok = YES;
+
+  /* libtiff reads files; the data is small enough for a round trip */
+  if (![data writeToFile: temp atomically: NO])
+    {
+      if (error)
+        {
+          *error = SCReadError(@"it could not be stored for reading.");
+        }
+      return nil;
+    }
+  tif = TIFFOpen([temp fileSystemRepresentation], "r");
+  [[NSFileManager defaultManager] removeItemAtPath: temp error: NULL];
+  if (tif == NULL)
+    {
+      if (error)
+        {
+          *error = SCReadError(@"the printer sent no TIFF image.");
+        }
+      return nil;
+    }
+  TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width);
+  TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &height);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_BITSPERSAMPLE, &bps);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_PLANARCONFIG, &planar);
+  TIFFGetField(tif, TIFFTAG_PHOTOMETRIC, &photometric);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_COMPRESSION, &compression);
+  /* Color TIFF-JPEG is stored as YCbCr; the codec converts it when asked to */
+  if (compression == COMPRESSION_JPEG && photometric == PHOTOMETRIC_YCBCR)
+    {
+      TIFFSetField(tif, TIFFTAG_JPEGCOLORMODE, JPEGCOLORMODE_RGB);
+      photometric = PHOTOMETRIC_RGB;
+    }
+  TIFFGetField(tif, TIFFTAG_XRESOLUTION, &xres);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_RESOLUTIONUNIT, &unit);
+  if (unit == RESUNIT_CENTIMETER)
+    {
+      xres *= 2.54f;
+    }
+
+  if (width == 0 || height == 0 || planar != PLANARCONFIG_CONTIG
+      || !((spp == 1 && (bps == 1 || bps == 8 || bps == 16)
+            && (photometric == PHOTOMETRIC_MINISBLACK || photometric == PHOTOMETRIC_MINISWHITE))
+           || (spp == 3 && (bps == 8 || bps == 16) && photometric == PHOTOMETRIC_RGB)))
+    {
+      TIFFClose(tif);
+      if (error)
+        {
+          *error = SCReadError(@"the printer sent an image layout Scanner cannot read.");
+        }
+      return nil;
+    }
+  outRow = (bps == 1) ? (width + 7) / 8 : (NSUInteger)width * spp * (bps / 8);
+  pixels = [NSMutableData dataWithLength: outRow * height];
+  {
+    tmsize_t lineSize = TIFFScanlineSize(tif);
+    uint8_t *line = malloc(lineSize > (tmsize_t)outRow ? lineSize : outRow);
+
+    for (y = 0; y < height && ok; y++)
+      {
+        uint8_t *dst = (uint8_t *)[pixels mutableBytes] + y * outRow;
+        NSUInteger i;
+
+        ok = TIFFReadScanline(tif, line, y, 0) == 1;
+        memcpy(dst, line, outRow);
+        /* Scanner's 1-bit pages use 1 for black, 8-bit ones 0 for black */
+        if (bps == 1 && photometric == PHOTOMETRIC_MINISBLACK)
+          {
+            for (i = 0; i < outRow; i++)
+              {
+                dst[i] = ~dst[i];
+              }
+          }
+        /* Bits past the right edge are undefined after decoding; keep them clear */
+        if (bps == 1 && width % 8 != 0)
+          {
+            dst[outRow - 1] &= (uint8_t)(0xff << (8 - width % 8));
+          }
+        else if (bps == 8 && spp == 1 && photometric == PHOTOMETRIC_MINISWHITE)
+          {
+            for (i = 0; i < outRow; i++)
+              {
+                dst[i] = 255 - dst[i];
+              }
+          }
+      }
+    free(line);
+  }
+  TIFFClose(tif);
+  if (!ok)
+    {
+      if (error)
+        {
+          *error = SCReadError(@"it is incomplete.");
+        }
+      return nil;
+    }
+  return [[SCImage alloc] initWithWidth: width height: height samplesPerPixel: spp
+                          bitsPerSample: bps pixels: pixels resolution: xres];
 }

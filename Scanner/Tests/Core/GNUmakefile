@@ -6,7 +6,7 @@ include $(GNUSTEP_MAKEFILES)/common.make
 
 GNUSTEP_OBJ_DIR=./obj
 
-TEST_TOOL_NAME =  t_ImageAnalysis t_ImageBuilder t_ImageWriter t_IPPUSB t_LanguageGuess t_PermissionCheck t_SaneTestBackend t_TextRecognizer
+TEST_TOOL_NAME =  t_ImageAnalysis t_ImageBuilder t_ImageWriter t_IPPUSB t_LanguageGuess t_PermissionCheck t_SaneTestBackend t_TextRecognizer t_WSD
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework
 
@@ -29,6 +29,7 @@ t_LanguageGuess_OBJC_FILES=t_LanguageGuess.m
 t_PermissionCheck_OBJC_FILES=t_PermissionCheck.m
 t_SaneTestBackend_OBJC_FILES=t_SaneTestBackend.m
 t_TextRecognizer_OBJC_FILES=t_TextRecognizer.m
+t_WSD_OBJC_FILES=t_WSD.m
 
 -include GNUmakefile.preamble
 -include make-check.mak

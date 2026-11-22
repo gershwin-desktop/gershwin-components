@@ -18,6 +18,7 @@ NSString * const SCThresholdKey = @"BlackAndWhiteThreshold";
 NSString * const SCRecognizeTextKey = @"RecognizeTextInPDFs";
 NSString * const SCDeclinedLanguagesKey = @"DeclinedTextRecognitionLanguages";
 NSString * const SCOfferedTextRecognitionKey = @"OfferedTextRecognition";
+NSString * const SCPanelScanningKey = @"ScanFromPrinterPanel";
 NSString * const SCDeviceSettingsKey = @"DeviceSettings";
 NSString * const SCLastDeviceKey = @"LastDevice";
 
@@ -27,6 +28,7 @@ NSString * const SCLastDeviceKey = @"LastDevice";
   NSTextField *_pattern;
   NSSlider *_quality;
   NSPopUpButton *_previewResolution;
+  NSButton *_panelScanning;
 }
 
 + (void) registerDefaults
@@ -44,6 +46,7 @@ NSString * const SCLastDeviceKey = @"LastDevice";
     SCInvertColorsKey: @NO,
     SCThresholdKey: @128,
     SCRecognizeTextKey: @NO,
+    SCPanelScanningKey: @YES,
   }];
 }
 
@@ -151,12 +154,22 @@ NSString * const SCLastDeviceKey = @"LastDevice";
   [_previewResolution setAction: @selector(changed:)];
 
 
+  _panelScanning = [[NSButton alloc] initWithFrame: NSMakeRect(0, 0, 100, 20)];
+  [_panelScanning setButtonType: NSSwitchButton];
+  [_panelScanning setTitle: @"Scan from the printer's panel"];
+  [_panelScanning setToolTip: @"While Scanner is open, network scanners list this "
+                  @"computer on their panel, so scanning can be started there. "
+                  @"Takes effect when a scanner is opened next."];
+  [_panelScanning setTarget: self];
+  [_panelScanning setAction: @selector(changed:)];
+
   [form setRows: @[
     [SCFormRow rowWithLabel: @"Save in:" control: folderRow],
     [SCFormRow rowWithLabel: @"File name:" control: _pattern],
     [SCFormRow rowWithLabel: @"" control: hint],
     [SCFormRow rowWithLabel: @"JPEG quality:" control: _quality],
     [SCFormRow rowWithLabel: @"Preview resolution:" control: _previewResolution],
+    [SCFormRow rowWithLabel: @"" control: _panelScanning],
   ]];
 
   /* Size the window to the form so the margins stay symmetric */
@@ -179,6 +192,7 @@ NSString * const SCLastDeviceKey = @"LastDevice";
   [_directory setStringValue: [SCPreferences saveDirectory]];
   [_pattern setStringValue: [d stringForKey: SCFileNamePatternKey]];
   [_quality setDoubleValue: [d doubleForKey: SCJPEGQualityKey]];
+  [_panelScanning setState: [d boolForKey: SCPanelScanningKey] ? NSOnState : NSOffState];
   for (i = 0; i < [_previewResolution numberOfItems]; i++)
     {
       if ([[[_previewResolution itemAtIndex: i] representedObject] integerValue]
@@ -206,6 +220,7 @@ NSString * const SCLastDeviceKey = @"LastDevice";
   [d setDouble: [_quality doubleValue] forKey: SCJPEGQualityKey];
   [d setObject: [[_previewResolution selectedItem] representedObject]
         forKey: SCPreviewResolutionKey];
+  [d setBool: [_panelScanning state] == NSOnState forKey: SCPanelScanningKey];
   [self load];
 }
 

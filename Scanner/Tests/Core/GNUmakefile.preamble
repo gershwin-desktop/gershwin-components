@@ -34,3 +34,9 @@ t_IPPUSB_OBJC_FILES += ../../SCIPPUSB.m
 # SCIPPUSB starts ipp-usb through PackageManager's sudo helper
 t_IPPUSB_OBJCFLAGS += -I/System/Library/Headers -Wno-nullability-completeness
 t_IPPUSB_TOOL_LIBS += -L/System/Library/Frameworks/PackageManager.framework/Versions/1 -lPackageManager
+
+../../SCHTTPPost.m_FILE_FLAGS += -fobjc-arc
+../../SCWSDClient.m_FILE_FLAGS += -fobjc-arc
+../../SCWSDEventListener.m_FILE_FLAGS += -fobjc-arc
+t_WSD_OBJC_FILES += ../../SCHTTPPost.m ../../SCWSDClient.m ../../SCWSDEventListener.m ../../SCImageWriter.m ../../SCFax.m ../../SCPDFWriter.m
+t_WSD_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs libtiff-4) -lz

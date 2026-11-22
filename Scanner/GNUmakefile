@@ -31,6 +31,10 @@ Scanner_OBJC_FILES = \
 	SCSoftwareInstaller.m \
 	SCPermissionCheck.m \
 	SCIPPUSB.m \
+	SCHTTPPost.m \
+	SCWSDClient.m \
+	SCWSDEventListener.m \
+	SCPanelScanning.m \
 	SCSaver.m \
 	SCFormView.m \
 	SCOptionControl.m \
@@ -59,6 +63,10 @@ Scanner_HEADER_FILES = \
 	SCSoftwareInstaller.h \
 	SCPermissionCheck.h \
 	SCIPPUSB.h \
+	SCHTTPPost.h \
+	SCWSDClient.h \
+	SCWSDEventListener.h \
+	SCPanelScanning.h \
 	SCSaver.h \
 	SCFormView.h \
 	SCOptionControl.h \

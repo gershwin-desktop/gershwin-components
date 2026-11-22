@@ -18,6 +18,9 @@
 - (SCScanner *) scanner;
 - (BOOL) isScanning;
 
+/* Stops listing this computer on the printer's panel; before closing the scanner */
+- (void) stopPanelScanning;
+
 /* Writes the scanner's settings to the defaults, to restore them next time */
 - (void) saveDeviceSettings;
 

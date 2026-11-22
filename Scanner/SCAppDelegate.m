@@ -305,6 +305,7 @@
 {
   [_scanWindow saveDeviceSettings];
   [[NSUserDefaults standardUserDefaults] synchronize];
+  [_scanWindow stopPanelScanning];
   [[_scanWindow scanner] close];
   [SCScanner exitSANE];
   if ([SCScanner mustSkipExitHandlers])
@@ -450,6 +451,7 @@
     removeObserver: self name: NSWindowWillCloseNotification
             object: [_scanWindow window]];
   [[_scanWindow window] close];
+  [_scanWindow stopPanelScanning];
   [[_scanWindow scanner] close];
   _scanWindow = nil;
 }

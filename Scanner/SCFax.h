@@ -19,3 +19,9 @@ BOOL SCWriteG4TIFF(SCImage *image, NSString *path, NSError **error);
 
 /* The bare G4 data of a 1-bit image, as PDF embeds it (K=-1, 0 is white) */
 NSData *SCG4Data(SCImage *image, NSError **error);
+
+/*
+ * A scan delivered as TIFF (scans from a printer's panel): gray or RGB with
+ * 8 or 16 bits, or 1-bit black and white, any compression libtiff knows
+ */
+SCImage *SCImageFromTIFFData(NSData *data, NSError **error);

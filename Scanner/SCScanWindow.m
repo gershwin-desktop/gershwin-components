@@ -19,6 +19,8 @@
 #import "SCTextRecognizer.h"
 #import "SCSoftwareInstaller.h"
 #import "SCLanguageGuess.h"
+#import "SCPanelScanning.h"
+#import "SCWSDClient.h"
 #import "SCMetrics.h"
 #include <sane/saneopts.h>
 
@@ -68,7 +70,7 @@ SCPageSizes(void)
 
 @interface SCScanWindow () <SCScannerDelegate, SCPreviewViewDelegate,
                             SCOptionControlDelegate, SCPageListViewDelegate,
-                            NSWindowDelegate>
+                            SCPanelScanningDelegate, NSWindowDelegate>
 @end
 
 @implementation SCScanWindow
@@ -97,6 +99,9 @@ SCPageSizes(void)
   NSButton *_saveButton;
   NSButton *_discardButton;
   BOOL _saving;
+  /* Lists this computer on the printer's panel while the window is open */
+  SCPanelScanning *_panel;
+  NSString *_panelHint;
   /* Languages already suggested in this session, and whether one is being offered */
   NSMutableSet *_suggestedLanguages;
   BOOL _suggestingLanguage;
@@ -145,6 +150,7 @@ SCPageSizes(void)
       [self buildContent];
       [self restoreDeviceSettings];
       [self rebuildOptions];
+      [self startPanelScanning];
       [self updateButtons];
       [[NSNotificationCenter defaultCenter]
         addObserver: self selector: @selector(optionsDidChange:)
@@ -1155,6 +1161,8 @@ SCPageSizes(void)
   BOOL feeder = [_scanner sourceFeedsMultiplePages];
 
   /* A preview from the feeder would use up the first sheet */
+  /* A scan started at the printer's panel has the scanner meanwhile */
+  idle = idle && ![_panel isBusy];
   [_previewButton setEnabled: idle && !feeder && [_scanner hasScanArea]];
   [_scanButton setEnabled: idle];
   [_cancelButton setEnabled: !idle];
@@ -1455,15 +1463,162 @@ SCPageSizes(void)
   [self showPageCountStatus];
 }
 
+#pragma mark Scanning from the printer's panel
+
+/* airscan names the network address in the device's type ("ip=192.0.2.30") */
+- (NSString *) printerHost
+{
+  NSString *kind = [[_scanner device] kind];
+  NSRange r = [kind rangeOfString: @"ip="];
+
+  if (r.location == NSNotFound)
+    {
+      return nil;
+    }
+  return [[[kind substringFromIndex: NSMaxRange(r)]
+            componentsSeparatedByCharactersInSet:
+              [NSCharacterSet whitespaceCharacterSet]] objectAtIndex: 0];
+}
+
+- (void) startPanelScanning
+{
+  NSString *host = [self printerHost];
+
+  if (host == nil || ![[NSUserDefaults standardUserDefaults] boolForKey: SCPanelScanningKey])
+    {
+      return;
+    }
+  _panel = [[SCPanelScanning alloc] initWithHost: host
+                                     displayName: [SCPanelScanning defaultDisplayName]];
+  [_panel setDelegate: self];
+  [_panel start];
+}
+
+- (void) stopPanelScanning
+{
+  [_panel stop];
+  _panel = nil;
+}
+
+- (void) panelScanningDidChangeStatus: (NSString *)name
+{
+  _panelHint = [name copy];
+  if (_mode == SCScanModeIdle && [_pages count] == 0)
+    {
+      [self showPageCountStatus];
+    }
+}
+
+/* Thousandths of an inch, as WS-Scan measures, from a fraction of the bed */
+- (NSRect) panelRegionForFraction: (NSRect)f
+{
+  NSSize bed = [_scanner scanAreaSizeInMillimeters];
+  double k = 1000.0 / 25.4;
+
+  return NSMakeRect(round(NSMinX(f) * bed.width * k), round(NSMinY(f) * bed.height * k),
+                    round(NSWidth(f) * bed.width * k), round(NSHeight(f) * bed.height * k));
+}
+
+- (SCWSDScanTicket *) panelScanTicketForSource: (NSString *)inputSource
+{
+  SCWSDScanTicket *ticket = [SCWSDScanTicket new];
+  NSString *mode = [[_scanner optionNamed: @SANE_NAME_SCAN_MODE] value];
+  NSArray *selections = [_preview selections];
+  NSInteger active = [_preview activeSelection];
+  BOOL feeder = ![inputSource isEqualToString: @"Platen"];
+  NSRect area = NSMakeRect(0, 0, 1, 1);
+
+  if (_mode != SCScanModeIdle || _saving)
+    {
+      return nil;
+    }
+  [ticket setInputSource: inputSource ? inputSource : @"Platen"];
+  /* Scanner's own black and white is made from gray, like its other scans */
+  if ([mode isKindOfClass: [NSString class]]
+      && [mode isEqualToString: [self nativeLineArtMode]])
+    {
+      [ticket setColorProcessing: @"BlackAndWhite1"];
+    }
+  else if ([mode isKindOfClass: [NSString class]]
+           && [[mode lowercaseString] hasPrefix: @"color"])
+    {
+      [ticket setColorProcessing: @"RGB24"];
+    }
+  else
+    {
+      [ticket setColorProcessing: @"Grayscale8"];
+    }
+  [ticket setResolution: [_scanner resolution] > 0 ? (NSUInteger)[_scanner resolution] : 300];
+  /* The same area a Scan here would take: the chosen selection or page size */
+  if (feeder)
+    {
+      if ([_pageSize indexOfSelectedItem] > 0 && active >= 0)
+        {
+          area = [[selections objectAtIndex: active] rectValue];
+        }
+    }
+  else if ([selections count] > 0)
+    {
+      area = [[selections objectAtIndex: active >= 0 ? active : 0] rectValue];
+    }
+  [ticket setRegion: [self panelRegionForFraction: area]];
+  return ticket;
+}
+
+- (void) panelScanDidStart
+{
+  [_status setStringValue: @"Scanning from the printer's panel..."];
+  [_progress setIndeterminate: YES];
+  [_progress setHidden: NO];
+  [_progress startAnimation: nil];
+  [self updateButtons];
+}
+
+- (void) panelScanDidDeliverPage: (SCImage *)page
+{
+  [_pages addObject: [self processedImage: page]];
+  [_pageList setPages: _pages];
+  [self showPageAtIndex: [_pages count]];
+  [self updateButtons];
+  [_status setStringValue: [NSString stringWithFormat:
+    @"Scanning from the printer's panel... page %lu.", (unsigned long)[_pages count]]];
+}
+
+- (void) panelScanDidFinishWithError: (NSError *)error
+{
+  [_progress stopAnimation: nil];
+  [_progress setIndeterminate: NO];
+  [self updateButtons];
+  if (error != nil)
+    {
+      [_status setStringValue: @""];
+      [self showError: error];
+      return;
+    }
+  [self showPageCountStatus];
+  /* Brought forward: the user was at the printer, not at the computer */
+  [[self window] orderFront: nil];
+}
+
 #pragma mark Pages
 
 - (void) showPageCountStatus
 {
   NSUInteger n = [_pages count];
 
+  /* Both ways to start a scan are named, the one here and the printer's panel */
   if (n == 0 && [_scanner sourceFeedsMultiplePages])
     {
-      [_status setStringValue: @"Put the pages into the document feeder, then choose Scan."];
+      [_status setStringValue: _panelHint
+        ? [NSString stringWithFormat: @"Put the pages into the document feeder, then "
+                    @"choose Scan, or \"%@\" on the printer's panel.", _panelHint]
+        : @"Put the pages into the document feeder, then choose Scan."];
+      return;
+    }
+  if (n == 0 && _panelHint != nil)
+    {
+      [_status setStringValue: [NSString stringWithFormat:
+        @"You can also scan from the printer's panel: choose \"%@\" there.", _panelHint]];
       return;
     }
   [_status setStringValue: n == 0 ? @"" : [NSString stringWithFormat:
