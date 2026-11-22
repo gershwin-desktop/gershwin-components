@@ -138,10 +138,14 @@ static MenuBarGeometry MenuControllerBarGeometry(NSRect *primaryFrame)
   /* With per-monitor scales the toolkit draws the bar at the primary's own
    * factor, which differs from GSScaleFactor when the primary is not the
    * monitor GSScaleFactor was chosen for; laid out at GSScaleFactor the
-   * extras ended short of the bar's right edge. */
+   * extras ended short of the bar's right edge.  Without mixed scales the
+   * toolkit uses GSScaleFactor and ignores the output's DPI, and so must we,
+   * or the bar is laid out for one scale and drawn at another. */
   MenuControllerBarScale = MenuBarScaleForMonitor(
       MenuBarMonitorDPI([MenuUtils sharedDisplay], xRect),
-      MenuControllerScaleFactor());
+      MenuControllerScaleFactor(),
+      MenuBarMonitorsHaveMixedScales([MenuUtils sharedDisplay],
+                                     MenuControllerScaleFactor()));
   return MenuBarGeometryForMonitor(xRect, rootSize,
                                    [[GSTheme theme] menuBarHeight],
                                    MenuControllerBarScale);

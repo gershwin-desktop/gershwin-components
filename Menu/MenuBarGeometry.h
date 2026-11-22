@@ -32,8 +32,15 @@ MenuBarGeometry MenuBarGeometryForMonitor(NSRect primaryXRect, NSSize rootSize,
  * content is laid out for the same scale its window is drawn at.  dpi is
  * the monitor's RandR output property "DPI" (0 when it has none); like
  * libs-back, 96 dpi is 1.0 and a monitor without one follows globalScale
- * (GSScaleFactor). */
-CGFloat MenuBarScaleForMonitor(long dpi, CGFloat globalScale);
+ * (GSScaleFactor).  mixed says whether the monitors differ in scale, see
+ * below: when they do not, the toolkit ignores the DPI and uses globalScale. */
+CGFloat MenuBarScaleForMonitor(long dpi, CGFloat globalScale, BOOL mixed);
+
+/* YES when at least two lit monitors have different scales (RandR "DPI" / 96,
+ * a monitor without one counting as globalScale).  Only then does the toolkit
+ * draw a monitor at its own factor; with one monitor, or all alike, it uses
+ * GSScaleFactor whatever the output's DPI says. */
+BOOL MenuBarMonitorsHaveMixedScales(Display *dpy, CGFloat globalScale);
 
 /* The RandR "DPI" of the lit output whose CRTC is exactly xRect (X root
  * coordinates), 0 when no output matches or it has no such property. */

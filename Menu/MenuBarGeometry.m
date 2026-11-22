@@ -43,9 +43,9 @@ CGFloat MenuBarSlideInTop(CGFloat finalTop, CGFloat barHeight, CGFloat progress)
   return round(finalTop + barHeight - eased * barHeight);
 }
 
-CGFloat MenuBarScaleForMonitor(long dpi, CGFloat globalScale)
+CGFloat MenuBarScaleForMonitor(long dpi, CGFloat globalScale, BOOL mixed)
 {
-  if (dpi > 0)
+  if (mixed && dpi > 0)
     return dpi / 96.0;
   return (globalScale > 0) ? globalScale : 1.0;
 }
@@ -109,4 +109,41 @@ long MenuBarMonitorDPI(Display *dpy, NSRect xRect)
     }
   XRRFreeScreenResources(res);
   return dpi;
+}
+
+BOOL MenuBarMonitorsHaveMixedScales(Display *dpy, CGFloat globalScale)
+{
+  Atom dpiAtom;
+  XRRScreenResources *res;
+  long first = 0;
+  BOOL mixed = NO;
+  int i;
+
+  if (dpy == NULL)
+    return NO;
+  dpiAtom = XInternAtom(dpy, "DPI", True);
+  res = XRRGetScreenResourcesCurrent(dpy, RootWindow(dpy, DefaultScreen(dpy)));
+  if (res == NULL)
+    return NO;
+  for (i = 0; i < res->noutput && !mixed; i++)
+    {
+      XRROutputInfo *oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
+
+      if (oi == NULL)
+        continue;
+      if (oi->crtc != None)
+        {
+          long dpi = (dpiAtom != None) ? OutputDPI(dpy, res->outputs[i], dpiAtom) : 0;
+
+          if (dpi <= 0)
+            dpi = lround(((globalScale > 0) ? globalScale : 1.0) * 96.0);
+          if (first == 0)
+            first = dpi;
+          else if (dpi != first)
+            mixed = YES;
+        }
+      XRRFreeOutputInfo(oi);
+    }
+  XRRFreeScreenResources(res);
+  return mixed;
 }
