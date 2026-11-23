@@ -25,4 +25,11 @@
 @property (readonly, strong) id<GWSystemCommandExecutor> executor;
 @property (readonly) NSString *capturedErrorOutput;
 
+/* The directory dpkg keeps its database and the journal (updates/) of an
+ * install in progress in.  Files in updates/ mean an install was interrupted,
+ * and apt refuses to work until `dpkg --configure -a` has finished it.  It is
+ * not always /var/lib/dpkg: it is where apt's Dir::State::status lives, which
+ * apt-config reports.  Settable for tests. */
+@property (copy) NSString *dpkgAdminDirectory;
+
 @end

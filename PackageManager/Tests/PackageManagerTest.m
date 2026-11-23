@@ -838,6 +838,9 @@ void AGRegisterKDEAppImagePickerTests(void);
 
 @interface BackendTestHelper : NSObject
 + (BOOL)testDebBackendExecuteCommand;
++ (BOOL)testDebBackendRepairsInterruptedDpkgFirst;
++ (BOOL)testDebBackendLeavesCleanDpkgAlone;
++ (BOOL)testDebBackendAsksTheDatabaseAptUses;
 + (BOOL)testArchBackendExecuteCommand;
 + (BOOL)testFreeBSDBackendExecuteCommand;
 + (BOOL)testOpenBSDBackendExecuteCommand;
@@ -847,6 +850,92 @@ void AGRegisterKDEAppImagePickerTests(void);
 @end
 
 @implementation BackendTestHelper
+
++ (BOOL)testDebBackendAsksTheDatabaseAptUses
+{
+  /* Where apt keeps dpkg's state is configurable (Dir::State::status).  If the
+     installed check asked /var/lib/dpkg anyway, a package apt has just
+     installed would be reported missing for ever. */
+  GWMockSystemCommandExecutor *executor = [[GWMockSystemCommandExecutor alloc] init];
+  [executor setResultForCommand:@"/usr/bin/apt-config"
+                      arguments:@[@"shell", @"STATUS", @"Dir::State::status"]
+                       exitCode:0
+                         output:@"STATUS='/var/lib/shadow-dpkg/status'\n"
+                   errorOutput:@""];
+  GWDebBackend *backend = [[GWDebBackend alloc] initWithExecutor:executor];
+  (void)[backend isPackageInstalled:@"cups"];
+
+  BOOL asked = NO;
+  for (NSDictionary *call in executor.recordedCalls)
+    {
+      NSArray *args = call[@"args"];
+      if ([call[@"path"] hasSuffix:@"dpkg-query"] && [args containsObject:@"--admindir"]
+          && [args containsObject:@"/var/lib/shadow-dpkg"])
+        asked = YES;
+    }
+  TAssertTrue(asked, @"dpkg-query was pointed at the admin directory apt uses");
+  return YES;
+}
+
++ (BOOL)testDebBackendRepairsInterruptedDpkgFirst
+{
+  /* dpkg leaves journal files in its updates directory when an install was
+     interrupted, and apt then refuses to work until `dpkg --configure -a`
+     has run.  The journal is looked at, not apt's translated message. */
+  NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+    [NSString stringWithFormat:@"dpkg-updates-%d", (int)getpid()]];
+  [[NSFileManager defaultManager] createDirectoryAtPath:[dir stringByAppendingPathComponent:@"updates"]
+                            withIntermediateDirectories:YES attributes:nil error:NULL];
+  BOOL wrote = [@"x" writeToFile:[dir stringByAppendingPathComponent:@"updates/0000"]
+                      atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+  TAssertTrue(wrote, @"fixture journal written");
+
+  GWMockSystemCommandExecutor *executor = [[GWMockSystemCommandExecutor alloc] init];
+  GWDebBackend *backend = [[GWDebBackend alloc] initWithExecutor:executor];
+  [backend setDpkgAdminDirectory:dir];
+  NSError *error = nil;
+  BOOL ok = [backend installPackages:@[@"sl"] localFilePaths:@[] progress:nil error:&error];
+  TAssertTrue(ok, @"the install goes through");
+
+  NSInteger configureIndex = -1, installIndex = -1;
+  NSArray *calls = executor.recordedCalls;
+  for (NSUInteger i = 0; i < [calls count]; i++)
+    {
+      NSArray *args = calls[i][@"args"];
+      if ([args containsObject:@"--configure"] && configureIndex < 0)
+        configureIndex = (NSInteger)i;
+      if ([args containsObject:@"install"] && installIndex < 0)
+        installIndex = (NSInteger)i;
+    }
+  TAssertTrue(configureIndex >= 0, @"dpkg --configure -a ran");
+  TAssertTrue(installIndex > configureIndex, @"and before the apt-get install");
+  NSArray *configureArgs = calls[(NSUInteger)configureIndex][@"args"];
+  TAssertTrue([configureArgs containsObject:@"--admindir"] && [configureArgs containsObject:dir],
+              @"against the admin directory apt really uses");
+  [[NSFileManager defaultManager] removeItemAtPath:dir error:NULL];
+  return YES;
+}
+
++ (BOOL)testDebBackendLeavesCleanDpkgAlone
+{
+  NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+    [NSString stringWithFormat:@"dpkg-clean-%d", (int)getpid()]];
+  [[NSFileManager defaultManager] createDirectoryAtPath:[dir stringByAppendingPathComponent:@"updates"]
+                            withIntermediateDirectories:YES attributes:nil error:NULL];
+  GWMockSystemCommandExecutor *executor = [[GWMockSystemCommandExecutor alloc] init];
+  GWDebBackend *backend = [[GWDebBackend alloc] initWithExecutor:executor];
+  [backend setDpkgAdminDirectory:dir];
+  NSError *error = nil;
+  BOOL ok = [backend installPackages:@[@"sl"] localFilePaths:@[] progress:nil error:&error];
+  TAssertTrue(ok, @"the install goes through");
+  for (NSDictionary *call in executor.recordedCalls)
+    {
+      TAssertFalse([call[@"args"] containsObject:@"--configure"],
+                   @"nothing to repair, so no dpkg --configure");
+    }
+  [[NSFileManager defaultManager] removeItemAtPath:dir error:NULL];
+  return YES;
+}
 
 + (BOOL)testDebBackendExecuteCommand
 {
@@ -2165,6 +2254,15 @@ static BOOL testNearly(float a, float b)
   });
 
   // --- Backend Tests ---
+  runTest(@"testDebBackendAsksTheDatabaseAptUses", ^{
+    return [BackendTestHelper testDebBackendAsksTheDatabaseAptUses];
+  });
+  runTest(@"testDebBackendRepairsInterruptedDpkgFirst", ^{
+    return [BackendTestHelper testDebBackendRepairsInterruptedDpkgFirst];
+  });
+  runTest(@"testDebBackendLeavesCleanDpkgAlone", ^{
+    return [BackendTestHelper testDebBackendLeavesCleanDpkgAlone];
+  });
   runTest(@"testDebBackendExecuteCommand", ^{
     return [BackendTestHelper testDebBackendExecuteCommand];
   });

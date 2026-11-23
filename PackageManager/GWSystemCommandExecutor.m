@@ -10,6 +10,19 @@
 
 #import "GWSystemCommandExecutor.h"
 
+/* The package tools' messages are translated, and this code looks at some of
+   them (the apt lock wait) and shows the rest: one fixed locale keeps both the
+   same in every language. */
+static NSDictionary *GWPackageToolEnvironment(void)
+{
+  NSMutableDictionary *environment =
+    [NSMutableDictionary dictionaryWithDictionary:[[NSProcessInfo processInfo] environment]];
+  [environment setObject:@"C" forKey:@"LC_ALL"];
+  [environment setObject:@"C" forKey:@"LANG"];
+  [environment removeObjectForKey:@"LANGUAGE"];
+  return environment;
+}
+
 @implementation GWSystemCommandExecutor
 
 static GWSystemCommandExecutor *sharedExecutor = nil;
@@ -43,6 +56,7 @@ static GWSystemCommandExecutor *sharedExecutor = nil;
   NSTask *task = [[NSTask alloc] init];
   [task setLaunchPath:path];
   [task setArguments:args];
+  [task setEnvironment:GWPackageToolEnvironment()];
 
   NSPipe *outPipe = [NSPipe pipe];
   NSPipe *errPipe = [NSPipe pipe];
@@ -198,6 +212,7 @@ static NSThread *SWStartReader(NSFileHandle *handle,
   NSTask *task = [[NSTask alloc] init];
   [task setLaunchPath:path];
   [task setArguments:args];
+  [task setEnvironment:GWPackageToolEnvironment()];
 
   NSPipe *outPipe = [NSPipe pipe];
   [task setStandardOutput:outPipe];

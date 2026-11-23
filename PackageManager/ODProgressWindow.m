@@ -16,9 +16,9 @@ static const CGFloat kBtnHeight = 24.0;
 static const CGFloat kBtnWide = 100.0;
 static const CGFloat kBarHeight = 20.0;
 static const CGFloat kLineHeight = 18.0;
+static const CGFloat kStatusHeight = 14.0;
 static const CGFloat kSpace16 = 16.0;
 static const CGFloat kSpace8 = 8.0;
-static const CGFloat kSpace24 = 24.0;
 
 @implementation ODProgressWindow
 
@@ -26,7 +26,7 @@ static const CGFloat kSpace24 = 24.0;
                       message:(NSString *)message
                      packages:(NSArray *)packages
 {
-  CGFloat contentH = kTopMargin + kLineHeight + kSpace8 + kBarHeight + kSpace16 + kBtnHeight + kBottomMargin;
+  CGFloat contentH = kTopMargin + kLineHeight + kSpace8 + kBarHeight + kSpace8 + kStatusHeight + kSpace16 + kBtnHeight + kBottomMargin;
   CGFloat winH = contentH;
 
   self = [super initWithContentRect:NSMakeRect(0, 0, kWinWidth, winH)
@@ -60,7 +60,22 @@ static const CGFloat kSpace24 = 24.0;
   [_progressBar startAnimation:nil];
   [content addSubview:_progressBar];
 
-  y -= kBarHeight + kSpace16;
+  y -= kBarHeight + kSpace8 + kStatusHeight;
+
+  /* Its own row between the bar and the button, placed from the content
+     height: the window frame includes the title bar, and a row computed from
+     it landed on top of the bar. */
+  _statusField = [[NSTextField alloc] initWithFrame:NSMakeRect(kSideMargin, y, kWinWidth - 2 * kSideMargin, kStatusHeight)];
+  [_statusField setBezeled:NO];
+  [_statusField setDrawsBackground:NO];
+  [_statusField setEditable:NO];
+  [_statusField setSelectable:NO];
+  [_statusField setFont:[NSFont systemFontOfSize:11]];
+  [_statusField setTextColor:[NSColor secondaryLabelColor]];
+  [[_statusField cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+  [content addSubview:_statusField];
+
+  y -= kSpace16 + kBtnHeight;
 
   _cancelButton = [[NSButton alloc] initWithFrame:NSMakeRect(kWinWidth - kSideMargin - kBtnWide, y, kBtnWide, kBtnHeight)];
   [_cancelButton setTitle:@"Cancel"];
@@ -95,18 +110,6 @@ static const CGFloat kSpace24 = 24.0;
 
 - (void)setStatus:(NSString *)status
 {
-  if (!_statusField)
-    {
-      CGFloat y = [self frame].size.height - kTopMargin - kLineHeight - kSpace8 - kBarHeight - kSpace16;
-      _statusField = [[NSTextField alloc] initWithFrame:NSMakeRect(kSideMargin, y, kWinWidth - 2 * kSideMargin - kBtnWide - kSpace24, kLineHeight)];
-      [_statusField setBezeled:NO];
-      [_statusField setDrawsBackground:NO];
-      [_statusField setEditable:NO];
-      [_statusField setSelectable:NO];
-      [_statusField setFont:[NSFont systemFontOfSize:11]];
-      [_statusField setTextColor:[NSColor secondaryLabelColor]];
-      [[self contentView] addSubview:_statusField];
-    }
   [_statusField setStringValue:status ?: @""];
 }
 

@@ -15,10 +15,14 @@
 static NSString *const kAPTGetPath = @"/usr/bin/apt-get";
 static NSString *const kDpkgPath = @"/usr/bin/dpkg";
 static NSString *const kDpkgQueryPath = @"/usr/bin/dpkg-query";
+static NSString *const kAptConfigPath = @"/usr/bin/apt-config";
 
 #pragma mark - GWDebBackend
 
 @implementation GWDebBackend
+{
+  NSString *_resolvedAdminDirectory;
+}
 
 @synthesize backendName = _backendName;
 
@@ -52,14 +56,71 @@ static NSString *const kDpkgQueryPath = @"/usr/bin/dpkg-query";
   // "unknown option -W" and a non-zero exit, which isPackageInstalled: was
   // silently reading as "not installed" - so every declared package looked
   // missing regardless of its real state.
+  // The database apt installs into, which a system may keep elsewhere than
+  // /var/lib/dpkg: a package apt has just installed must not read as missing.
+  NSMutableArray *queryArgs = [NSMutableArray array];
+  NSString *adminDirectory = [self resolvedDpkgAdminDirectory];
+  if (adminDirectory != nil)
+    [queryArgs addObjectsFromArray:@[@"--admindir", adminDirectory]];
+  [queryArgs addObjectsFromArray:@[@"-W", @"-f=${Status}", packageName]];
   NSString *output = nil;
   int status = [_executor execute:kDpkgQueryPath
-                        arguments:@[@"-W", @"-f=${Status}", packageName]
+                        arguments:queryArgs
                            output:&output];
   if (status != 0) {
     return NO;
   }
   return [output rangeOfString:@"install ok installed"].location != NSNotFound;
+}
+
+#pragma mark - Interrupted installs
+
+/* Where apt keeps dpkg's state, asked of apt itself: a system may point
+   Dir::State::status elsewhere, and the journal that blocks apt is then there.
+   nil when apt cannot say, in which case nothing is repaired. */
+- (NSString *)resolvedDpkgAdminDirectory
+{
+  if (_dpkgAdminDirectory != nil)
+    return _dpkgAdminDirectory;
+  if (_resolvedAdminDirectory != nil)
+    return _resolvedAdminDirectory;
+  NSString *output = nil;
+  int status = [_executor execute:kAptConfigPath
+                        arguments:@[@"shell", @"STATUS", @"Dir::State::status"]
+                           output:&output];
+  if (status != 0)
+    return nil;
+  NSRange open = [output rangeOfString:@"'"];
+  NSRange close = [output rangeOfString:@"'" options:NSBackwardsSearch];
+  if (open.location == NSNotFound || close.location <= open.location)
+    return nil;
+  NSString *statusFile = [output substringWithRange:
+    NSMakeRange(open.location + 1, close.location - open.location - 1)];
+  _resolvedAdminDirectory = [statusFile stringByDeletingLastPathComponent];
+  return _resolvedAdminDirectory;
+}
+
+/* An install that was killed (power loss, a stuck run that was stopped) leaves
+   journal files in dpkg's updates directory, and apt then fails with "dpkg was
+   interrupted" until `dpkg --configure -a` finishes the job.  The directory is
+   looked at, not apt's message, which is translated. */
+- (void)repairInterruptedDpkgWithProgress:(nullable id<GWInstallProgressHandler>)progressHandler
+{
+  NSString *adminDirectory = [self resolvedDpkgAdminDirectory];
+  if (adminDirectory == nil)
+    return;
+  NSArray *journal = [[NSFileManager defaultManager]
+    contentsOfDirectoryAtPath:[adminDirectory stringByAppendingPathComponent:@"updates"]
+                        error:NULL];
+  if ([journal count] == 0)
+    return;
+  NSLog(@"GWDebBackend -> dpkg was interrupted, running dpkg --configure -a in %@", adminDirectory);
+  [progressHandler installDidProgress:0.02f message:@"Finishing an interrupted installation..."];
+  NSArray *args = nil;
+  NSString *launchPath = GWSudoCommand(kDpkgPath,
+    @[@"--admindir", adminDirectory, @"--configure", @"-a"], &args);
+  int status = [_executor execute:launchPath arguments:args];
+  NSLog(@"GWDebBackend <- dpkg --configure -a exit code: %d", status);
 }
 
 #pragma mark - GWPackageManagerBackend - Install
@@ -108,6 +169,7 @@ static NSString *const kDpkgQueryPath = @"/usr/bin/dpkg-query";
     }
   }
 
+  [self repairInterruptedDpkgWithProgress:progressHandler];
   [progressHandler installDidProgress:0.05f message:@"Installing packages..."];
 
   // Install packages from repositories
