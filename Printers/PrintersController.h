@@ -7,6 +7,8 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 
+@class PrinterOptionsPanel;
+
 // Forward declaration for CUPS types
 typedef struct cups_dest_s cups_dest_t;
 typedef struct cups_job_s cups_job_t;
@@ -107,6 +109,7 @@ typedef struct cups_job_s cups_job_t;
     PrintJobInfo *selectedJob;
     
     NSPanel *addPrinterPanel;
+    PrinterOptionsPanel *optionsPanel;
     NSTableView *deviceTable;
     NSScrollView *deviceScroll;
     NSTextField *printerNameField;

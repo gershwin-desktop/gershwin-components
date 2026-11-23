@@ -7,8 +7,8 @@ GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 Printers_OBJCFLAGS += -Wall -Wextra -O2 -Wno-deprecated-declarations
 
 BUNDLE_NAME = Printers
-Printers_OBJC_FILES = PrintersPane.m PrintersController.m
-Printers_RESOURCE_FILES = Printers.png
+Printers_OBJC_FILES = PrintersPane.m PrintersController.m PrinterOptionsPanel.m PrinterSupplies.m CupsSystemGroups.m CupsAuthentication.m PrinterListing.m
+Printers_RESOURCE_FILES = Printers.png Dependencies.plist
 Printers_BUNDLE_LIBS = -lPreferencePanes -lcups
 Printers_PRINCIPAL_CLASS = PrintersPane
 PREF_INSTALL_DIR = $(GNUSTEP_SYSTEM_LIBRARY)/Bundles
