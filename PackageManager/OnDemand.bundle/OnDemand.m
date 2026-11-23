@@ -6,22 +6,71 @@
  * OnDemand — GNUstep bundle loaded into every GUI app via GSAppKitUserBundles.
  * When an app launches, checks whether it ships a Resources/Dependencies.plist
  * and offers to install missing packages directly via the system package manager.
+ * A preference pane that ships one is checked the same way when it is selected.
  */
 
 #import "OnDemand.h"
+#import <objc/runtime.h>
 #import <PackageManager/GWPackageInstallSpec.h>
+#import <PackageManager/GWPackageManager.h>
 #import <PackageManager/ODProgressWindow.h>
+
+/* The two NSPreferencePane methods used here; the bundle does not link the
+   PreferencePanes library, which only some hosts have. */
+@protocol ODPreferencePane
+- (NSBundle *)bundle;
+- (void)didSelect;
+@end
+
+/* Receives the package manager's progress on its worker thread. */
+@interface ODInstallObserver : NSObject <GWInstallProgressHandler>
+@property (atomic, copy) NSString *status;
+@end
+
+@implementation ODInstallObserver
+- (void)installDidProgress:(float)progress message:(NSString *)message
+{
+  if ([message length] > 0)
+    self.status = message;
+}
+
+- (void)installDidOutputLine:(NSString *)line
+{
+  NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if ([trimmed length] > 0)
+    self.status = trimmed;
+}
+@end
 
 @interface OnDemand ()
 + (void)_appDidFinishLaunch:(NSNotification *)n;
 + (NSArray *)_missingPackagesFromArray:(NSArray *)packages;
-+ (BOOL)_packageInstalled:(NSString *)package;
 + (void)_showErrorAlert:(NSString *)title detail:(NSString *)detail;
 + (void)_runInstallWithPackages:(NSArray *)packages;
++ (void)_installPaneHook;
++ (BOOL)_showInstallAlertForAppName:(NSString *)appName
+                    missingPackages:(NSArray *)missing
+                         bundlePath:(NSString *)bundlePath;
++ (BOOL)_offerForBundleAtPath:(NSString *)bundlePath;
++ (void)_reportPackagesStillMissingFromPlistAtPath:(NSString *)plistPath;
++ (void)_paneDidSelect:(id<ODPreferencePane>)pane;
 @end
 
-static NSTask *_installTask = nil;
-static NSPipe *_installPipe = nil;
+/* Bundles that were offered their packages: asked once per run of the host,
+   whatever the answer.  An install that fails, or that the system does not
+   notice, would otherwise be offered again on the re-selection that follows it,
+   for ever. */
+static NSMutableSet *_askedBundlePaths = nil;
+
+static IMP _originalPaneDidSelect = NULL;
+
+static void paneDidSelect(id pane, SEL _cmd)
+{
+  ((void (*)(id, SEL))(void *)_originalPaneDidSelect)(pane, _cmd);
+  [OnDemand _paneDidSelect:pane];
+}
+
 static ODProgressWindow *_progressWin = nil;
 
 @implementation OnDemand
@@ -48,53 +97,127 @@ static ODProgressWindow *_progressWin = nil;
       [bundlePath hasPrefix:@"/System/Applications/Utilities/OnDemand"])
     return;
 
+  [self _installPaneHook];
+
+  /* Let the app finish coming up before a dialog appears. */
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    [self _offerForBundleAtPath:bundlePath];
+  });
+}
+
+/* SystemPreferences loads every pane's class at startup, only to ask whether
+   the pane is compatible, so the moment to offer a pane's packages is when the
+   user selects it.  Every pane calls through to NSPreferencePane's -didSelect. */
++ (void)_installPaneHook
+{
+  Class paneClass = NSClassFromString(@"NSPreferencePane");
+  Method method = paneClass ? class_getInstanceMethod(paneClass, @selector(didSelect)) : NULL;
+  if (method == NULL || _originalPaneDidSelect != NULL)
+    return;
+  _originalPaneDidSelect = method_setImplementation(method, (IMP)(void *)paneDidSelect);
+}
+
++ (void)_paneDidSelect:(id<ODPreferencePane>)pane
+{
+  NSString *bundlePath = [[pane bundle] bundlePath];
+  if (bundlePath == nil)
+    return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if ([self _offerForBundleAtPath:bundlePath])
+      {
+        /* The pane looked for what it needs before it was there. */
+        [pane didSelect];
+      }
+  });
+}
+
+/* YES when the user had packages installed. */
++ (BOOL)_offerForBundleAtPath:(NSString *)bundlePath
+{
   NSString *depsPlist = [bundlePath stringByAppendingPathComponent:
                            @"Resources/Dependencies.plist"];
   if (![[NSFileManager defaultManager] fileExistsAtPath:depsPlist])
-    return;
+    return NO;
 
   NSLog(@"OnDemand bundle: found Dependencies.plist in %@", bundlePath);
 
-  NSString *appName = [[bundlePath lastPathComponent] stringByDeletingPathExtension];
+  if ([_askedBundlePaths containsObject:bundlePath])
+    return NO;
 
+  NSString *appName = [[bundlePath lastPathComponent] stringByDeletingPathExtension];
+  NSArray *missing = [self missingPackagesFromPlistAtPath:depsPlist];
+
+  if ([missing count] == 0)
+    {
+      NSLog(@"OnDemand bundle: all dependencies satisfied for %@", appName);
+      return NO;
+    }
+
+  NSLog(@"OnDemand bundle: missing packages for %@: %@", appName, missing);
+
+  BOOL installed = [self _showInstallAlertForAppName:appName missingPackages:missing
+                                          bundlePath:bundlePath];
+  if (installed)
+    [self _reportPackagesStillMissingFromPlistAtPath:depsPlist];
+  return installed;
+}
+
+/* The install went through but the system does not list the packages: say so
+   instead of asking again. */
++ (void)_reportPackagesStillMissingFromPlistAtPath:(NSString *)plistPath
+{
+  NSArray *stillMissing = [self missingPackagesFromPlistAtPath:plistPath];
+  if ([stillMissing count] == 0)
+    return;
+  NSLog(@"OnDemand bundle: still missing after the install: %@", stillMissing);
+  [self _showErrorAlert:@"Software Still Missing"
+                 detail:[NSString stringWithFormat:
+    @"The installation finished, but the system still does not list:\n\n• %@",
+    [stillMissing componentsJoinedByString:@"\n• "]]];
+}
+
++ (NSArray *)missingPackagesFromPlistAtPath:(NSString *)plistPath
+{
   /* The framework resolves the plist: the packages are named per
      distribution, so the entry is picked by what this machine really is,
      not by what it was compiled on. */
   NSError *specError = nil;
   GWPackageInstallSpec *spec =
-    [[GWPackageInstallSpec alloc] initWithPlistAtPath:depsPlist
+    [[GWPackageInstallSpec alloc] initWithPlistAtPath:plistPath
                                              specType:GWPackageInstallSpecTypeInstall
                                                 error:&specError];
   if (!spec)
     {
-      NSLog(@"OnDemand bundle: cannot read %@: %@", depsPlist, specError);
-      return;
+      NSLog(@"OnDemand bundle: cannot read %@: %@", plistPath, specError);
+      return @[];
     }
-  NSArray *packages = [spec packages];
-
-  if (!packages || [packages count] == 0)
-    {
-      NSLog(@"OnDemand bundle: no packages to install for %@", appName);
-      return;
-    }
-
-  NSArray *missing = [self _missingPackagesFromArray:packages];
-
-  if ([missing count] == 0)
-    {
-      NSLog(@"OnDemand bundle: all dependencies satisfied for %@", appName);
-      return;
-    }
-
-  NSLog(@"OnDemand bundle: missing packages for %@: %@", appName, missing);
-
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-    [self _showInstallAlertForAppName:appName missingPackages:missing];
-  });
+  return [self _missingPackagesFromArray:[spec packages]];
 }
 
-+ (void)_showInstallAlertForAppName:(NSString *)appName missingPackages:(NSArray *)missing
++ (BOOL)installPackagesFromPlistAtPath:(NSString *)plistPath title:(NSString *)title
 {
+  NSArray *missing = [self missingPackagesFromPlistAtPath:plistPath];
+  if ([missing count] == 0)
+    return YES;
+  if (![self _showInstallAlertForAppName:title missingPackages:missing bundlePath:nil])
+    return NO;
+  NSArray *stillMissing = [self missingPackagesFromPlistAtPath:plistPath];
+  if ([stillMissing count] > 0)
+    [self _reportPackagesStillMissingFromPlistAtPath:plistPath];
+  return [stillMissing count] == 0;
+}
+
++ (BOOL)_showInstallAlertForAppName:(NSString *)appName
+                    missingPackages:(NSArray *)missing
+                         bundlePath:(NSString *)bundlePath
+{
+  if (bundlePath != nil)
+    {
+      if (_askedBundlePaths == nil)
+        _askedBundlePaths = [NSMutableSet set];
+      [_askedBundlePaths addObject:bundlePath];
+    }
+
   NSAlert *alert = [[NSAlert alloc] init];
   [alert setMessageText:[NSString stringWithFormat:
     @"%@ needs additional software to run.", appName]];
@@ -109,122 +232,80 @@ static ODProgressWindow *_progressWin = nil;
   if (result != NSAlertFirstButtonReturn)
     {
       NSLog(@"OnDemand bundle: user skipped installation for %@", appName);
-      return;
+      return NO;
     }
 
   [self _runInstallWithPackages:missing];
+  return YES;
 }
 
 + (void)_runInstallWithPackages:(NSArray *)packages
 {
   NSLog(@"OnDemand bundle: installing packages: %@", packages);
 
-  NSString *pmBin = nil;
-  NSMutableArray *pmArgs = [NSMutableArray array];
-
-  if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/apt-get"])
-    {
-      pmBin = @"/usr/bin/sudo";
-      [pmArgs addObject:@"-A"];
-      [pmArgs addObject:@"-E"];
-      [pmArgs addObject:@"/usr/bin/apt-get"];
-      [pmArgs addObject:@"install"];
-      [pmArgs addObjectsFromArray:packages];
-      [pmArgs addObject:@"-y"];
-    }
-  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/dnf"])
-    {
-      pmBin = @"/usr/bin/sudo";
-      [pmArgs addObject:@"-A"];
-      [pmArgs addObject:@"-E"];
-      [pmArgs addObject:@"/usr/bin/dnf"];
-      [pmArgs addObject:@"install"];
-      [pmArgs addObjectsFromArray:packages];
-    }
-  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/pacman"])
-    {
-      pmBin = @"/usr/bin/sudo";
-      [pmArgs addObject:@"-A"];
-      [pmArgs addObject:@"-E"];
-      [pmArgs addObject:@"/usr/bin/pacman"];
-      [pmArgs addObject:@"-S"];
-      [pmArgs addObjectsFromArray:packages];
-    }
-  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/sbin/pkg"])
-    {
-      pmBin = @"/usr/bin/sudo";
-      [pmArgs addObject:@"-A"];
-      [pmArgs addObject:@"-E"];
-      [pmArgs addObject:@"/usr/sbin/pkg"];
-      [pmArgs addObject:@"install"];
-      [pmArgs addObjectsFromArray:packages];
-    }
-  else
-    {
-      [self _showErrorAlert:@"No Package Manager Found"
-                      detail:@"Could not find apt-get, dnf, pacman, or pkg.\n\nPlease install packages manually."];
-      return;
-    }
-
-  NSLog(@"OnDemand bundle: running: %@ %@", pmBin, [pmArgs componentsJoinedByString:@" "]);
-
-  _installTask = [[NSTask alloc] init];
-  [_installTask setLaunchPath:pmBin];
-  [_installTask setArguments:pmArgs];
-  [_installTask setEnvironment:[NSProcessInfo processInfo].environment];
-
-  _installPipe = [NSPipe pipe];
-  [_installTask setStandardOutput:_installPipe];
-  [_installTask setStandardError:_installPipe];
-
+  /* The install itself is PackageManager's: it knows every supported system's
+     package tool, finishes an interrupted install first, and runs the tools in
+     a fixed locale. */
   _progressWin = [[ODProgressWindow alloc] initWithTitle:@"Installing..."
                                                   message:@"Installing required packages..."
                                                  packages:packages];
-
+  /* The static reference owns the window; a window that releases itself when
+     closed would be freed under it. */
+  [_progressWin setReleasedWhenClosed:NO];
   [_progressWin showWindow:nil];
 
-  @try
-    {
-      [_installTask launch];
-    }
-  @catch (NSException *e)
-    {
-      [_progressWin close];
-      [self _showErrorAlert:@"Installation Failed"
-                      detail:[NSString stringWithFormat:@"Could not run package manager:\n%@", e]];
-      return;
-    }
+  ODInstallObserver *observer = [[ODInstallObserver alloc] init];
+  __block BOOL finished = NO;
+  __block BOOL succeeded = NO;
+  __block NSError *installError = nil;
+  __block NSString *failureDetail = nil;
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    GWPackageManager *manager = [GWPackageManager sharedManager];
+    NSError *error = nil;
+    BOOL ok = [manager installPackages:packages localFilePaths:@[] progress:observer error:&error];
+    installError = error;
+    failureDetail = [manager capturedErrorOutput];
+    succeeded = ok;
+    finished = YES;
+  });
 
-  while ([_installTask isRunning])
+  /* AppKit events are only dispatched by the application's own event loop, so
+     it is pumped here: spinning the plain run loop left the window unpainted. */
+  NSString *shownStatus = nil;
+  while (!finished)
     {
-      [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-
-      if ([_progressWin cancelled])
+      NSEvent *event = [NSApp nextEventMatchingMask:NSAnyEventMask
+                                          untilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]
+                                             inMode:NSDefaultRunLoopMode
+                                            dequeue:YES];
+      if (event != nil)
+        [NSApp sendEvent:event];
+      NSString *status = observer.status;
+      if (status != nil && ![status isEqualToString:shownStatus])
         {
-          [_installTask interrupt];
-          [_progressWin close];
-          return;
+          [_progressWin setStatus:status];
+          shownStatus = status;
         }
+      [_progressWin displayIfNeeded];
     }
-
-  NSData *outData = [[_installPipe fileHandleForReading] readDataToEndOfFile];
-  NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding];
-  NSInteger status = [_installTask terminationStatus];
 
   [_progressWin close];
+  _progressWin = nil;
 
-  if (status != 0)
+  if (!succeeded)
     {
-      NSLog(@"OnDemand bundle: install failed with status %ld", (long)status);
-      [self _showErrorAlert:@"Installation Failed"
-                      detail:[NSString stringWithFormat:@"The package manager exited with an error:\n%@",
-                        [outStr substringToIndex:MIN([outStr length], 500)]]];
+      NSLog(@"OnDemand bundle: install failed: %@", installError);
+      NSString *detail = [GWPackageManager friendlyErrorMessageForError:installError
+                                                                appName:@"the software"];
+      if ([failureDetail length] > 0)
+        detail = [detail stringByAppendingFormat:@"\n\n%@",
+                   [failureDetail substringToIndex:MIN([failureDetail length], 500)]];
+      [self _showErrorAlert:@"Installation Failed" detail:detail];
     }
   else
     {
       NSLog(@"OnDemand bundle: install succeeded");
     }
-  [_progressWin close];
 }
 
 + (void)_showErrorAlert:(NSString *)title detail:(NSString *)detail
@@ -238,61 +319,7 @@ static ODProgressWindow *_progressWin = nil;
 
 + (NSArray *)_missingPackagesFromArray:(NSArray *)packages
 {
-  NSMutableArray *missing = [NSMutableArray array];
-  for (NSString *pkg in packages)
-    {
-      if (![self _packageInstalled:pkg])
-        [missing addObject:pkg];
-    }
-  return missing;
-}
-
-+ (BOOL)_packageInstalled:(NSString *)package
-{
-  NSString *pmBin = nil;
-  NSArray *pmArgs = nil;
-
-  if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/dpkg"])
-    {
-      pmBin = @"/usr/bin/dpkg";
-      pmArgs = @[@"-s", package];
-    }
-  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/sbin/pkg"])
-    {
-      pmBin = @"/usr/sbin/pkg";
-      pmArgs = @[@"info", package];
-    }
-  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/pacman"])
-    {
-      pmBin = @"/usr/bin/pacman";
-      pmArgs = @[@"-Qi", package];
-    }
-  else if ([[NSFileManager defaultManager] fileExistsAtPath:@"/usr/bin/rpm"])
-    {
-      pmBin = @"/usr/bin/rpm";
-      pmArgs = @[@"-q", package];
-    }
-  else
-    {
-      return NO;
-    }
-
-  NSTask *t = [[NSTask alloc] init];
-  [t setLaunchPath:pmBin];
-  [t setArguments:pmArgs];
-  NSPipe *p = [NSPipe pipe];
-  [t setStandardOutput:p];
-  [t setStandardError:[NSPipe pipe]];
-  @try
-    {
-      [t launch];
-      [t waitUntilExit];
-      return ([t terminationStatus] == 0);
-    }
-  @catch (NSException *e)
-    {
-      return NO;
-    }
+  return [[GWPackageManager sharedManager] missingPackagesFrom:packages];
 }
 
 @end
