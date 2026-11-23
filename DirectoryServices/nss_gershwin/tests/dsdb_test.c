@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -144,6 +145,7 @@ static const char etc_group_text[] =
 "scanner:*:1400:\n"
 "saned:*:1401:\n"
 "lp:*:7:\n"
+"sys:*:3:\n"
 "\n"
 "broken line\n";
 
@@ -318,37 +320,37 @@ test_membership(void)
 
 	/* jane: primary 1001, jane(1001) dedup, admin 5000, staff 20, wheel 0,
 	 * audio 1201, video 1202, vboxusers 1300 and the scanner groups
-	 * scanner 1400, saned 1401 and lp 7 from /etc/group, and sudo 27
-	 * because she is an admin. */
+	 * scanner 1400, saned 1401, lp 7 and sys 3 (Arch's CUPS admin group)
+	 * from /etc/group, and sudo 27 because she is an admin. */
 	CHECK(dsdb_membership("jane", 1001, gids, 16, &cnt, etcgroup) == 0);
-	CHECK(cnt == 11);
+	CHECK(cnt == 12);
 	CHECK(gids[0] == 1001);
 	for (i = 0, have = 0; i < cnt && i < 16; i++)
 		if (gids[i] == 5000 || gids[i] == 20 || gids[i] == 0 ||
 		    gids[i] == 1201 || gids[i] == 1202 || gids[i] == 1300 ||
 		    gids[i] == 1400 || gids[i] == 1401 || gids[i] == 7 ||
-		    gids[i] == 27)
+		    gids[i] == 3 || gids[i] == 27)
 			have++;
-	CHECK(have == 10);
+	CHECK(have == 11);
 	for (i = 1; i < cnt && i < 16; i++)
 		CHECK(gids[i] != 1001);
 
 	/* guest is not an admin: staff, hardware groups, no wheel or sudo. */
 	CHECK(dsdb_membership("guest", 1002, gids, 16, &cnt, etcgroup) == 0);
-	CHECK(cnt == 8);
+	CHECK(cnt == 9);
 	for (i = 0; i < cnt; i++)
 		CHECK(gids[i] != 0 && gids[i] != 5000 && gids[i] != 27);
 
 	/* The caller's primary gid comes first even when it differs. */
 	CHECK(dsdb_membership("guest", 77, gids, 16, &cnt, etcgroup) == 0);
-	CHECK(cnt == 9 && gids[0] == 77 && gids[1] == 1002);
+	CHECK(cnt == 10 && gids[0] == 77 && gids[1] == 1002);
 
 	/* Sizing call: maxgrp 0 still reports the full count. */
 	CHECK(dsdb_membership("jane", 1001, NULL, 0, &cnt, etcgroup) == 0);
-	CHECK(cnt == 11);
+	CHECK(cnt == 12);
 	/* Partial: two slots filled, count still full. */
 	CHECK(dsdb_membership("jane", 1001, gids, 2, &cnt, etcgroup) == 0);
-	CHECK(cnt == 11 && gids[0] == 1001);
+	CHECK(cnt == 12 && gids[0] == 1001);
 
 	/* No /etc/group: only plist groups and wheel. */
 	CHECK(dsdb_membership("jane", 1001, gids, 16, &cnt, NULL) == 0);

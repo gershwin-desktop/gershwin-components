@@ -608,8 +608,9 @@ static const char *const hw_groups[] = {
 	"video",	/* GPU, framebuffer, webcam */
 	"render",	/* DRM render nodes */
 	"input",	/* input devices (gamepads, tablets) */
-	"cups",		/* printing (Arch, Fedora, Gentoo, FreeBSD) */
-	"lpadmin",	/* printing (Debian, Ubuntu) */
+	"cups",		/* printing (Fedora, Gentoo, FreeBSD's cupsd account) */
+	"lpadmin",	/* printing: CUPS SystemGroup on Debian, Ubuntu, Devuan */
+	"sys",		/* printing: CUPS SystemGroup on Arch (BSDs use wheel) */
 	"webcamd",	/* webcam userland drivers */
 	"vboxusers",	/* VirtualBox USB and device access */
 	/*
