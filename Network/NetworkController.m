@@ -280,12 +280,19 @@ static NSPanel *DialogPanel(NSString *title, NSSize contentSize)
     [(NetworkMainView *)mainView setLayoutOwner:self];
     /* No autoresizing: the host's +5px-inflated contentView would otherwise
        stretch the pane past the window. viewDidMoveToWindow clamps it. */
-    
+    [self populateMainView];
+    return mainView;
+}
+
+- (void)populateMainView
+{
     // Check if backend is available
     if (![backend isAvailable]) {
+        showsUnavailableView = YES;
         [self createUnavailableView];
-        return mainView;
+        return;
     }
+    showsUnavailableView = NO;
     
     // Get actual dimensions from mainView bounds
     NSRect viewBounds = [mainView bounds];
@@ -312,7 +319,6 @@ static NSPanel *DialogPanel(NSString *title, NSSize contentSize)
        index its widgets for search, without ever selecting the pane.
        Data comes from -startRefreshing at selection, and the sheets are
        built on first use. */
-    return mainView;
 }
 
 /* The host sizes the pane view to its content area, which is not the
@@ -362,6 +368,29 @@ static NSPanel *DialogPanel(NSString *title, NSSize contentSize)
     }
 }
 
+/* NetworkManager can arrive while the pane is open (OnDemand installs it from
+   this bundle's Dependencies.plist when the pane is selected), so the pane
+   builds its real view in place of the message once it is there. */
+- (void)reloadIfBackendBecameAvailable
+{
+    if (!mainView || !showsUnavailableView) {
+        return;
+    }
+    id<NetworkBackend> fresh = [[NMBackend alloc] init];
+    if (![fresh isAvailable]) {
+        [(id)fresh release];
+        return;
+    }
+    [(id)backend release];
+    backend = fresh;
+    [backend setDelegate:self];
+    for (NSView *view in [NSArray arrayWithArray:[mainView subviews]]) {
+        [view removeFromSuperview];
+    }
+    [self populateMainView];
+    [self relayoutWithWidth:NSWidth([mainView bounds])];
+}
+
 - (void)createUnavailableView
 {
     CGFloat viewWidth = NSWidth([mainView bounds]);
@@ -370,8 +399,8 @@ static NSPanel *DialogPanel(NSString *title, NSSize contentSize)
     NSTextField *errorLabel = [[NSTextField alloc] initWithFrame:
                                NSMakeRect(kContentSideMargin, viewHeight/2 - 40, viewWidth - kContentSideMargin*2, 80)];
     [errorLabel setStringValue:@"Network configuration is not available.\n\n"
-                                "NetworkManager is required but was not found.\n"
-                                "Please install the 'network-manager' package."];
+                                "NetworkManager is required but is not installed.\n"
+                                "Select this pane again to install it."];
     [errorLabel setBezeled:NO];
     [errorLabel setDrawsBackground:NO];
     [errorLabel setEditable:NO];

@@ -201,7 +201,12 @@ static NSInteger DoubleClickTimeForSliderValue(double value)
         return;
     }
     if (![backend xinputPath]) {
-        [self updateStatus:@"xinput not found; install the xinput package."];
+        /* It may have been installed since the backend looked. */
+        [backend release];
+        backend = [[MouseBackend alloc] init];
+    }
+    if (![backend xinputPath]) {
+        [self updateStatus:@"The xinput tool is not installed, so mouse settings are not available."];
         return;
     }
     refreshing = YES;

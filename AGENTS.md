@@ -46,6 +46,14 @@ to the SYSTEM domain unless noted.
   It installs to `/System/Library/Frameworks`; `AppGarden`, `Build` and
   `PackageManager/OnDemand` link it system-wide (no embedding). `OnDemand` and
   `Placeholders` are built and installed only during `install`.
+- Preference panes that need packages ship a `Dependencies.plist` (packages
+  plus `os_overrides` per distribution, the shape Profiler and DiskUtility
+  use); `PackageManager/OnDemand.bundle` offers the install when the pane is
+  selected, so the pane must stay visible (`+isCompatible` YES) without the
+  tool. A pane with per-feature packages (Sharing) ships
+  `Dependencies-<Feature>.plist` and asks OnDemand
+  (`+installPackagesFromPlistAtPath:title:`, looked up by name at run time)
+  when the feature is switched on.
 - `make_appimage/` is a GNUstep tool (`make_appimage`, `make_standalone`) that
   packs built `.app`/`.bundle` dirs into self-contained AppImages; uses
   `appimagetool` + `patchelf`.

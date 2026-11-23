@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>os_overrides</key>
+	<dict>
+		<key>arch</key>
+		<dict>
+			<key>packages</key>
+			<array/>
+		</dict>
+		<key>freebsd</key>
+		<dict>
+			<key>packages</key>
+			<array>
+				<string>netatalk4</string>
+			</array>
+		</dict>
+		<key>openbsd</key>
+		<dict>
+			<key>packages</key>
+			<array>
+				<string>netatalk</string>
+			</array>
+		</dict>
+	</dict>
+	<key>packages</key>
+	<array>
+		<string>netatalk</string>
+	</array>
+</dict>
+</plist>

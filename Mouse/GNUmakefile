@@ -6,7 +6,7 @@ Mouse_OBJCFLAGS += -Wall -Wextra -Werror -O2
 BUNDLE_NAME = Mouse
 Mouse_OBJC_FILES = MousePane.m MouseController.m PointerSection.m AccelerationEditor.m \
 	MousePaneControls.m CurveView.m
-Mouse_RESOURCE_FILES = Mouse.png
+Mouse_RESOURCE_FILES = Mouse.png Dependencies.plist
 # The xinput logic lives in libMouseBackend (Libraries/MouseBackend, sources
 # in this directory), shared with gershwin-apply-settings, which re-applies
 # these settings at login.  The build-tree directory must come first so an

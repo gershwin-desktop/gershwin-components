@@ -10,19 +10,11 @@
 
 @implementation MousePane
 
+/* No xinput check here: a pane that hid itself without xinput could not offer
+   to install it.  OnDemand does that when the pane is selected, from the
+   Dependencies.plist in this bundle. */
 + (BOOL)isCompatible {
-  NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
-  NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
-  for (NSString *dir in paths) {
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
-          [dir stringByAppendingPathComponent: @"xinput"]])
-      return YES;
-  }
-  return NO;
-}
-
-+ (NSString *)compatibilityReason {
-  return @"xinput not found - mouse configuration requires X11";
+  return YES;
 }
 
 - (id)initWithBundle:(NSBundle *)bundle

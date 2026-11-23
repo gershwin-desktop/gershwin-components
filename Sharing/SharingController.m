@@ -7,6 +7,7 @@
  */
 
 #import "SharingController.h"
+#import <OnDemand/OnDemand.h>
 #import "GSServiceDiscoveryManager.h"
 #import "GSXrdpSession.h"
 #import <dispatch/dispatch.h>
@@ -565,9 +566,45 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [applyHostnameButton setEnabled:changed];
 }
 
+#pragma mark - Packages a service needs
+
+/* The packages each service needs are named per system in a plist of this
+   bundle (Dependencies-<service>.plist).  Turning a service on installs what
+   is missing first, through OnDemand, so nothing listens on the network until
+   the user asks for it.  OnDemand lives in the bundle every GUI app loads. */
+- (NSString *)dependencyPlistForService:(NSString *)service
+{
+    return [[NSBundle bundleForClass:[self class]]
+        pathForResource:[@"Dependencies-" stringByAppendingString:service] ofType:@"plist"];
+}
+
+/* YES when something is missing that this system can install. */
+- (BOOL)canInstallPackagesForService:(NSString *)service
+{
+    NSString *path = [self dependencyPlistForService:service];
+    Class onDemand = NSClassFromString(@"OnDemand");
+    return path != nil && onDemand != Nil
+        && [[(id)onDemand missingPackagesFromPlistAtPath:path] count] > 0;
+}
+
+/* NO when the user declined or the install failed. */
+- (BOOL)installPackagesForService:(NSString *)service title:(NSString *)title
+{
+    NSString *path = [self dependencyPlistForService:service];
+    Class onDemand = NSClassFromString(@"OnDemand");
+    if (path == nil || onDemand == Nil) {
+        return YES;
+    }
+    return [(id)onDemand installPackagesFromPlistAtPath:path title:title];
+}
+
 - (void)toggleSSH:(id)sender
 {
     BOOL shouldEnable = [sshCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"SSH" title:NSLocalizedString(@"Remote Login", @"Sharing service")]) {
+        [sshCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"ssh-start" : @"ssh-stop";
     
     NSDebugLog(@"SharingController: %@ SSH", shouldEnable ? @"Starting" : @"Stopping");
@@ -666,6 +703,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleVNC:(id)sender
 {
     BOOL shouldEnable = [vncCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"VNC" title:NSLocalizedString(@"Screen Sharing", @"Sharing service")]) {
+        [vncCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"vnc-start" : @"vnc-stop";
     
     NSDebugLog(@"SharingController: %@ VNC", shouldEnable ? @"Starting" : @"Stopping");
@@ -761,6 +802,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleAFP:(id)sender
 {
     BOOL shouldEnable = [afpCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"AFP" title:NSLocalizedString(@"File Sharing", @"Sharing service")]) {
+        [afpCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"afp-start" : @"afp-stop";
     
     NSDebugLog(@"SharingController: %@ AFP", shouldEnable ? @"Starting" : @"Stopping");
@@ -870,6 +915,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleRDP:(id)sender
 {
     BOOL shouldEnable = [rdpCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"RDP" title:NSLocalizedString(@"Remote Desktop", @"Sharing service")]) {
+        [rdpCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"rdp-start" : @"rdp-stop";
 
     NSDebugLog(@"SharingController: %@ Remote Desktop", shouldEnable ? @"Starting" : @"Stopping");
@@ -935,6 +984,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleCloud:(id)sender
 {
     BOOL shouldEnable = [cloudCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"Cloud" title:NSLocalizedString(@"Cloud Sync", @"Sharing service")]) {
+        [cloudCheckbox setState:NSOffState];
+        return;
+    }
 
     NSDebugLog(@"SharingController: %@ Cloud Sync", shouldEnable ? @"Starting" : @"Stopping");
 
@@ -1244,11 +1297,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- SSH ---
     if (!isSshInstalled) {
-        [sshCheckbox setEnabled:NO];
+        [sshCheckbox setEnabled:[self canInstallPackagesForService:@"SSH"]];
         [sshCheckbox setState:NSOffState];
         [sshStatusLabel setStringValue:@"N/A"];
         [sshStatusLabel setTextColor:naColor];
-        [sshInfoLabel setStringValue:@"Install OpenSSH server (openssh-server) to enable Remote Login."];
+        [sshInfoLabel setStringValue:[self canInstallPackagesForService:@"SSH"]
+            ? @"It is installed when you turn this on."
+            : @"Install OpenSSH server (openssh-server) to enable Remote Login."];
         [sshInfoLabel setHidden:NO];
     } else {
         [sshCheckbox setEnabled:YES];
@@ -1287,11 +1342,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- VNC ---
     if (!isVncInstalled) {
-        [vncCheckbox setEnabled:NO];
+        [vncCheckbox setEnabled:[self canInstallPackagesForService:@"VNC"]];
         [vncCheckbox setState:NSOffState];
         [vncStatusLabel setStringValue:@"N/A"];
         [vncStatusLabel setTextColor:naColor];
-        [vncInfoLabel setStringValue:@"Install a VNC server (x11vnc, TigerVNC, or TightVNC) to enable Screen Sharing."];
+        [vncInfoLabel setStringValue:[self canInstallPackagesForService:@"VNC"]
+            ? @"It is installed when you turn this on."
+            : @"Install a VNC server (x11vnc, TigerVNC, or TightVNC) to enable Screen Sharing."];
         [vncInfoLabel setHidden:NO];
     } else {
         [vncCheckbox setEnabled:YES];
@@ -1373,11 +1430,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- AFP ---
     if (!isAfpInstalled) {
-        [afpCheckbox setEnabled:NO];
+        [afpCheckbox setEnabled:[self canInstallPackagesForService:@"AFP"]];
         [afpCheckbox setState:NSOffState];
         [afpStatusLabel setStringValue:@"N/A"];
         [afpStatusLabel setTextColor:naColor];
-        [afpInfoLabel setStringValue:@"Install Netatalk to enable Apple File Sharing (AFP)."];
+        [afpInfoLabel setStringValue:[self canInstallPackagesForService:@"AFP"]
+            ? @"It is installed when you turn this on."
+            : @"Install Netatalk to enable Apple File Sharing (AFP)."];
         [afpInfoLabel setHidden:NO];
     } else {
         [afpCheckbox setEnabled:YES];
@@ -1545,11 +1604,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- Remote Desktop ---
     if (!isRdpInstalled) {
-        [rdpCheckbox setEnabled:NO];
+        [rdpCheckbox setEnabled:[self canInstallPackagesForService:@"RDP"]];
         [rdpCheckbox setState:NSOffState];
         [rdpStatusLabel setStringValue:@"N/A"];
         [rdpStatusLabel setTextColor:naColor];
-        [rdpInfoLabel setStringValue:@"Install xrdp to enable Remote Desktop."];
+        [rdpInfoLabel setStringValue:[self canInstallPackagesForService:@"RDP"]
+            ? @"It is installed when you turn this on."
+            : @"Install xrdp to enable Remote Desktop."];
         [rdpInfoLabel setHidden:NO];
     } else {
         [rdpCheckbox setEnabled:YES];
@@ -1591,11 +1652,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- Cloud Sync ---
     if (!isCloudInstalled) {
-        [cloudCheckbox setEnabled:NO];
+        [cloudCheckbox setEnabled:[self canInstallPackagesForService:@"Cloud"]];
         [cloudCheckbox setState:NSOffState];
         [cloudStatusLabel setStringValue:@"N/A"];
         [cloudStatusLabel setTextColor:naColor];
-        [cloudInfoLabel setStringValue:@"Install rclone to enable Cloud Sync."];
+        [cloudInfoLabel setStringValue:[self canInstallPackagesForService:@"Cloud"]
+            ? @"It is installed when you turn this on."
+            : @"Install rclone to enable Cloud Sync."];
         [cloudInfoLabel setHidden:NO];
     } else {
         [cloudCheckbox setEnabled:YES];

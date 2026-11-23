@@ -12,24 +12,26 @@
 
 @implementation NetworkPane
 
+/* On Linux the pane stays visible without NetworkManager: OnDemand offers to
+   install it, from the Dependencies.plist in this bundle, when the pane is
+   selected.  Elsewhere the base system's ifconfig does the work. */
 + (BOOL)isCompatible {
+#ifdef __linux__
+  return YES;
+#else
   NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
   NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
-  for (NSString *dir in paths) {
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:
-          [dir stringByAppendingPathComponent: @"nmcli"]])
-      return YES;
-  }
   for (NSString *dir in paths) {
     if ([[NSFileManager defaultManager] isExecutableFileAtPath:
           [dir stringByAppendingPathComponent: @"ifconfig"]])
       return YES;
   }
   return NO;
+#endif
 }
 
 + (NSString *)compatibilityReason {
-  return @"Neither nmcli nor ifconfig found on PATH - Network configuration requires one of these";
+  return @"ifconfig not found - Network configuration requires it";
 }
 
 - (id)initWithBundle:(NSBundle *)bundle
@@ -66,6 +68,7 @@
 - (void)didSelect
 {
     [super didSelect];
+    [controller reloadIfBackendBecameAvailable];
     [controller startRefreshing];
     [self setInitialKeyView:nil];
 }

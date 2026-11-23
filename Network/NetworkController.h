@@ -17,6 +17,7 @@
 {
     // Backend
     id<NetworkBackend> backend;
+    BOOL showsUnavailableView;
     
     // Main view
     NSView *mainView;
@@ -104,6 +105,8 @@
 
 // View creation
 - (NSView *)createMainView;
+- (void)populateMainView;
+- (void)reloadIfBackendBecameAvailable;
 - (void)relayoutWithWidth:(CGFloat)width;
 - (void)createServiceListViewWithFrame:(NSRect)frame;
 - (void)createDetailViewWithFrame:(NSRect)frame;

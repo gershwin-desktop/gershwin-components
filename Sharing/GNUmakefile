@@ -9,7 +9,8 @@ Sharing_OBJC_FILES = \
 	GSServiceDiscoveryManager.m \
 	GSXrdpSession.m
 
-Sharing_RESOURCE_FILES = Sharing.png
+Sharing_RESOURCE_FILES = Sharing.png Dependencies-SSH.plist Dependencies-VNC.plist \
+	Dependencies-AFP.plist Dependencies-RDP.plist Dependencies-Cloud.plist
 Sharing_LOCALIZED_RESOURCE_FILES = Localizable.strings
 Sharing_LANGUAGES = English German
 Sharing_BUNDLE_LIBS = -lPreferencePanes

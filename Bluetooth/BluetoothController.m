@@ -485,7 +485,7 @@ typedef NS_ENUM(NSInteger, BTOperation) {
     if (!available) {
         [unavailableLabel setStringValue:[self toolExists]
             ? @"Bluetooth controller not found.\nEnsure your adapter is connected."
-            : @"Bluetooth utility not found.\nInstall bluez package."];
+            : @"The Bluetooth tools are not installed.\nSelect this pane again to install them."];
     }
 }
 
