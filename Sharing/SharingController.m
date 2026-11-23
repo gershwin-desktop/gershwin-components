@@ -7,7 +7,15 @@
  */
 
 #import "SharingController.h"
-#import <OnDemand/OnDemand.h>
+
+/* The two class methods of the OnDemand bundle that this file calls.  The host
+   loads that bundle at run time and the class is looked up by name, so they are
+   declared here and the build does not depend on the bundle's header having
+   been installed first. */
+@protocol SharingOnDemand
++ (NSArray *)missingPackagesFromPlistAtPath:(NSString *)plistPath;
++ (BOOL)installPackagesFromPlistAtPath:(NSString *)plistPath title:(NSString *)title;
+@end
 #import "GSServiceDiscoveryManager.h"
 #import "GSXrdpSession.h"
 #import <dispatch/dispatch.h>
@@ -582,20 +590,20 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (BOOL)canInstallPackagesForService:(NSString *)service
 {
     NSString *path = [self dependencyPlistForService:service];
-    Class onDemand = NSClassFromString(@"OnDemand");
+    Class<SharingOnDemand> onDemand = (Class<SharingOnDemand>)NSClassFromString(@"OnDemand");
     return path != nil && onDemand != Nil
-        && [[(id)onDemand missingPackagesFromPlistAtPath:path] count] > 0;
+        && [[onDemand missingPackagesFromPlistAtPath:path] count] > 0;
 }
 
 /* NO when the user declined or the install failed. */
 - (BOOL)installPackagesForService:(NSString *)service title:(NSString *)title
 {
     NSString *path = [self dependencyPlistForService:service];
-    Class onDemand = NSClassFromString(@"OnDemand");
+    Class<SharingOnDemand> onDemand = (Class<SharingOnDemand>)NSClassFromString(@"OnDemand");
     if (path == nil || onDemand == Nil) {
         return YES;
     }
-    return [(id)onDemand installPackagesFromPlistAtPath:path title:title];
+    return [onDemand installPackagesFromPlistAtPath:path title:title];
 }
 
 - (void)toggleSSH:(id)sender
