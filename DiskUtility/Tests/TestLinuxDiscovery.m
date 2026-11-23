@@ -18,6 +18,8 @@
 
 #import "DULinuxDeviceDiscovery.h"
 #import "DULinuxUserMount.h"
+#import "DUErrors.h"
+#import "DUProcessRunner.h"
 #import "DUPartition.h"
 #import "DUStorageDevice.h"
 #import "DUStorageVolume.h"
@@ -251,6 +253,62 @@ int main(void)
         PASS(!disk.capabilities.canMount && !disk.capabilities.canEject,
              "an internal disk row keeps neither Mount nor Eject");
     END_SET("Internal disk")
+
+    /* A kernel without the FUSE exfat options made udevil answer with its
+     * own text; the user saw only "could not be mounted". */
+    START_SET("udevil failure text")
+        NSString *kernelLine = @"mount: /media/admin/Ventoy: fsconfig() "
+            @"failed: exfat: Unknown parameter 'nonempty'.";
+        DUProcessResult *failed = [DUProcessResult
+            resultWithStandardOutput:@""
+                       standardError:[kernelLine stringByAppendingString:@"\n"]
+                    terminationStatus:2
+                      exitedNormally:YES
+                            timedOut:NO
+                        wasCancelled:NO];
+        NSError *error = [DULinuxUserMount
+            mountErrorForResult:failed
+                       runError:nil
+                    description:@"The volume could not be mounted."];
+        PASS(error != nil, "a failing udevil is an error");
+        PASS_EQUAL(error.localizedDescription,
+                   @"The volume could not be mounted.", "generic headline");
+        PASS_EQUAL(DUErrorBackendDetail(error), kernelLine,
+                   "udevil's own line is kept, trimmed");
+        NSString *alert = DUErrorAlertText(error);
+        PASS([alert hasPrefix:@"The volume could not be mounted."] &&
+             [alert hasSuffix:kernelLine],
+             "the alert shows the headline, then udevil's line");
+
+        DUProcessResult *onStdout = [DUProcessResult
+            resultWithStandardOutput:@"udevil: not allowed\n"
+                       standardError:@""
+                    terminationStatus:1
+                      exitedNormally:YES
+                            timedOut:NO
+                        wasCancelled:NO];
+        PASS_EQUAL(DUErrorBackendDetail([DULinuxUserMount
+                       mountErrorForResult:onStdout
+                                  runError:nil
+                               description:@"x"]),
+                   @"udevil: not allowed",
+                   "text on stdout is not lost when stderr is empty");
+
+        DUProcessResult *ok = [DUProcessResult
+            resultWithStandardOutput:@"Mounted /dev/sda1 at /media/a/B\n"
+                       standardError:@""
+                    terminationStatus:0
+                      exitedNormally:YES
+                            timedOut:NO
+                        wasCancelled:NO];
+        PASS([DULinuxUserMount mountErrorForResult:ok
+                                          runError:nil
+                                       description:@"x"] == nil,
+             "success is no error");
+
+        PASS_EQUAL(DUErrorAlertText(DUErrorMake(DUErrorMountError, @"Plain.")),
+                   @"Plain.", "no detail, no blank tail");
+    END_SET("udevil failure text")
 
     [arp release];
     return 0;

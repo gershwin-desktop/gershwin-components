@@ -729,8 +729,9 @@ static NSError *DUToolError(DUProcessResult *result, NSError *runError,
             [DUProcessRunner runExecutable:udevil
                                  arguments:@[ @"mount", devicePath ]
                                      error:&runError];
-        NSError *error =
-            DUToolError(result, runError, DUErrorMountError, failure);
+        NSError *error = [DULinuxUserMount mountErrorForResult:result
+                                                      runError:runError
+                                                   description:failure];
         if (error == nil && mountPoint != NULL) {
             *mountPoint = [DULinuxUserMount
                 mountPointFromOutput:result.standardOutput

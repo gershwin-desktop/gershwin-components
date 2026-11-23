@@ -8,6 +8,7 @@
 
 #import "DULinuxUserMount.h"
 
+#import "DUErrors.h"
 #import "DUProcessRunner.h"
 #import "DUStorageDevice.h"
 #import "DUStorageObject.h"
@@ -104,6 +105,35 @@ static id gWorkspaceSender = nil;
         }
     }
     return nil;
+}
+
++ (NSError *)mountErrorForResult:(DUProcessResult *)result
+                        runError:(NSError *)runError
+                     description:(NSString *)description
+{
+    if (result != nil && result.exitedNormally &&
+        result.terminationStatus == 0) {
+        return nil;
+    }
+    // udevil reports some refusals on stdout, the kernel's on stderr.
+    NSCharacterSet *blank = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSString *detail = [result.standardError
+        stringByTrimmingCharactersInSet:blank];
+    if (detail.length == 0) {
+        detail = [result.standardOutput stringByTrimmingCharactersInSet:blank];
+    }
+    if (detail.length == 0) {
+        detail = runError.localizedDescription ?: @"";
+    }
+    BOOL busy = [detail rangeOfString:@"already mounted"].location != NSNotFound
+        || [detail rangeOfString:@"busy"].location != NSNotFound;
+    return [NSError errorWithDomain:DUStorageErrorDomain
+                               code:busy ? DUErrorDeviceBusy
+                                         : DUErrorMountError
+                           userInfo:@{
+        NSLocalizedDescriptionKey : description,
+        @"DUBackendDetail" : detail,
+    }];
 }
 
 @end

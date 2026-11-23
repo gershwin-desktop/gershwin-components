@@ -1120,8 +1120,9 @@ static NSString * const kDefaultsWindowFrame = @"DUWindowFrame";
         NSRunAlertPanel(
             mounting ? NSLocalizedString(@"Mount", nil)
                      : NSLocalizedString(@"Unmount", nil),
-            error.localizedDescription
-                ?: NSLocalizedString(@"The operation failed.", nil),
+            error.localizedDescription.length > 0
+                ? DUErrorAlertText(error)
+                : NSLocalizedString(@"The operation failed.", nil),
             NSLocalizedString(@"OK", nil), nil, nil);
     }
     // A whole disk can fail on one volume after mounting the others.

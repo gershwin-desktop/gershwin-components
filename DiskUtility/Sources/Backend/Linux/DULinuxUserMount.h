@@ -8,6 +8,7 @@
 
 #import <Foundation/Foundation.h>
 
+@class DUProcessResult;
 @class DUStorageObject;
 @class DUStorageVolume;
 
@@ -52,6 +53,14 @@
 // or nil when the output does not name one for that device.
 + (NSString *)mountPointFromOutput:(NSString *)output
                             device:(NSString *)devicePath;
+
+// nil when the udevil run succeeded; otherwise an error with description as
+// its headline and udevil's own message (the kernel's refusal comes through
+// it) under kDUBackendDetailKey. "Busy" in the message gives
+// DUErrorDeviceBusy.
++ (NSError *)mountErrorForResult:(DUProcessResult *)result
+                        runError:(NSError *)runError
+                     description:(NSString *)description;
 
 @end
 
