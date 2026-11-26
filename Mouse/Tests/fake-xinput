@@ -1,0 +1,40 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 Simon Peter
+#
+# SPDX-License-Identifier: BSD-2-Clause OR GPL-3.0-or-later
+#
+# Stands in for xinput so libMouseBackend and the Mouse pane can be driven
+# against a captured device list (Fixtures/<case>/list and props-<id>) on a
+# machine or X server without those devices.  FAKE_XINPUT_DIR is a writable
+# copy of one fixture directory: set-prop is logged to set-prop.log and
+# changes the property there, and like the real xinput it fails on a
+# property the device does not have.
+
+dir="${FAKE_XINPUT_DIR:?FAKE_XINPUT_DIR not set}"
+
+case "$1" in
+list)
+    cat "$dir/list"
+    ;;
+list-props)
+    [ -f "$dir/props-$2" ] || { echo "unable to find device $2" >&2; exit 1; }
+    cat "$dir/props-$2"
+    ;;
+set-prop)
+    id="$2"
+    prop="$3"
+    shift 3
+    [ -f "$dir/props-$id" ] || { echo "unable to find device $id" >&2; exit 1; }
+    value=$(printf '%s, ' "$@" | sed 's/, $//')
+    echo "$id|$prop|$value" >> "$dir/set-prop.log"
+    grep -q "^	$prop (" "$dir/props-$id" || { echo "property '$prop' doesn't exist, you need to specify its type and format" >&2; exit 1; }
+    awk -v p="$prop" -v v="$value" 'BEGIN { FS = OFS = "\t" }
+        index($2, p " (") == 1 { $3 = v } { print }' "$dir/props-$id" > "$dir/props-$id.new"
+    mv "$dir/props-$id.new" "$dir/props-$id"
+    ;;
+*)
+    echo "fake-xinput: unsupported command $1" >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,62 @@
+#!/usr/bin/env run_uitest
+# AppGarden: the app starts, offers the keyboard contract of section 10, and
+# filters the catalog as the user types. The catalog comes from the local
+# fixture through AGFeedURL, so the test needs no network at all.
+#
+# Run with: run_uitest AppGarden/Tests/appgarden.uitest
+# (in an isolated uitest slot, after the app has been installed)
+
+# Point the catalog at the bundled fixture. curl reads file:// URLs, so the
+# loader, the parser and the search index all run on the real sample data.
+# The value is a plain plist value: this defaults tool would store a
+# "-string" flag as the value itself. A catalog cached from an earlier run
+# would win over the fixture for six hours, so it is removed first.
+shell "rm -rf ~/Library/Caches/io.github.gershwin-desktop.AppGarden"
+shell "defaults write io.github.gershwin-desktop.AppGarden AGFeedURL file://${testdir}/../Fixtures/feed-sample.json"
+
+launch application "AppGarden"
+wait until window "AppGarden" timeout 30s
+wait until menu bar "AppGarden" timeout 15s
+
+# The menu contract of section 10.
+assert menu item "AppGarden/Quit AppGarden" exists
+assert menu item "AppGarden/Quit AppGarden" shortcut "Cmd+Q"
+assert menu item "AppGarden/Hide AppGarden" shortcut "Cmd+H"
+assert menu item "Edit/Find" shortcut "Cmd+F"
+assert menu item "View/Reload Catalog" shortcut "Cmd+R"
+
+# Find focuses the search field; typing "netbeans" leaves one card behind.
+# Cards report their name as their title, so no role word: any widget whose
+# text is the name counts.
+select menu "Edit/Find"
+type "netbeans"
+wait until "Apache NetBeans" timeout 10s
+assert exists "Apache NetBeans"
+assert not exists "QOwnNotes"
+
+# Escape clears the search (the search field's own behavior), which brings
+# the whole catalog back. Discover is in a random order, so no single name
+# can be waited for: with 15 fixture entries any one of them may sit below
+# the viewport, and cards outside it are not in the tree at all. The
+# language has no widget-count assertion, so the cards are counted from the
+# tree instead - more than one card is what the filtered page denied.
+# Then real Cmd+Q key events (not the menu path) so the shortcut binding
+# itself is what gets tested.
+#
+# No double quotes inside the shell string: the parser takes the first
+# "..." as the command and does not understand a backslash before its
+# closing quote, so an escaped quote silently truncates the command to
+# "test \", which passes for any grid at all. The command substitution
+# yields a bare number, so it needs no quoting.
+#
+# The pid is looked up under the harness's own user, never by a bare
+# process name: a second AppGarden under another account (the logged-in
+# desktop's own) would otherwise be found first and asked for a tree it
+# cannot give, and the count would read 0 on every run.
+press key "Escape"
+shell "test $(drive_ui --pid $(pgrep -u $(id -un) -x AppGarden | head -1) get_full_tree | grep -c AGAppCardView) -gt 1"
+press key "Cmd+Q"
+wait until not exists application "AppGarden" timeout 15s
+assert not exists application "AppGarden"
+
+log "AppGarden starts, shows its menu and filters the catalog from the fixture"

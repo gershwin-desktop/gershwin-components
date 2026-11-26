@@ -1,0 +1,6 @@
+# The units under test are #included into MRC test TUs (the ObjectTesting
+# macros are not ARC-safe); they use only copy/assign properties, so they
+# compile cleanly either way.
+ADDITIONAL_OBJCFLAGS += -Wno-protocol
+t_TextExtraction_TOOL_LIBS += -lgnustep-gui
+t_CopyToPasteboard_TOOL_LIBS += -lgnustep-gui

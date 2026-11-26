@@ -341,19 +341,23 @@ static int getpeereid(int sock, uid_t *euid, gid_t *egid) {
 
         if (ready == 0) continue; // Timeout, check _running
 
-        // Check UNIX socket
-        if (FD_ISSET(_serverSocket, &readfds)) {
-            int clientFd = accept(_serverSocket, NULL, NULL);
-            if (clientFd >= 0) {
-                [self handleClient:clientFd];
+        // This loop never returns to main's pool, so without a pool per pass
+        // every autoreleased object of every request would live until exit.
+        @autoreleasepool {
+            // Check UNIX socket
+            if (FD_ISSET(_serverSocket, &readfds)) {
+                int clientFd = accept(_serverSocket, NULL, NULL);
+                if (clientFd >= 0) {
+                    [self handleClient:clientFd];
+                }
             }
-        }
 
-        // Check TCP socket (for network clients)
-        if (_discoverySocket >= 0 && FD_ISSET(_discoverySocket, &readfds)) {
-            int clientFd = accept(_discoverySocket, NULL, NULL);
-            if (clientFd >= 0) {
-                [self handleNetworkClient:clientFd];
+            // Check TCP socket (for network clients)
+            if (_discoverySocket >= 0 && FD_ISSET(_discoverySocket, &readfds)) {
+                int clientFd = accept(_discoverySocket, NULL, NULL);
+                if (clientFd >= 0) {
+                    [self handleNetworkClient:clientFd];
+                }
             }
         }
     }

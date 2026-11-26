@@ -38,6 +38,13 @@
 // reachable at all.
 - (NSArray<DUStorageObject *> *)discoverObjects:(NSError **)error;
 
+// Builds the tree from recorded `lsblk -P` and `blkid` output instead of
+// running the tools and probing the devices, so a machine's layout can be
+// replayed in tests.
+- (NSArray<DUStorageObject *> *)
+    discoverObjectsFromLsblkPairs:(NSString *)lsblkOutput
+                      blkidOutput:(NSString *)blkidOutput;
+
 @end
 
 #endif /* defined(__linux__) */

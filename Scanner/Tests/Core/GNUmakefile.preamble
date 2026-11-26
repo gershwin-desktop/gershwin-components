@@ -1,0 +1,42 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+ADDITIONAL_INCLUDE_DIRS += -I../..
+ADDITIONAL_OBJCFLAGS += -Wall
+
+CORE_SOURCES = ../../SCImage.m ../../SCImageAnalysis.m ../../SCSaneLibrary.m ../../SCImageBuilder.m ../../SCFileNamer.m \
+               ../../SCOption.m ../../SCScanner.m
+
+# The test tools stay manual reference counting because the PASS macros are not ARC-safe
+$(foreach f,$(CORE_SOURCES),$(eval $(f)_FILE_FLAGS += -fobjc-arc))
+$(foreach t,$(TEST_TOOL_NAME),$(eval $(t)_OBJC_FILES += $(CORE_SOURCES)))
+$(foreach t,$(TEST_TOOL_NAME),$(eval $(t)_TOOL_LIBS += -ldl))
+
+../../SCImageWriter.m_FILE_FLAGS += -fobjc-arc
+../../SCFax.m_FILE_FLAGS += -fobjc-arc
+../../SCPDFWriter.m_FILE_FLAGS += -fobjc-arc
+t_ImageWriter_OBJC_FILES += ../../SCImageWriter.m ../../SCFax.m ../../SCPDFWriter.m
+t_ImageWriter_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs libtiff-4) -lz
+ADDITIONAL_CPPFLAGS += $(shell pkg-config --cflags cairo libtiff-4)
+
+../../SCTextRecognizer.m_FILE_FLAGS += -fobjc-arc
+# cairo only renders the test's text page
+t_TextRecognizer_OBJC_FILES += ../../SCLanguageGuess.m ../../SCTextRecognizer.m ../../SCImageWriter.m ../../SCFax.m ../../SCPDFWriter.m
+t_TextRecognizer_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs cairo libtiff-4 icu-uc) -lz
+
+../../SCPermissionCheck.m_FILE_FLAGS += -fobjc-arc
+t_PermissionCheck_OBJC_FILES += ../../SCPermissionCheck.m
+
+../../SCLanguageGuess.m_FILE_FLAGS += -fobjc-arc
+t_LanguageGuess_OBJC_FILES += ../../SCLanguageGuess.m
+
+../../SCIPPUSB.m_FILE_FLAGS += -fobjc-arc
+t_IPPUSB_OBJC_FILES += ../../SCIPPUSB.m
+# SCIPPUSB starts ipp-usb through PackageManager's sudo helper
+t_IPPUSB_OBJCFLAGS += -I/System/Library/Headers -Wno-nullability-completeness
+t_IPPUSB_TOOL_LIBS += -L/System/Library/Frameworks/PackageManager.framework/Versions/1 -lPackageManager
+
+../../SCHTTPPost.m_FILE_FLAGS += -fobjc-arc
+../../SCWSDClient.m_FILE_FLAGS += -fobjc-arc
+../../SCWSDEventListener.m_FILE_FLAGS += -fobjc-arc
+t_WSD_OBJC_FILES += ../../SCHTTPPost.m ../../SCWSDClient.m ../../SCWSDEventListener.m ../../SCImageWriter.m ../../SCFax.m ../../SCPDFWriter.m
+t_WSD_TOOL_LIBS += -lgnustep-gui $(shell pkg-config --libs libtiff-4) -lz

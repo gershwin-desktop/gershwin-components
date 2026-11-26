@@ -8,15 +8,16 @@ libNetworkBackend_OBJC_FILES = \
 	../../Network/NetworkModels.m \
 	../../Network/NMBackend.m \
 	../../Network/BSDBackend.m \
-	CaptivePortalDetector.m
+	../../Network/CaptivePortalDetector.m
 
+libNetworkBackend_HEADER_FILES_DIR = ../../Network
 libNetworkBackend_HEADER_FILES = \
-	../../Network/NetworkBackend.h \
-	../../Network/NMBackend.h \
-	../../Network/BSDBackend.h \
+	NetworkBackend.h \
+	NMBackend.h \
+	BSDBackend.h \
 	CaptivePortalDetector.h
 
-libNetworkBackend_INSTALL_HEADERS_DIR = NetworkBackend
+libNetworkBackend_HEADER_FILES_INSTALL_DIR = NetworkBackend
 libNetworkBackend_FRAMEWORKS_DEPEND_UPON = AppKit Foundation
 
 # CaptivePortalDetector.m calls libcurl, so this library must link against it.

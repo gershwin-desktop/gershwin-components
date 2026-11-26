@@ -24,9 +24,10 @@ all: build
 # Libraries have been installed.  During "gmake" (build only) we skip them
 # because /System may not contain the libraries yet.  "sudo gmake install"
 # installs Libraries first, then builds and installs these consumers.
-# Build links the PackageManager framework and thus has the same constraint.
+# Build, DisplayConfig and Scanner link the PackageManager framework and thus
+# have the same constraint.
 ifneq ($(filter Libraries,$(SUBDIRS)),)
-LIBRARY_CONSUMERS := $(filter Menu Network Sound Whisper Build,$(SUBDIRS))
+LIBRARY_CONSUMERS := $(filter AppGarden Menu MIDI Network Sound Whisper Build Energy Mouse Keyboard Color SettingsApply networkmidid DisplayConfig Scanner,$(SUBDIRS))
 else
 LIBRARY_CONSUMERS :=
 endif

@@ -7,6 +7,11 @@
 #import "StartupDiskPane.h"
 #import "StartupDiskController.h"
 #include <stdlib.h>
+#include <sys/types.h>
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+#include <sys/sysctl.h>
+#include <string.h>
+#endif
 
 @class StartupDiskController;
 
@@ -41,9 +46,30 @@
 }
 @end
 
+/* Boot entries live in UEFI variables, which only exist when the firmware
+   started this system through UEFI; on a BIOS boot the pane could only show
+   an empty list.  The other BSDs expose no such flag, so they report NO. */
+static BOOL StartupDiskBootedViaUEFI(void)
+{
+#if defined(__linux__)
+  return [[NSFileManager defaultManager] fileExistsAtPath: @"/sys/firmware/efi"];
+#elif defined(__FreeBSD__) || defined(__DragonFly__)
+  char method[32];
+  size_t len = sizeof(method) - 1;
+  if (sysctlbyname("machdep.bootmethod", method, &len, NULL, 0) != 0)
+    return NO;
+  method[len] = '\0';
+  return strcmp(method, "UEFI") == 0;
+#else
+  return NO;
+#endif
+}
+
 @implementation StartupDiskPane
 
 + (BOOL)isCompatible {
+  if (!StartupDiskBootedViaUEFI())
+    return NO;
   /* A minimal launcher environment may not set PATH at all, and
      stringWithUTF8String: raises on the resulting NULL. */
   const char *pathEnv = getenv("PATH");
@@ -60,6 +86,8 @@
 }
 
 + (NSString *)compatibilityReason {
+  if (!StartupDiskBootedViaUEFI())
+    return @"this system was not started via UEFI - startup disk selection requires UEFI";
   return @"efibootmgr not found - startup disk selection requires EFI boot manager";
 }
 

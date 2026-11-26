@@ -96,7 +96,8 @@ enum {
             "  -o, --output FILE  Save the screenshot to FILE\n"
             "\n"
             "Without an output file, the screenshot is saved on the Desktop.\n"
-            "Escape or the right mouse button cancels a selection.\n");
+            "Escape or the right mouse button cancels a selection.\n"
+            "Space during an area selection switches to picking a window.\n");
 }
 
 - (int)run

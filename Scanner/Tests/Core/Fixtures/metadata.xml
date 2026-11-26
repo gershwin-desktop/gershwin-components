@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8" ?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsx="http://schemas.xmlsoap.org/ws/2004/09/mex" xmlns:wsdp="http://schemas.xmlsoap.org/ws/2006/02/devprof" xmlns:wprt="http://schemas.microsoft.com/windows/2006/08/wdp/print" xmlns:ss="http://www.samsung.com/wsd" xmlns:wscn="http://schemas.microsoft.com/windows/2006/08/wdp/scan" xmlns:xop="http://www.w3.org/2004/08/xop/include" xmlns:pnpx="http://schemas.microsoft.com/windows/pnpx/2005/10" xmlns:df="http://schemas.microsoft.com/windows/2008/09/devicefoundation" ><soap:Header><wsa:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/GetResponse</wsa:Action><wsa:MessageID>urn:uuid:0000fcd6-0004-1000-82be-38343a32353a</wsa:MessageID><wsa:RelatesTo RelationshipType="wsa:Reply">urn:uuid:c5d06d01-14ff-461d-b712-85f57ae87151</wsa:RelatesTo></soap:Header><soap:Body><wsx:Metadata>
+<wsx:MetadataSection Dialect="http://schemas.xmlsoap.org/ws/2006/02/devprof/ThisDevice">
+<wsdp:ThisDevice>
+<wsdp:FriendlyName xml:lang="en-US">Samsung C480FN</wsdp:FriendlyName>
+<wsdp:FirmwareVersion>V3.00.01.21     SEPT-03-2019</wsdp:FirmwareVersion>
+<wsdp:SerialNumber>0000000000000000</wsdp:SerialNumber>
+</wsdp:ThisDevice>
+</wsx:MetadataSection>
+<wsx:MetadataSection Dialect="http://schemas.xmlsoap.org/ws/2006/02/devprof/ThisModel">
+<wsdp:ThisModel>
+<wsdp:Manufacturer xml:lang="en-US">Samsung Electronics Co., Ltd.</wsdp:Manufacturer>
+<wsdp:ManufacturerUrl>http://www.samsungprinter.com</wsdp:ManufacturerUrl>
+<wsdp:ModelName>C48x Series</wsdp:ModelName>
+<wsdp:ModelNumber>C48x Series</wsdp:ModelNumber>
+<wsdp:ModelUrl>http://www.samsungprinter.com</wsdp:ModelUrl>
+<wsdp:PresentationUrl>http://192.0.2.30</wsdp:PresentationUrl>
+<pnpx:DeviceCategory>MFP Printers Scanners</pnpx:DeviceCategory>
+<df:DeviceCategory>PrintFax.MFP</df:DeviceCategory>
+</wsdp:ThisModel>
+</wsx:MetadataSection>
+<wsx:MetadataSection Dialect="http://schemas.xmlsoap.org/ws/2006/02/devprof/Relationship">
+<wsdp:Relationship Type="http://schemas.xmlsoap.org/ws/2006/02/devprof/host">
+<wsdp:Hosted>
+<wsa:EndpointReference>
+<wsa:Address>http://192.0.2.30:8018/wsd/print</wsa:Address>
+</wsa:EndpointReference>
+<wsdp:Types>wprt:PrinterServiceType</wsdp:Types>
+<wsdp:ServiceId>uri:Printer1</wsdp:ServiceId>
+<pnpx:HardwareId>VEN_04e8&amp;DEV_347e</pnpx:HardwareId>
+<pnpx:CompatibleId>http://schemas.microsoft.com/windows/2006/08/wdp/print/PrinterServiceType</pnpx:CompatibleId>
+</wsdp:Hosted>
+<wsdp:Hosted>
+<wsa:EndpointReference>
+<wsa:Address>http://192.0.2.30:8018/wsd/scan</wsa:Address>
+</wsa:EndpointReference>
+<wsdp:Types>wscn:ScannerServiceType</wsdp:Types>
+<wsdp:ServiceId>uri:Scanner1</wsdp:ServiceId>
+<pnpx:HardwareId>VEN_04e8&amp;DEV_347e</pnpx:HardwareId>
+<pnpx:CompatibleId>http://schemas.microsoft.com/windows/2006/08/wdp/scan/ScannerServiceType</pnpx:CompatibleId>
+</wsdp:Hosted>
+</wsdp:Relationship>
+</wsx:MetadataSection>
+</wsx:Metadata>
+</soap:Body></soap:Envelope>

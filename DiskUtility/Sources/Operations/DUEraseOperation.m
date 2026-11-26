@@ -48,8 +48,15 @@
         return;
     }
 
+    // Stop has to reach the tool that is writing the disk, not just mark the
+    // operation: the backend polls this probe while it waits for mkfs or dd.
+    __weak DUEraseOperation *weakSelf = self;
+    NSMutableDictionary *options = [_options mutableCopy] ?: [NSMutableDictionary dictionary];
+    options[@"duCancelCheck"] = ^BOOL(void) {
+        return weakSelf.cancelRequested;
+    };
     [_backend eraseObject:_object
-                  options:_options
+                  options:options
                   progress:^(double progress, NSString *message) {
                       [self setProgress:progress message:message];
                 }

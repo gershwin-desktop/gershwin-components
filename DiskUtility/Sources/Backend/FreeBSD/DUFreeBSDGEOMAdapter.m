@@ -69,12 +69,23 @@ NSString *const DUFreeBSDBackendDetailKey = @"DUBackendDetail";
         return nil;
     }
     if (!result.exitedNormally ||
-        WEXITSTATUS(result.terminationStatus) != 0) {
-        // A named provider that does not exist exits nonzero with an empty
-        // table; that is a legitimate "none" rather than a hard failure.
+        ![result exitedWithStatus:0]) {
         if (result.standardOutput.length == 0) {
-            if (error != NULL && result.standardError.length > 0 &&
-                providerName.length == 0) {
+            NSString *diagnostic =
+                [DUParsing trimmedString:result.standardError];
+            /* geom(8) says "Class 'PART' does not have an instance named
+             * 'da1'" and exits 1 both for a disk that genuinely has no
+             * partition table and for a provider that does not exist at all.
+             * The first is a real answer ("unpartitioned"), so it is reported
+             * as an empty table; anything else is a failure to read, and the
+             * caller must not confuse it with an empty disk. */
+            BOOL providerAbsent =
+                [diagnostic rangeOfString:@"does not have an instance named"]
+                        .location != NSNotFound;
+            if (providerAbsent) {
+                return @[];
+            }
+            if (error != NULL) {
                 *error = [NSError errorWithDomain:DUStorageErrorDomain
                                              code:DUErrorDiscoveryFailed
                                          userInfo:@{
@@ -82,8 +93,7 @@ NSString *const DUFreeBSDBackendDetailKey = @"DUBackendDetail";
                         NSLocalizedString(@"Reading the storage layout "
                                           @"failed.",
                                           nil),
-                    DUFreeBSDBackendDetailKey :
-                        [DUParsing trimmedString:result.standardError],
+                    DUFreeBSDBackendDetailKey : diagnostic ?: @"",
                 }];
             }
             return nil;
@@ -161,8 +171,15 @@ NSString *const DUFreeBSDBackendDetailKey = @"DUBackendDetail";
         return nil;
     }
 
-    // GPT type names gpart reports verbatim. Built per call: the table is
-    // tiny and no GCD primitives may be used for lazy initialization.
+    /* GPT type names gpart reports verbatim. Built per call: the table is
+     * tiny and no GCD primitives may be used for lazy initialization.
+     *
+     * An EFI system partition holds a FAT filesystem but is never mounted and
+     * must not be erased as a data volume, so it maps to a distinct token
+     * rather than to "msdosfs". FreeBSD also has no ext4 mounter, so
+     * "linux-data" is left unmapped: reporting ext4 there made the app offer
+     * Mount on a Linux partition and then fail with an opaque mount(8)
+     * error. */
     NSDictionary<NSString *, NSString *> *gptTable = @{
         @"freebsd-ufs" : @"ufs",
         @"ufs" : @"ufs",
@@ -171,10 +188,9 @@ NSString *const DUFreeBSDBackendDetailKey = @"DUBackendDetail";
         @"fat16" : @"msdosfs",
         @"fat32" : @"msdosfs",
         @"fat" : @"msdosfs",
-        @"efi" : @"msdosfs",
+        @"efi" : @"efi",
         @"ms-basic-data" : @"msdosfs",
         @"basic-data" : @"msdosfs",
-        @"linux-data" : @"ext4",
     };
     NSString *mapped = gptTable[type];
     if (mapped != nil) {

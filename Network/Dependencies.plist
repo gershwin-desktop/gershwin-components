@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>packages</key>
+    <array>
+        <string>network-manager</string>
+    </array>
+    <key>os_overrides</key>
+    <dict>
+        <key>arch</key>
+        <dict>
+            <key>packages</key>
+            <array>
+                <string>networkmanager</string>
+            </array>
+        </dict>
+        <key>freebsd</key>
+        <dict>
+            <key>description</key>
+            <string>FreeBSD configures the network with its base system tools</string>
+            <key>packages</key>
+            <array/>
+        </dict>
+        <key>openbsd</key>
+        <dict>
+            <key>description</key>
+            <string>OpenBSD configures the network with its base system tools</string>
+            <key>packages</key>
+            <array/>
+        </dict>
+    </dict>
+</dict>
+</plist>

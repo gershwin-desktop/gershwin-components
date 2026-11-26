@@ -22,6 +22,9 @@
 
 + (BOOL)haveTool:(NSString *)toolName;
 
+// YES when at least one of the named tools is present.
++ (BOOL)haveAnyTool:(NSArray<NSString *> *)toolNames;
+
 @end
 
 // Builds the storage object tree from NetBSD tool output: boot dmesg lines

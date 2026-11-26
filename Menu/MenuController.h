@@ -48,7 +48,6 @@
 @property (nonatomic, assign) CGFloat slideInStartY;
 @property (nonatomic, assign) NSTimeInterval lastActiveWindowScanTime;
 @property (nonatomic, strong) NSTimer *windowValidationTimer; // Watchdog timer to hide stale menus
-@property (nonatomic, strong) NSTimer *activeWindowPollTimer;        // Fallback active-window poll
 #if MENU_PROFILING
 @property (nonatomic, strong) NSTimer *cpuUsageLogTimer;
 @property (nonatomic, assign) NSTimeInterval lastCpuUsageSampleWallTime;

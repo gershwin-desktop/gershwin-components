@@ -62,6 +62,17 @@
                                    action:(SEL)action; // Returns YES on success, NO on failure
 
 /**
+ * Register a global shortcut for a menu item of the frontmost application, with
+ * a target/action. Unlike direct shortcuts, it is released on an application
+ * switch (unregisterNonDirectShortcuts) and has to be registered again.
+ * @param identifier Distinguishes items with the same key, e.g. window and index path
+ */
+- (BOOL)registerAppShortcutForMenuItem:(NSMenuItem *)menuItem
+                                target:(id)target
+                                action:(SEL)action
+                            identifier:(NSString *)identifier;
+
+/**
  * Unregister all global shortcuts
  */
 - (void)unregisterAllShortcuts;
@@ -69,6 +80,7 @@
 /**
  * Unregister shortcuts that were registered from DBus/app menus (non-direct shortcuts).
  * This preserves direct shortcuts (those registered with registerDirectShortcutForMenuItem:)
+ * and the XF86 hardware keys (registerXF86Key:...)
  * so global hotkeys like Cmd/Alt+Space remain active across application switches.
  */
 - (void)unregisterNonDirectShortcuts;

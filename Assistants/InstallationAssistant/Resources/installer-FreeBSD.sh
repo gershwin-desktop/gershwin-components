@@ -581,8 +581,6 @@ if [ "$IMAGE_MODE" = "0" ]; then
     fi
     echo "Running dscli init in chroot..."
     chroot "$MNT" /bin/sh -c '. /System/Library/Makefiles/GNUstep.sh && /System/Library/Tools/dscli init' || true
-    echo "Restarting dshelper in chroot..."
-    chroot "$MNT" service dshelper restart || true
 fi
 
 # Install bootloader
@@ -638,6 +636,9 @@ cat > "$MNT/etc/fstab" <<EOF
 $ROOT_PART   /      ufs   rw   1 1
 EOF
 if [ "$BOOT_METHOD" = "UEFI" ]; then
+    # The boot stops if an fstab mount point is missing, so make sure /efi
+    # exists on the new root whenever fstab refers to it.
+    mkdir -p "$MNT/efi"
     cat >> "$MNT/etc/fstab" <<EOF
 $EFI_PART    /efi   msdos rw   0 0
 EOF

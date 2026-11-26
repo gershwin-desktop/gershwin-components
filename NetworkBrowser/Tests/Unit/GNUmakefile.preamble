@@ -1,0 +1,2 @@
+# The formatter is Foundation only; its source is #included by the test.
+ADDITIONAL_CPPFLAGS += -I../..

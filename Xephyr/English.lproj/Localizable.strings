@@ -1,0 +1,37 @@
+/* Xephyr launcher */
+
+"About Xephyr" = "About Xephyr";
+"Hide Xephyr" = "Hide Xephyr";
+"Hide Others" = "Hide Others";
+"Show All" = "Show All";
+"Quit Xephyr" = "Quit Xephyr";
+"Edit" = "Edit";
+"Cut" = "Cut";
+"Copy" = "Copy";
+"Paste" = "Paste";
+"Select All" = "Select All";
+"Window" = "Window";
+"Minimize" = "Minimize";
+"Close" = "Close";
+"Screen size:" = "Screen size:";
+"Custom" = "Custom";
+"Screens:" = "Screens:";
+"Command:" = "Command:";
+"Started on the new display, for example xterm. Leave empty for an empty display." = "Started on the new display, for example xterm. Leave empty for an empty display.";
+"Not running." = "Not running.";
+"Start" = "Start";
+"Stop" = "Stop";
+"Xephyr is not installed. Install the Xephyr package of your system and try again." = "Xephyr is not installed. Install the Xephyr package of your system and try again.";
+"No free display number is left." = "No free display number is left.";
+"Could not create a temporary file for the Xephyr messages." = "Could not create a temporary file for the Xephyr messages.";
+"Could not create a temporary file for the command messages." = "Could not create a temporary file for the command messages.";
+"Could not start %@: %@" = "Could not start %@: %@";
+"Starting Xephyr on display %@..." = "Starting Xephyr on display %@...";
+"Xephyr is running on display %@." = "Xephyr is running on display %@.";
+"Xephyr on display %@ was closed." = "Xephyr on display %@ was closed.";
+"Xephyr exited with status %d." = "Xephyr exited with status %d.";
+"Xephyr did not open display %@ within %d seconds." = "Xephyr did not open display %@ within %d seconds.";
+"The command exited with status %d." = "The command exited with status %d.";
+"The width must be a number between %ld and %ld." = "The width must be a number between %ld and %ld.";
+"The height must be a number between %ld and %ld." = "The height must be a number between %ld and %ld.";
+"The number of screens must be between 1 and %ld." = "The number of screens must be between 1 and %ld.";

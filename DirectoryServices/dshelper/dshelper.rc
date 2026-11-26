@@ -1,11 +1,12 @@
 #!/bin/sh
 
 # PROVIDE: dshelper
-# REQUIRE: FILESYSTEMS rpcbind
-# BEFORE: loginwindow
+# REQUIRE: FILESYSTEMS NETWORKING
 # KEYWORD: shutdown
 #
-# Add the following lines to /etc/rc.conf to enable dshelper:
+# dshelper advertises a directory server for dscli join. Only a directory
+# server needs it: nss_gershwin resolves users and groups without it.
+# dscli promote enables it, dscli demote disables it:
 #
 # dshelper_enable="YES"
 #
@@ -24,6 +25,7 @@ load_rc_config ${name}
 
 command="/System/Library/Tools/dshelper"
 pidfile="/var/run/${name}.pid"
+domain_plist="/Local/Library/DirectoryServices/Domain.plist"
 gdomap_pidfile="/var/run/gdomap.pid"
 gdomap_iface="/var/run/gdomap-iface.conf"
 
@@ -58,6 +60,11 @@ generate_gdomap_iface()
 
 dshelper_start()
 {
+    if [ ! -f ${domain_plist} ]; then
+        echo "${name}: not a directory server, not starting."
+        return 0
+    fi
+
     if [ -f ${pidfile} ]; then
         echo "${name} already running."
         return 1

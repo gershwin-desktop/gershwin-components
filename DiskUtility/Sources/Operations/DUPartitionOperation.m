@@ -24,7 +24,9 @@
     }
     _backend = backend;
     _device = device;
-    _plan = [plan copy];
+    // The plan is an immutable snapshot already (it does not implement NSCopying,
+    // so copying it raised and no partition apply could ever start).
+    _plan = plan;
     return self;
 }
 
@@ -50,6 +52,10 @@
         return;
     }
 
+    __weak DUPartitionOperation *weakSelf = self;
+    _plan.cancelCheck = ^BOOL(void) {
+        return weakSelf.cancelRequested;
+    };
     [_backend partitionDevice:_device
                       withPlan:_plan
                       progress:^(double progress, NSString *message) {

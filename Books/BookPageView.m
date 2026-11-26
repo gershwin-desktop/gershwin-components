@@ -9,6 +9,8 @@
 #import "EPUBPageRenderer.h"
 #import "GLPageTurnView.h"
 #import "BookPageTextView.h"
+#import "BookTextSelection.h"
+#import "BookTextExtraction.h"
 #include <math.h>
 
 // Fixed bottom margin reserved for the folio (page number). Unlike the top/left/
@@ -32,12 +34,9 @@
 // Page ranges are computed natively here from the view's own bounds so resize
 // reflow is exact.
 @property (nonatomic, strong) NSMutableArray *pageRanges;
-// Drag-to-select state. Selection ranges are absolute in the reading text and
-// the owner paints them onto the relevant text view(s) natively.
-@property (nonatomic, assign) BOOL mouseDownActive;
-@property (nonatomic, assign) BOOL selecting;
-@property (nonatomic, assign) NSUInteger selAbsStart;
-@property (nonatomic, assign) NSUInteger selAbsEnd;
+// The reading selection, absolute in the reading text so it can span pages and
+// survive page turns; this view paints it onto whichever pages are visible.
+@property (nonatomic, strong) BookTextSelection *selection;
 @property (nonatomic, assign) NSUInteger selStartSide;
 @property (nonatomic, assign) CGFloat scrollAccum;
 // Cache of the last re-paginated geometry/text so we can skip the (still costly)
@@ -63,6 +62,7 @@
       _leftRange = NSMakeRange(NSNotFound, 0);
       _rightRange = NSMakeRange(NSNotFound, 0);
       _pageRanges = [NSMutableArray array];
+      _selection = [[BookTextSelection alloc] initWithString:@""];
 
       // GNUstep's NSTextView does not always create a text storage when handed
       // a bare container, so wire the storage -> layout manager -> container
@@ -144,6 +144,10 @@
 - (void)configureWithAttributedString:(NSAttributedString *)attr
 {
   self.attrString = attr;
+  // Re-pagination after a zoom or font change hands in the same text; only a
+  // different text invalidates the selected indexes.
+  if (![[_selection string] isEqualToString:[attr string]])
+    [_selection setString:[attr string]];
   [self recomputePages];
   self.currentSpread = 0;
 }
@@ -427,6 +431,9 @@
   // the fixed page frames and container sizes here.
   [self layoutTextViews];
   [self applyHighlights];
+  // Loading new page text resets the text views' own selection; repaint the
+  // book selection so it stays visible on every page it covers.
+  [self updateSelection];
   // The folio is painted by the superview and depends on the current spread, so
   // redraw the page (paper + folio) on every turn; otherwise the number would
   // not refresh until the next resize.
@@ -568,6 +575,13 @@
     }
 
   NSUInteger ch = [lm characterIndexForGlyphAtIndex:bestGlyph];
+  // A point past the middle of a glyph lies after it, so a drag that ends on
+  // the last letter of a sentence takes that letter (and the full stop) too.
+  // The line break itself is never stepped over, or the end would jump a line.
+  NSRect hit = [lm boundingRectForGlyphRange:NSMakeRange(bestGlyph, 1)
+                             inTextContainer:tc];
+  if (cp.x > NSMidX(hit) && ch < len && [[ts string] characterAtIndex:ch] != '\n')
+    ch++;
   if (ch > len) ch = len;
   NSRange pr = (side == 0) ? _leftRange : _rightRange;
   if (pr.location == NSNotFound) return 0;
@@ -576,11 +590,9 @@
 
 - (void)updateSelection
 {
-  NSUInteger lo = MIN(_selAbsStart, _selAbsEnd);
-  NSUInteger hi = MAX(_selAbsStart, _selAbsEnd);
   [self clearSelection];
-  if (hi <= lo) return;
-  NSRange sel = NSMakeRange(lo, hi - lo);
+  NSRange sel = [_selection selectedRange];
+  if (sel.location == NSNotFound) return;
   for (NSUInteger side = 0; side < 2; side++)
     {
       NSRange pr = (side == 0) ? _leftRange : _rightRange;
@@ -603,59 +615,134 @@
   [_rightTV setSelectedRanges:empty];
 }
 
+- (NSRange)selectedRange
+{
+  return [_selection selectedRange];
+}
+
+// libs-gui's +[NSEvent doubleClickInterval] is an unimplemented stub returning
+// 0, so read the setting libs-back counts clicks with, with its own floor.
+static NSTimeInterval BookDoubleClickInterval(void)
+{
+  NSInteger ms = [[NSUserDefaults standardUserDefaults] integerForKey:@"GSDoubleClickTime"];
+  if (ms < 200)
+    ms = 300;
+  return ms / 1000.0;
+}
+
+- (void)performPendingPageTurn
+{
+  if (_selStartSide == 0)
+    [_delegate pageViewDidRequestPrevious:self];
+  else
+    [_delegate pageViewDidRequestNext:self];
+}
+
 #pragma mark - BookPageTextViewOwner
 
 - (void)pageTextView:(BookPageTextView *)tv mouseDown:(NSEvent *)e
 {
-  _mouseDownActive = YES;
-  _selecting = NO;
+  // The page view, not a page's text view, answers Copy and Select All, so
+  // they act on the whole book selection rather than one page's slice of it.
+  [[self window] makeFirstResponder:self];
+  // A page turn waits out the double-click interval; the second click of a
+  // double-click cancels it, so selecting a word does not flip the page.
+  // The request carries no argument: cancelling matches the argument too, and
+  // the side the click started on is kept in _selStartSide anyway.
+  [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                           selector:@selector(performPendingPageTurn)
+                                             object:nil];
   NSPoint p = [tv convertPoint:[e locationInWindow] fromView:nil];
   NSUInteger side = [self sideForView:tv];
   _selStartSide = side;
-  _selAbsStart = [self charAtPoint:p side:side];
-  _selAbsEnd = _selAbsStart;
+  BOOL extend = ([e modifierFlags] & NSShiftKeyMask) != 0;
+  [_selection pressAtIndex:[self charAtPoint:p side:side]
+                clickCount:[e clickCount]
+                    extend:extend];
   [self updateSelection];
 }
 
 - (void)pageTextView:(BookPageTextView *)tv mouseDragged:(NSEvent *)e
 {
-  if (!_mouseDownActive) return;
   NSPoint p = [tv convertPoint:[e locationInWindow] fromView:nil];
-  NSUInteger side = [self sideForView:tv];
-  _selAbsEnd = [self charAtPoint:p side:side];
-  _selecting = YES;
+  [_selection dragToIndex:[self charAtPoint:p side:[self sideForView:tv]]];
   [self updateSelection];
 }
 
 - (void)pageTextView:(BookPageTextView *)tv mouseUp:(NSEvent *)e
 {
-  if (!_mouseDownActive) return;
-  NSUInteger lo = MIN(_selAbsStart, _selAbsEnd);
-  NSUInteger hi = MAX(_selAbsStart, _selAbsEnd);
-  BOOL wasSelecting = _selecting;
-  _mouseDownActive = NO;
-  _selecting = NO;
-  _selAbsStart = NSNotFound;
-  _selAbsEnd = NSNotFound;
-  [self clearSelection];
-  if (wasSelecting && hi > lo)
+  BookSelectionReleaseOutcome outcome = [_selection releaseButton];
+  [self updateSelection];
+  if (outcome == BookSelectionReleaseClick)
+    [self performSelector:@selector(performPendingPageTurn)
+               withObject:nil
+               afterDelay:BookDoubleClickInterval()];
+}
+
+- (NSMenu *)pageTextView:(BookPageTextView *)tv menuForEvent:(NSEvent *)e
+{
+  [[self window] makeFirstResponder:self];
+  // A right-click outside the selection acts on the word under the pointer,
+  // as in a text editor, so Copy and Highlight always have something to use.
+  NSPoint p = [tv convertPoint:[e locationInWindow] fromView:nil];
+  NSUInteger idx = [self charAtPoint:p side:[self sideForView:tv]];
+  if (!NSLocationInRange(idx, [_selection selectedRange]))
     {
-      if ([_delegate respondsToSelector:@selector(pageView:didSelectRange:)])
-        [_delegate pageView:self didSelectRange:NSMakeRange(lo, hi - lo)];
+      [_selection pressAtIndex:idx clickCount:2 extend:NO];
+      [_selection releaseButton];
+      [self updateSelection];
     }
-  else
-    {
-      if (_selStartSide == 0)
-        {
-          if ([_delegate respondsToSelector:@selector(pageViewDidRequestPrevious:)])
-            [_delegate pageViewDidRequestPrevious:self];
-        }
-      else
-        {
-          if ([_delegate respondsToSelector:@selector(pageViewDidRequestNext:)])
-            [_delegate pageViewDidRequestNext:self];
-        }
-    }
+  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Text"];
+  [[menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""]
+    setTarget:self];
+  [[menu addItemWithTitle:@"Highlight" action:@selector(highlightSelection:) keyEquivalent:@""]
+    setTarget:self];
+  return menu;
+}
+
+#pragma mark - edit actions
+
+- (BOOL)acceptsFirstResponder
+{
+  return YES;
+}
+
+- (void)copy:(id)sender
+{
+  NSRange sel = [_selection selectedRange];
+  if (sel.location == NSNotFound) return;
+  [BookTextExtraction writeRange:sel
+                          ofText:self.attrString
+                    toPasteboard:[NSPasteboard generalPasteboard]];
+}
+
+- (void)selectAll:(id)sender
+{
+  NSRange shown = (_leftRange.location != NSNotFound) ? _leftRange : _rightRange;
+  if (shown.location == NSNotFound) return;
+  [_selection selectRange:[_delegate pageView:self selectAllRangeAtIndex:shown.location]];
+  [self updateSelection];
+}
+
+- (void)highlightSelection:(id)sender
+{
+  NSRange sel = [_selection selectedRange];
+  if (sel.location == NSNotFound) return;
+  [_delegate pageView:self highlightRange:sel];
+  // The highlight now marks the text; leaving the selection over it would hide
+  // the highlight colour until the next click.
+  [_selection clear];
+  [self updateSelection];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+  SEL a = [item action];
+  if (a == @selector(copy:) || a == @selector(highlightSelection:))
+    return [_selection hasSelection];
+  if (a == @selector(selectAll:))
+    return [self.attrString length] > 0;
+  return YES;
 }
 
 - (void)pageTextView:(BookPageTextView *)tv scrollWheel:(NSEvent *)e

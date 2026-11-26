@@ -10,7 +10,13 @@
 
 @implementation BluetoothPane
 
+/* On Linux the pane stays visible without bluetoothctl: OnDemand offers to
+   install it, from the Dependencies.plist in this bundle, when the pane is
+   selected.  Elsewhere BlueZ does not exist, so there is nothing to offer. */
 + (BOOL)isCompatible {
+#ifdef __linux__
+  return YES;
+#else
   NSString *pathEnv = [NSString stringWithUTF8String: getenv("PATH")];
   NSArray *paths = [pathEnv componentsSeparatedByString: @":"];
   for (NSString *dir in paths) {
@@ -19,6 +25,7 @@
       return YES;
   }
   return NO;
+#endif
 }
 
 + (NSString *)compatibilityReason {

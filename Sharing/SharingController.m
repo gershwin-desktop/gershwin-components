@@ -7,12 +7,26 @@
  */
 
 #import "SharingController.h"
+
+/* The two class methods of the OnDemand bundle that this file calls.  The host
+   loads that bundle at run time and the class is looked up by name, so they are
+   declared here and the build does not depend on the bundle's header having
+   been installed first. */
+@protocol SharingOnDemand
++ (NSArray *)missingPackagesFromPlistAtPath:(NSString *)plistPath;
++ (BOOL)installPackagesFromPlistAtPath:(NSString *)plistPath title:(NSString *)title;
+@end
 #import "GSServiceDiscoveryManager.h"
+#import "GSXrdpSession.h"
 #import <dispatch/dispatch.h>
 #import <sys/utsname.h>
 #import <arpa/inet.h>
 #import <netinet/in.h>
 #import <ifaddrs.h>
+
+// The pane's bundle, not the application's, holds its Localizable.strings.
+#define SharingLocalized(s) \
+    NSLocalizedStringFromTableInBundle(s, nil, [NSBundle bundleForClass:[SharingController class]], nil)
 
 // AppearanceMetrics design philosophy - do NOT hardcode layout values
 // All spacing shall be multiples of 4px (4, 8, 12, 16, 20, 24)
@@ -248,6 +262,25 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         return [trimmed isEqualToString:@"running"];
     }
     return NO;
+}
+
+// "enabled" or "disabled"; anything else (the helper could not understand
+// sshd_config) is reported as unknown so the pane does not guess.
+- (NSString *)getX11State
+{
+    NSString *output = [self runHelper:@"x11-status"];
+    NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([trimmed isEqualToString:@"enabled"] || [trimmed isEqualToString:@"disabled"]) {
+        return trimmed;
+    }
+    return nil;
+}
+
+- (BOOL)getX11Installed
+{
+    NSString *output = [self runHelper:@"x11-installed"];
+    NSString *trimmed = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return [trimmed isEqualToString:@"installed"];
 }
 
 - (BOOL)getVNCStatus
@@ -541,9 +574,45 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     [applyHostnameButton setEnabled:changed];
 }
 
+#pragma mark - Packages a service needs
+
+/* The packages each service needs are named per system in a plist of this
+   bundle (Dependencies-<service>.plist).  Turning a service on installs what
+   is missing first, through OnDemand, so nothing listens on the network until
+   the user asks for it.  OnDemand lives in the bundle every GUI app loads. */
+- (NSString *)dependencyPlistForService:(NSString *)service
+{
+    return [[NSBundle bundleForClass:[self class]]
+        pathForResource:[@"Dependencies-" stringByAppendingString:service] ofType:@"plist"];
+}
+
+/* YES when something is missing that this system can install. */
+- (BOOL)canInstallPackagesForService:(NSString *)service
+{
+    NSString *path = [self dependencyPlistForService:service];
+    Class<SharingOnDemand> onDemand = (Class<SharingOnDemand>)NSClassFromString(@"OnDemand");
+    return path != nil && onDemand != Nil
+        && [[onDemand missingPackagesFromPlistAtPath:path] count] > 0;
+}
+
+/* NO when the user declined or the install failed. */
+- (BOOL)installPackagesForService:(NSString *)service title:(NSString *)title
+{
+    NSString *path = [self dependencyPlistForService:service];
+    Class<SharingOnDemand> onDemand = (Class<SharingOnDemand>)NSClassFromString(@"OnDemand");
+    if (path == nil || onDemand == Nil) {
+        return YES;
+    }
+    return [onDemand installPackagesFromPlistAtPath:path title:title];
+}
+
 - (void)toggleSSH:(id)sender
 {
     BOOL shouldEnable = [sshCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"SSH" title:NSLocalizedString(@"Remote Login", @"Sharing service")]) {
+        [sshCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"ssh-start" : @"ssh-stop";
     
     NSDebugLog(@"SharingController: %@ SSH", shouldEnable ? @"Starting" : @"Stopping");
@@ -586,9 +655,66 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
     }
 }
 
+- (void)toggleX11:(id)sender
+{
+    BOOL shouldEnable = [x11Checkbox state] == NSOnState;
+
+    if (![self runHelperWithSudo:shouldEnable ? @"x11-start" : @"x11-stop"]) {
+        [x11Checkbox setState:x11Enabled ? NSOnState : NSOffState];
+        NSRunAlertPanel(SharingLocalized(@"X11 Forwarding Error"),
+                        SharingLocalized(@"The sshd configuration could not be changed. It may use a layout this pane does not handle, or sshd rejected the change. Check the system log for details."),
+                        SharingLocalized(@"OK"), nil, nil);
+        return;
+    }
+    x11Enabled = shouldEnable;
+    [self refreshStatus:nil];
+}
+
+- (void)updateX11UIWithState:(NSString *)state installed:(BOOL)installed
+{
+    if (!x11Checkbox) {
+        return;
+    }
+    NSColor *grey = [NSColor colorWithCalibratedWhite:0.6 alpha:1.0];
+
+    if (!installed) {
+        [x11Checkbox setEnabled:NO];
+        [x11Checkbox setState:NSOffState];
+        [x11StatusLabel setStringValue:SharingLocalized(@"N/A")];
+        [x11StatusLabel setTextColor:grey];
+        [x11InfoLabel setStringValue:SharingLocalized(@"Install the OpenSSH server and xauth to allow X11 forwarding.")];
+        [x11InfoLabel setHidden:NO];
+    } else if (state == nil) {
+        [x11Checkbox setEnabled:NO];
+        [x11Checkbox setState:NSOffState];
+        [x11StatusLabel setStringValue:SharingLocalized(@"Unknown")];
+        [x11StatusLabel setTextColor:grey];
+        [x11InfoLabel setStringValue:SharingLocalized(@"The sshd configuration could not be read or is not understood; edit it by hand.")];
+        [x11InfoLabel setHidden:NO];
+    } else {
+        x11Enabled = [state isEqualToString:@"enabled"];
+        [x11Checkbox setEnabled:YES];
+        [x11Checkbox setState:x11Enabled ? NSOnState : NSOffState];
+        if (x11Enabled) {
+            [x11StatusLabel setStringValue:SharingLocalized(@"On")];
+            [x11StatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
+            [x11InfoLabel setStringValue:SharingLocalized(@"To use it: ssh -X user@host")];
+            [x11InfoLabel setHidden:NO];
+        } else {
+            [x11StatusLabel setStringValue:SharingLocalized(@"Off")];
+            [x11StatusLabel setTextColor:[NSColor grayColor]];
+            [x11InfoLabel setHidden:YES];
+        }
+    }
+}
+
 - (void)toggleVNC:(id)sender
 {
     BOOL shouldEnable = [vncCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"VNC" title:NSLocalizedString(@"Screen Sharing", @"Sharing service")]) {
+        [vncCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"vnc-start" : @"vnc-stop";
     
     NSDebugLog(@"SharingController: %@ VNC", shouldEnable ? @"Starting" : @"Stopping");
@@ -684,6 +810,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleAFP:(id)sender
 {
     BOOL shouldEnable = [afpCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"AFP" title:NSLocalizedString(@"File Sharing", @"Sharing service")]) {
+        [afpCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"afp-start" : @"afp-stop";
     
     NSDebugLog(@"SharingController: %@ AFP", shouldEnable ? @"Starting" : @"Stopping");
@@ -793,6 +923,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleRDP:(id)sender
 {
     BOOL shouldEnable = [rdpCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"RDP" title:NSLocalizedString(@"Remote Desktop", @"Sharing service")]) {
+        [rdpCheckbox setState:NSOffState];
+        return;
+    }
     NSString *command = shouldEnable ? @"rdp-start" : @"rdp-stop";
 
     NSDebugLog(@"SharingController: %@ Remote Desktop", shouldEnable ? @"Starting" : @"Stopping");
@@ -801,6 +935,20 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     if (success) {
         rdpEnabled = shouldEnable;
+
+        // The helper only starts xrdp; without this wrapper a login over RDP
+        // lands in the distribution's default session instead of Gershwin.
+        NSError *sessionError = nil;
+        BOOL sessionOK = shouldEnable
+            ? [GSXrdpSession configureInHome:NSHomeDirectory()
+                               sessionScript:[GSXrdpSession defaultSessionScript]
+                                       error:&sessionError]
+            : [GSXrdpSession restoreInHome:NSHomeDirectory() error:&sessionError];
+        if (!sessionOK) {
+            NSRunAlertPanel(@"Remote Desktop Warning",
+                           @"Could not set up the Gershwin session for Remote Desktop:\n%@",
+                           @"OK", nil, nil, [sessionError localizedDescription]);
+        }
 
         if (shouldEnable) {
             GSServiceDiscoveryManager *mgr = [self ensureServiceDiscoveryManager];
@@ -844,6 +992,10 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 - (void)toggleCloud:(id)sender
 {
     BOOL shouldEnable = [cloudCheckbox state] == NSOnState;
+    if (shouldEnable && ![self installPackagesForService:@"Cloud" title:NSLocalizedString(@"Cloud Sync", @"Sharing service")]) {
+        [cloudCheckbox setState:NSOffState];
+        return;
+    }
 
     NSDebugLog(@"SharingController: %@ Cloud Sync", shouldEnable ? @"Starting" : @"Stopping");
 
@@ -1083,9 +1235,12 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         BOOL isMediaInstalled  = [self getMediaInstalled];
         BOOL isRdpInstalled  = [self getRDPInstalled];
         BOOL isCloudInstalled = [self getCloudInstalled];
+        BOOL isX11Installed = [self getX11Installed];
+        NSString *x11State = isX11Installed ? [self getX11State] : nil;
 
         dispatch_async(dispatch_get_main_queue(), ^{
             isRefreshingStatus = NO;
+            [self updateX11UIWithState:x11State installed:isX11Installed];
             [self updateUIWithHostname:hostname
                                    ssh:ssh vnc:vnc sftp:sftp afp:afp smb:smb web:web media:media rdp:rdp cloud:cloud
                           sshInstalled:isSshInstalled vncInstalled:isVncInstalled
@@ -1150,11 +1305,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- SSH ---
     if (!isSshInstalled) {
-        [sshCheckbox setEnabled:NO];
+        [sshCheckbox setEnabled:[self canInstallPackagesForService:@"SSH"]];
         [sshCheckbox setState:NSOffState];
         [sshStatusLabel setStringValue:@"N/A"];
         [sshStatusLabel setTextColor:naColor];
-        [sshInfoLabel setStringValue:@"Install OpenSSH server (openssh-server) to enable Remote Login."];
+        [sshInfoLabel setStringValue:[self canInstallPackagesForService:@"SSH"]
+            ? @"It is installed when you turn this on."
+            : @"Install OpenSSH server (openssh-server) to enable Remote Login."];
         [sshInfoLabel setHidden:NO];
     } else {
         [sshCheckbox setEnabled:YES];
@@ -1193,11 +1350,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- VNC ---
     if (!isVncInstalled) {
-        [vncCheckbox setEnabled:NO];
+        [vncCheckbox setEnabled:[self canInstallPackagesForService:@"VNC"]];
         [vncCheckbox setState:NSOffState];
         [vncStatusLabel setStringValue:@"N/A"];
         [vncStatusLabel setTextColor:naColor];
-        [vncInfoLabel setStringValue:@"Install a VNC server (x11vnc, TigerVNC, or TightVNC) to enable Screen Sharing."];
+        [vncInfoLabel setStringValue:[self canInstallPackagesForService:@"VNC"]
+            ? @"It is installed when you turn this on."
+            : @"Install a VNC server (x11vnc, TigerVNC, or TightVNC) to enable Screen Sharing."];
         [vncInfoLabel setHidden:NO];
     } else {
         [vncCheckbox setEnabled:YES];
@@ -1279,11 +1438,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- AFP ---
     if (!isAfpInstalled) {
-        [afpCheckbox setEnabled:NO];
+        [afpCheckbox setEnabled:[self canInstallPackagesForService:@"AFP"]];
         [afpCheckbox setState:NSOffState];
         [afpStatusLabel setStringValue:@"N/A"];
         [afpStatusLabel setTextColor:naColor];
-        [afpInfoLabel setStringValue:@"Install Netatalk to enable Apple File Sharing (AFP)."];
+        [afpInfoLabel setStringValue:[self canInstallPackagesForService:@"AFP"]
+            ? @"It is installed when you turn this on."
+            : @"Install Netatalk to enable Apple File Sharing (AFP)."];
         [afpInfoLabel setHidden:NO];
     } else {
         [afpCheckbox setEnabled:YES];
@@ -1451,11 +1612,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- Remote Desktop ---
     if (!isRdpInstalled) {
-        [rdpCheckbox setEnabled:NO];
+        [rdpCheckbox setEnabled:[self canInstallPackagesForService:@"RDP"]];
         [rdpCheckbox setState:NSOffState];
         [rdpStatusLabel setStringValue:@"N/A"];
         [rdpStatusLabel setTextColor:naColor];
-        [rdpInfoLabel setStringValue:@"Install xrdp to enable Remote Desktop."];
+        [rdpInfoLabel setStringValue:[self canInstallPackagesForService:@"RDP"]
+            ? @"It is installed when you turn this on."
+            : @"Install xrdp to enable Remote Desktop."];
         [rdpInfoLabel setHidden:NO];
     } else {
         [rdpCheckbox setEnabled:YES];
@@ -1467,6 +1630,9 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
             [rdpStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.6 blue:0.0 alpha:1.0]];
 
             NSString *info = [NSString stringWithFormat:@"Remote Desktop available at: %@:3389", serviceAddress];
+            if (![GSXrdpSession isConfiguredInHome:NSHomeDirectory()]) {
+                info = [info stringByAppendingString:@" (Gershwin session not set up)"];
+            }
             [rdpInfoLabel setStringValue:info];
             [rdpInfoLabel setHidden:NO];
 
@@ -1494,11 +1660,13 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
 
     // --- Cloud Sync ---
     if (!isCloudInstalled) {
-        [cloudCheckbox setEnabled:NO];
+        [cloudCheckbox setEnabled:[self canInstallPackagesForService:@"Cloud"]];
         [cloudCheckbox setState:NSOffState];
         [cloudStatusLabel setStringValue:@"N/A"];
         [cloudStatusLabel setTextColor:naColor];
-        [cloudInfoLabel setStringValue:@"Install rclone to enable Cloud Sync."];
+        [cloudInfoLabel setStringValue:[self canInstallPackagesForService:@"Cloud"]
+            ? @"It is installed when you turn this on."
+            : @"Install rclone to enable Cloud Sync."];
         [cloudInfoLabel setHidden:NO];
     } else {
         [cloudCheckbox setEnabled:YES];
@@ -1699,6 +1867,8 @@ static const float METRICS_SPACE_20 = 20.0;  // Between control groups, checkbox
         CGFloat ty = tabContentH - kTabContentTop;
         ty = addService(tv, ty, &sshCheckbox, &sshStatusLabel, &sshInfoLabel,
                         @"Remote Login (SSH)", @"Off", @selector(toggleSSH:), YES);
+        ty = addService(tv, ty, &x11Checkbox, &x11StatusLabel, &x11InfoLabel,
+                        SharingLocalized(@"X11 Forwarding over SSH"), SharingLocalized(@"Off"), @selector(toggleX11:), YES);
         ty = addService(tv, ty, &vncCheckbox, &vncStatusLabel, &vncInfoLabel,
                         @"Screen Sharing (VNC)", @"Off", @selector(toggleVNC:), YES);
         addService(tv, ty, &rdpCheckbox, &rdpStatusLabel, &rdpInfoLabel,

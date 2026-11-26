@@ -4,6 +4,7 @@ TOOL_NAME = dscli
 
 dscli_OBJC_FILES = \
 	main.m \
+	DSUserCheck.m \
 	DSPlatform.m \
 	DSPlatformFreeBSD.m \
 	DSPlatformLinux.m

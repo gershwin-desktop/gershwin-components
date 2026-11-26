@@ -13,6 +13,7 @@ SudoAskPass provides a graphical interface for sudo password prompts, compatible
 - Support for keyboard shortcuts (Enter for OK, Escape for Cancel)
 - Floating window that stays on top
 - Compatible with sudo's SUDO_ASKPASS mechanism
+- A user whom sudoers allows nothing is told "You are not allowed to administer this computer" after entering the right password, instead of a prompt that can never succeed
 
 **Note:** The SUDO_COMMAND environment variable is set by sudo but may not always be passed to askpass programs. The Details section will show "(command not available - SUDO_COMMAND not set)" when this information is not provided by sudo.
 
@@ -36,6 +37,8 @@ sudo -A your-command
 ```
 
 ## Testing
+
+The check behind the "not allowed" message has a unit test that plays sudo with stand-in scripts (`cd Tests && gmake && ./obj/t_GWSudoPolicy`).
 
 A test script is provided to help verify the functionality:
 

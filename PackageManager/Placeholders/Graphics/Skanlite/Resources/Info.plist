@@ -9,7 +9,7 @@
   <key>CFBundleIconFile</key>
   <string>Skanlite.png</string>
   <key>CFBundleIdentifier</key>
-  <string>org.gershwin.Skanlite</string>
+  <string>io.github.gershwin-desktop.Skanlite</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

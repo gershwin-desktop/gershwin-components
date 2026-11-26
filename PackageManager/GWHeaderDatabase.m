@@ -269,6 +269,20 @@
         }
     }
 
+  // Headers the stack itself ships are not distro packages and must never be
+  // reported as missing: /System/Library/Headers holds libdispatch
+  // (dispatch/dispatch.h) and friends, which are on the default include path
+  // for every GNUstep build.  The distro prefix scan cannot see them, so check
+  // the directory explicitly before falling through to the basename scan.
+  NSString *systemHeadersPath = [@"/System/Library/Headers/"
+      stringByAppendingString:includeName];
+  if ([[NSFileManager defaultManager] fileExistsAtPath:systemHeadersPath])
+    {
+      NSLog(@"GWHeaderDatabase <- isHeaderInstalled: %@ / %@ -> YES (%@, system headers)",
+            includeName, distro, systemHeadersPath);
+      return YES;
+    }
+
   // The header may be reachable via a -I subdirectory flag even though its
   // canonical path does not exist, e.g. "#include <gphoto2.h>" with
   // -I/usr/include/gphoto2.  Treat any file with the same basename anywhere

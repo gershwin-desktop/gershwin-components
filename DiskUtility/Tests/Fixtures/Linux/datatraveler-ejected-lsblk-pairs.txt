@@ -1,0 +1,1 @@
+NAME="sdb" PKNAME="" PATH="/dev/sdb" TYPE="disk" SIZE="0" FSTYPE="" MOUNTPOINT="" LABEL="" PARTUUID="" UUID="" MODEL="DataTraveler 3.0" RO="0" RM="1" HOTPLUG="1" MAJ:MIN="8:16"

@@ -5,6 +5,10 @@
  */
 
 #import "PrintersController.h"
+#import "PrinterOptionsPanel.h"
+#import "CupsSystemGroups.h"
+#import "CupsAuthentication.h"
+#import "PrinterListing.h"
 #include <cups/cups.h>
 #include <cups/adminutil.h>
 #include <cups/ppd.h>
@@ -224,6 +228,9 @@ static void deviceCallback(const char *device_class,
         isDiscovering = NO;
         cupsAvailable = NO;
         userInLpadminGroup = NO;
+        /* CUPS asks the user for a password before it lets a member of its
+           admin group change printers; this lets it ask in a window. */
+        [CupsAuthentication install];
         privilegeWarningShown = NO;
     }
     return self;
@@ -265,6 +272,8 @@ static void deviceCallback(const char *device_class,
     [printerInfoLabel release];
     [privilegeWarningLabel release];
     [addPrinterPanel release];
+    [optionsPanel close];
+    [optionsPanel release];
     [deviceTable release];
     [deviceScroll release];
     [printerNameField release];
@@ -287,93 +296,71 @@ static void deviceCallback(const char *device_class,
     return NO;
 }
 
+/* The groups CUPS lets manage printers, from this system's own configuration:
+   lpadmin on Debian, sys on Arch, wheel on the BSDs.  Only those the system
+   defines are returned, nil when it has no CUPS configuration. */
+- (NSArray *)adminGroupNames
+{
+    NSArray *configured = [CupsSystemGroups systemGroups];
+    if (configured == nil) {
+        return nil;
+    }
+    NSMutableArray *existing = [NSMutableArray array];
+    for (NSString *name in configured) {
+        if (getgrnam([name UTF8String]) != NULL) {
+            [existing addObject:name];
+        }
+    }
+    return existing;
+}
+
+/* The one to name in a message: the first of them. */
 - (NSString *)getAdminGroupName
 {
-    struct utsname unameData;
-    if (uname(&unameData) == 0) {
-        NSString *sysname = [NSString stringWithUTF8String:unameData.sysname];
-        
-        // Linux uses lpadmin
-        if ([sysname isEqualToString:@"Linux"]) {
-            return [self findExistingGroupAmong:@[@"lpadmin", @"printadmin", @"cups"]];
-        }
-        // FreeBSD uses cups
-        else if ([sysname isEqualToString:@"FreeBSD"]) {
-            return [self findExistingGroupAmong:@[@"cups", @"lpadmin", @"printadmin"]];
-        }
-        // macOS might use different groups
-        else if ([sysname isEqualToString:@"Darwin"]) {
-            return [self findExistingGroupAmong:@[@"_lpadmin", @"lpadmin", @"cups", @"printadmin"]];
-        }
-        // For other systems, try common names in order
-        else {
-            return [self findExistingGroupAmong:@[@"lpadmin", @"cups", @"printadmin", @"print"]];
-        }
-    }
-    // If uname fails, default to lpadmin
-    return @"lpadmin";
+    return [[self adminGroupNames] firstObject];
 }
 
-- (NSString *)findExistingGroupAmong:(NSArray *)groupNames
-{
-    for (NSString *groupName in groupNames) {
-        struct group *grp = getgrnam([groupName UTF8String]);
-        if (grp) {
-            return groupName;
-        }
-    }
-    // Fallback to first in list if none exist
-    return [groupNames firstObject] ?: @"lpadmin";
-}
-
+/* Whether the user belongs to one of them. */
 - (BOOL)isUserInLpadminGroup
 {
-    // Get current user's UID
-    uid_t uid = getuid();
-    
-    // Get user info
-    struct passwd *pwd = getpwuid(uid);
-    if (!pwd) {
-        NSDebugLLog(@"gwcomp", @"[Printers] Warning: Could not get user info for UID %d", uid);
+    int count = getgroups(0, NULL);
+    if (count <= 0) {
         return NO;
     }
-    
-    // Get admin group name for this system
-    NSString *adminGroupName = [self getAdminGroupName];
-    
-    // Get admin group info
-    struct group *grp = getgrnam([adminGroupName UTF8String]);
-    if (!grp) {
-        NSDebugLLog(@"gwcomp", @"[Printers] Warning: %@ group not found on system", adminGroupName);
-        return NO;
-    }
-    
-    // Get all groups for current user
-    int ngroups = 0;
-    gid_t *groups = NULL;
-    
-    if (getgroups(0, NULL) > 0) {
-        ngroups = getgroups(0, NULL);
-        groups = malloc(ngroups * sizeof(gid_t));
-        getgroups(ngroups, groups);
-    }
-    
-    // Check if admin group is in user's groups
+    gid_t *groups = malloc(count * sizeof(gid_t));
+    count = getgroups(count, groups);
     BOOL found = NO;
-    gid_t admin_gid = grp->gr_gid;
-    
-    for (int i = 0; i < ngroups; i++) {
-        if (groups[i] == admin_gid) {
-            found = YES;
-            break;
+    for (NSString *name in [self adminGroupNames]) {
+        gid_t adminGid = getgrnam([name UTF8String])->gr_gid;
+        for (int i = 0; i < count && !found; i++) {
+            found = (groups[i] == adminGid);
         }
     }
-    
-    if (groups) {
-        free(groups);
-    }
-    
+    free(groups);
     return found;
+}
+
+/* What to tell a user who may not manage printers; the command is the one the
+   system's own tools take. */
+- (NSString *)privilegeHint
+{
+    NSString *group = [self getAdminGroupName];
+    if (group == nil) {
+        return @"Ask an administrator to let you manage printers.";
+    }
+    NSString *user = [NSString stringWithUTF8String:getenv("USER") ?: "$USER"];
+    struct utsname unameData;
+    NSString *command;
+    if (uname(&unameData) == 0 && strcmp(unameData.sysname, "Linux") == 0) {
+        command = [NSString stringWithFormat:@"sudo usermod -a -G %@ %@", group, user];
+    } else if (uname(&unameData) == 0 && strcmp(unameData.sysname, "OpenBSD") == 0) {
+        command = [NSString stringWithFormat:@"doas usermod -G %@ %@", group, user];
+    } else {
+        command = [NSString stringWithFormat:@"sudo pw groupmod %@ -m %@", group, user];
+    }
+    return [NSString stringWithFormat:
+        @"To manage printers, you must be a member of the '%@' group. "
+        @"Run this command, then log out and back in:\n\n%@", group, command];
 }
 
 - (void)showPrivilegeWarningIfNeeded
@@ -385,16 +372,9 @@ static void deviceCallback(const char *device_class,
     }
     if (!userInLpadminGroup && cupsAvailable) {
         privilegeWarningShown = YES;
-        NSString *username = [NSString stringWithUTF8String:getenv("USER") ?: "current user"];
-        NSString *adminGroupName = [self getAdminGroupName];
-        
         NSAlert *alert = [[NSAlert alloc] init];
         [alert setMessageText:@"Insufficient Privileges"];
-        [alert setInformativeText:[NSString stringWithFormat:
-            @"You are not a member of the '%@' group.\n\n"
-            @"To manage printers, run this command and then log out and back in:\n\n"
-            @"sudo usermod -a -G %@ %@",
-            adminGroupName, adminGroupName, username]];
+        [alert setInformativeText:[self privilegeHint]];
         [alert addButtonWithTitle:@"OK"];
         [alert setAlertStyle:NSWarningAlertStyle];
         [alert runModal];
@@ -679,85 +659,139 @@ static void deviceCallback(const char *device_class,
 
 #pragma mark - Refresh Methods
 
+/* The destinations CUPS reports (printers and classes) as dictionaries: name,
+   info, location, makeModel, deviceURI, state, accepting, shared and, for a
+   class, members.  A request of its own rather than cupsGetDests, whose
+   options carry no state for a printer CUPS discovered on the network. */
+- (NSArray *)destinationRecords
+{
+    static const char *wanted[] = {
+        "printer-name", "printer-info", "printer-location", "printer-make-and-model",
+        "device-uri", "printer-state", "printer-is-accepting-jobs", "printer-is-shared",
+        "member-names"
+    };
+    ipp_t *request = ippNewRequest(IPP_OP_CUPS_GET_PRINTERS);
+    ippAddStrings(request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes",
+                  (int)(sizeof(wanted) / sizeof(wanted[0])), NULL, wanted);
+    ipp_t *response = cupsDoRequest(CUPS_HTTP_DEFAULT, request, "/");
+    NSMutableArray *records = [NSMutableArray array];
+    if (response == NULL) {
+        return records;
+    }
+    NSMutableDictionary *current = nil;
+    for (ipp_attribute_t *attribute = ippFirstAttribute(response); ;
+         attribute = ippNextAttribute(response)) {
+        const char *attributeName = attribute ? ippGetName(attribute) : NULL;
+        if (attributeName == NULL) {
+            // A separator between printers, or the end
+            if ([current objectForKey:@"name"] != nil) {
+                [records addObject:current];
+            }
+            current = nil;
+            if (attribute == NULL) {
+                break;
+            }
+            continue;
+        }
+        if (ippGetGroupTag(attribute) != IPP_TAG_PRINTER) {
+            continue;
+        }
+        if (current == nil) {
+            current = [NSMutableDictionary dictionary];
+        }
+        NSString *key = nil;
+        id value = nil;
+        if (strcmp(attributeName, "printer-name") == 0) {
+            key = @"name";
+        } else if (strcmp(attributeName, "printer-info") == 0) {
+            key = @"info";
+        } else if (strcmp(attributeName, "printer-location") == 0) {
+            key = @"location";
+        } else if (strcmp(attributeName, "printer-make-and-model") == 0) {
+            key = @"makeModel";
+        } else if (strcmp(attributeName, "device-uri") == 0) {
+            key = @"deviceURI";
+        } else if (strcmp(attributeName, "printer-state") == 0) {
+            [current setObject:[NSNumber numberWithInt:ippGetInteger(attribute, 0)] forKey:@"state"];
+        } else if (strcmp(attributeName, "printer-is-accepting-jobs") == 0) {
+            [current setObject:[NSNumber numberWithBool:ippGetBoolean(attribute, 0)] forKey:@"accepting"];
+        } else if (strcmp(attributeName, "printer-is-shared") == 0) {
+            [current setObject:[NSNumber numberWithBool:ippGetBoolean(attribute, 0)] forKey:@"shared"];
+        } else if (strcmp(attributeName, "member-names") == 0) {
+            NSMutableArray *members = [NSMutableArray array];
+            for (int i = 0; i < ippGetCount(attribute); i++) {
+                [members addObject:[NSString stringWithUTF8String:ippGetString(attribute, i, NULL)]];
+            }
+            [current setObject:members forKey:@"members"];
+        }
+        if (key != nil) {
+            const char *text = ippGetString(attribute, 0, NULL);
+            value = text ? [NSString stringWithUTF8String:text] : nil;
+            if (value != nil) {
+                [current setObject:value forKey:key];
+            }
+        }
+    }
+    ippDelete(response);
+    return records;
+}
+
 - (void)refreshPrinters:(NSTimer *)timer
 {
     if (!cupsAvailable) {
-        return;
+        /* The pane stays open without cupsd, and the service can arrive while
+           it is: OnDemand installs it from this bundle's Dependencies.plist
+           when the pane is selected. */
+        cupsAvailable = [self isCupsAvailable];
+        if (!cupsAvailable) {
+            [statusLabel setStringValue:@"The printing service (CUPS) is not running."];
+            return;
+        }
     }
     
     NSDebugLLog(@"gwcomp", @"[Printers] Refreshing printer list...");
     
-    // Get all destinations (printers and classes)
-    cups_dest_t *dests = NULL;
-    int num_dests = cupsGetDests(&dests);
-    
+    // Every printer and class CUPS has, with the state it reports for each
+    NSArray *records = [self destinationRecords];
+    NSArray *visibleNames = [PrinterListing visibleNamesFromEntries:records];
+    NSString *defaultName = nil;
+    const char *defaultDestination = cupsGetDefault();
+    if (defaultDestination) {
+        defaultName = [NSString stringWithUTF8String:defaultDestination];
+    }
+
     // Store the currently selected printer name
     NSString *selectedName = nil;
     if (selectedPrinter) {
         selectedName = [[selectedPrinter name] retain];
     }
-    
+
     [printers removeAllObjects];
     selectedPrinter = nil;
-    
-    for (int i = 0; i < num_dests; i++) {
-        cups_dest_t *dest = &dests[i];
+
+    for (NSDictionary *record in records) {
+        NSString *name = [record objectForKey:@"name"];
+        if (![visibleNames containsObject:name]) {
+            continue;
+        }
         PrinterInfo *printer = [[PrinterInfo alloc] init];
-        
-        [printer setName:[NSString stringWithUTF8String:dest->name]];
-        [printer setIsDefault:(dest->is_default != 0)];
-        
-        // Get printer options
-        const char *info = cupsGetOption("printer-info", dest->num_options, dest->options);
-        if (info) {
-            [printer setDisplayName:[NSString stringWithUTF8String:info]];
-        } else {
-            [printer setDisplayName:[printer name]];
+        [printer setName:name];
+        [printer setIsDefault:[name isEqualToString:defaultName]];
+        [printer setDisplayName:[record objectForKey:@"info"] ?: name];
+        [printer setLocation:[record objectForKey:@"location"]];
+        [printer setMakeModel:[record objectForKey:@"makeModel"]];
+        [printer setDeviceURI:[record objectForKey:@"deviceURI"]];
+        switch ([[record objectForKey:@"state"] intValue]) {
+            case IPP_PSTATE_IDLE: [printer setState:@"Idle"]; break;
+            case IPP_PSTATE_PROCESSING: [printer setState:@"Printing"]; break;
+            case IPP_PSTATE_STOPPED: [printer setState:@"Stopped"]; break;
+            default: [printer setState:@"Unknown"]; break;
         }
-        
-        const char *location = cupsGetOption("printer-location", dest->num_options, dest->options);
-        if (location) {
-            [printer setLocation:[NSString stringWithUTF8String:location]];
-        }
-        
-        const char *makeModel = cupsGetOption("printer-make-and-model", dest->num_options, dest->options);
-        if (makeModel) {
-            [printer setMakeModel:[NSString stringWithUTF8String:makeModel]];
-        }
-        
-        const char *uri = cupsGetOption("device-uri", dest->num_options, dest->options);
-        if (uri) {
-            [printer setDeviceURI:[NSString stringWithUTF8String:uri]];
-        }
-        
-        const char *state = cupsGetOption("printer-state", dest->num_options, dest->options);
-        if (state) {
-            int stateVal = atoi(state);
-            switch (stateVal) {
-                case 3: [printer setState:@"Idle"]; break;
-                case 4: [printer setState:@"Printing"]; break;
-                case 5: [printer setState:@"Stopped"]; break;
-                default: [printer setState:@"Unknown"]; break;
-            }
-        } else {
-            [printer setState:@"Unknown"];
-        }
-        
-        const char *accepting = cupsGetOption("printer-is-accepting-jobs", dest->num_options, dest->options);
-        if (accepting) {
-            [printer setAcceptingJobs:(strcmp(accepting, "true") == 0)];
-        }
-        
-        const char *shared = cupsGetOption("printer-is-shared", dest->num_options, dest->options);
-        if (shared) {
-            [printer setIsShared:(strcmp(shared, "true") == 0)];
-        }
-        
+        [printer setAcceptingJobs:[[record objectForKey:@"accepting"] boolValue]];
+        [printer setIsShared:[[record objectForKey:@"shared"] boolValue]];
         [printers addObject:printer];
         [printer release];
     }
-    
-    cupsFreeDests(num_dests, dests);
     
     [printerTable reloadData];
     
@@ -1066,7 +1100,7 @@ static void deviceCallback(const char *device_class,
         
         if (!success) {
             NSDebugLLog(@"gwcomp", @"[Printers] Failed to remove printer: %@", printerName);
-            [statusLabel setStringValue:@"Failed to remove printer. Add yourself to the 'lpadmin' group to manage printers."];
+            [statusLabel setStringValue:@"Failed to remove printer. You are not allowed to manage printers."];
         }
         
         [self refreshPrinters:nil];
@@ -1594,7 +1628,7 @@ static void deviceCallback(const char *device_class,
         } else {
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"Failed to Add Printer"];
-            [alert setInformativeText:@"Could not add the printer. To manage printers, add yourself to the 'lpadmin' group:\n\nsudo usermod -a -G lpadmin $USER\n\nThen log out and log back in."];
+            [alert setInformativeText:[@"Could not add the printer.\n\n" stringByAppendingString:[self privilegeHint]]];
             [alert addButtonWithTitle:@"OK"];
             [alert runModal];
             [alert release];
@@ -1614,95 +1648,16 @@ static void deviceCallback(const char *device_class,
     if (!selectedPrinter) {
         return;
     }
-    
-    // Create options panel
-    NSPanel *optionsPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 400, 300)
-                                                       styleMask:(NSTitledWindowMask | NSClosableWindowMask)
-                                                         backing:NSBackingStoreBuffered
-                                                           defer:YES];
-    [optionsPanel setTitle:[NSString stringWithFormat:@"Options for %@", [selectedPrinter displayName]]];
-    
-    NSView *content = [optionsPanel contentView];
-    
-    // Printer info
-    NSTextField *infoLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 250, 360, 40)];
-    NSMutableString *infoText = [NSMutableString string];
-    [infoText appendFormat:@"Name: %@\n", [selectedPrinter displayName]];
-    if ([selectedPrinter makeModel]) {
-        [infoText appendFormat:@"Model: %@", [selectedPrinter makeModel]];
-    }
-    [infoLabel setStringValue:infoText];
-    [infoLabel setBezeled:NO];
-    [infoLabel setDrawsBackground:NO];
-    [infoLabel setEditable:NO];
-    [infoLabel setSelectable:YES];
-    [content addSubview:infoLabel];
-    [infoLabel release];
-    
-    // URI
-    NSTextField *uriLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 210, 360, 30)];
-    [uriLabel setStringValue:[NSString stringWithFormat:@"URI: %@", [selectedPrinter deviceURI] ?: @"Unknown"]];
-    [uriLabel setBezeled:NO];
-    [uriLabel setDrawsBackground:NO];
-    [uriLabel setEditable:NO];
-    [uriLabel setSelectable:YES];
-    [uriLabel setFont:[NSFont systemFontOfSize:10]];
-    [content addSubview:uriLabel];
-    [uriLabel release];
-    
-    // Status
-    NSTextField *statusLbl = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 180, 360, 20)];
-    [statusLbl setStringValue:[NSString stringWithFormat:@"Status: %@", [selectedPrinter state]]];
-    [statusLbl setBezeled:NO];
-    [statusLbl setDrawsBackground:NO];
-    [statusLbl setEditable:NO];
-    [statusLbl setSelectable:NO];
-    [content addSubview:statusLbl];
-    [statusLbl release];
-    
-    // Accepting jobs checkbox
-    NSButton *acceptingCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(20, 140, 200, 20)];
-    [acceptingCheckbox setButtonType:NSSwitchButton];
-    [acceptingCheckbox setTitle:@"Accepting Print Jobs"];
-    [acceptingCheckbox setState:[selectedPrinter acceptingJobs] ? NSOnState : NSOffState];
-    [content addSubview:acceptingCheckbox];
-    [acceptingCheckbox release];
-    
-    // Shared checkbox
-    NSButton *sharedCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(20, 110, 200, 20)];
-    [sharedCheckbox setButtonType:NSSwitchButton];
-    [sharedCheckbox setTitle:@"Share this Printer"];
-    [sharedCheckbox setState:[selectedPrinter isShared] ? NSOnState : NSOffState];
-    [content addSubview:sharedCheckbox];
-    [sharedCheckbox release];
-    
-    // Enable/Disable button
-    NSButton *enableButton = [[NSButton alloc] initWithFrame:NSMakeRect(20, 60, 120, 24)];
-    if ([[selectedPrinter state] isEqualToString:@"Stopped"]) {
-        [enableButton setTitle:@"Enable"];
-        [enableButton setTarget:self];
-        [enableButton setAction:@selector(enablePrinter:)];
-    } else {
-        [enableButton setTitle:@"Disable"];
-        [enableButton setTarget:self];
-        [enableButton setAction:@selector(disablePrinter:)];
-    }
-    [enableButton setBezelStyle:NSRoundedBezelStyle];
-    [content addSubview:enableButton];
-    [enableButton release];
-    
-    // Close button
-    NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(300, 10, 80, 24)];
-    [closeButton setTitle:@"Close"];
-    [closeButton setBezelStyle:NSRoundedBezelStyle];
-    [closeButton setTarget:optionsPanel];
-    [closeButton setAction:@selector(orderOut:)];
-    [content addSubview:closeButton];
-    [closeButton release];
-    
-    [optionsPanel center];
-    [optionsPanel makeKeyAndOrderFront:nil];
-    [optionsPanel autorelease];
+
+    // The controller owns the panel: one that nothing retains is freed with
+    // the next autorelease pool, which made it vanish on the first mouse move.
+    [optionsPanel close];
+    [optionsPanel release];
+    optionsPanel = [[PrinterOptionsPanel alloc] initWithPrinter:selectedPrinter
+                                                  privilegeHint:[self privilegeHint]
+                                                         target:self
+                                                  changedAction:@selector(refreshPrinters:)];
+    [optionsPanel show];
 }
 
 @end

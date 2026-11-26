@@ -14,6 +14,7 @@
     NSString *_identifier;
     NSString *_displayName;
     NSInteger _priority;
+    BOOL _enabledByDefault;
     GSMenuExtraContext *_context;
 }
 
@@ -31,6 +32,14 @@
         _priority = priority;
         _cachedWidth = 0;
 
+        @try {
+            _enabledByDefault = [_extra respondsToSelector:@selector(enabledByDefault)] &&
+                                [_extra enabledByDefault];
+        } @catch (NSException *e) {
+            NSLog(@"GSMenuExtraInstance: exception in enabledByDefault for %@: %@", _identifier, e);
+            _enabledByDefault = NO;
+        }
+
         _context = [[GSMenuExtraContext alloc] initWithManager:manager
                                                     identifier:_identifier];
         if ([_extra respondsToSelector:@selector(setContext:)]) {
@@ -38,6 +47,11 @@
         }
     }
     return self;
+}
+
+- (BOOL)enabledByDefault
+{
+    return _enabledByDefault;
 }
 
 - (BOOL)load
@@ -94,12 +108,26 @@
     }
 }
 
+/* The width the extra wants, or 0 to be measured from the title.
+ *
+ * A cached width is only reused while it is positive, so an extra that
+ * reports 0 - because it has nothing to show - is measured afresh every
+ * time, and the first time it has something again it is measured and kept.
+ * That is what lets an extra come and go in the bar: see -invalidateWidth,
+ * which is what tells the cached width it is stale. */
 - (CGFloat)width
 {
     if (_cachedWidth > 0) return _cachedWidth;
     NSString *display = [self title];
-    if ([_extra respondsToSelector:@selector(preferredWidth)]) {
-        _cachedWidth = [_extra preferredWidth];
+    if ([_extra respondsToSelector:@selector(totalWidthInMenuBar)]) {
+        /* Stated as the whole item, icon and padding included. */
+        CGFloat wanted = [_extra totalWidthInMenuBar];
+        _cachedWidth = wanted > 0 ? wanted : 0;
+    } else if ([_extra respondsToSelector:@selector(preferredWidth)]) {
+        CGFloat wanted = [_extra preferredWidth];
+        /* A negative width is not a width; treating it as 0 keeps a broken
+           extra from pushing the rest of the bar off the screen. */
+        _cachedWidth = wanted > 0 ? wanted : 0;
     } else {
         if (!display || [display length] == 0) display = @"";
         NSFont *font = [NSFont menuBarFontOfSize:0];
@@ -109,14 +137,38 @@
     return _cachedWidth;
 }
 
+- (BOOL)statesTotalWidthInMenuBar
+{
+    return [_extra respondsToSelector:@selector(totalWidthInMenuBar)];
+}
+
+- (void)invalidateWidth
+{
+    _cachedWidth = 0;
+}
+
 - (BOOL)isIconOnly
 {
     NSString *t = [self title];
     return !t || [t length] == 0;
 }
 
-- (void)invalidateWidth
+/* Whether the extra wants no room in the bar at all right now.
+ *
+ * An extra that does not implement -isHiddenFromMenuBar is never hidden, so
+ * this is a plain NO for every extra that has not opted in. */
+- (BOOL)isHiddenFromMenuBar
 {
+    if (![_extra respondsToSelector:@selector(isHiddenFromMenuBar)]) {
+        return NO;
+    }
+    @try {
+        return [_extra isHiddenFromMenuBar];
+    } @catch (NSException *e) {
+        NSLog(@"GSMenuExtraInstance: exception in isHiddenFromMenuBar for %@: %@",
+              _identifier, e);
+        return NO;
+    }
 }
 
 - (void)tick

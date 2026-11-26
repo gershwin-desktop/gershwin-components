@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8" ?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wse="http://schemas.xmlsoap.org/ws/2004/08/eventing" xmlns:wscn="http://schemas.microsoft.com/windows/2006/08/wdp/scan" xmlns:xop="http://www.w3.org/2004/08/xop/include" ><soap:Header><wsa:To>http://192.0.2.61:38021/scanevents</wsa:To><wsa:Action>http://schemas.microsoft.com/windows/2006/08/wdp/scan/ScanAvailableEvent</wsa:Action><wsa:MessageID>urn:uuid:000289f9-002a-1002-b5d7-38343a32353a</wsa:MessageID></soap:Header><soap:Body><wscn:ScanAvailableEvent>
+<wscn:ClientContext>GershwinTest</wscn:ClientContext>
+<wscn:ScanIdentifier>630f081c-58ea-22e4-7846-cd2b2801ff95</wscn:ScanIdentifier>
+<wscn:InputSource>Platen</wscn:InputSource>
+</wscn:ScanAvailableEvent>
+</soap:Body></soap:Envelope>

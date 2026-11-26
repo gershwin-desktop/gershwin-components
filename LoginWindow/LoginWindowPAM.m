@@ -313,6 +313,14 @@ int loginwindow_pam_conv(int num_msg, const struct pam_message **msg,
     NSDebugLLog(@"gwcomp", @"[PAM] PAM transaction ended");
 }
 
+- (void)clearCredentials
+{
+    [_storedUsername release];
+    _storedUsername = nil;
+    [_storedPassword release];
+    _storedPassword = nil;
+}
+
 - (char **)getEnvironmentList
 {
     NSDebugLLog(@"gwcomp", @"[PAM] getEnvironmentList called");

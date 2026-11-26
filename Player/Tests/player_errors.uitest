@@ -1,0 +1,61 @@
+#!/usr/bin/env run_uitest
+# Player says in its window why something cannot be played, and interrupts
+# with an alert only for what the user opened: a broken file opened with
+# Open URL brings one alert, and stays in the window title afterwards; a
+# list that reaches a broken file by itself skips it without an alert.
+#
+# Leaves the computer as it was found: the fixtures are removed and the app
+# is quit at the end.
+#
+# Run with: run_uitest Player/Tests/player_errors.uitest
+# Self-healing start: a run that stopped half way leaves Player open
+shell "pkill -9 -u $(id -u) -x Player; sleep 1; true"
+# Player reopens in Internet radio mode, or with its last list, as it was quit
+shell "defaults delete io.github.gershwin-desktop.Player PlayerMode >/dev/null 2>&1; true"
+shell "defaults delete io.github.gershwin-desktop.Player PlayerPlaylist >/dev/null 2>&1; true"
+shell "rm -rf /tmp/player-uitest-${home} && mkdir -p /tmp/player-uitest-${home}"
+# Not a sound file at all, only named like one
+shell "head -c 4096 /dev/urandom > /tmp/player-uitest-${home}/Broken.mp3"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=2 -metadata title='Short Tone' /tmp/player-uitest-${home}/Short.mp3"
+shell "ffmpeg -loglevel error -f lavfi -i sine=duration=20 -metadata title='Error Tone' /tmp/player-uitest-${home}/Tone.mp3"
+
+shell "openapp Player >/dev/null 2>&1 &"
+wait 2s
+activate application "Player"
+wait until window "Player" timeout 15s
+
+# Opened by the user: one alert, then the reason stays in the window
+select menu "File/Open URL..."
+wait until textfield "https://" timeout 5s
+click textfield "https://"
+type "/tmp/player-uitest-${home}/Broken.mp3"
+press key "Return"
+wait until text contains "Cannot Be Played" timeout 10s
+assert button "OK"
+invoke default button
+wait until window "Player - Broken (Cannot Be Played)" timeout 5s
+assert button "Play"
+assert menu item "Playback/Stop" disabled
+
+# Reached by the list on its own: skipped, without an alert.  Files given
+# on the command line are opened at launch, so Player starts again.
+activate application "Player"
+wait until menu bar "Player" timeout 10s
+press "Alt+Q"
+wait until not exists application "Player" timeout 5s
+shell "openapp Player /tmp/player-uitest-${home}/Short.mp3 /tmp/player-uitest-${home}/Broken.mp3 /tmp/player-uitest-${home}/Tone.mp3 >/dev/null 2>&1 &"
+wait 2s
+activate application "Player"
+wait until window "Player - Error Tone" timeout 15s
+wait until button "Pause" timeout 5s
+# The alert's only button
+assert not exists button "OK"
+
+activate application "Player"
+wait until menu bar "Player" timeout 10s
+press "Alt+Q"
+wait until not exists window "Player - Error Tone" timeout 5s
+# Sound fades out for a second before the app goes
+wait until not exists application "Player" timeout 5s
+shell "rm -rf /tmp/player-uitest-${home}"
+log "Player shows why a file cannot be played, with one alert for what the user opened"

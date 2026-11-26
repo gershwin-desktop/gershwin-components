@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>packages</key>
+    <array>
+        <string>bluez</string>
+    </array>
+    <key>os_overrides</key>
+    <dict>
+        <key>arch</key>
+        <dict>
+            <key>packages</key>
+            <array>
+                <string>bluez</string>
+                <string>bluez-utils</string>
+            </array>
+        </dict>
+        <key>freebsd</key>
+        <dict>
+            <key>description</key>
+            <string>FreeBSD has its own Bluetooth stack and does not use BlueZ</string>
+            <key>packages</key>
+            <array/>
+        </dict>
+        <key>openbsd</key>
+        <dict>
+            <key>description</key>
+            <string>OpenBSD has no Bluetooth support</string>
+            <key>packages</key>
+            <array/>
+        </dict>
+    </dict>
+</dict>
+</plist>

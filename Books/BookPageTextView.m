@@ -69,6 +69,27 @@
 {
   if (_owner) [_owner pageTextView:self mouseUp:e];
 }
+// NSTextView's own right-click handling selects inside this page only and
+// offers editing items; the owner's menu acts on the book selection instead.
+- (NSMenu *)menuForEvent:(NSEvent *)e
+{
+  return _owner ? [_owner pageTextView:self menuForEvent:e] : nil;
+}
+- (void)rightMouseDown:(NSEvent *)e
+{
+  NSMenu *m = [self menuForEvent:e];
+  if (m != nil)
+    [NSMenu popUpContextMenu:m withEvent:e forView:self];
+}
+
+// A page's text view must never become first responder: its copy: and
+// selectAll: would act on its own page only, not on the book selection held
+// by the owner.
+- (BOOL)acceptsFirstResponder
+{
+  return NO;
+}
+
 - (void)scrollWheel:(NSEvent *)e
 {
   if (_owner) [_owner pageTextView:self scrollWheel:e];

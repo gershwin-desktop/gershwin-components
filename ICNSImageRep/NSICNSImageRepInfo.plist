@@ -1,7 +1,7 @@
 {
     NSPrincipalClass = "NSICNSImageRep";
     NSImageRepClass = "NSICNSImageRep";
-    CFBundleIdentifier = "org.gershwin.NSICNSImageRep";
+    CFBundleIdentifier = "io.github.gershwin-desktop.NSICNSImageRep";
     CFBundleName = "NSICNSImageRep";
     CFBundleVersion = "1.0";
 }

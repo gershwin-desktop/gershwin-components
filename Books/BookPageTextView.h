@@ -17,6 +17,7 @@
 - (void)pageTextView:(BookPageTextView *)tv mouseUp:(NSEvent *)e;
 - (void)pageTextView:(BookPageTextView *)tv scrollWheel:(NSEvent *)e;
 - (void)pageTextView:(BookPageTextView *)tv keyDown:(NSEvent *)e;
+- (NSMenu *)pageTextView:(BookPageTextView *)tv menuForEvent:(NSEvent *)e;
 @end
 
 @interface BookPageTextView : NSTextView

@@ -1,7 +1,6 @@
 [Unit]
 Description=Gershwin Login Window
-After=systemd-user-sessions.service dshelper.service
-Wants=dshelper.service
+After=systemd-user-sessions.service
 Conflicts=getty@tty1.service plymouth-quit.service
 After=plymouth-quit.service
 

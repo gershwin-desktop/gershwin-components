@@ -9,7 +9,9 @@
 #import <AppKit/AppKit.h>
 
 // DBus connection wrapper for GNUstep
-@interface GNUDBusConnection : NSObject
+#import "DBusMenuLayout.h"
+
+@interface GNUDBusConnection : NSObject <DBusMenuLayoutSource>
 
 @property (nonatomic, assign) void *connection; // DBusConnection pointer (opaque)
 @property (nonatomic, assign) BOOL connected;
@@ -20,6 +22,14 @@
 - (void)disconnect;
 - (BOOL)isConnected;
 - (BOOL)registerService:(NSString *)serviceName;
+
+/* Delivers every signal of interfaceName to [target selector:info] on the
+   main run loop, info holding "sender", "path" and "member".  Delivery is
+   deferred because signals are seen while libdbus dispatches, which also
+   happens in the middle of our own synchronous calls. */
+- (BOOL)watchSignalsOfInterface:(NSString *)interfaceName
+                         target:(id)target
+                       selector:(SEL)selector;
 - (BOOL)registerObjectPath:(NSString *)objectPath 
                  interface:(NSString *)interfaceName 
                    handler:(id)handler;

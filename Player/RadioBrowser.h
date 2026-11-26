@@ -16,6 +16,10 @@
  *
  * API client for the TuneIn radio directory service.
  * Provides methods for browsing local stations and searching.
+ *
+ * The user default PlayerRadioDirectoryURL replaces the directory's base
+ * URL; with a file:// URL each endpoint (Browse.ashx, Search.ashx) is a
+ * file in that directory holding one answer (query parameters ignored).
  */
 @interface RadioBrowser : NSObject
 

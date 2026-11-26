@@ -93,7 +93,13 @@ static void UpdateHighlightedItemImage(NSMenuItem *item, BOOL highlighted)
                            highlighted ? [NSNumber numberWithBool: YES] : nil,
                            OBJC_ASSOCIATION_RETAIN);
 
-  if (highlighted && image != nil && untinted == nil)
+  /* Only a named image is one of ours: the extras register their icons by
+     name, and those are the monochrome ones a highlight colour suits. An
+     application's icon comes from the workspace without a name, is in full
+     colour, and must be left as it is - tinting it would flatten it to a
+     silhouette, and getting at its pixels means building a bitmap of the
+     whole icon that the icon then keeps for good. */
+  if (highlighted && image != nil && untinted == nil && [image name] != nil)
     [item setImage: HighlightedImage(image)];
   else if (!highlighted && untinted != nil)
     [item setImage: untinted];
@@ -103,7 +109,8 @@ static void UpdateHighlightedItemImage(NSMenuItem *item, BOOL highlighted)
 
 - (void) setMenuBarImage: (NSImage *)image
 {
-  if (image != nil && objc_getAssociatedObject(self, &kHighlightedKey) != nil)
+  if (image != nil && [image name] != nil
+      && objc_getAssociatedObject(self, &kHighlightedKey) != nil)
     image = HighlightedImage(image);
   [self setImage: image];
 }

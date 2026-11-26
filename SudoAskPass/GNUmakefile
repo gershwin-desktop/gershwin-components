@@ -2,15 +2,22 @@ include $(GNUSTEP_MAKEFILES)/common.make
 GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
 
 APP_NAME = SudoAskPass
-SudoAskPass_OBJC_FILES = SudoAskPass.m
+SudoAskPass_OBJC_FILES = SudoAskPass.m GWSudoPolicy.m
 SudoAskPass_APPLICATION_ICON = SudoAskPass.png
 SudoAskPass_RESOURCE_FILES = \
-	Resources/SudoAskPass.png
+	Resources/SudoAskPass.png \
+	Resources/Lock.png \
+	Resources/Lock@2x.png
 
 # PAM validates passwords on systems that authenticate against the OS account
 # database rather than Gershwin Directory Services. libpam is in base on
 # FreeBSD and on the default library path on Linux, so no -L is needed.
 SudoAskPass_LDFLAGS += -lpam
+# crypt(3) checks Directory Services passwords. It is in a separate libcrypt
+# on Linux and FreeBSD, but is part of libc on OpenBSD.
+ifneq ($(findstring openbsd,$(GNUSTEP_HOST_OS)),openbsd)
+SudoAskPass_LDFLAGS += -lcrypt
+endif
 
 include $(GNUSTEP_MAKEFILES)/application.make
 

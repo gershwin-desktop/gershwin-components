@@ -1,0 +1,10 @@
+GNUSTEP_INSTALLATION_DOMAIN = SYSTEM
+
+# The units under test are compiled in here, from the pane's directory.
+ADDITIONAL_INCLUDE_DIRS += -I..
+ADDITIONAL_OBJCFLAGS += -Wall -Wextra -Werror
+t_PrinterSupplies_OBJC_FILES += ../PrinterSupplies.m
+t_CupsSystemGroups_OBJC_FILES += ../CupsSystemGroups.m
+t_CupsAuthentication_OBJC_FILES += ../CupsAuthentication.m
+t_CupsAuthentication_TOOL_LIBS += -lcups
+t_PrinterListing_OBJC_FILES += ../PrinterListing.m

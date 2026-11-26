@@ -6,6 +6,7 @@
 
 
 #import "KeyboardController.h"
+#import "KeyboardBackend.h"
 #import "AppearanceMetrics.h"
 #import <dispatch/dispatch.h>
 
@@ -46,8 +47,24 @@
 
 static NSString *const kKeyboardDomain = @"KeyboardPreferences";
 static NSString *const kDefaultKeyboardFile = @"/etc/default/keyboard";
-static NSString *const kSetxkbmapLocal = @"/usr/local/bin/setxkbmap";
-static NSString *const kSetxkbmapSystem = @"/usr/bin/setxkbmap";
+
+/* A narrow column of check marks showing which rows are in the Keyboard
+   menu; ticking is done with the checkbox below the tables. */
+static NSTableColumn *MenuIndicatorColumn(void)
+{
+    NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"inMenu"];
+    NSButtonCell *cell = [[NSButtonCell alloc] init];
+    [cell setButtonType:NSSwitchButton];
+    [cell setTitle:@""];
+    [column setDataCell:cell];
+    [cell release];
+    [column setTitle:@""];
+    [column setWidth:22];
+    [column setMinWidth:22];
+    [column setMaxWidth:22];
+    [column setEditable:YES];
+    return [column autorelease];
+}
 
 static NSComparisonResult LayoutComparator(id a, id b, void *context)
 {
@@ -61,7 +78,6 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
 - (void)ensureMetadataLoaded;
 - (void)parseKeyboardMetadata;
 - (NSDictionary *)fallbackLayouts;
-- (NSString *)findExecutableFromCandidates:(NSArray *)candidates;
 - (NSDictionary *)savedPreferences;
 - (NSDictionary *)systemKeyboardDefaults;
 - (NSDictionary *)currentXkbmapSettingsSync;
@@ -182,10 +198,18 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
     {
         const CGFloat gap = METRICS_SPACE_8;
         const CGFloat tryFieldY = bottomMargin + statusH + METRICS_SPACE_8;
+        const CGFloat hintH = 16;
+        const CGFloat hintY = winH - topMargin - keyboardTypeBoxH - boxGap - hintH;
         const CGFloat tablesBottom = tryFieldY + tryFieldH + boxGap;
-        const CGFloat tablesTop = winH - topMargin - keyboardTypeBoxH - boxGap;
+        const CGFloat tablesTop = hintY - METRICS_SPACE_8;
         const CGFloat tablesH = tablesTop - tablesBottom;
         const CGFloat halfW = (boxW - gap) / 2.0;
+
+        NSTextField *hintLabel = [self labelWithText:@"Click a layout to use it. Tick the box to show it in the Keyboard menu."
+                                               frame:NSMakeRect(sideMargin, hintY, contentW, hintH)
+                                           alignment:NSTextAlignmentLeft];
+        [hintLabel setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+        [mainView addSubview:hintLabel];
 
         layoutScroll = [[NSScrollView alloc] initWithFrame:
             NSMakeRect(sideMargin, tablesBottom, halfW, tablesH)];
@@ -199,6 +223,7 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         [layoutTable setDataSource:self];
         [layoutTable setAllowsMultipleSelection:NO];
         [layoutTable setAllowsEmptySelection:NO];
+        [layoutTable addTableColumn:MenuIndicatorColumn()];
         NSTableColumn *layoutColumn = [[NSTableColumn alloc] initWithIdentifier:@"layout"];
         [layoutColumn setTitle:@""];
         [layoutColumn setWidth:250];
@@ -219,6 +244,7 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         [variantTable setDataSource:self];
         [variantTable setAllowsMultipleSelection:NO];
         [variantTable setAllowsEmptySelection:YES];
+        [variantTable addTableColumn:MenuIndicatorColumn()];
         NSTableColumn *variantColumn = [[NSTableColumn alloc] initWithIdentifier:@"variant"];
         [variantColumn setTitle:@""];
         [variantColumn setWidth:210];
@@ -367,100 +393,23 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
     }
 
     [self parseKeyboardMetadata];
-    setxkbmapPath = [[self findExecutableFromCandidates:[NSArray arrayWithObjects:kSetxkbmapLocal, kSetxkbmapSystem, nil]] retain];
+    setxkbmapPath = [[KeyboardBackend findSetxkbmap] retain];
     metadataLoaded = YES;
 }
 
 - (void)parseKeyboardMetadata
 {
-    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
-    NSArray *possiblePaths = [NSArray arrayWithObjects:
-                              @"/usr/share/X11/xkb/rules/base.lst",
-                              @"/usr/local/share/X11/xkb/rules/base.lst",
-                              nil];
-    NSString *lstPath = nil;
-    for (NSString *path in possiblePaths) {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-            lstPath = path;
-            break;
-        }
-    }
-    NSError *error = nil;
-    NSString *contents = lstPath ? [NSString stringWithContentsOfFile:lstPath encoding:NSUTF8StringEncoding error:&error] : nil;
-
-    NSMutableDictionary *layoutMap = [[NSMutableDictionary alloc] init];
-    NSMutableDictionary *variantMap = [[NSMutableDictionary alloc] init];
-
-    if (contents) {
-        BOOL inLayout = NO;
-        BOOL inVariant = NO;
-        NSArray *lines = [contents componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-
-        for (NSString *line in lines) {
-            NSString *trim = [line stringByTrimmingCharactersInSet:ws];
-            if ([trim length] == 0) {
-                continue;
-            }
-
-            if ([trim hasPrefix:@"! "]) {
-                inLayout = [trim hasPrefix:@"! layout"];
-                inVariant = [trim hasPrefix:@"! variant"];
-                continue;
-            }
-
-            if (inLayout) {
-                NSRange space = [trim rangeOfString:@" "];
-                if (space.location == NSNotFound) {
-                    continue;
-                }
-                NSString *code = [[trim substringToIndex:space.location] stringByTrimmingCharactersInSet:ws];
-                NSString *desc = [[trim substringFromIndex:space.location] stringByTrimmingCharactersInSet:ws];
-                if ([code length] > 0) {
-                    [layoutMap setObject:(desc.length ? desc : code) forKey:code];
-                }
-                continue;
-            }
-
-            if (inVariant) {
-                NSRange colon = [trim rangeOfString:@":"];
-                if (colon.location == NSNotFound) {
-                    continue;
-                }
-                NSString *lhs = [[trim substringToIndex:colon.location] stringByTrimmingCharactersInSet:ws];
-                NSString *rhs = [[trim substringFromIndex:(colon.location + 1)] stringByTrimmingCharactersInSet:ws];
-
-                NSArray *parts = [lhs componentsSeparatedByCharactersInSet:ws];
-                if ([parts count] < 2) {
-                    continue;
-                }
-                NSString *variantCode = [parts objectAtIndex:0];
-                NSString *layoutCode = [parts lastObject];
-
-                if ([variantCode length] == 0 || [layoutCode length] == 0) {
-                    continue;
-                }
-
-                NSMutableArray *list = [variantMap objectForKey:layoutCode];
-                if (!list) {
-                    list = [NSMutableArray array];
-                    [variantMap setObject:list forKey:layoutCode];
-                }
-                NSDictionary *entry = [NSDictionary dictionaryWithObjectsAndKeys:variantCode, @"code", (rhs.length ? rhs : variantCode), @"description", nil];
-                [list addObject:entry];
-            }
-        }
-    }
-
+    NSDictionary *variantMap = nil;
+    NSDictionary *layoutMap = [KeyboardBackend availableLayouts:&variantMap];
     if ([layoutMap count] == 0) {
-        NSDictionary *fallback = [self fallbackLayouts];
-        layoutMap = [fallback mutableCopy];
+        layoutMap = [self fallbackLayouts];
     }
 
     [layouts release];
     [variantsByLayout release];
 
-    layouts = layoutMap;
-    variantsByLayout = variantMap;
+    layouts = [layoutMap mutableCopy];
+    variantsByLayout = [variantMap mutableCopy];
 }
 
 - (NSDictionary *)fallbackLayouts
@@ -473,35 +422,6 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
             @"Spanish", @"es",
             @"Italian", @"it",
             nil];
-}
-
-- (NSString *)findExecutableFromCandidates:(NSArray *)candidates
-{
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *path in candidates) {
-        if ([fm isExecutableFileAtPath:path]) {
-            return path;
-        }
-    }
-
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:@"/usr/bin/which"];
-    [task setArguments:[NSArray arrayWithObject:@"setxkbmap"]];
-
-    NSPipe *pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    [task launch];
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *output = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
-    [task release];
-
-    NSString *trim = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([trim length] > 0 && [fm isExecutableFileAtPath:trim]) {
-        return trim;
-    }
-
-    return nil;
 }
 
 - (NSDictionary *)savedPreferences
@@ -614,17 +534,49 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
 
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
 {
+    if ([[tableColumn identifier] isEqualToString:@"inMenu"]) {
+        NSString *layout = nil;
+        NSString *variant = nil;
+        [self getLayout:&layout variant:&variant forRow:row inTable:tableView];
+        return [NSNumber numberWithBool:[KeyboardBackend menuLayouts:[KeyboardBackend menuLayouts]
+                                                       containLayout:layout variant:variant]];
+    }
     if (tableView == layoutTable) {
         NSString *code = [sortedLayouts objectAtIndex:row];
         NSString *desc = [layouts objectForKey:code];
-        return [NSString stringWithFormat:@"%@ (%@)", desc, code];
+        (void)code;
+        return desc;
     } else if (tableView == variantTable) {
         NSDictionary *entry = [currentVariants objectAtIndex:row];
         NSString *code = [entry objectForKey:@"code"];
         NSString *desc = [entry objectForKey:@"description"];
-        return [NSString stringWithFormat:@"%@ (%@)", desc, code];
+        (void)code;
+        return desc;
     }
     return nil;
+}
+
+- (void)getLayout:(NSString **)layout variant:(NSString **)variant forRow:(NSInteger)row inTable:(NSTableView *)tableView
+{
+    if (tableView == layoutTable) {
+        *layout = [sortedLayouts objectAtIndex:row];
+        *variant = nil;
+    } else {
+        *layout = [self selectedLayout];
+        *variant = [[currentVariants objectAtIndex:row] objectForKey:@"code"];
+    }
+}
+
+- (void)tableView:(NSTableView *)tableView setObjectValue:(id)object forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
+{
+    if (![[tableColumn identifier] isEqualToString:@"inMenu"]) {
+        return;
+    }
+    NSString *layout = nil;
+    NSString *variant = nil;
+    [self getLayout:&layout variant:&variant forRow:row inTable:tableView];
+    [self setLayout:layout variant:variant inMenu:[object boolValue]];
+    [tableView setNeedsDisplay:YES];
 }
 
 // NSTableView delegate methods
@@ -650,6 +602,29 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         NSDebugLog(@"[Keyboard] Variant table selection changed to row %ld", (long)selectedRow);
         [self applySelection:nil];
     }
+}
+
+- (NSString *)selectedLayout
+{
+    NSInteger row = [layoutTable selectedRow];
+    return (row >= 0 && row < (NSInteger)[sortedLayouts count]) ? [sortedLayouts objectAtIndex:row] : nil;
+}
+
+/* Ticks or unticks one layout (variant nil: the layout itself) for the
+   Keyboard menu.  The menu extra switches itself on and off with the count. */
+- (void)setLayout:(NSString *)layout variant:(NSString *)variant inMenu:(BOOL)inMenu
+{
+    NSMutableArray *list = [NSMutableArray array];
+    for (NSDictionary *entry in [KeyboardBackend menuLayouts]) {
+        if (![KeyboardBackend menuLayouts:@[entry] containLayout:layout variant:variant]) {
+            [list addObject:entry];
+        }
+    }
+    if (inMenu) {
+        [list addObject:[variant length] ? @{@"layout": layout, @"variant": variant} : @{@"layout": layout}];
+    }
+    [KeyboardBackend setMenuLayouts:list];
+    [KeyboardBackend syncKeyboardMenuExtraWithMenuLayouts];
 }
 
 - (void)selectLayout:(NSString *)layout variant:(NSString *)variant
@@ -714,68 +689,16 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         return YES;  // Pretend success during refresh
     }
     NSDebugLog(@"[Keyboard] applyLayout: layout='%@' variant='%@' options='%@'", layout, variant, options);
-    if (!setxkbmapPath) {
-        if (error) {
-            *error = @"setxkbmap not found";
-        }
-        return NO;
-    }
-
-    NSString *trimmedLayout = [self trimmed:layout];
-    NSString *trimmedVariant = [self trimmed:variant];
-    NSString *trimmedOptions = [self trimmed:options];
-
-    NSTask *clearTask = [[NSTask alloc] init];
-    [clearTask setLaunchPath:setxkbmapPath];
-    [clearTask setArguments:[NSArray arrayWithObjects:@"-option", @"", nil]];
-    [clearTask launch];
-    [clearTask waitUntilExit];
-    [clearTask release];
-
-    NSMutableArray *args = [NSMutableArray array];
-    if ([trimmedLayout length]) {
-        [args addObject:@"-layout"];
-        [args addObject:trimmedLayout];
-    }
-
-    if ([trimmedVariant length]) {
-        [args addObject:@"-variant"];
-        [args addObject:trimmedVariant];
-    }
-
-    if ([trimmedOptions length]) {
-        [args addObject:@"-option"];
-        [args addObject:trimmedOptions];
-    }
-
-    NSTask *task = [[NSTask alloc] init];
-    [task setLaunchPath:setxkbmapPath];
-    [task setArguments:args];
-
-    NSPipe *stderrPipe = [NSPipe pipe];
-    [task setStandardError:stderrPipe];
-
-    [task launch];
-    // Drain stderr before waitUntilExit to avoid pipe-buffer deadlock
-    NSData *stderrData = [[stderrPipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-
-    int status = [task terminationStatus];
-    [task release];
-
-    if (status != 0) {
-        NSString *stderrString = [[[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] autorelease];
-        if (error) {
-            *error = (stderrString.length ? stderrString : @"Failed to run setxkbmap");
-        }
+    if (![KeyboardBackend applyLayout:layout variant:variant options:options
+                            setxkbmap:setxkbmapPath error:error]) {
         return NO;
     }
 
     [lastAppliedLayout release];
     [lastAppliedVariant release];
 
-    lastAppliedLayout = [trimmedLayout copy];
-    lastAppliedVariant = [trimmedVariant copy];
+    lastAppliedLayout = [[self trimmed:layout] copy];
+    lastAppliedVariant = [[self trimmed:variant] copy];
 
     return YES;
 }
@@ -801,10 +724,14 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         [domain setObject:keyboardType forKey:@"keyboardType"];
     }
     [domain setObject:[NSNumber numberWithBool:isApple] forKey:@"isApple"];
+    /* Not a setting of this pane's selection: the layouts offered in the menu
+       bar must survive every new selection. */
+    [domain setObject:[KeyboardBackend menuLayouts] forKey:@"menuLayouts"];
 
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setPersistentDomain:domain forName:kKeyboardDomain];
     [defaults synchronize];
+    [KeyboardBackend announcePreferencesChange];
 }
 
 - (void)writeUserAutostartWithLayout:(NSString *)layout variant:(NSString *)variant options:(NSString *)options keyboardType:(NSString *)keyboardType isApple:(BOOL)isApple
@@ -1064,17 +991,9 @@ static NSComparisonResult LayoutComparator(id a, id b, void *context)
         NSString *errorCopy = [applyError copy];
 
         // Apple ISO TLDE/LSGT swap
-        if (success && isApple && [keyboardType isEqualToString:@"ISO"]) {
+        if (success && [KeyboardBackend needsAppleISOKeySwapForKeyboardType:keyboardType isApple:isApple]) {
             NSDebugLog(@"[Keyboard] Applying TLDE/LSGT swap for Apple ISO keyboard");
-            NSTask *xmodmapTask = [[NSTask alloc] init];
-            [xmodmapTask setLaunchPath:@"/usr/bin/xmodmap"];
-            [xmodmapTask setArguments:[NSArray arrayWithObjects:
-                @"-e", @"keycode 49 = less greater less greater bar dagger bar",
-                @"-e", @"keycode 94 = asciicircum degree asciicircum degree notsign notsign notsign",
-                nil]];
-            [xmodmapTask launch];
-            [xmodmapTask waitUntilExit];
-            [xmodmapTask release];
+            [KeyboardBackend applyAppleISOKeySwap];
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{

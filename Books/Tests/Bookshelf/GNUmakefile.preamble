@@ -1,0 +1,5 @@
+# The test TU stays MRC (the ObjectTesting macros are not ARC-safe); only the
+# units under test get ARC, keyed by their path.
+ADDITIONAL_OBJCFLAGS += -Wno-protocol
+../../BookshelfView.m_FILE_FLAGS += -fobjc-arc -fobjc-runtime=gnustep-2.0
+t_BookshelfLayout_TOOL_LIBS += -lgnustep-gui

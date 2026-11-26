@@ -16,3 +16,26 @@ static inline NSError* DUErrorMake(DUStorageErrorCode code, NSString *msg)
                                code:code
                            userInfo:@{ NSLocalizedDescriptionKey : msg ?: @"" }];
 }
+
+// Raw tool output the backends attach to an error next to the generic
+// description; the controllers show it so a failure explains itself.
+static inline NSString *DUErrorBackendDetail(NSError *error)
+{
+    NSString *detail = error.userInfo[@"DUBackendDetail"];
+    return [detail isKindOfClass:[NSString class]] ? detail : @"";
+}
+
+// What an alert shows for a failed operation: the generic headline, then the
+// tool's own words, so a failure such as a rejected mount option can be
+// diagnosed from the dialog alone.
+static inline NSString *DUErrorAlertText(NSError *error)
+{
+    NSString *headline = error.localizedDescription ?: @"";
+    NSString *detail = DUErrorBackendDetail(error);
+    if (detail.length == 0) {
+        return headline;
+    }
+    return headline.length == 0
+        ? detail
+        : [NSString stringWithFormat:@"%@\n\n%@", headline, detail];
+}

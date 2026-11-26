@@ -10,6 +10,9 @@
 #import <X11/Xutil.h>
 #import <X11/Xatom.h>
 #import <dispatch/dispatch.h>
+#ifdef __GLIBC__
+#import <malloc.h>
+#endif
 
 @interface MenuUtils (Private)
 + (NSString *)_getApplicationNameForWindow:(unsigned long)windowId display:(Display *)display;
@@ -38,6 +41,17 @@ static dispatch_once_t _sharedDisplayOnce;
         XCloseDisplay(_sharedDisplay);
         _sharedDisplay = NULL;
     }
+}
+
++ (void)releaseFreedHeapMemory
+{
+#ifdef __GLIBC__
+    /* glibc gives memory back only from the top of the heap.  After a burst
+       of short-lived allocations the freed pages below a surviving object
+       stay resident for the life of the process.  The allocators of the
+       BSDs return such pages on their own. */
+    malloc_trim(0);
+#endif
 }
 
 + (Display *)openDisplay
@@ -75,42 +89,6 @@ static dispatch_once_t _sharedDisplayOnce;
     return activeWindow;
 }
 
-+ (unsigned long)getActiveWindow
-{
-    Display *display = [self sharedDisplay];
-    if (!display) return 0;
-
-    Atom actualType;
-    int actualFormat;
-    unsigned long nitems, bytesAfter;
-    unsigned char *prop = NULL;
-    unsigned long activeWindow = 0;
-
-    Atom atom = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
-    if (XGetWindowProperty(display, DefaultRootWindow(display), atom,
-                          0, 1, False, XA_WINDOW,
-                          &actualType, &actualFormat, &nitems, &bytesAfter,
-                          &prop) == 0 && prop) {
-        if (nitems > 0) {
-            activeWindow = *(Window*)prop;
-        }
-        XFree(prop);
-    }
-
-    // Systematic fix: If the active window ID is reported but the window is NO LONGER VALID
-    // or NOT MAPPED, then it's effectively NOT the active window anymore.
-    if (activeWindow != 0) {
-        XWindowAttributes attrs;
-        // XGetWindowAttributes returns non-zero on success
-        if (XGetWindowAttributes(display, (Window)activeWindow, &attrs) == 0 ||
-            attrs.map_state != IsViewable) {
-            activeWindow = 0;
-        }
-    }
-
-    return activeWindow;
-}
-
 // Internal helper that reuses an existing display connection
 + (NSString *)_getApplicationNameForWindow:(unsigned long)windowId display:(Display *)display
 {
@@ -118,9 +96,9 @@ static dispatch_once_t _sharedDisplayOnce;
 
     // First validate that the window still exists before accessing properties
     XWindowAttributes attrs;
-    // Set an error handler? XGetWindowAttributes is reasonably safe if we check return,
-    // but a global error handler might be needed if we were really paranoid.
-    if (XGetWindowAttributes(display, (Window)windowId, &attrs) != Success) {
+    /* XGetWindowAttributes, XGetClassHint and XGetWMName return a nonzero
+       Status on success, not Success (0). */
+    if (XGetWindowAttributes(display, (Window)windowId, &attrs) == 0) {
         // NSLog(@"MenuUtils: Window 0x%lx no longer exists, skipping name lookup", windowId);
         return nil;
     }
@@ -129,7 +107,7 @@ static dispatch_once_t _sharedDisplayOnce;
     XClassHint classHint = {NULL, NULL};
     NSString *className = nil;
 
-    if (XGetClassHint(display, (Window)windowId, &classHint) == Success) {
+    if (XGetClassHint(display, (Window)windowId, &classHint) != 0) {
         if (classHint.res_class != NULL) {
             className = [NSString stringWithUTF8String:classHint.res_class];
         }
@@ -183,7 +161,7 @@ static dispatch_once_t _sharedDisplayOnce;
 
     // Fallback to WM_NAME
     XTextProperty windowName;
-    if (XGetWMName(display, (Window)windowId, &windowName) == Success) {
+    if (XGetWMName(display, (Window)windowId, &windowName) != 0) {
         NSString *title = nil;
         if (windowName.value) {
             title = [NSString stringWithUTF8String:(char *)windowName.value];
@@ -249,8 +227,10 @@ static dispatch_once_t _sharedDisplayOnce;
         return NO;
     }
     
+    /* XGetWindowAttributes returns a nonzero Status on success, not Success
+     * (0), so comparing with Success called every live window gone. */
     XWindowAttributes attrs;
-    BOOL ok = (XGetWindowAttributes(display, (Window)windowId, &attrs) == Success);
+    BOOL ok = (XGetWindowAttributes(display, (Window)windowId, &attrs) != 0);
     XCloseDisplay(display);
     return ok;
 }
@@ -266,34 +246,27 @@ static dispatch_once_t _sharedDisplayOnce;
         return NO;
     }
     
+    /* A failure means the window is gone: nonzero is success, see
+     * isWindowValid:. IsViewable (not just IsMapped) because a window under
+     * an unmapped ancestor is not visible either. */
     XWindowAttributes attrs;
     BOOL mapped = NO;
-    if (XGetWindowAttributes(display, (Window)windowId, &attrs) == Success) {
-        // Require IsViewable: window AND all ancestors must be mapped.
-        // IsUnviewable (window mapped but an ancestor is not) is treated as not visible.
+    if (XGetWindowAttributes(display, (Window)windowId, &attrs) != 0) {
         mapped = (attrs.map_state == IsViewable);
-    } else {
-        // XGetWindowAttributes failure does NOT mean the window is unmapped.
-        // It can fail due to X11 thread-safety issues with shared Display connections,
-        // or transient server states. Assume mapped (safe default) and let the caller
-        // use isWindowValid for definitive existence checks.
-        mapped = YES;
     }
-    
+
     XCloseDisplay(display);
     return mapped;
 }
 
-+ (BOOL)isRealApplicationWindow:(unsigned long)windowId
++ (BOOL)isRealApplicationWindow:(unsigned long)windowId onDisplay:(Display *)display
 {
-    if (windowId == 0) return NO;
-
-    Display *display = [self openDisplay];
-    if (!display) return NO;
+    if (windowId == 0 || !display) return NO;
 
     XWindowAttributes attrs;
     BOOL real = NO;
-    if (XGetWindowAttributes(display, (Window)windowId, &attrs) == Success) {
+    /* A nonzero Status is success here, unlike most X calls. */
+    if (XGetWindowAttributes(display, (Window)windowId, &attrs) != 0) {
         /* Mapped (window and ancestors) and not an override-redirect popup. */
         if (attrs.map_state == IsViewable && !attrs.override_redirect) {
             /* WM-managed, or a GNUstep window.  Chromium keeps internal helper
@@ -350,7 +323,6 @@ static dispatch_once_t _sharedDisplayOnce;
         }
     }
 
-    [self closeDisplay:display];
     return real;
 }
 
@@ -365,7 +337,18 @@ static dispatch_once_t _sharedDisplayOnce;
     if (!display) {
         return NO;
     }
-    
+
+    BOOL isDesktop = [self isDesktopWindow:windowId onDisplay:display];
+    XCloseDisplay(display);
+    return isDesktop;
+}
+
++ (BOOL)isDesktopWindow:(unsigned long)windowId onDisplay:(Display *)display
+{
+    if (windowId == 0 || !display) {
+        return NO;
+    }
+
     // Check if window has _NET_WM_WINDOW_TYPE_DESKTOP
     Atom actualType;
     int actualFormat;
@@ -389,8 +372,7 @@ static dispatch_once_t _sharedDisplayOnce;
         }
         XFree(prop);
     }
-    
-    XCloseDisplay(display);
+
     return isDesktop;
 }
 
@@ -514,15 +496,18 @@ static dispatch_once_t _sharedDisplayOnce;
     }
     
     Window root = DefaultRootWindow(display);
-    Window parent, *children;
-    unsigned int nchildren;
+    Window parent, *children = NULL;
+    unsigned int nchildren = 0;
     
     NSMutableArray *windows = [NSMutableArray array];
     
-    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) == Success) {
+    /* XQueryTree and XGetWindowAttributes return a nonzero Status on success;
+       comparing it with Success (0) skipped the scan and leaked the child
+       list Xlib allocated on every healthy call. */
+    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) != 0) {
         for (unsigned int i = 0; i < nchildren; i++) {
             XWindowAttributes attrs;
-            if (XGetWindowAttributes(display, children[i], &attrs) == Success) {
+            if (XGetWindowAttributes(display, children[i], &attrs) != 0) {
                 /* Skip override-redirect windows: dropdown menus, popups and
                  * tooltips are transient, churn constantly while being
                  * opened/closed, and are never menu-bar or menu-service hosts.
@@ -609,15 +594,16 @@ static dispatch_once_t _sharedDisplayOnce;
     }
     
     Window root = DefaultRootWindow(display);
-    Window parent, *children;
-    unsigned int nchildren;
+    Window parent, *children = NULL;
+    unsigned int nchildren = 0;
     unsigned long desktopWindow = 0;
     
     // Atoms for checks
     Atom desktopTypeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
     Atom windowTypeAtom = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
     
-    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) == Success) {
+    /* Nonzero Status means success, see getAllWindows. */
+    if (XQueryTree(display, root, &root, &parent, &children, &nchildren) != 0) {
         for (unsigned int i = 0; i < nchildren; i++) {
             Window w = children[i];
             
@@ -693,7 +679,7 @@ static dispatch_once_t _sharedDisplayOnce;
     Display *display = [self sharedDisplay];
     if (!display) return 0;
 
-    Atom atom = XInternAtom(display, "_GERSHWIN_ACTIVE_APP", False);
+    Atom atom = XInternAtom(display, "_ACTIVE_APPLICATION", False);
     if (atom == None) return 0;
 
     Atom actualType;
@@ -720,7 +706,7 @@ static dispatch_once_t _sharedDisplayOnce;
     Display *display = [self sharedDisplay];
     if (!display) return @[];
 
-    Atom atom = XInternAtom(display, "_GERSHWIN_MENU_APPS", False);
+    Atom atom = XInternAtom(display, "_MENU_APPLICATIONS", False);
     if (atom == None) return @[];
 
     Atom actualType;
@@ -750,7 +736,7 @@ static dispatch_once_t _sharedDisplayOnce;
     Display *display = [self sharedDisplay];
     if (!display) return;
 
-    Atom atom = XInternAtom(display, "_GERSHWIN_MENU_APPS", False);
+    Atom atom = XInternAtom(display, "_MENU_APPLICATIONS", False);
     if (atom == None) return;
 
     NSUInteger count = [pids count];

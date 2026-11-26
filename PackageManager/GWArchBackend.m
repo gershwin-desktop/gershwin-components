@@ -42,6 +42,13 @@ static NSString *const kPacmanPath = @"/usr/bin/pacman";
   return [self initWithExecutor:nil];
 }
 
+#pragma mark - GWPackageManagerBackend - Query
+
+- (BOOL)isPackageInstalled:(NSString *)packageName
+{
+  return [_executor execute:kPacmanPath arguments:@[@"-Qi", packageName]] == 0;
+}
+
 #pragma mark - GWPackageManagerBackend - Install
 
 - (BOOL)installPackages:(NSArray<NSString *> *)packageNames
@@ -54,12 +61,10 @@ static NSString *const kPacmanPath = @"/usr/bin/pacman";
 
   // Install local .pkg.tar files first
   if ([filePaths count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kPacmanPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kPacmanPath];
-    [args addObjectsFromArray:@[@"-U", @"--noconfirm"]];
-    [args addObjectsFromArray:filePaths];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObjects:@"-U", @"--noconfirm", nil];
+    [toolArgs addObjectsFromArray:filePaths];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kPacmanPath, toolArgs, &args);
 
     NSString *capturedStderr = nil;
     int status = [_executor execute:launchPath
@@ -91,12 +96,10 @@ static NSString *const kPacmanPath = @"/usr/bin/pacman";
 
   // Install packages from repositories
   if ([packageNames count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kPacmanPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kPacmanPath];
-    [args addObjectsFromArray:@[@"-S", @"--noconfirm"]];
-    [args addObjectsFromArray:packageNames];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObjects:@"-S", @"--noconfirm", nil];
+    [toolArgs addObjectsFromArray:packageNames];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kPacmanPath, toolArgs, &args);
 
     int status = 0;
     int retries = 0;
@@ -174,12 +177,10 @@ static NSString *const kPacmanPath = @"/usr/bin/pacman";
   [progressHandler installDidProgress:0.5f message:@"Removing packages..."];
 
   if ([packageNames count] > 0) {
-    NSArray *sudoArgs = GWSudoArgPrefix();
-    NSString *launchPath = ([sudoArgs count] > 0) ? GWSudoPath() : kPacmanPath;
-    NSMutableArray *args = [NSMutableArray arrayWithArray:sudoArgs];
-    [args addObject:kPacmanPath];
-    [args addObjectsFromArray:@[@"-R", @"--noconfirm"]];
-    [args addObjectsFromArray:packageNames];
+    NSMutableArray *toolArgs = [NSMutableArray arrayWithObjects:@"-R", @"--noconfirm", nil];
+    [toolArgs addObjectsFromArray:packageNames];
+    NSArray *args = nil;
+    NSString *launchPath = GWSudoCommand(kPacmanPath, toolArgs, &args);
 
     int status = [_executor execute:launchPath arguments:args];
     if (status != 0) {
